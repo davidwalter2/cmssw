@@ -697,13 +697,15 @@ void ZCounting::initHLT(const edm::TriggerResults& result, const edm::TriggerNam
 //--------------------------------------------------------------------------------------------------
 bool ZCounting::isMuonTrigger(const ZCountingTrigger::TTrigger &triggerMenu, const TriggerBits &hltBits)
 {
-  return triggerMenu.pass("HLT_IsoMu27_v*",hltBits);
+  //return triggerMenu.pass("HLT_IsoMu27_v*",hltBits);
+  return triggerMenu.pass("HLT_IsoMu24_v*",hltBits);
 }
 
 //--------------------------------------------------------------------------------------------------
 bool ZCounting::isMuonTriggerObj(const ZCountingTrigger::TTrigger &triggerMenu, const TriggerObjects &hltMatchBits)
 {
-  return triggerMenu.passObj("HLT_IsoMu27_v*","hltL3crIsoL1sMu22Or25L1f0L2f10QL3f27QL3trkIsoFiltered0p07",hltMatchBits);
+  //return triggerMenu.passObj("HLT_IsoMu27_v*","hltL3crIsoL1sMu22Or25L1f0L2f10QL3f27QL3trkIsoFiltered0p07",hltMatchBits);
+  return triggerMenu.passObj("HLT_IsoMu24_v*","hltL3crIsoL1sSingleMu22L1f0L2f10QL3f24QL3trkIsoFiltered0p07",hltMatchBits);
 }
 
 //--------------------------------------------------------------------------------------------------
