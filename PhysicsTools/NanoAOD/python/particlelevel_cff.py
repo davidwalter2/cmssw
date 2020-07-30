@@ -127,7 +127,8 @@ HTXSCategoryTable = simpleHTXSFlatTableProducer.clone(
 lheInfoTable = cms.EDProducer("LHETablesProducer",
      lheInfo = cms.VInputTag(cms.InputTag("externalLHEProducer"), cms.InputTag("source")),
      precision = cms.int32(14),
-     storeLHEParticles = cms.bool(True)
+     storeLHEParticles = cms.bool(True),
+     storeAllLHEInfo = cms.bool(False),
  )
 
 particleLevelTask = cms.Task(mergedGenParticles,genParticles2HepMC,particleLevel,tautagger,genParticles2HepMCHiggsVtx,rivetProducerHTXS)
