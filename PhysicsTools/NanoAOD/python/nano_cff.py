@@ -464,3 +464,16 @@ def nanoWmassGenCustomize(process):
     process.genParticleTable.variables.eta.precision=cms.string(etaPrecision)
     return process
 
+
+###Customizations needed for Wmass analysis                                                                                                              
+###increasing the precision of selected GenParticles.                                                                                                             
+def nanoGenWmassCustomize(process):
+    pdgSelection="?(abs(pdgId) == 11|| abs(pdgId)==13 || abs(pdgId)==15 ||abs(pdgId)== 12 || abs(pdgId)== 14 || abs(pdgId)== 16|| abs(pdgId)== 6|| abs(pdgId)== 24|| pdgId== 23|| pdgId== 25)"
+    # Keep precision same as default RECO for selected particles                                                                                       
+    ptPrecision="{}?{}:{}".format(pdgSelection, CandVars.pt.precision.value(),genParticleTable.variables.pt.precision.value())
+    process.genParticleTable.variables.pt.precision=cms.string(ptPrecision)
+    phiPrecision="{} ? {} : {}".format(pdgSelection, CandVars.phi.precision.value(), genParticleTable.variables.phi.precision.value())
+    process.genParticleTable.variables.phi.precision=cms.string(phiPrecision)
+    etaPrecision="{} ? {} : {}".format(pdgSelection, CandVars.eta.precision.value(), genParticleTable.variables.eta.precision.value())
+    process.genParticleTable.variables.pt.precision=cms.string(etaPrecision)
+    return process
