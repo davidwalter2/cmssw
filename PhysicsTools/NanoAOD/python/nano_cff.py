@@ -476,4 +476,7 @@ def nanoGenWmassCustomize(process):
     process.genParticleTable.variables.phi.precision=cms.string(phiPrecision)
     etaPrecision="{} ? {} : {}".format(pdgSelection, CandVars.eta.precision.value(), genParticleTable.variables.eta.precision.value())
     process.genParticleTable.variables.pt.precision=cms.string(etaPrecision)
+    
+    process.lheInfoTable.storeAllLHEInfo = True
+    
     return process
