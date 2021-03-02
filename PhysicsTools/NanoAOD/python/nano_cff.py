@@ -609,6 +609,12 @@ def nanoAOD_wmassLowPU(process):
             mksel("filter('hltL3fL1sMu10lqL1f0L2f10L3Filtered17')", "Mu17"),
         ),
     )
+
+    from RecoMET.METPUSubtraction.deepMETProducer_cfi import deepMETProducer
+    process.deepMETsResolutionTuneLowPU = deepMETProducer.clone(
+        graph_path = "PhysicsTools/NanoAOD/data/deepmetmodel/deepmet_lowPU.pb",
+        ignore_leptons = True,
+    )
     return process
 
 
