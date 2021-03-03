@@ -615,6 +615,10 @@ def nanoAOD_wmassLowPU(process):
         graph_path = "PhysicsTools/NanoAOD/data/deepmetmodel/deepmet_lowPU.pb",
         ignore_leptons = True,
     )
+    process.deepMETsResponseTuneLowPU = deepMETProducer.clone(
+        graph_path = "PhysicsTools/NanoAOD/data/deepmetmodel/deepmet_lowPU_Resp.pb",
+        ignore_leptons = True,
+    )
     return process
 
 
