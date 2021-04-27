@@ -478,5 +478,9 @@ def nanoGenWmassCustomize(process):
     process.genParticleTable.variables.pt.precision=cms.string(etaPrecision)
     
     process.lheInfoTable.storeAllLHEInfo = True
-    
+
+
+    process.genWeightsTable.weightgroups = ['scale', 'PDF', 'matrix element', 'unknown', 'parton shower']
+    process.genWeightsTable.maxGroupsPerType = [-1, -1, -1, -1, 1]
+
     return process
