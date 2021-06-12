@@ -41,12 +41,21 @@ muonTable.variables = cms.PSet(muonTable.variables,
 muonSimpleSequence= cms.Sequence(slimmedMuonsUpdated+isoForMu + finalMuons + finalLooseMuons )
 
 nanotpSequence = cms.Sequence(
-        nanoMetadata + triggerObjectTables + l1bits +
-        genParticleSequence + genParticleTables + genWeightsTable + genVertexTables + 
+        nanoMetadata + 
         muonSequence + vertexSequence+
         isoTrackSequence + # must be after all the leptons
-		puTable + genTable +
-        muonMC + muonTable + vertexTables+ isoTrackTables + generalTrackTable
+        muonTable + vertexTables+ isoTrackTables + generalTrackTable
+        )
+
+nanotpSequenceMC = cms.Sequence(
+        nanoMetadata + 
+        muonSequence + vertexSequence+
+        isoTrackSequence + # must be after all the leptons
+        muonTable + vertexTables+ isoTrackTables + generalTrackTable +
+        genParticleSequence + genParticleTable +
+        genWeightsTable + genVertexTables + puTable + genTable + 
+        muonMC + 
+        triggerObjectTables + l1bits
         )
 
 def customizeMuonPassThrough(process):
@@ -54,4 +63,3 @@ def customizeMuonPassThrough(process):
 	process.selectedPatMuons.cut = cms.string("||".join([passStandalone, process.selectedPatMuons.cut.value()]))
 	process.finalMuons.cut = cms.string("||".join([passStandalone, process.finalMuons.cut.value()]))
 	return process
-
