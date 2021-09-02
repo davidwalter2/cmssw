@@ -12,6 +12,9 @@
 #include "G4ErrorPropagatorManager.hh"
 #include "G4ErrorSurfaceTarget.hh"
 
+#include <Eigen/Core>
+
+
 /** Propagator based on the Geant4e package. Uses the Propagator class
  *  in the TrackingTools/GeomPropagators package to define the interface.
  *  See that class for more details.
@@ -19,6 +22,8 @@
 
 class Geant4ePropagator : public Propagator {
 public:
+  
+  typedef ROOT::Math::SMatrix<double, 5, 7, ROOT::Math::MatRepStd<double, 5, 7> > AlgebraicMatrix57;
   /** Constructor. Takes as arguments:
    *  * The magnetic field
    *  * The particle name whose properties will be used in the propagation.
@@ -55,6 +60,12 @@ public:
 
   const MagneticField *magneticField() const override { return theField; }
 
+  std::tuple<TrajectoryStateOnSurface, Geant4ePropagator::AlgebraicMatrix57, AlgebraicMatrix55> propagateGenericWithJacobian(const FreeTrajectoryState &ftsStart,
+                                                               const Plane &pDest) const;
+                                                               
+  std::tuple<TrajectoryStateOnSurface, Geant4ePropagator::AlgebraicMatrix57, AlgebraicMatrix55, double> propagateGenericWithJacobianAlt(const FreeTrajectoryState &ftsStart,
+                                                               const Plane &pDest) const;
+  
 private:
   typedef std::pair<TrajectoryStateOnSurface, double> TsosPP;
   typedef std::pair<bool, std::shared_ptr<G4ErrorTarget>> ErrorTargetPair;
@@ -91,6 +102,7 @@ private:
   template <class SurfaceType>
   std::pair<TrajectoryStateOnSurface, double> propagateGeneric(const FreeTrajectoryState &ftsStart,
                                                                const SurfaceType &pDest) const;
+                                                               
 
   // saves the Geant4 propagation direction (Forward or Backward) in the
   // provided variable reference mode and returns true if the propagation
@@ -135,6 +147,25 @@ private:
                              GlobalVector const &cmsInitMom,
                              CLHEP::Hep3Vector const &g4InitMom,
                              const SurfaceType &pDest) const;
+                             
+  double computeErrorIoni(const G4Track* aTrack) const;
+
+  void CalculateEffectiveZandA(const G4Material* mate, G4double& effZ, G4double& effA) const;
+  
+  AlgebraicMatrix55 curv2localJacobianAlt(const GlobalTrajectoryParameters &globalSource, const Surface &surface) const;
+  
+  AlgebraicMatrix55 curv2localJacobianAlteloss(const GlobalTrajectoryParameters &globalSource, const Surface &surface, double dEdx, double mass) const;
+  
+  Eigen::Matrix<double, 5, 7> transportJacobian(const FreeTrajectoryState &start, double s, double dEdx, double mass) const;
+  
+  Eigen::Matrix<double, 5, 7> transportJacobianBz(const FreeTrajectoryState &start, double s, double dEdx, double mass) const;
+  
+  Eigen::Matrix<double, 5, 7> transportJacobianBzAdvanced(const FreeTrajectoryState &start, double s, double dEdx, double mass) const;
+  
+  Eigen::Matrix<double, 6, 5> curv2cartJacobianAlt(const FreeTrajectoryState &state) const;
+
+
+  
 };
 
 #endif
