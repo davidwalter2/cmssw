@@ -671,7 +671,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
         
   //       constexpr unsigned int niters = 1;
 //         constexpr unsigned int niters = 3;
-        constexpr unsigned int niters = 5;
+//         constexpr unsigned int niters = 5;
+        constexpr unsigned int niters = 10;
         
 //         const unsigned int niters = icons == 0 ? 3 : 1;
         
@@ -2413,7 +2414,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
           niter = iiter + 1;
           edmval = -deltachisq[0];
           
-//           std::cout << "icons = " << icons << " iiter = " << iiter << " edmval = " << edmval << " deltachisqval = " << deltachisqval << " chisqval = " << chisqval << std::endl;
+          std::cout << "icons = " << icons << " iiter = " << iiter << " edmval = " << edmval << " deltachisqval = " << deltachisqval << " chisqval = " << chisqval << std::endl;
 //           std::cout << "dxvtx" << std::endl;
           
 //           std::cout << "pt0 = " << refftsarr[0].momentum().perp() << " eta0 = " << refftsarr[0].momentum().eta() << " charge0 = " << refftsarr[0].charge() <<  " pt1 = " << refftsarr[1].momentum().perp() << " eta1 = " << refftsarr[1].momentum().eta() << " charge1 = " << refftsarr[1].charge() << std::endl;
@@ -2436,9 +2437,9 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
 //           std::cout << dxfull.segment<3>(trackstateidxarr[0]) << std::endl;
 //           std::cout << dxfull.segment<3>(trackstateidxarr[1]) << std::endl;
          
-          if (std::abs(deltachisqval)<1e-2) {
-            break;
-          }
+//           if (std::abs(deltachisqval)<1e-2) {
+//             break;
+//           }
           
 //           if (iiter > 1 && std::abs(deltachisq[0])<1e-3) {
 //             break;
@@ -2472,6 +2473,13 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
   //     }
       
       grad = dchisqdparms + dxdparms*dchisqdx;
+      
+//       std::cout << "dchisqdparms" << std::endl;
+//       std::cout << dchisqdparms.transpose() << std::endl;
+//       std::cout << "dxdparms*dchisqdx" << std::endl;
+//       std::cout << (dxdparms*dchisqdx).transpose() << std::endl;
+//       std::cout << "grad" << std::endl;
+//       std::cout << grad.transpose() << std::endl;
       //TODO check the simplification
   //     hess = d2chisqdparms2 + 2.*dxdparms*d2chisqdxdparms + dxdparms*d2chisqdx2*dxdparms.transpose();
       hess = d2chisqdparms2 + dxdparms*d2chisqdxdparms;

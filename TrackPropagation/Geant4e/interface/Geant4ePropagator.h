@@ -65,6 +65,9 @@ public:
                                                                
   std::tuple<TrajectoryStateOnSurface, Geant4ePropagator::AlgebraicMatrix57, AlgebraicMatrix55, double> propagateGenericWithJacobianAlt(const FreeTrajectoryState &ftsStart,
                                                                const Plane &pDest) const;
+                                                               
+  std::tuple<bool, Eigen::Matrix<double, 7, 1>, Eigen::Matrix<double, 5, 5>, Eigen::Matrix<double, 5, 7>, double> propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 7, 1> &ftsStart,
+                                                                                const GloballyPositioned<double> &pDest) const;
   
 private:
   typedef std::pair<TrajectoryStateOnSurface, double> TsosPP;
@@ -85,6 +88,9 @@ private:
   // propagation
   template <class SurfaceType>
   ErrorTargetPair transformToG4SurfaceTarget(const SurfaceType &pDest, bool moveTargetToEndOfSurface) const;
+  
+  template <class SurfaceType>
+  ErrorTargetPair transformToG4SurfaceTargetD(const SurfaceType &pDest, bool moveTargetToEndOfSurface) const;
 
   // generates the Geant4 name for a particle from the
   // string stored in theParticleName ( set via constructor )
@@ -160,11 +166,14 @@ private:
   
   Eigen::Matrix<double, 5, 7> transportJacobianBz(const FreeTrajectoryState &start, double s, double dEdx, double mass) const;
   
+  Eigen::Matrix<double, 5, 7> transportJacobianBzD(const Eigen::Matrix<double, 7, 1> &start, double s, double dEdx, double mass) const;
+
+  
   Eigen::Matrix<double, 5, 7> transportJacobianBzAdvanced(const FreeTrajectoryState &start, double s, double dEdx, double mass) const;
   
   Eigen::Matrix<double, 6, 5> curv2cartJacobianAlt(const FreeTrajectoryState &state) const;
 
-
+  Eigen::Matrix<double, 6, 1> transportResult(const FreeTrajectoryState &start, double s, double dEdx, double mass) const;
   
 };
 

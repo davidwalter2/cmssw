@@ -568,6 +568,7 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
   }
   
   surfacemap_.clear();
+  surfacemapD_.clear();
   // fill map of modified surfaces with results of previous iteration if applicable
   for (const GeomDet* det : globalGeometry->detUnits()) {
     if (!det) {
@@ -608,6 +609,32 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
 //         dy = -corparms_[dyidx];
 //       }
       
+      const Surface &surface = det->surface();
+      Point3DBase<double, GlobalTag> pos = surface.position();
+      
+      //re-orthogonalize
+      Matrix<double, 3, 3> rot;
+      rot << surface.rotation().xx(), surface.rotation().xy(), surface.rotation().xz(),
+              surface.rotation().yx(), surface.rotation().yy(), surface.rotation().yz(),
+              surface.rotation().zx(), surface.rotation().zy(), surface.rotation().zz();
+              
+      for (unsigned int i = 0; i < 3; ++i) {
+        for (unsigned int j = 0; j < i; ++j) {
+          rot.row(i) = (rot.row(i) - (rot.row(i)*rot.row(j).transpose())[0]/rot.row(j).squaredNorm()*rot.row(j)).eval();
+        }
+      }
+      for (unsigned int i = 0; i < 3; ++i) {
+          rot.row(i) = (rot.row(i)/rot.row(i).norm()).eval();
+      }
+      
+      const TkRotation<double> tkrot(rot(0,0), rot(0,1), rot(0,2),
+                                     rot(1,0), rot(1,1), rot(1,2),
+                                     rot(2,0), rot(2,1), rot(2,2));
+      
+      
+      const GloballyPositioned<double> surfaceD(pos, tkrot);
+      
+      
       ReferenceCountingPointer<Plane> plane = Plane::build(det->surface());
 //       std::shared_ptr<Plane> plane = std::make_shared<Plane>(det->surface());
       
@@ -629,6 +656,8 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
 //       std::cout << "oldxi = " << det->surface().mediumProperties().xi() << " newxi = " << plane->mediumProperties().xi() << " dxi = " << dxi << " xifraction = " << xifraction << std::endl;
       
       surfacemap_[det->geographicalId()] = plane;
+      
+      surfacemapD_[det->geographicalId()] = surfaceD;
       
 
     }
@@ -2424,6 +2453,212 @@ Matrix<double, 5, 5> ResidualGlobalCorrectionMakerBase::curv2localJacobianAltelo
                                               
 }
 
+// Point3DBase<double, GlobalTag> ResidualGlobalCorrectionMakerBase::toGlobal(const Surface &surface, const Point3DBase<double, LocalTag> &lp) const {
+//   Point3DBase<double, GlobalTag> position = surface.position();
+//   TkRotation<double> rotation = surface.rotation();
+//   
+//   return Point3DBase<double, GlobalTag>(rotation.multiplyInverse(lp.basicVector()) + position.basicVector());
+// 
+// }
+// 
+// Vector3DBase<double, GlobalTag> ResidualGlobalCorrectionMakerBase::toGlobal(const Surface &surface, const Vector3DBase<double, LocalTag> &lv) const {
+//   TkRotation<double> rotation = surface.rotation();
+//   
+//   return Vector3DBase<double, GlobalTag>(rotation.multiplyInverse(lv.basicVector()));
+// }
+// 
+// Point3DBase<double, LocalTag> ResidualGlobalCorrectionMakerBase::toLocal(const Surface &surface, const Point3DBase<double, GlobalTag> &gp) const {
+//   Point3DBase<double, GlobalTag> position = surface.position();
+//   TkRotation<double> rotation = surface.rotation();
+//   
+//   return Point3DBase<double, LocalTag>(rotation*(gp.basicVector() - position.basicVector()));
+// 
+// }
+// 
+// Vector3DBase<double, LocalTag> ResidualGlobalCorrectionMakerBase::toLocal(const Surface &surface, const Vector3DBase<double, GlobalTag> &gv) const {
+//   TkRotation<double> rotation = surface.rotation();
+//   
+//   return Vector3DBase<double, LocalTag>(rotation*(gv.basicVector()));
+// 
+// }
+
+Matrix<double, 5, 5> ResidualGlobalCorrectionMakerBase::curv2localJacobianAltelossD(const Matrix<double, 7, 1> &state, const MagneticField *field, const GloballyPositioned<double> &surface, double dEdx, double mass) const {
+  
+  
+  const GlobalPoint pos(state[0], state[1], state[2]);  
+  const GlobalVector &bfield = field->inInverseGeV(pos);
+  const Matrix<double, 3, 1> Bv(bfield.x(), bfield.y(), bfield.z());
+  
+  const double q = state[6];
+  
+  const double qop0 = q/state.head<3>().norm();
+  const double lam0 = std::atan(state[5]/std::sqrt(state[3]*state[3] + state[4]*state[4]));
+  const double phi0 = std::atan2(state[4], state[3]);
+  
+  const Matrix<double, 3, 1> W0 = state.segment<3>(3).normalized();
+  const double W0x = W0[0];
+  const double W0y = W0[1];
+  const double W0z = W0[2];
+    
+  const Vector3DBase<double, LocalTag> lx(1.,0.,0.);
+  const Vector3DBase<double, LocalTag> ly(0.,1.,0.);
+  const Vector3DBase<double, LocalTag> lz(0.,0.,1.);
+  const Point3DBase<double, LocalTag> l0(0., 0., 0.);
+  
+//   const Vector3DBase<double, GlobalTag> I1 = surface.toGlobal<double>(lz);
+//   const Vector3DBase<double, GlobalTag> J1 = surface.toGlobal<double>(lx);
+//   const Vector3DBase<double, GlobalTag> K1 = surface.toGlobal<double>(ly);  
+//   const Point3DBase<double, GlobalTag> r1 = surface.toGlobal<double>(l0);
+  
+  const Vector3DBase<double, GlobalTag> I1 = surface.toGlobal(lz);
+  const Vector3DBase<double, GlobalTag> J1 = surface.toGlobal(lx);
+  const Vector3DBase<double, GlobalTag> K1 = surface.toGlobal(ly);  
+  const Point3DBase<double, GlobalTag> r1 = surface.toGlobal(l0);
+  
+//   const Vector3DBase<double, GlobalTag> I1 = toGlobal(surface, lz);
+//   const Vector3DBase<double, GlobalTag> J1 = toGlobal(surface, lx);
+//   const Vector3DBase<double, GlobalTag> K1 = toGlobal(surface, ly);  
+//   const Point3DBase<double, GlobalTag> r1 = toGlobal(surface, l0);
+  
+  const double Ix1 = I1.x();
+  const double Iy1 = I1.y();
+  const double Iz1 = I1.z();
+  
+  const double Jx1 = J1.x();
+  const double Jy1 = J1.y();
+  const double Jz1 = J1.z();
+  
+  const double Kx1 = K1.x();
+  const double Ky1 = K1.y();
+  const double Kz1 = K1.z();
+  
+  const double rx1 = r1.x();
+  const double ry1 = r1.y();
+  const double rz1 = r1.z();
+    
+  const double B = Bv.norm();
+  const Matrix<double, 3, 1> H = Bv.normalized();
+  const double hx = H[0];
+  const double hy = H[1];
+  const double hz = H[2];
+        
+  const double x0 = std::pow(q, 2);
+  const double x1 = std::pow(x0, -3.0/2.0);
+  const double x2 = Iy1*W0x;
+  const double x3 = Ix1*W0y;
+  const double x4 = std::pow(qop0, 2);
+  const double x5 = std::pow(W0x, 2) + std::pow(W0y, 2);
+  const double x6 = std::pow(x5, -1.0/2.0);
+  const double x7 = std::sin(lam0);
+  const double x8 = Iz1*x7;
+  const double x9 = std::cos(lam0);
+  const double x10 = std::cos(phi0);
+  const double x11 = Ix1*x10;
+  const double x12 = std::sin(phi0);
+  const double x13 = Iy1*x12;
+  const double x14 = x11*x9 + x13*x9 + x8;
+  const double x15 = x6/x14;
+  const double x16 = dEdx*q*x1*x15*x4*std::sqrt(std::pow(mass, 2)*x4 + x0);
+  const double x17 = Ix1*W0x*W0z + Iy1*W0y*W0z - Iz1*x5;
+  const double x18 = std::pow(x14, -2);
+  const double x19 = Iz1*Jx1;
+  const double x20 = Iz1*Jy1;
+  const double x21 = lam0 + phi0;
+  const double x22 = -phi0;
+  const double x23 = lam0 + x22;
+  const double x24 = std::pow(Ix1*std::cos(x21) + Ix1*std::cos(x23) + Iy1*std::sin(x21) - Iy1*std::sin(x23) + 2*x8, -2);
+  const double x25 = 2*Ix1;
+  const double x26 = Jy1*x25;
+  const double x27 = 2*Iy1;
+  const double x28 = Jx1*x27;
+  const double x29 = 2*lam0;
+  const double x30 = std::cos(x29);
+  const double x31 = phi0 + x29;
+  const double x32 = std::cos(x31);
+  const double x33 = std::sin(x31);
+  const double x34 = Ix1*Jz1;
+  const double x35 = Iy1*Jz1;
+  const double x36 = x22 + x29;
+  const double x37 = std::cos(x36);
+  const double x38 = std::sin(x36);
+  const double x39 = -x2 + x3;
+  const double x40 = hz*x9;
+  const double x41 = hx*x7 - x10*x40;
+  const double x42 = hy*x7 - x12*x40;
+  const double x43 = x9*(hx*x12 - hy*x10);
+  const double x44 = x10*x9;
+  const double x45 = x12*x9;
+  const double x46 = Jx1*x44 + Jy1*x45 + Jz1*x7;
+  const double x47 = -Ix1*x42 + Iy1*x41 - Iz1*x43;
+  const double x48 = B*qop0*x6/std::pow(x14, 3);
+  const double x49 = x48*(x14*(-Jx1*x42 + Jy1*x41 - Jz1*x43) - x46*x47);
+  const double x50 = Iz1*Kx1;
+  const double x51 = Iz1*Ky1;
+  const double x52 = Ky1*x25;
+  const double x53 = Kx1*x27;
+  const double x54 = Ix1*Kz1;
+  const double x55 = Iy1*Kz1;
+  const double x56 = Kx1*x44 + Ky1*x45 + Kz1*x7;
+  const double x57 = x48*(x14*(-Kx1*x42 + Ky1*x41 - Kz1*x43) - x47*x56);
+  const double x58 = x14*x5;
+  const double x59 = W0z*x14;
+  const double dqopdqop0 = std::pow(q, 3)*x1*std::fabs(qop0)/qop0;
+  const double dqopdlam0 = 0;
+  const double dqopdphi0 = 0;
+  const double dqopdxt0 = x16*(x2 - x3);
+  const double dqopdyt0 = -x16*x17;
+  const double ddxdzdqop0 = 0;
+  const double ddxdzdlam0 = x18*(Jz1*x11 + Jz1*x13 - x10*x19 - x12*x20);
+  const double ddxdzdphi0 = x24*(x19*x32 - x19*x37 + x20*x33 + x20*x38 + x26*x30 + x26 - x28*x30 - x28 - x32*x34 - x33*x35 + x34*x37 - x35*x38);
+  const double ddxdzdxt0 = x39*x49;
+  const double ddxdzdyt0 = x17*x49;
+  const double ddydzdqop0 = 0;
+  const double ddydzdlam0 = x18*(Kz1*x11 + Kz1*x13 - x10*x50 - x12*x51);
+  const double ddydzdphi0 = x24*(x30*x52 - x30*x53 + x32*x50 - x32*x54 + x33*x51 - x33*x55 - x37*x50 + x37*x54 + x38*x51 - x38*x55 + x52 - x53);
+  const double ddydzdxt0 = x39*x57;
+  const double ddydzdyt0 = x17*x57;
+  const double dxdqop0 = 0;
+  const double dxdlam0 = 0;
+  const double dxdphi0 = 0;
+  const double dxdxt0 = x15*(x14*(-Jx1*W0y + Jy1*W0x) + x39*x46);
+  const double dxdyt0 = x15*(Jz1*x58 + x17*x46 - x59*(Jx1*W0x + Jy1*W0y));
+  const double dydqop0 = 0;
+  const double dydlam0 = 0;
+  const double dydphi0 = 0;
+  const double dydxt0 = x15*(x14*(-Kx1*W0y + Ky1*W0x) + x39*x56);
+  const double dydyt0 = x15*(Kz1*x58 + x17*x56 - x59*(Kx1*W0x + Ky1*W0y));
+  Matrix<double, 5, 5> res;
+  res(0,0) = dqopdqop0;
+  res(0,1) = dqopdlam0;
+  res(0,2) = dqopdphi0;
+  res(0,3) = dqopdxt0;
+  res(0,4) = dqopdyt0;
+  res(1,0) = ddxdzdqop0;
+  res(1,1) = ddxdzdlam0;
+  res(1,2) = ddxdzdphi0;
+  res(1,3) = ddxdzdxt0;
+  res(1,4) = ddxdzdyt0;
+  res(2,0) = ddydzdqop0;
+  res(2,1) = ddydzdlam0;
+  res(2,2) = ddydzdphi0;
+  res(2,3) = ddydzdxt0;
+  res(2,4) = ddydzdyt0;
+  res(3,0) = dxdqop0;
+  res(3,1) = dxdlam0;
+  res(3,2) = dxdphi0;
+  res(3,3) = dxdxt0;
+  res(3,4) = dxdyt0;
+  res(4,0) = dydqop0;
+  res(4,1) = dydlam0;
+  res(4,2) = dydphi0;
+  res(4,3) = dydxt0;
+  res(4,4) = dydyt0;
+
+  
+  return res;
+                                              
+}
+
 Matrix<double, 6, 5> ResidualGlobalCorrectionMakerBase::curv2cartJacobianAlt(const FreeTrajectoryState &state) const {
   
   const GlobalTrajectoryParameters &globalSource = state.parameters();
@@ -2441,6 +2676,98 @@ Matrix<double, 6, 5> ResidualGlobalCorrectionMakerBase::curv2cartJacobianAlt(con
   const double W0x = W0.x();
   const double W0y = W0.y();
   const double W0z = W0.z();
+    
+  const double x0 = std::sqrt(std::pow(W0x, 2) + std::pow(W0y, 2));
+  const double x1 = 1.0/x0;
+  const double x2 = W0y*x1;
+  const double x3 = W0x*x1;
+  const double x4 = 1.0/qop0;
+  const double x5 = std::cos(phi0);
+  const double x6 = 1.0/std::fabs(qop0);
+  const double x7 = x6*std::cos(lam0);
+  const double x8 = x5*x7;
+  const double x9 = x6*std::sin(lam0);
+  const double x10 = std::sin(phi0);
+  const double x11 = x10*x7;
+  const double dxdqop0 = 0;
+  const double dxdlam0 = 0;
+  const double dxdphi0 = 0;
+  const double dxdxt0 = -x2;
+  const double dxdyt0 = -W0z*x3;
+  const double dydqop0 = 0;
+  const double dydlam0 = 0;
+  const double dydphi0 = 0;
+  const double dydxt0 = x3;
+  const double dydyt0 = -W0z*x2;
+  const double dzdqop0 = 0;
+  const double dzdlam0 = 0;
+  const double dzdphi0 = 0;
+  const double dzdxt0 = 0;
+  const double dzdyt0 = x0;
+  const double dpxdqop0 = -x4*x8;
+  const double dpxdlam0 = -x5*x9;
+  const double dpxdphi0 = -x11;
+  const double dpxdxt0 = 0;
+  const double dpxdyt0 = 0;
+  const double dpydqop0 = -x11*x4;
+  const double dpydlam0 = -x10*x9;
+  const double dpydphi0 = x8;
+  const double dpydxt0 = 0;
+  const double dpydyt0 = 0;
+  const double dpzdqop0 = -x4*x9;
+  const double dpzdlam0 = x7;
+  const double dpzdphi0 = 0;
+  const double dpzdxt0 = 0;
+  const double dpzdyt0 = 0;
+  Matrix<double, 6, 5> res;
+  res(0,0) = dxdqop0;
+  res(0,1) = dxdlam0;
+  res(0,2) = dxdphi0;
+  res(0,3) = dxdxt0;
+  res(0,4) = dxdyt0;
+  res(1,0) = dydqop0;
+  res(1,1) = dydlam0;
+  res(1,2) = dydphi0;
+  res(1,3) = dydxt0;
+  res(1,4) = dydyt0;
+  res(2,0) = dzdqop0;
+  res(2,1) = dzdlam0;
+  res(2,2) = dzdphi0;
+  res(2,3) = dzdxt0;
+  res(2,4) = dzdyt0;
+  res(3,0) = dpxdqop0;
+  res(3,1) = dpxdlam0;
+  res(3,2) = dpxdphi0;
+  res(3,3) = dpxdxt0;
+  res(3,4) = dpxdyt0;
+  res(4,0) = dpydqop0;
+  res(4,1) = dpydlam0;
+  res(4,2) = dpydphi0;
+  res(4,3) = dpydxt0;
+  res(4,4) = dpydyt0;
+  res(5,0) = dpzdqop0;
+  res(5,1) = dpzdlam0;
+  res(5,2) = dpzdphi0;
+  res(5,3) = dpzdxt0;
+  res(5,4) = dpzdyt0;
+  
+  return res;
+
+  
+}
+
+Matrix<double, 6, 5> ResidualGlobalCorrectionMakerBase::curv2cartJacobianAltD(const Matrix<double, 7, 1> &state) const {
+  
+  const double charge = state[6];
+  
+  const double qop0 = charge/state.head<3>().norm();
+  const double lam0 = std::atan(state[5]/std::sqrt(state[3]*state[3] + state[4]*state[4]));
+  const double phi0 = std::atan2(state[4], state[3]);
+  
+  const Matrix<double, 3, 1> W0 = state.segment<3>(3).normalized();
+  const double W0x = W0[0];
+  const double W0y = W0[1];
+  const double W0z = W0[2];
     
   const double x0 = std::sqrt(std::pow(W0x, 2) + std::pow(W0y, 2));
   const double x1 = 1.0/x0;
@@ -4189,6 +4516,31 @@ Matrix<double, 5, 1> ResidualGlobalCorrectionMakerBase::elossAdHocJacobian(const
   
   const double qop0 = state.signedInverseMomentum();
   const double q = state.charge();
+  
+  const double eloss = 0.01; // 10 MeV
+  
+  const double x0 = std::pow(qop0, 2);
+  const double x1 = std::pow(q, 2);
+  const double dqopdde = -eloss*q*x0*std::sqrt(std::pow(mass, 2) + x1/x0)*std::fabs(qop0)/std::pow(x1, 3.0/2.0);
+  const double dlamdde = 0;
+  const double dphidde = 0;
+  const double dxtdde = 0;
+  const double dytdde = 0;
+  Eigen::Matrix<double, 5, 1> res;
+  res(0,0) = dqopdde;
+  res(1,0) = dlamdde;
+  res(2,0) = dphidde;
+  res(3,0) = dxtdde;
+  res(4,0) = dytdde;
+
+  return res;
+
+}
+
+Matrix<double, 5, 1> ResidualGlobalCorrectionMakerBase::elossAdHocJacobianD(const Matrix<double, 7, 1> &state, double mass) const {
+  
+  const double q = state[6];
+  const double qop0 = q/state.segment<3>(3).norm();
   
   const double eloss = 0.01; // 10 MeV
   

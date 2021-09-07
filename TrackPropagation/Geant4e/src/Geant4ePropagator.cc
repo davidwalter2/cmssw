@@ -118,6 +118,31 @@ Geant4ePropagator::ErrorTargetPair Geant4ePropagator::transformToG4SurfaceTarget
 }
 
 template <>
+Geant4ePropagator::ErrorTargetPair Geant4ePropagator::transformToG4SurfaceTargetD(const GloballyPositioned<double> &pDest,
+                                                                                 bool moveTargetToEndOfSurface) const {
+  //* Get position and normal (orientation) of the destination plane
+//   Point3DBase<double, GlobalTag> posPlane = pDest.toGlobal<double>(Point3DBase<double, LocalTag>(0, 0, 0));
+  Vector3DBase<double, GlobalTag> normalPlane = pDest.toGlobal(Vector3DBase<double, LocalTag>(0, 0, 1.));
+                                                                                   
+                                                                                   
+  Point3DBase<double, GlobalTag> posPlane = pDest.position();
+//   TkRotation<double> rot = pDest.rotation();
+  
+//   Vector3DBase<double, LocalTag> lz(0, 0, 1.);
+//   Vector3DBase<double, GlobalTag> normalPlane = Vector3DBase<double, GlobalTag>(rot.multiplyInverse(lz.basicVector()));
+
+  //* Transform this into HepGeom::Point3D<double>  and
+  // HepGeom::Normal3D<double>  that define a plane for
+  //  Geant4e.
+  //  CMS uses cm and GeV while Geant4 uses mm and MeV
+  HepGeom::Point3D<double> surfPos(posPlane.x()*cm, posPlane.y()*cm, posPlane.z()*cm);
+  HepGeom::Normal3D<double> surfNorm(normalPlane.x(), normalPlane.y(), normalPlane.z());
+
+  //* Set the target surface
+  return ErrorTargetPair(false, std::make_shared<G4ErrorPlaneSurfaceTarget>(surfNorm, surfPos));
+}
+
+template <>
 Geant4ePropagator::ErrorTargetPair Geant4ePropagator::transformToG4SurfaceTarget(const Cylinder &pDest,
                                                                                  bool moveTargetToEndOfSurface) const {
   // Get Cylinder parameters.
@@ -160,6 +185,28 @@ std::string Geant4ePropagator::generateParticleName(int charge) const {
   LogDebug("Geant4e") << "G4e -  Particle name: " << particleName;
 
   return particleName;
+}
+
+template <>
+bool Geant4ePropagator::configureAnyPropagation(G4ErrorMode &mode,
+                                                GloballyPositioned<double> const &pDest,
+                                                GlobalPoint const &cmsInitPos,
+                                                GlobalVector const &cmsInitMom) const {
+  if (cmsInitMom.mag() < plimit_)
+    return false;
+  if (pDest.toLocal(cmsInitPos).z() * pDest.toLocal(cmsInitMom).z() < 0) {
+    mode = G4ErrorMode_PropForwards;
+    LogDebug("Geant4e") << "G4e -  Propagator mode is \'forwards\' indirect "
+                           "via the Any direction"
+                        << std::endl;
+  } else {
+    mode = G4ErrorMode_PropBackwards;
+    LogDebug("Geant4e") << "G4e -  Propagator mode is \'backwards\' indirect "
+                           "via the Any direction"
+                        << std::endl;
+  }
+
+  return true;
 }
 
 template <>
@@ -840,6 +887,8 @@ std::tuple<TrajectoryStateOnSurface, Geant4ePropagator::AlgebraicMatrix57, Algeb
 
   double dEdxlast = 0.;
   double masslast = 0.;
+  
+  Matrix<double, 5, 5> dErrorDxLast = Matrix<double, 5, 5>::Zero();
 
   bool continuePropagation = true;
   while (continuePropagation) {
@@ -868,7 +917,7 @@ std::tuple<TrajectoryStateOnSurface, Geant4ePropagator::AlgebraicMatrix57, Algeb
     const double dEdx = (ePost - ePre)/thisPathLength;
     const double mass  = g4eTrajState.GetG4Track()->GetDynamicParticle()->GetMass() / GeV;
 
-    if (thisPathLength > 0.) {
+    if (std::abs(thisPathLength) > 0.) {
       dEdxlast = dEdx;
       masslast = mass;
     }
@@ -918,6 +967,8 @@ std::tuple<TrajectoryStateOnSurface, Geant4ePropagator::AlgebraicMatrix57, Algeb
     // recompute ionization contribution (without truncation for the moment)
     errMSI(0+1, 0+1) = computeErrorIoni(g4eTrajState.GetG4Track());
     
+    Matrix<double, 5, 5> errMSIout = Matrix<double, 5, 5>::Zero();
+    
 //     std::cout << "errMSI" << std::endl;
 //     std::cout << errMSI << std::endl;
     
@@ -930,13 +981,17 @@ std::tuple<TrajectoryStateOnSurface, Geant4ePropagator::AlgebraicMatrix57, Algeb
         if (j==0) {
           w *= ftsStart.charge();
         }
-        g4errorEnd(i, j) += w*errMSI(i+1, j+1);
+        errMSIout(i, j) += w*errMSI(i+1, j+1);
       }
     }
       
       
     
-//     g4errorEnd += errMSI;
+    g4errorEnd += errMSIout;
+    
+    if (std::abs(thisPathLength) > 0.) {
+      dErrorDxLast = errMSIout/thisPathLength;
+    }
     
     // transport  + nominal energy loss contribution to jacobian
 //     jac = transferMatrix*jac;
@@ -1037,6 +1092,76 @@ std::tuple<TrajectoryStateOnSurface, Geant4ePropagator::AlgebraicMatrix57, Algeb
 
   debugReportTrackState("final", posEndGV, finalRecoPos, momEndGV, momEnd, pDest);
 
+  if (mode == G4ErrorMode_PropBackwards) {
+    GlobalTrajectoryParameters endParm(
+        posEndGV, momEndGV, ftsStart.parameters().charge(), &ftsStart.parameters().magneticField());
+
+    // flip the momentum direction because it has been flipped before running
+    // G4's backwards prop
+    momEndGV = -momEndGV;
+  }
+  
+//   FreeTrajectoryState stateiter(posEndGV, momEndGV, ftsStart.charge(), &ftsStart.parameters().magneticField());
+//   
+//   // additional iterations with analytic propagation to get closer to surface
+//   for (unsigned int iiter = 0; iiter < 10; ++iiter) {
+//     auto const localpos = pDest.toLocal<double>(stateiter.parameters().position());
+//     
+//     
+//     std::cout << "iiter = " << iiter << " localz = " << localpos.z() << std::endl;
+//     if (std::abs(localpos.z()) < 1e-9) {
+//       break;
+//     }
+//     
+//     auto const localmom = pDest.toLocal<double>(stateiter.parameters().momentum());
+//     
+//     const double pathdir = std::copysign(1.0, -localpos.z()*localmom.z());
+//     
+//     const double pathlength = pathdir*std::sqrt(std::pow(localpos.z()*localmom.x()/localmom.z(), 2) + std::pow(localpos.z()*localmom.y()/localmom.z(), 2) + std::pow(localpos.z(), 2));
+//     
+//     std::cout << "pathlength = " << pathlength << std::endl;
+//     
+//     const Matrix<double, 6, 1> transportRes = transportResult(stateiter, pathlength, dEdxlast, masslast);
+//     const Matrix<double, 5, 7> transportJac = transportJacobianBz(stateiter, pathlength, dEdxlast, masslast);
+//     
+//     std::cout << "transportRes" << std::endl;
+//     std::cout << transportRes << std::endl;
+//     
+//     GlobalPoint posupd(transportRes[0], transportRes[1], transportRes[2]);
+//     posupd += stateiter.parameters().position();
+//     const GlobalVector momupd(transportRes[3], transportRes[4], transportRes[5]);
+//     
+//     std::cout << "posdiff" << std::endl;
+//     std::cout << posupd - stateiter.parameters().position() << std::endl;
+//     std::cout << "momdiff" << std::endl;
+//     std::cout << momupd - stateiter.parameters().momentum() << std::endl;
+// //     
+//     std::cout << "pospre" << std::endl;
+//     std::cout << stateiter.parameters().position() << std::endl;
+//     std::cout << "mompre" << std::endl;
+//     std::cout << stateiter.parameters().momentum() << std::endl;
+//     
+//     stateiter = FreeTrajectoryState(posupd, momupd, ftsStart.charge(), &ftsStart.parameters().magneticField());
+//     
+//     std::cout << "pospost" << std::endl;
+//     std::cout << stateiter.parameters().position() << std::endl;
+//     std::cout << "mompost" << std::endl;
+//     std::cout << stateiter.parameters().momentum() << std::endl;
+//     
+// 
+//     
+//     g4errorEnd = (transportJac.leftCols<5>()*g4errorEnd*transportJac.leftCols<5>().transpose()).eval();
+//     g4errorEnd += pathlength*dErrorDxLast;
+//     
+//     jac = (transportJac.leftCols<5>()*jac).eval();
+//     jac.rightCols<2>() += transportJac.rightCols<2>();
+//     
+//   }
+  
+//   posEndGV = stateiter.parameters().position();
+//   momEndGV = stateiter.parameters().momentum();
+  
+  
   // Get the error covariance matrix from Geant4e. It comes in curvilinear
   // coordinates so use the appropiate CMS class
 //   G4ErrorTrajErr g4errorEnd = g4eTrajState.GetError();
@@ -1056,14 +1181,7 @@ std::tuple<TrajectoryStateOnSurface, Geant4ePropagator::AlgebraicMatrix57, Algeb
 //   CurvilinearTrajectoryError curvError(
 //       TrackPropagation::g4ErrorTrajErrToAlgebraicSymMatrix55(g4errorEnd, ftsStart.charge()));
 
-  if (mode == G4ErrorMode_PropBackwards) {
-    GlobalTrajectoryParameters endParm(
-        posEndGV, momEndGV, ftsStart.parameters().charge(), &ftsStart.parameters().magneticField());
 
-    // flip the momentum direction because it has been flipped before running
-    // G4's backwards prop
-    momEndGV = -momEndGV;
-  }
 
   LogDebug("Geant4e") << "G4e -  Error matrix after propagation: " << std::endl << g4errorEnd;
 
@@ -1081,7 +1199,11 @@ std::tuple<TrajectoryStateOnSurface, Geant4ePropagator::AlgebraicMatrix57, Algeb
   auto const localpos = pDest.toLocal<double>(posEndGV);
   auto const localmom = pDest.toLocal<double>(momEndGV);
   
-//   std::cout << "local z = " << localpos.z() << " local pz = " << localmom.z() << std::endl;
+  std::cout << "final: local z = " << localpos.z() << " local pz = " << localmom.z() << std::endl;
+  
+  Point3DBase<double, GlobalTag> posEndDouble(finalRecoPos.x()*0.1, finalRecoPos.y()*0.1, finalRecoPos.z()*0.1);
+  auto const localposdouble = pDest.toLocal<double>(posEndDouble);
+  std::cout << "local z double = " << localposdouble.z() << std::endl;
   
   const LocalPoint localposcor(localpos.x() - localpos.z()*localmom.x()/localmom.z(), localpos.y() - localpos.z()*localmom.y()/localmom.z(), 0.);
   
@@ -1142,6 +1264,321 @@ std::tuple<TrajectoryStateOnSurface, Geant4ePropagator::AlgebraicMatrix57, Algeb
 //   return std::tuple<TrajectoryStateOnSurface, AlgebraicMatrix57, AlgebraicMatrix55>(TrajectoryStateOnSurface(tParsDest, curvError, pDest, side), jacfinal, dQfinal);
   
   return std::tuple<TrajectoryStateOnSurface, AlgebraicMatrix57, AlgebraicMatrix55, double>(TrajectoryStateOnSurface(localparms, localerr, pDest, theField, side), jacfinal, dQfinal, dEdxlast);
+}
+
+
+
+ std::tuple<bool, Eigen::Matrix<double, 7, 1>, Eigen::Matrix<double, 5, 5>, Eigen::Matrix<double, 5, 7>, double> Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 7, 1> &ftsStart,
+                                                                                const GloballyPositioned<double> &pDest) const {
+                          
+  using namespace Eigen;
+
+                                                                                  
+  auto retDefault = []() {
+//     return std::tuple<TrajectoryStateOnSurface, AlgebraicMatrix57, AlgebraicMatrix55, double>();
+    return std::tuple<bool, Matrix<double, 7, 1>, Matrix<double, 5, 5>, Matrix<double, 5, 7>, double>(false, Matrix<double, 7, 1>::Zero(), Matrix<double, 5, 5>::Zero(), Matrix<double, 5, 7>::Zero(), 0.);
+  };
+  
+//   std::cout << "start propagation" << std::endl;
+  
+  ///////////////////////////////
+  // Construct the target surface
+  //
+  //* Set the target surface
+
+  //TODO fix precision of this
+  ErrorTargetPair g4eTarget_center = transformToG4SurfaceTargetD(pDest, false);
+
+  CLHEP::Hep3Vector g4InitPos(ftsStart[0]*cm, ftsStart[1]*cm, ftsStart[2]*cm);
+  CLHEP::Hep3Vector g4InitMom(ftsStart[3]*GeV, ftsStart[4]*GeV, ftsStart[5]*GeV);
+  
+  // * Get the starting point and direction and convert them to
+  // CLHEP::Hep3Vector
+  //   for G4. CMS uses cm and GeV while Geant4 uses mm and MeV
+  GlobalPoint cmsInitPos(ftsStart[0], ftsStart[1], ftsStart[2]);
+  GlobalVector cmsInitMom(ftsStart[3], ftsStart[4], ftsStart[5]);
+  bool flipped = false;
+  if (propagationDirection() == oppositeToMomentum) {
+    // flip the momentum vector as Geant4 will not do this
+    // on it's own in a backward propagation
+    cmsInitMom = -cmsInitMom;
+    g4InitMom = -g4InitMom;
+    flipped = true;
+  }
+  
+  const double charge = ftsStart[6];
+
+  // Set the mode of propagation according to the propagation direction
+  G4ErrorMode mode = G4ErrorMode_PropForwards;
+  if (!configurePropagation(mode, pDest, cmsInitPos, cmsInitMom))
+    return retDefault();
+
+  // re-check propagation direction chosen in case of AnyDirection
+  if (mode == G4ErrorMode_PropBackwards && !flipped) {
+    cmsInitMom = -cmsInitMom;
+    g4InitMom = -g4InitMom; 
+  }
+
+//   CLHEP::Hep3Vector g4InitPos = TrackPropagation::globalPointToHep3Vector(cmsInitPos);
+//   CLHEP::Hep3Vector g4InitMom = TrackPropagation::globalVectorToHep3Vector(cmsInitMom * GeV);
+  
+
+
+//   debugReportTrackState("intitial", cmsInitPos, g4InitPos, cmsInitMom, g4InitMom, pDest);
+
+  // Set the mode of propagation according to the propagation direction
+  // G4ErrorMode mode = G4ErrorMode_PropForwards;
+
+  // if (!configurePropagation(mode, pDest, cmsInitPos, cmsInitMom))
+  //	return TsosPP(TrajectoryStateOnSurface(), 0.0f);
+
+  ///////////////////////////////
+  // Set the error and trajectories, and finally propagate
+  //
+  G4ErrorTrajErr g4error(5, 0);
+//   if (ftsStart.hasError()) {
+//     CurvilinearTrajectoryError initErr;
+//     initErr = ftsStart.curvilinearError();
+//     g4error = TrackPropagation::algebraicSymMatrix55ToG4ErrorTrajErr(initErr, ftsStart.charge());
+//     LogDebug("Geant4e") << "CMS -  Error matrix: " << std::endl << initErr.matrix();
+//   } else {
+//     LogDebug("Geant4e") << "No error matrix available" << std::endl;
+//     return retDefault();
+//   }
+
+  LogDebug("Geant4e") << "G4e -  Error matrix: " << std::endl << g4error;
+
+  // in CMSSW, the state errors are deflated when performing the backward
+  // propagation
+  if (mode == G4ErrorMode_PropForwards) {
+    G4ErrorPropagatorData::GetErrorPropagatorData()->SetStage(G4ErrorStage_Inflation);
+  } else if (mode == G4ErrorMode_PropBackwards) {
+    G4ErrorPropagatorData::GetErrorPropagatorData()->SetStage(G4ErrorStage_Deflation);
+  }
+
+  G4ErrorFreeTrajState g4eTrajState(generateParticleName(charge), g4InitPos, g4InitMom, g4error);
+  LogDebug("Geant4e") << "G4e -  Traj. State: " << (g4eTrajState);
+
+  //////////////////////////////
+  // Propagate
+  int iterations = 0;
+  double finalPathLength = 0;
+
+  HepGeom::Point3D<double> finalRecoPos;
+
+  G4ErrorPropagatorData::GetErrorPropagatorData()->SetMode(mode);
+
+  theG4eData->SetTarget(g4eTarget_center.second.get());
+  LogDebug("Geant4e") << "Running Propagation to the RECO surface" << std::endl;
+
+  theG4eManager->InitTrackPropagation();
+  
+  // initial jacobian is the identity matrix for the state components,
+  // and 0 for b-field and material variations
+//   G4ErrorMatrix jac(5, 7);
+//   for (unsigned int i = 0; i < 5; ++i) {
+//     for (unsigned int j = 0; j < 7; ++j) {
+//       jac(i+1, j+1) = i == j ? 1. : 0.;
+//     }
+//   }
+  
+  Matrix<double, 5, 7> jac;
+  jac.leftCols<5>() = Matrix<double, 5, 5>::Identity();
+  jac.rightCols<2>() = Matrix<double, 5, 2>::Zero();
+  
+  const G4ErrorTrajErr errnull(5, 0);
+  
+  
+//   const G4ErrorTrajErr g4errorEnd = g4eTrajState.GetError();
+//   const AlgebraicMatrix55 errstart = ftsStart.curvilinearError().matrix();
+  Matrix<double, 5, 5> g4errorEnd = Matrix<double, 5, 5>::Zero();
+  
+//   Matrix<double, 7, 1> ftsEnd = ftsStart;
+
+  
+  G4ErrorTrajErr dQ(5, 0);
+
+  double dEdxlast = 0.;
+//   double masslast = 0.;
+  
+  Matrix<double, 5, 5> dErrorDxLast = Matrix<double, 5, 5>::Zero();
+
+  bool continuePropagation = true;
+  while (continuePropagation) {
+    iterations++;
+    LogDebug("Geant4e") << std::endl << "step count " << iterations << " step length " << finalPathLength;
+
+//     const GlobalPoint pos = TrackPropagation::hepPoint3DToGlobalPoint(g4eTrajState.GetPosition());
+//     const GlobalVector mom = TrackPropagation::hep3VectorToGlobalVector(g4eTrajState.GetMomentum() / GeV);
+//     constexpr double mass = 0.1056583745;
+    
+//     const FreeTrajectoryState statepre(pos, mom, ftsStart.charge(), &ftsStart.parameters().magneticField());
+    
+    Matrix<double, 7, 1> statepre;
+    statepre[0] = g4eTrajState.GetPosition().x()/cm;
+    statepre[1] = g4eTrajState.GetPosition().y()/cm;
+    statepre[2] = g4eTrajState.GetPosition().z()/cm;
+    statepre[3] = g4eTrajState.GetMomentum().x()/GeV;
+    statepre[4] = g4eTrajState.GetMomentum().y()/GeV;
+    statepre[5] = g4eTrajState.GetMomentum().z()/GeV;
+    statepre[6] = charge;
+    
+    //set the error matrix to null to disentangle MS and ionization contributions
+    g4eTrajState.SetError(errnull);
+    const int ierr = theG4eManager->PropagateOneStep(&g4eTrajState, mode);
+
+    if (ierr != 0) {
+      // propagation failed, return invalid track state
+      return retDefault();
+    }
+
+    const double thisPathLength = TrackPropagation::g4doubleToCmsDouble(g4eTrajState.GetG4Track()->GetStepLength());
+
+    const double ePre = g4eTrajState.GetG4Track()->GetStep()->GetPreStepPoint()->GetTotalEnergy() / GeV;
+    const double ePost = g4eTrajState.GetG4Track()->GetStep()->GetPostStepPoint()->GetTotalEnergy() / GeV;
+    const double dEdx = (ePost - ePre)/thisPathLength;
+    const double mass  = g4eTrajState.GetG4Track()->GetDynamicParticle()->GetMass() / GeV;
+
+    if (std::abs(thisPathLength) > 0.) {
+      dEdxlast = dEdx;
+//       masslast = mass;
+    }
+    
+//     std::cout << "thisPathLength = " << thisPathLength << std::endl;
+//     const Matrix<double, 5, 7> transportJac = transportJacobian(statepre, thisPathLength, dEdx, mass);
+    const Matrix<double, 5, 7> transportJac = transportJacobianBzD(statepre, thisPathLength, dEdx, mass);
+//     const Matrix<double, 5, 7> transportJac = transportJacobianBzAdvanced(statepre, thisPathLength, dEdx, mass);
+    
+//     const Matrix<double, 5, 7> transportJacAlt = transportJacobianBz(statepre, thisPathLength, dEdx, mass);
+
+//     std::cout << "transportJac" << std::endl;
+//     std::cout << transportJac << std::endl;
+//     std::cout << "transportJacAlt" << std::endl;
+//     std::cout << transportJacAlt << std::endl;
+    
+    
+//     bool isnan = false;
+//     for (unsigned int i=0; i<transportJac.rows(); ++i) {
+//       for (unsigned int j=0; j<transportJac.cols(); ++j) {
+//         if (std::isnan(transportJac(i, j))) {
+//           isnan = true;
+//         }
+//       }
+//     }
+//     
+//     if (isnan) {
+//       std::cout << "thisPathLength = " << thisPathLength << " ePre = " << ePre << " ePost = " << ePost << " dEdx = " << dEdx << " mass = " << mass << std::endl;
+//       std::cout << "transportJac" << std::endl;
+//       std::cout << transportJac << std::endl;
+//     }
+    
+    // transport contribution to error
+    g4errorEnd = (transportJac.leftCols<5>()*g4errorEnd*transportJac.leftCols<5>().transpose()).eval();
+    
+    
+//     const G4ErrorMatrix &transferMatrix = g4eTrajState.GetTransfMat();
+    
+    // transport contribution to error
+//     g4errorEnd = g4errorEnd.similarity(transferMatrix).T();
+//     dQ = dQ.similarity(transferMatrix).T();
+    
+    // MS and ionization contributions to error
+    
+    G4ErrorTrajErr errMSI = g4eTrajState.GetError();
+    
+    // recompute ionization contribution (without truncation for the moment)
+    errMSI(0+1, 0+1) = computeErrorIoni(g4eTrajState.GetG4Track());
+    
+    Matrix<double, 5, 5> errMSIout = Matrix<double, 5, 5>::Zero();
+    
+//     std::cout << "errMSI" << std::endl;
+//     std::cout << errMSI << std::endl;
+    
+    for (unsigned int i = 0; i < 5; i++) {
+      for (unsigned int j = 0; j < 5; j++) {
+        double w = 1.;
+        if (i==0) {
+          w *= charge;
+        }
+        if (j==0) {
+          w *= charge;
+        }
+        errMSIout(i, j) += w*errMSI(i+1, j+1);
+      }
+    }
+      
+      
+    
+    g4errorEnd += errMSIout;
+    
+    if (std::abs(thisPathLength) > 0.) {
+      dErrorDxLast = errMSIout/thisPathLength;
+    }
+    
+    // transport  + nominal energy loss contribution to jacobian
+//     jac = transferMatrix*jac;
+    jac = (transportJac.leftCols<5>()*jac).eval();
+
+    //TODO assess relevance of approximations (does the order matter? position/momentum before or after step?)
+    //b-field and material contributions to jacobian
+    jac.rightCols<2>() += transportJac.rightCols<2>();
+        
+    LogDebug("Geant4e") << "step Length was " << thisPathLength << " cm, current global position: "
+                        << TrackPropagation::hepPoint3DToGlobalPoint(g4eTrajState.GetPosition()) << std::endl;
+
+    finalPathLength += thisPathLength;
+
+    // if (std::fabs(finalPathLength) > 10000.0f)
+    if (std::fabs(finalPathLength) > 200.0f) {
+      LogDebug("Geant4e") << "ERROR: Quitting propagation: path length mega large" << std::endl;
+      theG4eManager->GetPropagator()->InvokePostUserTrackingAction(g4eTrajState.GetG4Track());
+      continuePropagation = false;
+      LogDebug("Geant4e") << "WARNING: Quitting propagation: max path length "
+                             "exceeded, returning invalid state"
+                          << std::endl;
+
+      // reached maximum path length, bail out
+      return retDefault();
+    }
+
+    if (theG4eManager->GetPropagator()->CheckIfLastStep(g4eTrajState.GetG4Track())) {
+      theG4eManager->GetPropagator()->InvokePostUserTrackingAction(g4eTrajState.GetG4Track());
+      continuePropagation = false;
+    }
+  }
+
+  // CMSSW Tracking convention, backward propagations have negative path length
+  if (propagationDirection() == oppositeToMomentum)
+    finalPathLength = -finalPathLength;
+
+//   std::cout << "finalPathLength = " << finalPathLength << std::endl;
+  
+  // store the correct location for the hit on the RECO surface
+  LogDebug("Geant4e") << "Position on the RECO surface" << g4eTrajState.GetPosition() << std::endl;
+  finalRecoPos = g4eTrajState.GetPosition();
+
+  theG4eManager->EventTermination();
+
+  LogDebug("Geant4e") << "Final position of the Track :" << g4eTrajState.GetPosition() << std::endl;
+
+  //////////////////////////////
+  // Retrieve the state in the end from Geant4e, convert them to CMS vectors
+  // and points, and build global trajectory parameters.
+  // CMS uses cm and GeV while Geant4 uses mm and MeV
+  //
+  
+  Matrix<double, 7, 1> ftsEnd;
+  ftsEnd[0] = g4eTrajState.GetPosition().x()/cm;
+  ftsEnd[1] = g4eTrajState.GetPosition().y()/cm;
+  ftsEnd[2] = g4eTrajState.GetPosition().z()/cm;
+  ftsEnd[3] = g4eTrajState.GetMomentum().x()/GeV;
+  ftsEnd[4] = g4eTrajState.GetMomentum().y()/GeV;
+  ftsEnd[5] = g4eTrajState.GetMomentum().z()/GeV;
+  ftsEnd[6] = charge;
+  
+  return std::tuple<bool, Matrix<double, 7, 1>, Matrix<double, 5, 5>, Matrix<double, 5, 7>, double>(true, ftsEnd, g4errorEnd, jac, dEdxlast);
+  
+//   return std::tuple<TrajectoryStateOnSurface, AlgebraicMatrix57, AlgebraicMatrix55, double>(TrajectoryStateOnSurface(localparms, localerr, pDest, theField, side), jacfinal, dQfinal, dEdxlast);
 }
 
 //
@@ -2060,6 +2497,85 @@ Eigen::Matrix<double, 5, 7> Geant4ePropagator::transportJacobian(const FreeTraje
 }
 
 
+Eigen::Matrix<double, 6, 1> Geant4ePropagator::transportResult(const FreeTrajectoryState &start, double s, double dEdx, double mass) const {
+  
+  const GlobalTrajectoryParameters &globalSource = start.parameters();
+  
+  if (s==0.) {
+    Eigen::Matrix<double, 6, 1> res;
+    res[0] = globalSource.position().x();
+    res[1] = globalSource.position().y();
+    res[2] = globalSource.position().z();
+    res[3] = globalSource.momentum().x();
+    res[4] = globalSource.momentum().y();
+    res[5] = globalSource.momentum().z();
+    return res;
+  }
+  
+  const GlobalVector& bfield = start.parameters().magneticFieldInInverseGeV();
+
+  const double M0x = globalSource.position().x();
+  const double M0y = globalSource.position().y();
+  const double M0z = globalSource.position().z();
+  
+  const double p0 = globalSource.momentum().mag();
+  const GlobalVector W0 = globalSource.momentum()/p0;
+  const double W0x = W0.x();
+  const double W0y = W0.y();
+  const double W0z = W0.z();
+  
+  const double Bx = bfield.x();
+  const double By = bfield.y();
+  const double Bz = bfield.z();
+  
+  
+  const double qop0 = globalSource.signedInverseMomentum();
+  const double q = start.charge();
+
+  const double xc0 = std::pow(Bx, 2) + std::pow(By, 2) + std::pow(Bz, 2);
+  const double xc1 = qop0*s*std::sqrt(xc0);
+  const double xc2 = std::sin(xc1);
+  const double xc3 = std::pow(xc0, 5.0/2.0)*xc2;
+  const double xc4 = By*W0z - Bz*W0y;
+  const double xc5 = std::cos(xc1);
+  const double xc6 = std::pow(xc0, 2)*(xc5 - 1);
+  const double xc7 = Bx*W0x + By*W0y + Bz*W0z;
+  const double xc8 = Bx*xc7;
+  const double xc9 = std::pow(xc0, 3.0/2.0)*(xc1 - xc2);
+  const double xc10 = std::pow(W0x, 2) + std::pow(W0y, 2);
+  const double xc11 = std::pow(W0z, 2) + xc10;
+  const double xc12 = xc11/xc10;
+  const double xc13 = std::pow(xc0, 3);
+  const double xc14 = 1.0/xc13;
+  const double xc15 = xc11*xc14/(qop0*std::pow(xc10, 3.0/2.0)*std::pow(xc12, 3.0/2.0));
+  const double xc16 = Bx*W0z - Bz*W0x;
+  const double xc17 = xc7*xc9;
+  const double xc18 = Bx*W0y - By*W0x;
+  const double xc19 = xc13*xc5;
+  const double xc20 = std::fabs(qop0);
+  const double xc21 = std::pow(q, 2);
+  const double xc22 = std::pow(qop0, 2);
+  const double xc23 = xc14*std::sqrt(std::pow(dEdx, 2)*std::pow(s, 2)*xc20*xc22 + 2*dEdx*s*xc22*std::sqrt(std::pow(mass, 2)*xc22 + xc21) + xc20*xc21)/(std::sqrt(xc10)*std::sqrt(xc12)*std::pow(xc20, 3.0/2.0));
+  const double xc24 = xc6*xc7;
+  const double x = xc15*(W0x*xc3 + xc4*xc6 + xc8*xc9);
+  const double y = xc15*(By*xc17 + W0y*xc3 - xc16*xc6);
+  const double z = xc15*(Bz*xc17 + W0z*xc3 + xc18*xc6);
+  const double px = xc23*(W0x*xc19 - xc3*xc4 - xc6*xc8);
+  const double py = xc23*(-By*xc24 + W0y*xc19 + xc16*xc3);
+  const double pz = xc23*(-Bz*xc24 + W0z*xc19 - xc18*xc3);
+  Eigen::Matrix<double, 6, 1> rescart;
+  rescart[0] = x;
+  rescart[1] = y;
+  rescart[2] = z;
+  rescart[3] = px;
+  rescart[4] = py;
+  rescart[5] = pz;
+
+
+
+  return rescart;
+}
+
 Eigen::Matrix<double, 5, 7> Geant4ePropagator::transportJacobianBz(const FreeTrajectoryState &start, double s, double dEdx, double mass) const {
   
   if (s==0.) {
@@ -2089,6 +2605,402 @@ Eigen::Matrix<double, 5, 7> Geant4ePropagator::transportJacobianBz(const FreeTra
   
   const double qop0 = globalSource.signedInverseMomentum();
   const double q = start.charge();
+              
+  const double x0 = std::pow(q, 2);
+  const double x1 = x0/std::pow(qop0, 3);
+  const double x2 = std::pow(qop0, -2);
+  const double x3 = x0*x2;
+  const double x4 = std::sqrt(std::pow(mass, 2) + x3);
+  const double x5 = std::pow(dEdx, 2);
+  const double x6 = std::pow(s, 2)*x5;
+  const double x7 = dEdx*x4;
+  const double x8 = s*x7;
+  const double x9 = q/std::pow(x3 + x6 + 2*x8, 3.0/2.0);
+  const double x10 = std::pow(W0z, 2);
+  const double x11 = std::pow(W0x, 2);
+  const double x12 = std::pow(W0y, 2);
+  const double x13 = x11 + x12;
+  const double x14 = 1.0/x13;
+  const double x15 = std::pow(x10*x14 + 1, -1.0/2.0);
+  const double x16 = std::pow(Bz, 2);
+  const double x17 = std::pow(Bx, 2) + std::pow(By, 2) + x16;
+  const double x18 = std::sqrt(x17);
+  const double x19 = s*x18;
+  const double x20 = qop0*x19;
+  const double x21 = std::sin(x20);
+  const double x22 = std::pow(x17, 5.0/2.0)*x21;
+  const double x23 = x15*x22;
+  const double x24 = std::sqrt(x13);
+  const double x25 = 1.0/x24;
+  const double x26 = W0z*x25;
+  const double x27 = Bx*W0y;
+  const double x28 = By*W0x;
+  const double x29 = x25*x27 - x25*x28;
+  const double x30 = std::pow(x17, 2);
+  const double x31 = std::cos(x20);
+  const double x32 = x31 - 1;
+  const double x33 = x30*x32;
+  const double x34 = x15*x33;
+  const double x35 = x29*x34;
+  const double x36 = std::pow(x17, 3);
+  const double x37 = W0x*x25;
+  const double x38 = W0z*x37;
+  const double x39 = W0y*x25;
+  const double x40 = W0z*x39;
+  const double x41 = -M0x*x38 - M0y*x40 + M0z*(x11*x25 + x12*x25);
+  const double x42 = x24*x41;
+  const double x43 = x36*x42;
+  const double x44 = x20 - x21;
+  const double x45 = std::pow(x17, 3.0/2.0);
+  const double x46 = Bx*x15;
+  const double x47 = By*x15;
+  const double x48 = Bz*x15;
+  const double x49 = x26*x48;
+  const double x50 = x37*x46 + x39*x47 + x49;
+  const double x51 = x45*x50;
+  const double x52 = x44*x51;
+  const double x53 = Bz*x52 + qop0*x43 + x23*x26 + x35;
+  const double x54 = 1.0/x36;
+  const double x55 = x2*x54;
+  const double x56 = x53*x55;
+  const double x57 = x31*x36;
+  const double x58 = x15*x57;
+  const double x59 = x26*x58;
+  const double x60 = x23*x29;
+  const double x61 = -x19*x31 + x19;
+  const double x62 = Bz*x51;
+  const double x63 = 1.0/qop0;
+  const double x64 = x54*x63;
+  const double x65 = x64*(s*x59 - s*x60 + x43 + x61*x62);
+  const double x66 = x33*x50;
+  const double x67 = -Bz*x66 + x59 - x60;
+  const double x68 = x54*x67;
+  const double x69 = W0y*x23;
+  const double x70 = x26*x46;
+  const double x71 = x37*x48;
+  const double x72 = x70 - x71;
+  const double x73 = x24*x33;
+  const double x74 = -M0x*x39 + M0y*x37;
+  const double x75 = W0z*x41;
+  const double x76 = W0x*x74 - W0y*x75;
+  const double x77 = x36*x76;
+  const double x78 = By*x24;
+  const double x79 = qop0*x77 + x52*x78 + x69 - x72*x73;
+  const double x80 = x25*x55;
+  const double x81 = s*x58;
+  const double x82 = x22*x72;
+  const double x83 = s*x24;
+  const double x84 = x51*x61;
+  const double x85 = W0y*x81 + x77 + x78*x84 + x82*x83;
+  const double x86 = x25*x64;
+  const double x87 = x39*x58;
+  const double x88 = -By*x66 + x82 + x87;
+  const double x89 = x54*x88;
+  const double x90 = W0x*x23;
+  const double x91 = x26*x47;
+  const double x92 = x39*x48;
+  const double x93 = x91 - x92;
+  const double x94 = W0x*x75 + W0y*x74;
+  const double x95 = x36*x94;
+  const double x96 = Bx*x24;
+  const double x97 = -qop0*x95 + x52*x96 + x73*x93 + x90;
+  const double x98 = x22*x93;
+  const double x99 = W0x*x81 - x83*x98 + x84*x96 - x95;
+  const double x100 = x37*x58;
+  const double x101 = -Bx*x66 + x100 - x98;
+  const double x102 = x101*x54;
+  const double x103 = -x102*(-x80*x97 + x86*x99) - x68*(-x56 + x65) - x89*(-x79*x80 + x85*x86);
+  const double x104 = x9*(-s*x5 - x7);
+  const double x105 = W0z*x14;
+  const double x106 = W0x*x105;
+  const double x107 = W0y*x105;
+  const double x108 = -x106*x46 - x107*x47 + x48;
+  const double x109 = Bz*x108;
+  const double x110 = x44*x45;
+  const double x111 = x109*x110 + x23 - x26*x35;
+  const double x112 = std::pow(x17, -6);
+  const double x113 = x112*x63;
+  const double x114 = x113*x67;
+  const double x115 = x107*x48 + x47;
+  const double x116 = x108*x110;
+  const double x117 = x115*x73 + x116*x96 - x23*x38;
+  const double x118 = x113*x25;
+  const double x119 = x101*x118;
+  const double x120 = x106*x48 + x46;
+  const double x121 = x116*x78 - x120*x73 - x23*x40;
+  const double x122 = x118*x88;
+  const double x123 = -x111*x114 - x117*x119 - x121*x122;
+  const double x124 = Bx*W0x;
+  const double x125 = By*W0y;
+  const double x126 = x124*x25 + x125*x25;
+  const double x127 = x37*x47 - x39*x46;
+  const double x128 = Bz*x127;
+  const double x129 = x110*x128 + x126*x34;
+  const double x130 = x33*x48;
+  const double x131 = x110*x127;
+  const double x132 = -W0y*x130 + x131*x78 + x90;
+  const double x133 = -W0x*x130 + x131*x96 - x69;
+  const double x134 = -x114*x129 - x119*x133 - x122*x132;
+  const double x135 = x102*x39 - x37*x89;
+  const double x136 = x102*x38 - x24*x68 + x40*x89;
+  const double x137 = 6*Bz;
+  const double x138 = x137/std::pow(x17, 4);
+  const double x139 = x138*x63;
+  const double x140 = x139*x53;
+  const double x141 = x21*x45;
+  const double x142 = 5*x141;
+  const double x143 = x30*x31;
+  const double x144 = qop0*s;
+  const double x145 = x143*x144;
+  const double x146 = x17*x32;
+  const double x147 = 4*x146;
+  const double x148 = x29*x48;
+  const double x149 = x144*x148;
+  const double x150 = Bz*qop0;
+  const double x151 = 6*x30;
+  const double x152 = x150*x151;
+  const double x153 = x16*x50;
+  const double x154 = 3*x18*x44;
+  const double x155 = s*x150;
+  const double x156 = x155/x18;
+  const double x157 = -x156*x31 + x156;
+  const double x158 = x64*(x110*x49 - x141*x149 + x142*x49 + x145*x49 + x147*x148 + x152*x42 + x153*x154 + x157*x62 + x52);
+  const double x159 = x139*x25;
+  const double x160 = x142*x48;
+  const double x161 = x145*x48;
+  const double x162 = W0z*x110;
+  const double x163 = Bz*x72;
+  const double x164 = x147*x24;
+  const double x165 = x155*x72;
+  const double x166 = x141*x24;
+  const double x167 = Bz*x50;
+  const double x168 = x154*x167;
+  const double x169 = x157*x51;
+  const double x170 = W0x*x34 + W0y*x160 + W0y*x161 + x152*x76 + x162*x47 - x163*x164 + x165*x166 + x168*x78 + x169*x78;
+  const double x171 = Bz*x93;
+  const double x172 = x155*x93;
+  const double x173 = W0x*x160 + W0x*x161 - W0y*x34 - x152*x94 + x162*x46 + x164*x171 - x166*x172 + x168*x96 + x169*x96;
+  const double x174 = -x102*(-x159*x97 + x173*x86) - x68*(-x140 + x158) - x89*(-x159*x79 + x170*x86);
+  const double x175 = std::pow(x88, 2);
+  const double x176 = std::pow(x101, 2);
+  const double x177 = x112*x175 + x112*x176;
+  const double x178 = 1.0/x177;
+  const double x179 = x112*x178;
+  const double x180 = 1.0/(x179*std::pow(x67, 2) + 1);
+  const double x181 = s*x21;
+  const double x182 = x15*std::pow(x17, 7.0/2.0);
+  const double x183 = x182*x26;
+  const double x184 = x22*x50;
+  const double x185 = s*x184;
+  const double x186 = std::pow(x177, -1.0/2.0);
+  const double x187 = x186*x54;
+  const double x188 = x181*x182;
+  const double x189 = x188*x39;
+  const double x190 = s*x57;
+  const double x191 = x190*x72;
+  const double x192 = By*x185;
+  const double x193 = (1.0/2.0)*x112;
+  const double x194 = x193*x88;
+  const double x195 = x188*x37;
+  const double x196 = x190*x93;
+  const double x197 = Bx*x185;
+  const double x198 = x101*x193;
+  const double x199 = x68/std::pow(x177, 3.0/2.0);
+  const double x200 = qop0*x21;
+  const double x201 = qop0*x58;
+  const double x202 = x182*x200;
+  const double x203 = x202*x39;
+  const double x204 = qop0*x57;
+  const double x205 = x204*x72;
+  const double x206 = qop0*x184;
+  const double x207 = By*x206;
+  const double x208 = x202*x37;
+  const double x209 = x204*x93;
+  const double x210 = Bx*x206;
+  const double x211 = x180*(x187*(x150*x184 - x183*x200 - x201*x29) + x199*(-x194*(-2*x203 + 2*x205 + 2*x207) - x198*(-2*x208 - 2*x209 + 2*x210)));
+  const double x212 = x107*x58;
+  const double x213 = x120*x22;
+  const double x214 = x108*x33;
+  const double x215 = By*x214;
+  const double x216 = x106*x58;
+  const double x217 = x115*x22;
+  const double x218 = Bx*x214;
+  const double x219 = x22*x92;
+  const double x220 = 2*x219;
+  const double x221 = x127*x33;
+  const double x222 = By*x221;
+  const double x223 = x22*x71;
+  const double x224 = 2*x223;
+  const double x225 = Bx*x221;
+  const double x226 = x151*x31;
+  const double x227 = qop0*x181;
+  const double x228 = x137/std::pow(x17, 7);
+  const double x229 = x23*x37;
+  const double x230 = 12*x143;
+  const double x231 = x33*x91;
+  const double x232 = 10*x141;
+  const double x233 = x143*x165;
+  const double x234 = By*x167;
+  const double x235 = 8*x146;
+  const double x236 = x227*x62;
+  const double x237 = By*x236;
+  const double x238 = x23*x39;
+  const double x239 = x33*x70;
+  const double x240 = x143*x172;
+  const double x241 = Bx*x167;
+  const double x242 = Bx*x236;
+  const double x243 = x101*x179;
+  const double x244 = x179*x88;
+  const double x245 = x243*(-x203 + x205 + x207) - x244*(-x208 - x209 + x210);
+  const double x246 = x33*(Bz*W0z + x124 + x125);
+  const double x247 = -By*x246 + W0y*x57 + x22*(Bx*W0z - Bz*W0x);
+  const double x248 = x10 + x13;
+  const double x249 = 1.0/x248;
+  const double x250 = x112*x249;
+  const double x251 = std::pow(x247, 2)*x250;
+  const double x252 = -Bx*x246 + W0x*x57 - x22*(By*W0z - Bz*W0y);
+  const double x253 = x250*std::pow(x252, 2);
+  const double x254 = std::pow(x251 + x253, -1.0/2.0);
+  const double x255 = x247*x254;
+  const double x256 = x2*x97;
+  const double x257 = std::pow(x14*x248, -1.0/2.0);
+  const double x258 = x14*x257;
+  const double x259 = x112*x258;
+  const double x260 = x252*x254;
+  const double x261 = x2*x79;
+  const double x262 = x113*x258;
+  const double x263 = x260*x262;
+  const double x264 = x255*x262;
+  const double x265 = qop0*x24;
+  const double x266 = qop0*x18;
+  const double x267 = -x266*x31 + x266;
+  const double x268 = x267*x51;
+  const double x269 = W0y*x201 + x265*x82 + x268*x78;
+  const double x270 = W0x*x201 - x265*x98 + x268*x96;
+  const double x271 = x263*x269 - x264*x270;
+  const double x272 = x258*x54;
+  const double x273 = x257*x54;
+  const double x274 = x228*x258;
+  const double x275 = x255*x63;
+  const double x276 = x260*x63;
+  const double x277 = -Bz*x246 + W0z*x57 - x22*(x27 - x28);
+  const double x278 = x249*x25*x277/std::pow(x17, 9);
+  const double x279 = x255*x278;
+  const double x280 = x279*x63;
+  const double x281 = x276*x278;
+  const double x282 = x251*x254 + x253*x254;
+  const double x283 = x282*x64;
+  const double x284 = -x269*x280 - x270*x281 + x283*(qop0*x59 - qop0*x60 + x267*x62);
+  const double x285 = x250*x277;
+  const double x286 = x255*x285;
+  const double x287 = x260*x285;
+  const double x288 = x137*x249*x25*x277/std::pow(x17, 10);
+  const double dqopdqop0 = x103*x104 + x9*(dEdx*s*x1/x4 + x1);
+  const double dqopdlam0 = x104*x123;
+  const double dqopdphi0 = x104*x134;
+  const double dqopdxt0 = x104*x135;
+  const double dqopdyt0 = x104*x136;
+  const double dqopdBz = x104*x174;
+  const double dqopdxi = x9*(-x6 - x8);
+  const double dlamdqop0 = x103*x211 + x180*(x187*(Bz*x185 - x181*x183 - x29*x81) + x199*(-x194*(-2*x189 + 2*x191 + 2*x192) - x198*(-2*x195 - 2*x196 + 2*x197)));
+  const double dlamdlam0 = x123*x211 + x180*(x187*(-x109*x33 + x26*x60 + x58) + x199*(-x194*(-2*x212 + 2*x213 - 2*x215) - x198*(-2*x216 - 2*x217 - 2*x218)));
+  const double dlamdphi0 = x134*x211 + x180*(x187*(-x126*x23 - x128*x33) + x199*(-x194*(2*x100 + x220 - 2*x222) - x198*(x224 - 2*x225 - 2*x87)));
+  const double dlamdxt0 = x135*x211;
+  const double dlamdyt0 = x136*x211;
+  const double dlamdBz = x174*x211 + x180*(-x138*x186*x67 + x187*(-x142*x148 - x143*x149 - x144*x22*x49 - x147*x153 + x16*x227*x51 + x226*x49 - x33*x49 - x66) + x199*(x175*x228 + x176*x228 - x194*(-x144*x220 + x163*x232 - 2*x229 + x230*x92 - 2*x231 + 2*x233 - x234*x235 + 2*x237) - x198*(-x144*x224 - x171*x232 + x230*x71 - x235*x241 + 2*x238 - 2*x239 - 2*x240 + 2*x242)));
+  const double dlamdxi = 0;
+  const double dphidqop0 = x103*x245 + x243*(-x189 + x191 + x192) - x244*(-x195 - x196 + x197);
+  const double dphidlam0 = x123*x245 + x243*(-x212 + x213 - x215) - x244*(-x216 - x217 - x218);
+  const double dphidphi0 = x134*x245 + x243*(x100 + x219 - x222) - x244*(x223 - x225 - x87);
+  const double dphidxt0 = x135*x245;
+  const double dphidyt0 = x136*x245;
+  const double dphidBz = x102*x178*(-x138*x88 + x54*(x142*x163 - x144*x219 - x147*x234 + x226*x92 - x229 - x231 + x233 + x237)) + x174*x245 - x178*x89*(-x101*x138 + x54*(-x142*x171 - x144*x223 - x147*x241 + x226*x71 + x238 - x239 - x240 + x242));
+  const double dphidxi = 0;
+  const double dxtdqop0 = x103*x271 + x255*x256*x259 - x259*x260*x261 + x263*x85 - x264*x99;
+  const double dxtdlam0 = -x117*x264 + x121*x263 + x123*x271;
+  const double dxtdphi0 = x132*x263 - x133*x264 + x134*x271;
+  const double dxtdxt0 = W0x*x260*x272 + W0y*x255*x272 + x135*x271;
+  const double dxtdyt0 = x106*x255*x273 - x107*x260*x273 + x136*x271;
+  const double dxtdBz = x170*x263 - x173*x264 + x174*x271 + x274*x275*x97 - x274*x276*x79;
+  const double dxtdxi = 0;
+  const double dytdqop0 = x103*x284 + x256*x260*x278 + x261*x279 - x280*x85 - x281*x99 - x282*x56 + x282*x65;
+  const double dytdlam0 = x111*x283 - x117*x281 - x121*x280 + x123*x284;
+  const double dytdphi0 = x129*x283 - x132*x280 - x133*x281 + x134*x284;
+  const double dytdxt0 = x135*x284 - x286*x37 + x287*x39;
+  const double dytdyt0 = x136*x284 + x24*x282 + x286*x40 + x287*x38;
+  const double dytdBz = -x140*x282 + x158*x282 - x170*x280 - x173*x281 + x174*x284 + x275*x288*x79 + x276*x288*x97;
+  const double dytdxi = 0;
+  Eigen::Matrix<double, 5, 7> res;
+  res(0,0) = dqopdqop0;
+  res(0,1) = dqopdlam0;
+  res(0,2) = dqopdphi0;
+  res(0,3) = dqopdxt0;
+  res(0,4) = dqopdyt0;
+  res(0,5) = dqopdBz;
+  res(0,6) = dqopdxi;
+  res(1,0) = dlamdqop0;
+  res(1,1) = dlamdlam0;
+  res(1,2) = dlamdphi0;
+  res(1,3) = dlamdxt0;
+  res(1,4) = dlamdyt0;
+  res(1,5) = dlamdBz;
+  res(1,6) = dlamdxi;
+  res(2,0) = dphidqop0;
+  res(2,1) = dphidlam0;
+  res(2,2) = dphidphi0;
+  res(2,3) = dphidxt0;
+  res(2,4) = dphidyt0;
+  res(2,5) = dphidBz;
+  res(2,6) = dphidxi;
+  res(3,0) = dxtdqop0;
+  res(3,1) = dxtdlam0;
+  res(3,2) = dxtdphi0;
+  res(3,3) = dxtdxt0;
+  res(3,4) = dxtdyt0;
+  res(3,5) = dxtdBz;
+  res(3,6) = dxtdxi;
+  res(4,0) = dytdqop0;
+  res(4,1) = dytdlam0;
+  res(4,2) = dytdphi0;
+  res(4,3) = dytdxt0;
+  res(4,4) = dytdyt0;
+  res(4,5) = dytdBz;
+  res(4,6) = dytdxi;
+
+  res.col(5) *= 2.99792458e-3;
+  
+  return res;
+
+  
+}
+
+Eigen::Matrix<double, 5, 7> Geant4ePropagator::transportJacobianBzD(const Eigen::Matrix<double, 7, 1> &start, double s, double dEdx, double mass) const {
+  
+  if (s==0.) {
+    Eigen::Matrix<double, 5, 7> res;
+    res.leftCols<5>() = Eigen::Matrix<double, 5, 5>::Identity();
+    res.rightCols<2>() = Eigen::Matrix<double, 5, 2>::Zero();
+    return res;
+  }
+  
+  const GlobalPoint pos(start[0], start[1], start[2]);  
+  const GlobalVector &bfield = theField->inInverseGeV(pos);
+  
+  const double Bx = bfield.x();
+  const double By = bfield.y();
+  const double Bz = bfield.z();
+  
+  const double M0x = start[0];
+  const double M0y = start[1];
+  const double M0z = start[2];
+  
+  const Eigen::Matrix<double, 3, 1> W0 = start.segment<3>(3).normalized();
+  const double W0x = W0[0];
+  const double W0y = W0[1];
+  const double W0z = W0[2];
+  
+  const double q = start[6];
+  const double qop0 = q/start.segment<3>(3).norm();
               
   const double x0 = std::pow(q, 2);
   const double x1 = x0/std::pow(qop0, 3);

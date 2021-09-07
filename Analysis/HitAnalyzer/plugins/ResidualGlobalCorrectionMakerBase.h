@@ -214,7 +214,10 @@ protected:
   
   Matrix<double, 5, 5> curv2localJacobianAlteloss(const TrajectoryStateOnSurface &state, double dEdx, double mass) const;
   
+  Matrix<double, 5, 5> curv2localJacobianAltelossD(const Matrix<double, 7, 1> &state, const MagneticField *field, const GloballyPositioned<double> &surface, double dEdx, double mass) const;
+  
   Matrix<double, 6, 5> curv2cartJacobianAlt(const FreeTrajectoryState &state) const;
+  Matrix<double, 6, 5> curv2cartJacobianAltD(const Matrix<double, 7, 1> &state) const;
                                                              
   Matrix<double, 5, 6> hybrid2curvJacobian(const FreeTrajectoryState &state) const;
          
@@ -265,6 +268,16 @@ protected:
   Matrix<double, 1, 6> mrJacobian(const FreeTrajectoryState &state0, const FreeTrajectoryState &state1, double dmass) const;
   
   Matrix<double, 5, 1> elossAdHocJacobian(const FreeTrajectoryState &state, double mass) const;
+  Matrix<double, 5, 1> elossAdHocJacobianD(const Matrix<double, 7, 1> &state, double mass) const;
+  
+
+//   Point3DBase<double, GlobalTag> toGlobal(const Surface &surface, const Point3DBase<double, LocalTag> &lp) const;
+//   
+//   Vector3DBase<double, GlobalTag> toGlobal(const Surface &surface, const Vector3DBase<double, LocalTag> &lv) const;
+//   
+//   Point3DBase<double, LocalTag> toLocal(const Surface &surface, const Point3DBase<double, GlobalTag> &gp) const;
+//   
+//   Vector3DBase<double, LocalTag> toLocal(const Surface &surface, const Vector3DBase<double, GlobalTag> &gv) const;
   
   // ----------member data ---------------------------
   edm::EDGetTokenT<std::vector<Trajectory>> inputTraj_;
@@ -385,6 +398,7 @@ protected:
   std::map<DetId, std::array<int, 3>> detidlayermap;
   
   std::map<DetId, ReferenceCountingPointer<Plane>> surfacemap_;
+  std::map<DetId, GloballyPositioned<double>> surfacemapD_;
   std::vector<float> corparms_;
   
   unsigned int run;
