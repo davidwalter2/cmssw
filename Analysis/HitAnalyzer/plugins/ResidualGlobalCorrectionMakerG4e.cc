@@ -1648,7 +1648,6 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
 //         const Matrix<double, 6, 1> globupd = Map<const Matrix<double, 6, 1>>(glob.Array()) + jac*dxlocal;
         const Matrix<double, 6, 1> globupd = refFts.head<6>() + jac*dxlocal;
         
-        refFts.head<3>() = globupd.head<3>();
         
         const double qbp = refFts[6]/refFts.segment<3>(3).norm();
         const double lam = std::atan(refFts[5]/std::sqrt(refFts[3]*refFts[3] + refFts[4]*refFts[4]));
@@ -1679,6 +1678,7 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
         const double pyupd = pupd*std::cos(lamupd)*std::sin(phiupd);
         const double pzupd = pupd*std::sin(lamupd);
         
+        refFts.head<3>() = globupd.head<3>();
         refFts[3] = pxupd;
         refFts[4] = pyupd;
         refFts[5] = pzupd;
@@ -2109,7 +2109,6 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
           const double localmomfact = signpz/std::sqrt(1. + dxdzupd*dxdzupd + dydzupd*dydzupd);
           const Vector3DBase<double, LocalTag> localmomupd(pupd*dxdzupd*localmomfact, pupd*dydzupd*localmomfact, pupd*localmomfact);
           const Vector3DBase<double, GlobalTag> momupd = surface.toGlobal(localmomupd);
-//           const Vector3DBase<double, GlobalTag> momupd = toGlobal(surface, localmomupd);
                     
           oldtsos[0] = posupd.x();
           oldtsos[1] = posupd.y();
@@ -3413,7 +3412,7 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
         break;
       }
       
-      std::cout << "iiter = " << iiter << " edmval = " << edmval << " chisqval = " << chisqval << std::endl;
+//       std::cout << "iiter = " << iiter << " edmval = " << edmval << " chisqval = " << chisqval << std::endl;
 //       std::cout <<"dxRef" << std::endl;
 //       std::cout << dxRef << std::endl;
 //       std::cout <<"dxOut" << std::endl;

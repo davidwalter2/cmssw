@@ -220,6 +220,8 @@ protected:
   Matrix<double, 6, 5> curv2cartJacobianAltD(const Matrix<double, 7, 1> &state) const;
                                                              
   Matrix<double, 5, 6> hybrid2curvJacobian(const FreeTrajectoryState &state) const;
+  
+  Matrix<double, 5, 6> hybrid2curvJacobianD(const Matrix<double, 7, 1> &state, const MagneticField *field) const;
          
   Matrix<double, 5, 7> hybrid2localTransportJacobian(const FreeTrajectoryState& start,
                                               const std::pair<TrajectoryStateOnSurface, double>& propresult) const;
@@ -262,6 +264,8 @@ protected:
   Matrix<double, 6, 6> cartesianToCartesianJacobian(const FreeTrajectoryState &state) const;
   
   Matrix<double, 1, 6> massJacobianAlt(const FreeTrajectoryState &state0, const FreeTrajectoryState &state1, double dmass) const;
+  
+  Matrix<double, 1, 6> massJacobianAltD(const Matrix<double, 7, 1> &state0, const Matrix<double, 7, 1> &state1, double dmass) const;
   
   Matrix<double, 1, 6> massJacobianInvSq(const FreeTrajectoryState &state0, const FreeTrajectoryState &state1, double dmass) const;
   

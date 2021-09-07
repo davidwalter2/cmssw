@@ -646,21 +646,45 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
         }
         
         const std::vector<RefCountedKinematicParticle> outparts = kinTree->finalStateParticles();
-        std::array<FreeTrajectoryState, 2> refftsarr = {{ outparts[0]->currentState().freeTrajectoryState(),
-                                                          outparts[1]->currentState().freeTrajectoryState() }};
-                                                          
+//         std::array<Matrix<double, 7, 1>, 2> refftsarr = {{ outparts[0]->currentState().freeTrajectoryState(),
+//                                                           outparts[1]->currentState().freeTrajectoryState() }};
+              
+        std::array<Matrix<double, 7, 1>, 2> refftsarr;
+        
         if (fitFromGenParms_ && mu0gen != nullptr && mu1gen != nullptr) {
-          GlobalPoint pos0(mu0gen->vertex().x(), mu0gen->vertex().y(), mu0gen->vertex().z());
-          GlobalVector mom0(mu0gen->momentum().x(), mu0gen->momentum().y(), mu0gen->momentum().z());
+          refftsarr[0][0] = mu0gen->vertex().x();
+          refftsarr[0][1] = mu0gen->vertex().y();
+          refftsarr[0][2] = mu0gen->vertex().z();
+          refftsarr[0][3] = mu0gen->momentum().x();
+          refftsarr[0][4] = mu0gen->momentum().y();
+          refftsarr[0][5] = mu0gen->momentum().z();
+          refftsarr[0][6] = mu0gen->charge();
           
-          GlobalPoint pos1(mu1gen->vertex().x(), mu1gen->vertex().y(), mu1gen->vertex().z());
-          GlobalVector mom1(mu1gen->momentum().x(), mu1gen->momentum().y(), mu1gen->momentum().z());
+          refftsarr[1][0] = mu1gen->vertex().x();
+          refftsarr[1][1] = mu1gen->vertex().y();
+          refftsarr[1][2] = mu1gen->vertex().z();
+          refftsarr[1][3] = mu1gen->momentum().x();
+          refftsarr[1][4] = mu1gen->momentum().y();
+          refftsarr[1][5] = mu1gen->momentum().z();
+          refftsarr[1][6] = mu1gen->charge();
+        }
+        else {
+          for (unsigned int id = 0; id < 2; ++id) {
+            const GlobalPoint pos = outparts[id]->currentState().freeTrajectoryState().position();
+            const GlobalVector mom = outparts[id]->currentState().freeTrajectoryState().momentum();
+            
+            refftsarr[id][0] = pos.x();
+            refftsarr[id][1] = pos.y();
+            refftsarr[id][2] = pos.z();
+            refftsarr[id][3] = mom.x();
+            refftsarr[id][4] = mom.y();
+            refftsarr[id][5] = mom.z();
+            refftsarr[id][6] = outparts[id]->currentState().freeTrajectoryState().charge();
+          }
           
-          refftsarr[0] = FreeTrajectoryState(pos0, mom0, mu0gen->charge(), field);
-          refftsarr[1] = FreeTrajectoryState(pos1, mom1, mu1gen->charge(), field);
         }
         
-        std::array<std::vector<TrajectoryStateOnSurface>, 2> layerStatesarr;
+        std::array<std::vector<Matrix<double, 7, 1>>, 2> layerStatesarr;
         for (unsigned int id = 0; id < 2; ++id) {
           auto const &hits = hitsarr[id];
           layerStatesarr[id].reserve(hits.size());
@@ -706,10 +730,12 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
           
           for (unsigned int id = 0; id < 2; ++id) {
     //         FreeTrajectoryState refFts = outparts[id]->currentState().freeTrajectoryState();
-            FreeTrajectoryState &refFts = refftsarr[id];
+//             FreeTrajectoryState &refFts = refftsarr[id];
+            
+            Matrix<double, 7, 1> &refFts = refftsarr[id];
             auto &hits = hitsarr[id];
             
-            std::vector<TrajectoryStateOnSurface> &layerStates = layerStatesarr[id];
+            std::vector<Matrix<double, 7, 1>> &layerStates = layerStatesarr[id];
                       
             trackstateidxarr[id] = trackstateidx;
             trackparmidxarr[id] = parmidx;
@@ -719,26 +745,14 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
 //             if (iiter > 0 || icons > 0) {
             if (iiter > 0) {
               //update current state from reference point state (errors not needed beyond first iteration)
-//               JacobianCurvilinearToCartesian curv2cart(refFts.parameters());
-//               const AlgebraicMatrix65& jac = curv2cart.jacobian();
-//               const Matrix<double, 6, 5> jac = curv2cartJacobianAlt(refFts);
-              const AlgebraicVector6 glob = refFts.parameters().vector();
+
+              const double qbp = refFts[6]/refFts.segment<3>(3).norm();
+              const double lam = std::atan(refFts[5]/std::sqrt(refFts[3]*refFts[3] + refFts[4]*refFts[4]));
+              const double phi = std::atan2(refFts[4], refFts[3]);
               
-              const Matrix<double, 3, 1> posupd = Map<const Matrix<double, 6, 1>>(glob.Array()).head<3>() + dxfull.head<3>();
-              
-//               const Matrix<double, 3, 1> momupd = Map<const Matrix<double, 6, 1>>(glob.Array()).tail<3>() + Map<const Matrix<double, 6, 5, RowMajor>>(jac.Array()).bottomLeftCorner<3, 3>()*dxfull.segment<3>(trackstateidx);
-//               const Matrix<double, 3, 1> momupd = Map<const Matrix<double, 6, 1>>(glob.Array()).tail<3>() + jac.bottomLeftCorner<3, 3>()*dxfull.segment<3>(trackstateidx);
-              
-              const GlobalPoint pos(posupd[0], posupd[1], posupd[2]);
-//               const GlobalVector mom(momupd[0], momupd[1], momupd[2]);
-//               const double charge = std::copysign(1., refFts.charge()/refFts.momentum().mag() + dxfull[trackstateidx]);
-              
-              
-              const CurvilinearTrajectoryParameters curv(refFts.position(), refFts.momentum(), refFts.charge());
-              
-              const double qbpupd = curv.Qbp() + dxfull(trackstateidx);
-              const double lamupd = curv.lambda() + dxfull(trackstateidx + 1);
-              const double phiupd = curv.phi() + dxfull(trackstateidx + 2);
+              const double qbpupd = qbp + dxfull(trackstateidx);
+              const double lamupd = lam + dxfull(trackstateidx + 1);
+              const double phiupd = phi + dxfull(trackstateidx + 2);
               
               const double charge = std::copysign(1., qbpupd);
               const double pupd = std::abs(1./qbpupd);
@@ -747,77 +761,52 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
               const double pyupd = pupd*std::cos(lamupd)*std::sin(phiupd);
               const double pzupd = pupd*std::sin(lamupd);
               
-              const GlobalVector mom(pxupd, pyupd, pzupd);
-              
-        //         std::cout << "before update: reffts:" << std::endl;
-        //         std::cout << refFts.parameters().vector() << std::endl;
-              
-//               const double etaold = refFts.momentum().eta();
-        //         std::cout << "charge " << refFts.charge() << std::endl;
-              refFts = FreeTrajectoryState(pos, mom, charge, field);
-              
-//               const double etanew = refFts.momentum().eta();
-              
-//               const double deta = etanew - etaold;
-//               std::cout << "delta eta iter update = " << deta << std::endl;
-              
-//               if (abs(deta) > 1e-5) {
-//                 std::cout << "anomalous deta" << std::endl;
-//                 std::cout << "etaold = " << etaold << " etanew = " << etanew << std::endl;
-//                 std::cout << "momold:" << std::endl;
-//                 std::cout << Map<const Matrix<double, 6, 1>>(glob.Array()).tail<3>() << std::endl;
-//                 std::cout << "momupd" << std::endl;
-//                 std::cout << momupd << std::endl;
-//                 std::cout << "dmom" << std::endl;
-//                 std::cout << jac.bottomLeftCorner<3, 3>()*dxfull.segment<3>(trackstateidx) << std::endl;
-//                 std::cout << "dxmom" << std::endl;
-//                 std::cout << dxfull.segment<3>(trackstateidx) << std::endl;
-//                 std::cout << "jac" << std::endl;
-//                 std::cout << jac << std::endl;
-//                 assert(false);
-//               }
-              
-        //         std::cout << "after update: reffts:" << std::endl;
-        //         std::cout << refFts.parameters().vector() << std::endl;
-        //         std::cout << "charge " << refFts.charge() << std::endl;
-        //         currentFts = refFts;
+              refFts.head<3>() += dxfull.head<3>();
+              refFts[3] = pxupd;
+              refFts[4] = pyupd;
+              refFts[5] = pzupd;
+              refFts[6] = charge;
             }
             
-            // initialize with zero uncertainty
-            refFts = FreeTrajectoryState(refFts.parameters(), nullerr);
-            
-            
-            const Matrix<double, 5, 1> Felossadhoc = elossAdHocJacobian(refFts, mmu);
-            const unsigned int etaphiidx = hetaphi->FindFixBin(refFts.momentum().eta(), refFts.momentum().phi());
-            
-  //           std::cout << "refFts:" << std::endl;
-  //           std::cout << refFts.position() << std::endl;
-  //           std::cout << refFts.momentum() << std::endl;
-  //           std::cout << refFts.charge() << std::endl;
-            
-  //           auto const &surface0 = *hits[0]->surface();
-            auto const &surface0 = *surfacemap_.at(hits[0]->geographicalId());
-  //           auto propresult = fPropagator->geometricalPropagator().propagateWithPath(refFts, surface0);
-      //       auto propresult = fPropagator->geometricalPropagator().propagateWithPath(refFts, *beampipe);
-//             auto const propresultref = g4prop->propagateGenericWithJacobian(refFts, surface0);
-            auto const propresultref = g4prop->propagateGenericWithJacobianAlt(refFts, surface0);
-            if (!std::get<0>(propresultref).isValid()) {
-              std::cout << "Abort: Propagation of reference state Failed!" << std::endl;
-              valid = false;
-              break;
-            }
-            TrajectoryStateOnSurface updtsos = std::get<0>(propresultref);
-            
-            const Matrix<double, 5, 6> hybrid2curvref = hybrid2curvJacobian(refFts);
-            
-  //           JacobianCartesianToCurvilinear cart2curvref(refFts.parameters());
-  //           auto const &jacCart2CurvRef = Map<const Matrix<double, 5, 6, RowMajor>>(cart2curvref.jacobian().Array());
-            
-            Matrix<double, 5, 7> FdFm = Map<const Matrix<double, 5, 7, RowMajor>>(std::get<1>(propresultref).Array());
-            
-            FdFmrefarr[id] = FdFm;
-            
-            double dEdxlast = std::get<3>(propresultref);
+//             // initialize with zero uncertainty
+//             refFts = FreeTrajectoryState(refFts.parameters(), nullerr);
+//             
+            const ROOT::Math::PxPyPzMVector momtmp(refFts[3], refFts[4], refFts[5], mmu);
+            const Matrix<double, 5, 1> Felossadhoc = elossAdHocJacobianD(refFts, mmu);
+            const unsigned int etaphiidx = hetaphi->FindFixBin(momtmp.eta(), momtmp.phi());
+//             
+//   //           std::cout << "refFts:" << std::endl;
+//   //           std::cout << refFts.position() << std::endl;
+//   //           std::cout << refFts.momentum() << std::endl;
+//   //           std::cout << refFts.charge() << std::endl;
+//             
+//   //           auto const &surface0 = *hits[0]->surface();
+//             auto const &surface0 = *surfacemap_.at(hits[0]->geographicalId());
+//   //           auto propresult = fPropagator->geometricalPropagator().propagateWithPath(refFts, surface0);
+//       //       auto propresult = fPropagator->geometricalPropagator().propagateWithPath(refFts, *beampipe);
+// //             auto const propresultref = g4prop->propagateGenericWithJacobian(refFts, surface0);
+//             auto const propresultref = g4prop->propagateGenericWithJacobianAlt(refFts, surface0);
+//             if (!std::get<0>(propresultref).isValid()) {
+//               std::cout << "Abort: Propagation of reference state Failed!" << std::endl;
+//               valid = false;
+//               break;
+//             }
+//             TrajectoryStateOnSurface updtsos = std::get<0>(propresultref);
+//             
+//             const Matrix<double, 5, 6> hybrid2curvref = hybrid2curvJacobian(refFts);
+//             
+//   //           JacobianCartesianToCurvilinear cart2curvref(refFts.parameters());
+//   //           auto const &jacCart2CurvRef = Map<const Matrix<double, 5, 6, RowMajor>>(cart2curvref.jacobian().Array());
+//             
+//             Matrix<double, 5, 7> FdFm = Map<const Matrix<double, 5, 7, RowMajor>>(std::get<1>(propresultref).Array());
+//             
+//             FdFmrefarr[id] = FdFm;
+//             
+//             double dEdxlast = std::get<3>(propresultref);
+
+            const Matrix<double, 5, 6> hybrid2curvref = hybrid2curvJacobianD(refFts, field);
+
+            Matrix<double, 7, 1> updtsos = refFts;
             
             
             if (bsConstraint_) {
@@ -872,9 +861,9 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
               }
               
               Matrix<BSScalar, 3, 1> dbs0;
-              dbs0[0] = BSScalar(refFts.position().x() - x0);
-              dbs0[1] = BSScalar(refFts.position().y() - y0);
-              dbs0[2] = BSScalar(refFts.position().z() - z0);
+              dbs0[0] = BSScalar(refFts[0] - x0);
+              dbs0[1] = BSScalar(refFts[1] - y0);
+              dbs0[2] = BSScalar(refFts[2] - z0);
               
       //         std::cout << "dposition / d(qop, lambda, phi) (should be 0?):" << std::endl;
       //         std::cout << Map<const Matrix<double, 6, 5, RowMajor>>(jac.Array()).topLeftCorner<3,3>() << std::endl;
@@ -912,35 +901,48 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
               const GeomDet* parmDet = isglued ? globalGeometry->idToDet(parmdetid) : hit->det();
               const double xifraction = isglued ? hit->det()->surface().mediumProperties().xi()/parmDet->surface().mediumProperties().xi() : 1.;
 
-              if (ihit > 0) {
-                if (std::abs(updtsos.globalMomentum().eta()) > 4.0) {
-                  std::cout << "WARNING:  Invalid state!!!" << std::endl;
-                  valid = false;
-                  break;
-                }
-                
-                
-      //        auto const &surfaceip1 = *hits[ihit+1]->surface();
-      //           auto const &surface = *hit->surface();
-      //           const Plane &surface = *hit->surface();
-                auto const &surface = *surfacemap_.at(hit->geographicalId());
-      //           auto propresult = thePropagator->propagateWithPath(updtsos, surface);
-//                 auto const propresult = g4prop->propagateGenericWithJacobian(*updtsos.freeState(), surface);
-                auto const propresult = g4prop->propagateGenericWithJacobianAlt(*updtsos.freeState(), surface);
-      //           propresult = fPropagator->geometricalPropagator().propagateWithPath(updtsos, *hits[ihit+1]->surface());
-                if (!std::get<0>(propresult).isValid()) {
-                  std::cout << "Abort: Propagation Failed!" << std::endl;
-                  valid = false;
-                  break;
-                }
-                
-                FdFm = Map<const Matrix<double, 5, 7, RowMajor>>(std::get<1>(propresult).Array());
-      //           FdFm = localTransportJacobian(updtsos, propresult, false);
-                updtsos = std::get<0>(propresult);
-                
-                dEdxlast = std::get<3>(propresult);
+//               if (ihit > 0) {
+//                 if (std::abs(updtsos.globalMomentum().eta()) > 4.0) {
+//                   std::cout << "WARNING:  Invalid state!!!" << std::endl;
+//                   valid = false;
+//                   break;
+//                 }
+//                 
+//                 
+//       //        auto const &surfaceip1 = *hits[ihit+1]->surface();
+//       //           auto const &surface = *hit->surface();
+//       //           const Plane &surface = *hit->surface();
+//                 auto const &surface = *surfacemap_.at(hit->geographicalId());
+//       //           auto propresult = thePropagator->propagateWithPath(updtsos, surface);
+// //                 auto const propresult = g4prop->propagateGenericWithJacobian(*updtsos.freeState(), surface);
+//                 auto const propresult = g4prop->propagateGenericWithJacobianAlt(*updtsos.freeState(), surface);
+//       //           propresult = fPropagator->geometricalPropagator().propagateWithPath(updtsos, *hits[ihit+1]->surface());
+//                 if (!std::get<0>(propresult).isValid()) {
+//                   std::cout << "Abort: Propagation Failed!" << std::endl;
+//                   valid = false;
+//                   break;
+//                 }
+//                 
+//                 FdFm = Map<const Matrix<double, 5, 7, RowMajor>>(std::get<1>(propresult).Array());
+//       //           FdFm = localTransportJacobian(updtsos, propresult, false);
+//                 updtsos = std::get<0>(propresult);
+//                 
+//                 dEdxlast = std::get<3>(propresult);
+//               }
+              
+              
+              const GloballyPositioned<double> &surface = surfacemapD_.at(hit->geographicalId());
+              auto propresult = g4prop->propagateGenericWithJacobianAltD(updtsos, surface);
+              if (!std::get<0>(propresult)) {
+                std::cout << "Abort: Propagation Failed!" << std::endl;
+                valid = false;
+                break;
               }
-                          
+              
+              updtsos = std::get<1>(propresult);
+              const Matrix<double, 5, 5> Qcurv = std::get<2>(propresult);
+              const Matrix<double, 5, 7> FdFm = std::get<3>(propresult);
+              const double dEdxlast = std::get<4>(propresult);
 
 
               
@@ -952,59 +954,154 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
 //               const AlgebraicMatrix55& curv2localjacm = curv2localm.jacobian();
 //               const Matrix<double, 5, 5> Hm = Map<const Matrix<double, 5, 5, RowMajor>>(curv2localjacm.Array()); 
 //               const Matrix<double, 5, 5> Hm = curv2localJacobianAlt(updtsos);
-              const Matrix<double, 5, 5> Hm = curv2localJacobianAlteloss(updtsos, dEdxlast, mmu);
+//               const Matrix<double, 5, 5> Hm = curv2localJacobianAlteloss(updtsos, dEdxlast, mmu);
+              
+              const Matrix<double, 5, 5> Hm = curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, mmu);
               
               //get the process noise matrix
-              AlgebraicMatrix55 const Qmat = updtsos.localError().matrix();
-              const Map<const Matrix<double, 5, 5, RowMajor>>Q(Qmat.Array());
+//               AlgebraicMatrix55 const Qmat = updtsos.localError().matrix();
+//               const Map<const Matrix<double, 5, 5, RowMajor>>Q(Qmat.Array());
+              
+              const Matrix<double, 5, 5> Q = Hm*Qcurv*Hm.transpose();
 
-              // update state from previous iteration
-              //momentum kink residual
-              AlgebraicVector5 idx0(0., 0., 0., 0., 0.);
-//               if (iiter==0 && icons==0) {
+
+              Matrix<double, 5, 1> localparmsprop;
+              const Point3DBase<double, GlobalTag> posprop(updtsos[0], updtsos[1], updtsos[2]);
+              const Vector3DBase<double, GlobalTag> momprop(updtsos[3], updtsos[4], updtsos[5]);
+              
+              const Point3DBase<double, LocalTag> localpos = surface.toLocal(posprop);
+              const Vector3DBase<double, LocalTag> localmom = surface.toLocal(momprop);
+              
+              localparmsprop[0] = updtsos[6]/updtsos.segment<3>(3).norm();
+              localparmsprop[1] = localmom.x()/localmom.z();
+              localparmsprop[2] = localmom.y()/localmom.z();
+              localparmsprop[3] = localpos.x();
+              localparmsprop[4] = localpos.y();        
+              
+              Matrix<double, 5, 1> localparms = localparmsprop;
+
+              Matrix<double, 5, 1> idx0 = Matrix<double, 5, 1>::Zero();
               if (iiter==0) {
-                updtsos.update(updtsos.localParameters(),
-                                LocalTrajectoryError(0.,0.,0.,0.,0.),
-                                updtsos.surface(),
-                                updtsos.magneticField(),
-                                updtsos.surfaceSide());
+      //         if (true) {
                 layerStates.push_back(updtsos);
+      //           layerStatesStart.push_back(updtsos);
+                
+
               }
-              else {          
+              else {
                 //current state from previous state on this layer
-                //save current parameters          
-                TrajectoryStateOnSurface& oldtsos = layerStates[ihit];
+                //save current parameters  
                 
-//                 JacobianCurvilinearToLocal curv2localold(oldtsos.surface(), oldtsos.localParameters(), *oldtsos.magneticField());
-//                 const AlgebraicMatrix55& curv2localjacold = curv2localold.jacobian();
-//                 const Matrix<double, 5, 5> Hold = Map<const Matrix<double, 5, 5, RowMajor>>(curv2localjacold.Array());
-//                 const Matrix<double, 5, 5> Hold = curv2localJacobianAlt(oldtsos);
-                const Matrix<double, 5, 5> Hold = curv2localJacobianAlteloss(oldtsos, dEdxlast, mmu);
-
+                Matrix<double, 7, 1>& oldtsos = layerStates[ihit];
+                const Matrix<double, 5, 5> Hold = curv2localJacobianAltelossD(oldtsos, field, surface, dEdxlast, mmu);
+//                 const Matrix<double, 5, 1> dxlocal = Hold*dxfull.segment<5>(5*(ihit+1));
+                const Matrix<double, 5, 1> dxlocal = Hold*dxfull.segment<5>(trackstateidx + 3 + 5*ihit);
                 
-                const AlgebraicVector5 local = oldtsos.localParameters().vector();
+                const Point3DBase<double, GlobalTag> pos(oldtsos[0], oldtsos[1], oldtsos[2]);
+                const Point3DBase<double, LocalTag> localpos = surface.toLocal(pos);
                 
-                auto const& dxlocal = Hold*dxfull.segment<5>(trackstateidx + 3 + 5*ihit);
-                const Matrix<double, 5, 1> localupd = Map<const Matrix<double, 5, 1>>(local.Array()) + dxlocal;
-                AlgebraicVector5 localvecupd(localupd[0],localupd[1],localupd[2],localupd[3],localupd[4]);
+                const Point3DBase<double, LocalTag> localposupd(localpos.x() + dxlocal[3], localpos.y() + dxlocal[4], localpos.z());
+                const Point3DBase<double, GlobalTag> posupd = surface.toGlobal(localposupd);
+              
                 
-                idx0 = localvecupd - updtsos.localParameters().vector();
+                const Vector3DBase<double, GlobalTag> mom(oldtsos[3], oldtsos[4], oldtsos[5]);
+                const Vector3DBase<double, LocalTag> localmom = surface.toLocal(mom);
                 
-                const LocalTrajectoryParameters localparms(localvecupd, oldtsos.localParameters().pzSign());
+                const double dxdz = localmom.x()/localmom.z();
+                const double dydz = localmom.y()/localmom.z();
                 
-      //           std::cout << "before update: oldtsos:" << std::endl;
-      //           std::cout << oldtsos.localParameters().vector() << std::endl;
-  //               oldtsos.update(localparms, oldtsos.surface(), field, oldtsos.surfaceSide());
-                oldtsos.update(localparms, LocalTrajectoryError(0.,0.,0.,0.,0.), oldtsos.surface(), field, oldtsos.surfaceSide());
-      //           std::cout << "after update: oldtsos:" << std::endl;
-      //           std::cout << oldtsos.localParameters().vector() << std::endl;
+                
+                
+                const double dxdzupd = dxdz + dxlocal[1];
+                const double dydzupd = dydz + dxlocal[2];
+                
+                const double qop = oldtsos[6]/oldtsos.segment<3>(3).norm();
+                const double qopupd = qop + dxlocal[0];
+                
+                const double pupd = std::abs(1./qopupd);
+                const double charge = std::copysign(1., qopupd);
+                
+                const double signpz = std::copysign(1., localmom.z());
+                const double localmomfact = signpz/std::sqrt(1. + dxdzupd*dxdzupd + dydzupd*dydzupd);
+                const Vector3DBase<double, LocalTag> localmomupd(pupd*dxdzupd*localmomfact, pupd*dydzupd*localmomfact, pupd*localmomfact);
+                const Vector3DBase<double, GlobalTag> momupd = surface.toGlobal(localmomupd);
+                          
+                oldtsos[0] = posupd.x();
+                oldtsos[1] = posupd.y();
+                oldtsos[2] = posupd.z();
+                oldtsos[3] = momupd.x();
+                oldtsos[4] = momupd.y();
+                oldtsos[5] = momupd.z();
+                oldtsos[6] = charge;          
+                
                 updtsos = oldtsos;
-
+                          
+                localparms[0] = qopupd;
+                localparms[1] = dxdzupd;
+                localparms[2] = dydzupd;
+                localparms[3] = localposupd.x();
+                localparms[4] = localposupd.y();
+                
+                idx0 = localparms - localparmsprop;
+                
               }
+              
+              
+//               // update state from previous iteration
+//               //momentum kink residual
+//               AlgebraicVector5 idx0(0., 0., 0., 0., 0.);
+// //               if (iiter==0 && icons==0) {
+//               if (iiter==0) {
+//                 updtsos.update(updtsos.localParameters(),
+//                                 LocalTrajectoryError(0.,0.,0.,0.,0.),
+//                                 updtsos.surface(),
+//                                 updtsos.magneticField(),
+//                                 updtsos.surfaceSide());
+//                 layerStates.push_back(updtsos);
+//               }
+//               else {          
+//                 //current state from previous state on this layer
+//                 //save current parameters          
+//                 TrajectoryStateOnSurface& oldtsos = layerStates[ihit];
+//                 
+// //                 JacobianCurvilinearToLocal curv2localold(oldtsos.surface(), oldtsos.localParameters(), *oldtsos.magneticField());
+// //                 const AlgebraicMatrix55& curv2localjacold = curv2localold.jacobian();
+// //                 const Matrix<double, 5, 5> Hold = Map<const Matrix<double, 5, 5, RowMajor>>(curv2localjacold.Array());
+// //                 const Matrix<double, 5, 5> Hold = curv2localJacobianAlt(oldtsos);
+//                 const Matrix<double, 5, 5> Hold = curv2localJacobianAlteloss(oldtsos, dEdxlast, mmu);
+// 
+//                 
+//                 const AlgebraicVector5 local = oldtsos.localParameters().vector();
+//                 
+//                 auto const& dxlocal = Hold*dxfull.segment<5>(trackstateidx + 3 + 5*ihit);
+//                 const Matrix<double, 5, 1> localupd = Map<const Matrix<double, 5, 1>>(local.Array()) + dxlocal;
+//                 AlgebraicVector5 localvecupd(localupd[0],localupd[1],localupd[2],localupd[3],localupd[4]);
+//                 
+//                 idx0 = localvecupd - updtsos.localParameters().vector();
+//                 
+//                 const LocalTrajectoryParameters localparms(localvecupd, oldtsos.localParameters().pzSign());
+//                 
+//       //           std::cout << "before update: oldtsos:" << std::endl;
+//       //           std::cout << oldtsos.localParameters().vector() << std::endl;
+//   //               oldtsos.update(localparms, oldtsos.surface(), field, oldtsos.surfaceSide());
+//                 oldtsos.update(localparms, LocalTrajectoryError(0.,0.,0.,0.,0.), oldtsos.surface(), field, oldtsos.surfaceSide());
+//       //           std::cout << "after update: oldtsos:" << std::endl;
+//       //           std::cout << oldtsos.localParameters().vector() << std::endl;
+//                 updtsos = oldtsos;
+// 
+//               }
               
               //apply measurement update if applicable
       //         std::cout << "constructing preciseHit" << std::endl;
-              auto const& preciseHit = hit->isValid() ? cloner.makeShared(hit, updtsos) : hit;
+//               auto const& preciseHit = hit->isValid() ? cloner.makeShared(hit, updtsos) : hit;
+
+              const GlobalPoint pos(updtsos[0], updtsos[1], updtsos[2]);
+              const GlobalVector mom(updtsos[3], updtsos[4], updtsos[5]);
+              const GlobalTrajectoryParameters glob(pos, mom, updtsos[6], field);
+              const TrajectoryStateOnSurface tsostmp(glob, *hit->surface());
+
+              auto const& preciseHit = hit->isValid() ? cloner.makeShared(hit, tsostmp) : hit;
+
               if (hit->isValid() && !preciseHit->isValid()) {
                 std::cout << "Abort: Failed updating hit" << std::endl;
                 valid = false;
@@ -1024,7 +1121,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
 //               const AlgebraicMatrix55& curv2localjacp = curv2localp.jacobian();
 //               const Matrix<double, 5, 5> Hp = Map<const Matrix<double, 5, 5, RowMajor>>(curv2localjacp.Array());
 //               const Matrix<double, 5, 5> Hp = curv2localJacobianAlt(updtsos);
-              const Matrix<double, 5, 5> Hp = curv2localJacobianAlteloss(updtsos, dEdxlast, mmu);
+//               const Matrix<double, 5, 5> Hp = curv2localJacobianAlteloss(updtsos, dEdxlast, mmu);
+              const Matrix<double, 5, 5> Hp = curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, mmu);
               
   //             const Matrix<double, 5, 5> Hpalt = curv2localJacobianAlt(updtsos);
   //             
@@ -1045,7 +1143,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
     //             std::cout << "xival = " << xival << std::endl;
                 
   //               AlgebraicVector5 idx0(0., 0., 0., 0., 0.);
-                const Vector5d dx0 = Map<const Vector5d>(idx0.Array());
+//                 const Vector5d dx0 = Map<const Vector5d>(idx0.Array());
+                const Vector5d dx0 = idx0;
 
                 if (ihit == 0) {
                   const unsigned int elossadhocglobalidx = detidparms.at(std::make_pair(8, etaphiidx));
@@ -1250,7 +1349,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
       //             Matrix<AlignScalar, 2, 2> R;
                   Matrix2d R;
                   if (preciseHit->dimension() == 1) {
-                    dy0[0] = AlignScalar(preciseHit->localPosition().x() - updtsos.localPosition().x());
+                    dy0[0] = AlignScalar(preciseHit->localPosition().x() - localparms[3]);
                     dy0[1] = AlignScalar(0.);
                     
       //               bool simvalid = false;
@@ -1283,8 +1382,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
                     if (ispixel) {
 //                     if (true) {
                       //take 2d hit as-is for pixels
-                      dy0[0] = AlignScalar(preciseHit->localPosition().x() - updtsos.localPosition().x());
-                      dy0[1] = AlignScalar(preciseHit->localPosition().y() - updtsos.localPosition().y());
+                      dy0[0] = AlignScalar(preciseHit->localPosition().x() - localparms[3]);
+                      dy0[1] = AlignScalar(preciseHit->localPosition().y() - localparms[4]);
                     
                       Vinv = iV.inverse().cast<AlignScalar>();
                       //FIXME various temporary hacks;
@@ -1346,8 +1445,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
                       }
                       
                       Matrix<double, 2, 1> dy0local;
-                      dy0local[0] = preciseHit->localPosition().x() - updtsos.localPosition().x();
-                      dy0local[1] = preciseHit->localPosition().y() - updtsos.localPosition().y();
+                      dy0local[0] = preciseHit->localPosition().x() - localparms[3];
+                      dy0local[1] = preciseHit->localPosition().y() - localparms[4];
                       
       //                 bool simvalid = false;
       //                 for (auto const& simhith : simHits) {
@@ -1409,27 +1508,32 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
                   // alignment jacobian
                   Matrix<AlignScalar, 2, 6> A = Matrix<AlignScalar, 2, 6>::Zero();
 
+                  const double localqopval = localparms[0];
+                  const double localdxdzval = localparms[1];
+                  const double localdydzval = localparms[2];
+                  const double localxval = localparms[3];
+                  const double localyval = localparms[4];
                               
                   // dx/dx
                   A(0,0) = AlignScalar(1.);
                   // dy/dy
                   A(1,1) = AlignScalar(1.);
                   // dx/dz
-                  A(0,2) = updtsos.localParameters().dxdz();
+                  A(0,2) = localdxdzval;
                   // dy/dz
-                  A(1,2) = updtsos.localParameters().dydz();
+                  A(1,2) = localdydzval;
                   // dx/dtheta_x
-                  A(0,3) = -updtsos.localPosition().y()*updtsos.localParameters().dxdz();
+                  A(0,3) = -localyval*localdxdzval;
                   // dy/dtheta_x
-                  A(1,3) = -updtsos.localPosition().y()*updtsos.localParameters().dydz();
+                  A(1,3) = -localyval*localdydzval;
                   // dx/dtheta_y
-                  A(0,4) = -updtsos.localPosition().x()*updtsos.localParameters().dxdz();
+                  A(0,4) = -localxval*localdxdzval;
                   // dy/dtheta_y
-                  A(1,4) = -updtsos.localPosition().x()*updtsos.localParameters().dydz();
+                  A(1,4) = -localxval*localdydzval;
                   // dx/dtheta_z
-                  A(0,5) = -updtsos.localPosition().y();
+                  A(0,5) = -localyval;
                   // dy/dtheta_z
-                  A(1,5) = updtsos.localPosition().x();
+                  A(1,5) = localxval;
                   
                   
       //             std::cout << "strip local z shift gradient: " << (Ralign*A.col(2))[0].value().value() << std::endl;
@@ -1455,7 +1559,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
       //             Matrix<AlignScalar, 2, 1> dh = dy0 - R*Hu*dx - R*A*dalpha;
                   
                             
-                  double thetaincidence = std::asin(1./std::sqrt(std::pow(updtsos.localParameters().dxdz(),2) + std::pow(updtsos.localParameters().dydz(),2) + 1.));
+                  double thetaincidence = std::asin(1./std::sqrt(std::pow(localdxdzval,2) + std::pow(localdydzval,2) + 1.));
+
                   
       //             bool morehitquality = applyHitQuality_ ? thetaincidence > 0.25 : true;
                   bool morehitquality = true;
@@ -1574,17 +1679,20 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
     //         const FreeTrajectoryState refFts0 = outparts[0]->currentState().freeTrajectoryState();
     //         const FreeTrajectoryState refFts1 = outparts[1]->currentState().freeTrajectoryState();
             
-            const FreeTrajectoryState &refFts0 = refftsarr[0];
-            const FreeTrajectoryState &refFts1 = refftsarr[1];
+//             const FreeTrajectoryState &refFts0 = refftsarr[0];
+//             const FreeTrajectoryState &refFts1 = refftsarr[1];
             
-            const ROOT::Math::PxPyPzMVector mom0(refFts0.momentum().x(),
-                                                    refFts0.momentum().y(),
-                                                    refFts0.momentum().z(),
+            const Matrix<double, 7, 1> &refFts0 = refftsarr[0];
+            const Matrix<double, 7, 1> &refFts1 = refftsarr[1];
+            
+            const ROOT::Math::PxPyPzMVector mom0(refFts0[3],
+                                                    refFts0[4],
+                                                    refFts0[5],
                                                     mmu);
             
-            const ROOT::Math::PxPyPzMVector mom1(refFts1.momentum().x(),
-                                                    refFts1.momentum().y(),
-                                                    refFts1.momentum().z(),
+            const ROOT::Math::PxPyPzMVector mom1(refFts1[3],
+                                                    refFts1[4],
+                                                    refFts1[5],
                                                     mmu);
             
             const double massval = (mom0 + mom1).mass();
@@ -1608,7 +1716,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
             
   //           std::cout << "massval = " << massval << std::endl;
             
-            const Matrix<double, 1, 6> mjacalt = massJacobianAlt(refFts0, refFts1, mmu);
+            const Matrix<double, 1, 6> mjacalt = massJacobianAltD(refFts0, refFts1, mmu);
             
 //             const Matrix<double, 1, 6> mjacalt = (1./massval)*massJacobianAlt(refFts0, refFts1, mmu);
             
@@ -1706,170 +1814,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
             }
             
           }
-//           else if (icons == 1) {
-//           else if (icons==2 && iiter > 3) {
-//           if (icons > 0) {
-          if (false) {
-//           else if (false) {
-            constexpr unsigned int nlocalstate0 = 3;
-            constexpr unsigned int nlocalstate1 = 3;
-            
-            constexpr unsigned int nlocal = nlocalstate0 + nlocalstate1;
-            
-            constexpr unsigned int localstateidx0 = 0;
-            constexpr unsigned int localstateidx1 = localstateidx0 + nlocalstate0;
-            
-            const unsigned int fullstateidx0 = trackstateidxarr[0];
-            const unsigned int fullstateidx1 = trackstateidxarr[1];
-            
-            using MScalar = AANT<double, nlocal>;
-            
-            //TODO optimize to avoid recomputation of FTS
-    //         const FreeTrajectoryState refFts0 = outparts[0]->currentState().freeTrajectoryState();
-    //         const FreeTrajectoryState refFts1 = outparts[1]->currentState().freeTrajectoryState();
-            
-            const FreeTrajectoryState &refFts0 = refftsarr[0];
-            const FreeTrajectoryState &refFts1 = refftsarr[1];
-            
-            const ROOT::Math::PxPyPzMVector mom0(refFts0.momentum().x(),
-                                                    refFts0.momentum().y(),
-                                                    refFts0.momentum().z(),
-                                                    mmu);
-            
-            const ROOT::Math::PxPyPzMVector mom1(refFts1.momentum().x(),
-                                                    refFts1.momentum().y(),
-                                                    refFts1.momentum().z(),
-                                                    mmu);
-            
-            const double massval = (mom0 + mom1).mass();
-            
-  //           const double mrval = 1./massval/massval;
-            
-  //           const double mrconstraintval = 1./massconstraintval/massconstraintval;
-            
-  //           const double 
-            
-            const Matrix<double, 5, 7> &FdFmref0 = FdFmrefarr[0];
-            const Matrix<double, 5, 7> &FdFmref1 = FdFmrefarr[1];
-            
-//             JacobianCurvilinearToCartesian curv2cartref0(refFts0.parameters());
-//             auto const &jacCurv2Cartref0 = Map<const Matrix<double, 6, 5, RowMajor>>(curv2cartref0.jacobian().Array());
-//             
-//             JacobianCurvilinearToCartesian curv2cartref1(refFts1.parameters());
-//             auto const &jacCurv2Cartref1 = Map<const Matrix<double, 6, 5, RowMajor>>(curv2cartref1.jacobian().Array());
-            
-  //           const Matrix<double, 1, 6> m2jac = massJacobian(refFts0, refFts1, mmu);
-            
-  //           std::cout << "massval = " << massval << std::endl;
-            
-            const Matrix<double, 1, 6> mjacalt = -2.*pow(massval, -3)*massJacobianAlt(refFts0, refFts1, mmu);
-            
-//             const Matrix<double, 1, 6> mjacalt2 = massJacobianInvSq(refFts0, refFts1, mmu);
-//             
-//             std::cout << "mjacalt" << std::endl;
-//             std::cout << mjacalt << std::endl;
-//             std::cout << "mjacalt2" << std::endl;
-//             std::cout << mjacalt2 << std::endl;
-            
-//             const Matrix<double, 1, 6> mjacalt = (1./massval)*massJacobianAlt(refFts0, refFts1, mmu);
-            
-            
-  //           const Matrix<double, 1, 6> mjacalt = mrJacobian(refFts0, refFts1, mmu);
-            
-  //           const Matrix<double, 1, 3> mjac0 = m2jac.leftCols<3>()*jacCurv2Cartref0.bottomLeftCorner<3, 3>();
-  //           const Matrix<double, 1, 3> mjac1 = m2jac.rightCols<3>()*jacCurv2Cartref1.bottomLeftCorner<3, 3>();
-            
-  //           const Matrix<double, 1, 3> mjacalt0 = mjacalt.leftCols<3>();
-  //           const Matrix<double, 1, 3> mjacalt1 = mjacalt.rightCols<3>();
-            
-  //           std::cout << "mjac0" << std::endl;
-  //           std::cout << mjac0 << std::endl;
-  //           std::cout << "mjacalt0" << std::endl;
-  //           std::cout << mjacalt0 << std::endl;
-  // 
-  //           std::cout << "mjac1" << std::endl;
-  //           std::cout << mjac1 << std::endl;
-  //           std::cout << "mjacalt1" << std::endl;
-  //           std::cout << mjacalt1 << std::endl;
-                              
-            // initialize active scalars for common vertex parameters
-//             Matrix<MScalar, 3, 1> dvtx = Matrix<MScalar, 3, 1>::Zero();
-//             for (unsigned int j=0; j<dvtx.size(); ++j) {
-//               init_twice_active_var(dvtx[j], nlocal, localvtxidx + j);
-//             }
 
-            // initialize active scalars for state parameters
-            // (first track is index together with vertex parameters)
-            
-            Matrix<MScalar, 3, 1> dmomcurv0 = Matrix<MScalar, 3, 1>::Zero();
-            for (unsigned int j=0; j<dmomcurv0.size(); ++j) {
-              init_twice_active_var(dmomcurv0[j], nlocal, localstateidx0 + j);
-            }
-            
-            Matrix<MScalar, 3, 1> dmomcurv1 = Matrix<MScalar, 3, 1>::Zero();
-            for (unsigned int j=0; j<dmomcurv1.size(); ++j) {
-              init_twice_active_var(dmomcurv1[j], nlocal, localstateidx1 + j);
-            }
-            
-  //           const Matrix<MScalar, 3, 1> dmom0 = jacCurv2Cartref0.bottomLeftCorner<3, 3>().cast<MScalar>()*dmomcurv0;
-  //           const Matrix<MScalar, 3, 1> dmom1 = jacCurv2Cartref1.bottomLeftCorner<3, 3>().cast<MScalar>()*dmomcurv1;
-            
-            // resonance width
-    //         const MScalar invSigmaMsq(0.25/massConstraint_/massConstraint_/massConstraintWidth_/massConstraintWidth_);
-    //         const MScalar dmsq0 = MScalar(m0*m0 - massConstraint_*massConstraint_);
-            
-            const double sigmar = 2.*massConstraintWidth_*pow(massconstraintval, -3);
-            
-            const MScalar invSigmaMsq(1./sigmar/sigmar);
-//             const MScalar dmsq0 = MScalar(massval - massconstraintval);
-            const MScalar dmsq0 = MScalar(1./massval/massval - 1./massconstraintval/massconstraintval);
-
-            
-//             const double sigmalnm = massConstraintWidth_/massconstraintval;
-//             const MScalar invSigmaMsq(1./sigmalnm/sigmalnm);
-//             const MScalar dmsq0 = MScalar(std::log(massval) - std::log(massconstraintval));
-            
-  //           const MScalar invSigmaMsq(0.25*std::pow(massval, 6)/massConstraintWidth_/massConstraintWidth_);
-  //           const MScalar dmsq0 = MScalar(mrval - mrconstraintval);
-  //           const MScalar dmsq0 = MScalar(massval - massConstraint_);
-  //           const MScalar dmsq0 = MScalar(0.);
-    //         const MScalar dmsq0 = MScalar(m0 - massConstraint_);
-            
-            
-    //         std::cout << "invSigmaMsq = " << invSigmaMsq.value().value() << std::endl;
-            
-  //           const MScalar dmsqtrack0 = (m2jac.leftCols<3>().cast<MScalar>()*dmom0)[0];
-  //           const MScalar dmsqtrack1 = (m2jac.rightCols<3>().cast<MScalar>()*dmom1)[0];
-            
-            const MScalar dmsqtrack0 = (mjacalt.leftCols<3>().cast<MScalar>()*dmomcurv0)[0];
-            const MScalar dmsqtrack1 = (mjacalt.rightCols<3>().cast<MScalar>()*dmomcurv1)[0];
-            
-            const MScalar dmsq = dmsq0 + dmsqtrack0 + dmsqtrack1;
-            
-    //         const MScalar chisq = dmsq*invSigmaMsq*dmsq;
-            const MScalar chisq = invSigmaMsq*dmsq*dmsq;
-            
-            chisq0val += chisq.value().value();
-            
-            auto const& gradlocal = chisq.value().derivatives();
-            //fill local hessian
-            Matrix<double, nlocal, nlocal> hesslocal;
-            for (unsigned int j=0; j<nlocal; ++j) {
-              hesslocal.row(j) = chisq.derivatives()[j].derivatives();
-            }
-            
-            constexpr std::array<unsigned int, 2> localsizes = {{ nlocalstate0, nlocalstate0 }};
-            constexpr std::array<unsigned int, 2> localidxs = {{ localstateidx0, localstateidx1 }};
-            const std::array<unsigned int, 2> fullidxs = {{ fullstateidx0, fullstateidx1 }};
-            
-            for (unsigned int iidx = 0; iidx < localidxs.size(); ++iidx) {
-              gradfull.segment(fullidxs[iidx], localsizes[iidx]) += gradlocal.segment(localidxs[iidx], localsizes[iidx]);
-              for (unsigned int jidx = 0; jidx < localidxs.size(); ++jidx) {
-                hessfull.block(fullidxs[iidx], fullidxs[jidx], localsizes[iidx], localsizes[jidx]) += hesslocal.block(localidxs[iidx], localidxs[jidx], localsizes[iidx], localsizes[jidx]);
-              }
-            }
-            
-          }
          
 
           
@@ -2099,17 +2044,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
           }
           
           // apply the GBL fit results to the vertex position
-          Vector3d vtxpos;
-//           vtxpos << dimu_vertex->position().x(),
-//                   dimu_vertex->position().y(),
-//                   dimu_vertex->position().z();
-                  
-          vtxpos << refftsarr[0].position().x(),
-                    refftsarr[0].position().y(),
-                    refftsarr[0].position().z();
-          
-          vtxpos += dxfull.head<3>();
-          
+          const Vector3d vtxpos = refftsarr[0].head<3>() + dxfull.head<3>();
           
           if (icons == 0) {
             Jpsi_x = vtxpos[0];
@@ -2130,35 +2065,17 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
           
           // apply the GBL fit results to the muon kinematics
           for (unsigned int id = 0; id < 2; ++id) {
-    //         auto const &refFts = outparts[id]->currentState().freeTrajectoryState();
-            auto const &refFts = refftsarr[id];
-  //           auto const &jac = jacarr[id];
-            unsigned int trackstateidx = trackstateidxarr[id];
-            
-//             JacobianCurvilinearToCartesian curv2cart(refFts.parameters());
-//             const AlgebraicMatrix65& jac = curv2cart.jacobian();
-//             const Matrix<double, 6, 5> jac = curv2cartJacobianAlt(refFts);
-            const AlgebraicVector6 glob = refFts.parameters().vector();
-            
-            const Matrix<double, 3, 1> posupd = Map<const Matrix<double, 6, 1>>(glob.Array()).head<3>() + dxfull.head<3>();
-            
-//             const Matrix<double, 3, 1> momupd = Map<const Matrix<double, 6, 1>>(glob.Array()).tail<3>() + Map<const Matrix<double, 6, 5, RowMajor>>(jac.Array()).bottomLeftCorner<3, 3>()*dxfull.segment<3>(trackstateidx);
-//             const Matrix<double, 3, 1> momupd = Map<const Matrix<double, 6, 1>>(glob.Array()).tail<3>() + jac.bottomLeftCorner<3, 3>()*dxfull.segment<3>(trackstateidx);
-            
-            const GlobalPoint pos(posupd[0], posupd[1], posupd[2]);
-//             const GlobalVector mom(momupd[0], momupd[1], momupd[2]);
-//             const double charge = std::copysign(1., refFts.charge()/refFts.momentum().mag() + dxfull[trackstateidx]);
-      //         std::cout << "before update: reffts:" << std::endl;
-      //         std::cout << refFts.parameters().vector() << std::endl;
-      //         std::cout << "charge " << refFts.charge() << std::endl;
-  //           updFts = FreeTrajectoryState(pos, mom, charge, field);
+            const Matrix<double, 7, 1> &refFts = refftsarr[id];
+            const unsigned int trackstateidx = trackstateidxarr[id];
 
             
-            const CurvilinearTrajectoryParameters curv(refFts.position(), refFts.momentum(), refFts.charge());
-              
-            const double qbpupd = curv.Qbp() + dxfull(trackstateidx);
-            const double lamupd = curv.lambda() + dxfull(trackstateidx + 1);
-            const double phiupd = curv.phi() + dxfull(trackstateidx + 2);
+            const double qbp = refFts[6]/refFts.segment<3>(3).norm();
+            const double lam = std::atan(refFts[5]/std::sqrt(refFts[3]*refFts[3] + refFts[4]*refFts[4]));
+            const double phi = std::atan2(refFts[4], refFts[3]);
+            
+            const double qbpupd = qbp + dxfull(trackstateidx);
+            const double lamupd = lam + dxfull(trackstateidx + 1);
+            const double phiupd = phi + dxfull(trackstateidx + 2);
             
             const double charge = std::copysign(1., qbpupd);
             const double pupd = std::abs(1./qbpupd);
@@ -2167,19 +2084,62 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
             const double pyupd = pupd*std::cos(lamupd)*std::sin(phiupd);
             const double pzupd = pupd*std::sin(lamupd);
             
-            const GlobalVector mom(pxupd, pyupd, pzupd);
-            
             muarr[id] = ROOT::Math::PxPyPzMVector(pxupd, pyupd, pzupd, mmu);
             muchargearr[id] = charge;
             
-//             std::cout << "delta eta final = " << muarr[id].eta() - refFts.momentum().eta() << std::endl;
-                    
             auto &refParms = mucurvarr[id];
-  //           CurvilinearTrajectoryParameters curvparms(refFts.position(), refFts.momentum(), refFts.charge());
-            CurvilinearTrajectoryParameters curvparms(pos, mom, charge);
-  //           refParms << curvparms.Qbp(), curvparms.lambda(), curvparms.phi(), curvparms.xT(), curvparms.yT();
-            refParms << curvparms.Qbp(), curvparms.lambda(), curvparms.phi();
-  //           refParms += dxcurv;
+            refParms << qbpupd, lamupd, phiupd;
+            
+    //         auto const &refFts = outparts[id]->currentState().freeTrajectoryState();
+//             auto const &refFts = refftsarr[id];
+//   //           auto const &jac = jacarr[id];
+//             unsigned int trackstateidx = trackstateidxarr[id];
+//             
+// //             JacobianCurvilinearToCartesian curv2cart(refFts.parameters());
+// //             const AlgebraicMatrix65& jac = curv2cart.jacobian();
+// //             const Matrix<double, 6, 5> jac = curv2cartJacobianAlt(refFts);
+//             const AlgebraicVector6 glob = refFts.parameters().vector();
+//             
+//             const Matrix<double, 3, 1> posupd = Map<const Matrix<double, 6, 1>>(glob.Array()).head<3>() + dxfull.head<3>();
+//             
+// //             const Matrix<double, 3, 1> momupd = Map<const Matrix<double, 6, 1>>(glob.Array()).tail<3>() + Map<const Matrix<double, 6, 5, RowMajor>>(jac.Array()).bottomLeftCorner<3, 3>()*dxfull.segment<3>(trackstateidx);
+// //             const Matrix<double, 3, 1> momupd = Map<const Matrix<double, 6, 1>>(glob.Array()).tail<3>() + jac.bottomLeftCorner<3, 3>()*dxfull.segment<3>(trackstateidx);
+//             
+//             const GlobalPoint pos(posupd[0], posupd[1], posupd[2]);
+// //             const GlobalVector mom(momupd[0], momupd[1], momupd[2]);
+// //             const double charge = std::copysign(1., refFts.charge()/refFts.momentum().mag() + dxfull[trackstateidx]);
+//       //         std::cout << "before update: reffts:" << std::endl;
+//       //         std::cout << refFts.parameters().vector() << std::endl;
+//       //         std::cout << "charge " << refFts.charge() << std::endl;
+//   //           updFts = FreeTrajectoryState(pos, mom, charge, field);
+// 
+//             
+//             const CurvilinearTrajectoryParameters curv(refFts.position(), refFts.momentum(), refFts.charge());
+//               
+//             const double qbpupd = curv.Qbp() + dxfull(trackstateidx);
+//             const double lamupd = curv.lambda() + dxfull(trackstateidx + 1);
+//             const double phiupd = curv.phi() + dxfull(trackstateidx + 2);
+//             
+//             const double charge = std::copysign(1., qbpupd);
+//             const double pupd = std::abs(1./qbpupd);
+//             
+//             const double pxupd = pupd*std::cos(lamupd)*std::cos(phiupd);
+//             const double pyupd = pupd*std::cos(lamupd)*std::sin(phiupd);
+//             const double pzupd = pupd*std::sin(lamupd);
+//             
+//             const GlobalVector mom(pxupd, pyupd, pzupd);
+//             
+//             muarr[id] = ROOT::Math::PxPyPzMVector(pxupd, pyupd, pzupd, mmu);
+//             muchargearr[id] = charge;
+//             
+// //             std::cout << "delta eta final = " << muarr[id].eta() - refFts.momentum().eta() << std::endl;
+//                     
+//             auto &refParms = mucurvarr[id];
+//   //           CurvilinearTrajectoryParameters curvparms(refFts.position(), refFts.momentum(), refFts.charge());
+//             CurvilinearTrajectoryParameters curvparms(pos, mom, charge);
+//   //           refParms << curvparms.Qbp(), curvparms.lambda(), curvparms.phi(), curvparms.xT(), curvparms.yT();
+//             refParms << curvparms.Qbp(), curvparms.lambda(), curvparms.phi();
+//   //           refParms += dxcurv;
 
           }
           
@@ -2261,7 +2221,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
             
             
             
-            const Matrix<double, 1, 6> mjacalt = massJacobianAlt(refftsarr[0], refftsarr[1], mmu);
+            const Matrix<double, 1, 6> mjacalt = massJacobianAltD(refftsarr[0], refftsarr[1], mmu);
 
             
             Jpsi_sigmamass = std::sqrt((mjacalt*covrefmom*mjacalt.transpose())[0]);
@@ -2414,7 +2374,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
           niter = iiter + 1;
           edmval = -deltachisq[0];
           
-          std::cout << "icons = " << icons << " iiter = " << iiter << " edmval = " << edmval << " deltachisqval = " << deltachisqval << " chisqval = " << chisqval << std::endl;
+//           std::cout << "icons = " << icons << " iiter = " << iiter << " edmval = " << edmval << " deltachisqval = " << deltachisqval << " chisqval = " << chisqval << std::endl;
 //           std::cout << "dxvtx" << std::endl;
           
 //           std::cout << "pt0 = " << refftsarr[0].momentum().perp() << " eta0 = " << refftsarr[0].momentum().eta() << " charge0 = " << refftsarr[0].charge() <<  " pt1 = " << refftsarr[1].momentum().perp() << " eta1 = " << refftsarr[1].momentum().eta() << " charge1 = " << refftsarr[1].charge() << std::endl;
@@ -2440,6 +2400,10 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
 //           if (std::abs(deltachisqval)<1e-2) {
 //             break;
 //           }
+          
+          if (edmval < 1e-5) {
+            break;
+          }
           
 //           if (iiter > 1 && std::abs(deltachisq[0])<1e-3) {
 //             break;
