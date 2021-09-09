@@ -343,18 +343,18 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
     }
   }
   
-  const unsigned int netabins = 48;
-  const unsigned int nphibins = 36;
-  if (hetaphi == nullptr) {
-    hetaphi = new TH2D("hetaphi", "", netabins, -2.4, 2.4, nphibins, -M_PI, M_PI);
-  }
-  
-  for (unsigned int ibin = 0; ibin < (netabins + 2); ++ibin) {
-    for (unsigned int jbin = 1; jbin < (nphibins + 1); ++jbin) {
-      const unsigned int bin = hetaphi->GetBin(ibin, jbin);
-      parmset.emplace(8, bin);
-    }
-  }
+//   const unsigned int netabins = 48;
+//   const unsigned int nphibins = 36;
+//   if (hetaphi == nullptr) {
+//     hetaphi = new TH2D("hetaphi", "", netabins, -2.4, 2.4, nphibins, -M_PI, M_PI);
+//   }
+//   
+//   for (unsigned int ibin = 0; ibin < (netabins + 2); ++ibin) {
+//     for (unsigned int jbin = 1; jbin < (nphibins + 1); ++jbin) {
+//       const unsigned int bin = hetaphi->GetBin(ibin, jbin);
+//       parmset.emplace(8, bin);
+//     }
+//   }
   
   if (detidparms.empty()) {
 

@@ -583,8 +583,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
       
       const unsigned int nparsAlignment = 2*nvalid + nvalidalign2d;
       const unsigned int nparsBfield = nhits;
-//       const unsigned int nparsEloss = nhits;
-      const unsigned int nparsEloss = nhits + 2;
+      const unsigned int nparsEloss = nhits;
+//       const unsigned int nparsEloss = nhits + 2;
       const unsigned int npars = nparsAlignment + nparsBfield + nparsEloss;
       
       const unsigned int nstateparms =  9 + 5*nhits;
@@ -771,9 +771,9 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
 //             // initialize with zero uncertainty
 //             refFts = FreeTrajectoryState(refFts.parameters(), nullerr);
 //             
-            const ROOT::Math::PxPyPzMVector momtmp(refFts[3], refFts[4], refFts[5], mmu);
-            const Matrix<double, 5, 1> Felossadhoc = elossAdHocJacobianD(refFts, mmu);
-            const unsigned int etaphiidx = hetaphi->FindFixBin(momtmp.eta(), momtmp.phi());
+//             const ROOT::Math::PxPyPzMVector momtmp(refFts[3], refFts[4], refFts[5], mmu);
+//             const Matrix<double, 5, 1> Felossadhoc = elossAdHocJacobianD(refFts, mmu);
+//             const unsigned int etaphiidx = hetaphi->FindFixBin(momtmp.eta(), momtmp.phi());
 //             
 //   //           std::cout << "refFts:" << std::endl;
 //   //           std::cout << refFts.position() << std::endl;
@@ -1146,13 +1146,11 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
 //                 const Vector5d dx0 = Map<const Vector5d>(idx0.Array());
                 const Vector5d dx0 = idx0;
 
-                if (ihit == 0) {
-                  const unsigned int elossadhocglobalidx = detidparms.at(std::make_pair(8, etaphiidx));
-                  
+                if (ihit == 0) {                  
                   constexpr unsigned int nvtxstate = 3;
                   constexpr unsigned int nlocalstate = 8;
                   constexpr unsigned int nlocalbfield = 1;
-                  constexpr unsigned int nlocaleloss = 2;
+                  constexpr unsigned int nlocaleloss = 1;
                   constexpr unsigned int nlocalparms = nlocalbfield + nlocaleloss;
                   
                   constexpr unsigned int nlocal = nvtxstate + nlocalstate + nlocalparms;
@@ -1173,7 +1171,6 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
   //                 Matrix<MSScalar, 5, 3> Fvtx = (FdFm.leftCols<5>()*jacCart2CurvRef.leftCols<3>()).cast<MSScalar>();
   //                 Matrix<MSScalar, 5, 3> Fmom = FdFm.leftCols<3>().cast<MSScalar>();
                   
-                  Matrix<MSScalar, 5, 1> Fe = (FdFm.leftCols<5>()*Felossadhoc).cast<MSScalar>();
                   Matrix<MSScalar, 5, 1> Fb = FdFm.col(5).cast<MSScalar>();
                   Matrix<MSScalar, 5, 1> Fxi = FdFm.col(6).cast<MSScalar>();
                   
@@ -1198,17 +1195,14 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
                     init_twice_active_var(du[j], nlocal, localstateidx + 3 + j);
                   }
                   
-                  // initialize active scalars for correction parameters
-                  MSScalar de(corparms_[elossadhocglobalidx]);
-                  init_twice_active_var(de, nlocal, localparmidx);
-                  
+                  // initialize active scalars for correction parameters                  
                   MSScalar dbeta(corparms_[bfieldglobalidx]);
-                  init_twice_active_var(dbeta, nlocal, localparmidx + 1);
+                  init_twice_active_var(dbeta, nlocal, localparmidx);
                   
                   MSScalar dxi(corparms_[elossglobalidx]);
-                  init_twice_active_var(dxi, nlocal, localparmidx + 2);
+                  init_twice_active_var(dxi, nlocal, localparmidx + 1);
                   
-                  const Matrix<MSScalar, 5, 1> dprop = dx0.cast<MSScalar>() + Hpstate*du - Hmstate*Fvtx*dvtx - Hmstate*Fmom*dmom - Hmstate*Fe*de - Hmstate*Fb*dbeta - Hmstate*Fxi*dxi;
+                  const Matrix<MSScalar, 5, 1> dprop = dx0.cast<MSScalar>() + Hpstate*du - Hmstate*Fvtx*dvtx - Hmstate*Fmom*dmom - Hmstate*Fb*dbeta - Hmstate*Fxi*dxi;
                   const MSScalar chisq = dprop.transpose()*Qinv*dprop;
                   
                   chisq0val += chisq.value().value();
@@ -1230,9 +1224,6 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
                       hessfull.block(fullidxs[iidx], fullidxs[jidx], localsizes[iidx], localsizes[jidx]) += hesslocal.block(localidxs[iidx], localidxs[jidx], localsizes[iidx], localsizes[jidx]);
                     }
                   }
-                  
-                  globalidxv[parmidx] = elossadhocglobalidx;
-                  parmidx++;
                                   
                 }
                 else {

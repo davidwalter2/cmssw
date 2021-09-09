@@ -1163,8 +1163,8 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
     const unsigned int nparsAlignment = 2*nvalid + nvalidalign2d;
 //     const unsigned int nparsAlignment = 6*nvalid;
     const unsigned int nparsBfield = nhits;
-//     const unsigned int nparsEloss = nhits;
-    const unsigned int nparsEloss = nhits + 1;
+    const unsigned int nparsEloss = nhits;
+//     const unsigned int nparsEloss = nhits + 1;
     const unsigned int npars = nparsAlignment + nparsBfield + nparsEloss;
     
     const unsigned int nstateparms = 5*(nhits+1);
@@ -1717,8 +1717,8 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
         break;
       }
       
-      const Matrix<double, 5, 1> Felossadhoc = elossAdHocJacobianD(refFts, mmu);
-      const unsigned int etaphiidx = hetaphi->FindFixBin(momtmp.eta(), momtmp.phi());
+//       const Matrix<double, 5, 1> Felossadhoc = elossAdHocJacobianD(refFts, mmu);
+//       const unsigned int etaphiidx = hetaphi->FindFixBin(momtmp.eta(), momtmp.phi());
 
       
 //       std::cout << "beamline p = " << refFts.momentum().mag() << std::endl;
@@ -2393,127 +2393,7 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
           
 //           const double dqopnext = propresult.first.signedInverseMomentum() - updtsos.signedInverseMomentum();
           
-          if (ihit == 0) {
-
-            constexpr unsigned int nlocalstate = 10;
-            constexpr unsigned int nlocalbfield = 1;
-            constexpr unsigned int nlocaleloss = 2;
-            constexpr unsigned int nlocalparms = nlocalbfield + nlocaleloss;
-            
-            constexpr unsigned int nlocal = nlocalstate + nlocalbfield + nlocaleloss;
-            
-            using MSScalar = AANT<double, nlocal>;
-            
-            constexpr unsigned int localstateidx = 0;
-
-            constexpr unsigned int localparmidx = localstateidx + nlocalstate;
-            
-            const unsigned int fullstateidx = 5*ihit;
-            const unsigned int fullparmidx = nstateparms + parmidx;
-            
-            
-            Matrix<MSScalar, 5, 5> Fstate = FdFm.leftCols<5>().cast<MSScalar>();
-            Matrix<MSScalar, 5, 1> Fe = (FdFm.leftCols<5>()*Felossadhoc).cast<MSScalar>();
-            Matrix<MSScalar, 5, 1> Fb = FdFm.col(5).cast<MSScalar>();
-            Matrix<MSScalar, 5, 1> Fxi = FdFm.col(6).cast<MSScalar>();
-            
-            Matrix<MSScalar, 5, 5> Hmstate = Hm.cast<MSScalar>();
-            Matrix<MSScalar, 5, 5> Hpstate = Hp.cast<MSScalar>();
-            
-            Matrix<MSScalar, 5, 5> Qinv = Q.inverse().cast<MSScalar>();
-                                    
-            // initialize active scalars for state parameters
-            Matrix<MSScalar, 5, 1> dum = Matrix<MSScalar, 5, 1>::Zero();
-            //suppress gradients of reference point parameters when fitting with gen constraint
-            for (unsigned int j=0; j<dum.size(); ++j) {
-              init_twice_active_var(dum[j], nlocal, localstateidx + j);
-            }
-
-            Matrix<MSScalar, 5, 1> du = Matrix<MSScalar, 5, 1>::Zero();
-            for (unsigned int j=0; j<du.size(); ++j) {
-              init_twice_active_var(du[j], nlocal, localstateidx + 5 + j);
-            }
-            
-            MSScalar de(0.);
-            init_twice_active_var(de, nlocal, localparmidx);
-            
-            MSScalar dbeta(0.);
-            init_twice_active_var(dbeta, nlocal, localparmidx + 1);
-
-            MSScalar dxi(0.);
-            init_twice_active_var(dxi, nlocal, localparmidx + 2);
-                        
-            const Matrix<MSScalar, 5, 1> dprop = dx0.cast<MSScalar>() + Hpstate*du - Hmstate*Fstate*dum - Hmstate*Fe*de - Hmstate*Fb*dbeta - Hmstate*Fxi*dxi;
-//             const Matrix<MSScalar, 5, 1> dprop = dx0.cast<MSScalar>() + du - Fstate*dum - Fb*dbeta;
-            
-            
-//             const MSScalar chisq = dprop.transpose()*Qinv*dprop;
-            
-            MSScalar chisq;
-            
-            if (!islikelihood) {
-              chisq = dprop.transpose()*Qinv*dprop;
-            }
-            else {
-              const Matrix<MSScalar, 5, 5> dQdqop = dQ.cast<MSScalar>();
-              const Matrix<MSScalar, 5, 5> Qinvfull = Qinv - Qinv*dum[0]*dQdqop*Qinv;
-              chisq = dprop.transpose()*Qinvfull*dprop;
-                            
-              const MSScalar dchisq = -dprop.transpose()*Qinv*dQdqop*Qinv*dprop;
-              
-              //TODO should this be 11x11 instead?
-              //TODO check additional factor of 2
-              for (unsigned int j=0; j<nlocal; ++j) {
-                for (unsigned int k=0; k<nlocal; ++k) {
-                  dhessv[ihit](j,k) = dchisq.derivatives()[j].derivatives()[k];
-                }
-              }
-              
-//               std::cout << "dhessv" << std::endl;
-//               std::cout << dhessv[ihit] << std::endl;
-                
-              
-              
-            }
-            
-            chisq0val += chisq.value().value();
-            
-            auto const& gradlocal = chisq.value().derivatives();
-            //fill local hessian
-            Matrix<double, nlocal, nlocal> hesslocal;
-            for (unsigned int j=0; j<nlocal; ++j) {
-              hesslocal.row(j) = chisq.derivatives()[j].derivatives();
-            }
-            
-            
-//             std::cout << "material: ihit = " << ihit << std::endl;
-//             std::cout << "dx0" << std::endl;
-//             std::cout << dx0.transpose() << std::endl;
-//             std::cout << "Q" << std::endl;
-//             std::cout << Q << std::endl;
-//             std::cout << "gradlocal" << std::endl;
-//             std::cout << gradlocal.transpose() << std::endl;
-            
-//             std::cout << "gradlocal" << std::endl;
-//             std::cout << gradlocal << std::endl;
-//             std::cout << "hesslocal" << std::endl;
-//             std::cout << hesslocal << std::endl;
-            
-            //fill global gradient
-            gradfull.segment<nlocalstate>(fullstateidx) += gradlocal.head<nlocalstate>();
-            gradfull.segment<nlocalparms>(fullparmidx) += gradlocal.segment<nlocalparms>(localparmidx);
-
-            //fill global hessian (upper triangular blocks only)
-            hessfull.block<nlocalstate,nlocalstate>(fullstateidx, fullstateidx) += hesslocal.topLeftCorner<nlocalstate,nlocalstate>();
-            hessfull.block<nlocalstate,nlocalparms>(fullstateidx, fullparmidx) += hesslocal.topRightCorner<nlocalstate, nlocalparms>();
-            hessfull.block<nlocalparms, nlocalparms>(fullparmidx, fullparmidx) += hesslocal.bottomRightCorner<nlocalparms, nlocalparms>();
-                        
-//             std::cout << "eta = " << refFts.momentum().eta() << " phi = " << refFts.momentum().phi() << " etaphiidx = " << etaphiidx << std::endl;
-            const unsigned int elossadhocglobalidx = detidparms.at(std::make_pair(8, etaphiidx));
-            globalidxv[parmidx] = elossadhocglobalidx;
-            parmidx++;
-          }
-          else {
+          if (true) {
 
             constexpr unsigned int nlocalstate = 10;
             constexpr unsigned int nlocalbfield = 1;
