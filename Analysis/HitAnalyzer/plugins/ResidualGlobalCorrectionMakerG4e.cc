@@ -6,6 +6,8 @@
 #include "Math/Vector4Dfwd.h"
 #include "Math/Vector4D.h"
 
+#include <Eigen/Sparse>
+
 class ResidualGlobalCorrectionMakerG4e : public ResidualGlobalCorrectionMakerBase
 {
 public:
@@ -798,7 +800,7 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
     
     normalizedChi2 = track.normalizedChi2();
     
-//     std::cout << "track pt: " << trackPt << " track eta: " << trackEta << " track phi: " << trackPhi << " trackCharge: " << trackCharge << " qop: " << track.parameters()[0] << std::endl;
+    std::cout << "track pt: " << trackPt << " track eta: " << trackEta << " track phi: " << trackPhi << " trackCharge: " << trackCharge << " qop: " << track.parameters()[0] << std::endl;
     
     auto const& tkparms = track.parameters();
     auto const& tkcov = track.covariance();
@@ -1266,6 +1268,9 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
     VectorXd gradfull;
     MatrixXd hessfull;
     
+    std::vector<MatrixXd> dhessv;
+
+    
     MatrixXd validdxeigjac;
     VectorXd validdxeig;
     
@@ -1486,6 +1491,7 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
 //     constexpr unsigned int niters = 3;
 //     constexpr unsigned int niters = 5;
     constexpr unsigned int niters = 10;
+//     constexpr unsigned int niters = 20;
     
     for (unsigned int iiter=0; iiter<niters; ++iiter) {
       if (debugprintout_) {
@@ -1586,8 +1592,9 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
       }      
       
         
-//       const bool islikelihood = true;
-      const bool islikelihood = false;
+      const bool islikelihood = true;
+//       const bool islikelihood = iiter > 2;
+//       const bool islikelihood = false;
       
 //       const bool islikelihood = iiter > 0;
 //       const bool islikelihood = true;
@@ -1595,13 +1602,18 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
       gradfull = VectorXd::Zero(nparmsfull);
       hessfull = MatrixXd::Zero(nparmsfull, nparmsfull);
       
+      if (islikelihood) {
+        dhessv.assign(nparmsfull, MatrixXd::Zero(nstateparms, nstateparms));
+      }
+      
+      
       validdxeigjac = MatrixXd::Zero(2*nvalid, nstateparms);
       
 //       evector<std::array<Matrix<double, 8, 8>, 11> > dhessv;
-      evector<Matrix<double, 12, 12>> dhessv;
-      if (islikelihood) {
-        dhessv.resize(nhits);
-      }
+//       std::vector<Matrix<double, 10, 10>> dhessv;
+//       if (islikelihood) {
+//         dhessv.resize(nhits);
+//       }
       
       double chisq0val = 0.;
       
@@ -1964,12 +1976,13 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
 //           FdFm = localTransportJacobian(updtsos, propresult, false);
         
 //         const Matrix<double, 5, 5> dQ = Map<const Matrix<double, 5, 5, RowMajor>>(std::get<2>(propresult).Array());
-        const Matrix<double, 5, 5> dQ = Matrix<double, 5, 5>::Zero();
+//         const Matrix<double, 5, 5> dQ = Matrix<double, 5, 5>::Zero();
         
         updtsos = std::get<1>(propresult);
         const Matrix<double, 5, 5> Qcurv = std::get<2>(propresult);
         const Matrix<double, 5, 7> FdFm = std::get<3>(propresult);
         const double dEdxlast = std::get<4>(propresult);
+        const Matrix<double, 5, 5> dQcurv = std::get<5>(propresult);
         
 //         if (ihit == (hits.size() - 1)) {
 //           dEdxout = dEdxlast;
@@ -2020,6 +2033,9 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
 //         AlgebraicMatrix55 const Qmat = updtsos.localError().matrix();
 //         const Map<const Matrix<double, 5, 5, RowMajor>>Q(Qmat.Array());
         const Matrix<double, 5, 5> Q = Hm*Qcurv*Hm.transpose();
+        
+        const Matrix<double, 5, 5> dQ = Hm*dQcurv*Hm.transpose();
+        
 //         const Map<const Matrix<double, 5, 5, RowMajor>>Qorig(Qmat.Array());
 //         Matrix<double, 5, 5> Q = Qorig;
 //         Q(0,0) = 100.*dqop*dqop;
@@ -2459,11 +2475,65 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
               
               //TODO should this be 11x11 instead?
               //TODO check additional factor of 2
+              
+              
+              Matrix<double, nlocal, nlocal> dhesslocal;
               for (unsigned int j=0; j<nlocal; ++j) {
-                for (unsigned int k=0; k<nlocal; ++k) {
-                  dhessv[ihit](j,k) = dchisq.derivatives()[j].derivatives()[k];
-                }
+                dhesslocal.row(j) = dchisq.derivatives()[j].derivatives();
               }
+              
+//               std::cout << "ihit = " << ihit << " dhesslocal:" << std::endl;
+//               std::cout << dhesslocal << std::endl;
+              
+              dhessv[fullstateidx].block<nlocalstate, nlocalstate>(fullstateidx, fullstateidx) += dhesslocal.topLeftCorner<nlocalstate, nlocalstate>();
+                            
+              for (unsigned int i=1; i<nlocal; ++i) {
+                const unsigned int ifull = i < nlocalstate ? fullstateidx + i : (fullparmidx + i) - nlocalstate;
+                for (unsigned int j=0; j<nlocalstate; ++j) {
+                  const unsigned int jfull = fullstateidx + j;
+                  for (unsigned int k=0; k<nlocalstate; ++k) {
+                    const unsigned int kfull = fullstateidx + k;
+                    if (j==0) {
+                      dhessv[ifull](jfull, kfull) += dhesslocal(i, k);
+                    }
+                    else if (k==0) {
+                      dhessv[ifull](jfull, kfull) += dhesslocal(i, j);
+                    }
+                  }
+                }  
+              }
+              
+//               for (unsigned int j=i; j<nlocal; ++j) {
+//                 const unsigned int jfull = j < nlocal ? fullstateidx + j : (fullparmidx + j) - nlocalstate;
+//                 for (unsigned int k=j; k<nlocal; ++k) {
+//                   const unsigned int kfull = k < nlocal ? fullstateidx + k : (fullparmidx + k) - nlocalstate;
+//                   const double d3val = dchisq.derivatives()[j].derivatives()[k];
+//                   
+//                   
+//                   if (j < nlocalstate && k < nlocalstate) {
+//                     dhessv[ifull](jfull, kfull) += d3val;
+//                     if (jfull != kfull) {
+//                       dhessv[ifull](kfull, jfull) += d3val;
+//                     }
+//                   }
+// //                   if (j < nlocalstate) {
+// //                     if (ifull != kfull) {
+// //                       dhessv[kfull](ifull, jfull) += d3val;
+// //                       if (ifull != jfull) {
+// //                         dhessv[kfull](jfull, ifull) += d3val;
+// //                       }
+// //                     }
+// //                   }
+// //                   if (k < nlocalstate) {
+// //                     if (jfull != ifull) {
+// //                       dhessv[jfull](ifull, kfull) += d3val;
+// //                       if (ifull != kfull) {
+// //                         dhessv[jfull](kfull, ifull) += d3val;
+// //                       }
+// //                     }
+// //                   }
+//                 }
+//               }
               
 //               std::cout << "dhessv" << std::endl;
 //               std::cout << dhessv[ihit] << std::endl;
@@ -3055,13 +3125,7 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
 //         hessfull.col(nstateparms) *= 0.;
       }
       
-      //now do the expensive calculations and fill outputs
-      auto const& dchisqdx = gradfull.head(nstateparms);
-      auto const& dchisqdparms = gradfull.tail(npars);
-      
-      auto const& d2chisqdx2 = hessfull.topLeftCorner(nstateparms, nstateparms);
-      auto const& d2chisqdxdparms = hessfull.topRightCorner(nstateparms, npars);
-      auto const& d2chisqdparms2 = hessfull.bottomRightCorner(npars, npars);
+
       
 //       std::cout << "dchisqdx" << std::endl;
 //       std::cout << dchisqdx << std::endl;
@@ -3079,64 +3143,194 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
 //       auto const& Cinvd = d2chisqdx2.ldlt();
       
       
+      auto const& d2chisqdx2pre = hessfull.topLeftCorner(nstateparms, nstateparms);
+      SelfAdjointEigenSolver<MatrixXd> es(d2chisqdx2pre, EigenvaluesOnly);
+      const double logdetH = es.eigenvalues().array().log().sum();
+      
       
       if (islikelihood) {
 //       if (false) {
 //         Cinvd.compute(hessfull);
 //         const MatrixXd Cfull = Cinvd.solve(MatrixXd::Identity(nparmsfull,nparmsfull));
         
+//         for (unsigned int i = 1; i < nparmsfull; ++i) {
+//           for (unsigned int j = 0; j < nstateparms; ++j) {
+//             for (unsigned int k = 0; k < nstateparms; ++k) {
+//               dhessv[i](j,k) = dhessv[0]
+//             }
+//           }
+//         }
+        
+        auto const& d2chisqdx2 = hessfull.topLeftCorner(nstateparms, nstateparms);
         Cinvd.compute(d2chisqdx2);
-        const MatrixXd Cfull = Cinvd.solve(MatrixXd::Identity(nstateparms,nstateparms));
+        
+//         const SparseMatrix<double> sparseH = hessfull.topLeftCorner(nstateparms, nstateparms);
+        
+        std::vector<Triplet<double>> tripletList;
+        tripletList.reserve(nstateparms*nstateparms);
+        for (unsigned int i = 0; i < nstateparms; ++i) {
+          for (unsigned int j = 0; j < nstateparms; ++j) {
+            const double val = hessfull(i, j);
+            if (std::abs(val) > 0.) {
+              tripletList.push_back(Triplet<double>(i,j,val));
+            }
+          }
+        }
+        
+        SparseMatrix<double> sparseH(nstateparms, nstateparms);
+        sparseH.setFromTriplets(tripletList.begin(), tripletList.end());
+        
+        Eigen::SimplicialLDLT<SparseMatrix<double>> Cinvdsparse;
+        Cinvdsparse.compute(sparseH);
+
+        
+        std::vector<SparseMatrix<double>> dhessvsparse(nparmsfull);
+//         dhesssparse.reserve(nparmsfull);
+        
+//         const MatrixXd Cfull = Cinvd.solve(MatrixXd::Identity(nstateparms,nstateparms));
+        
+//         std::vector<MatrixXd>
+        
+        for (unsigned int i = 0; i < nparmsfull; ++i) {
+//           if (i<10) {
+//             std::cout << "dhessv[i].topLeftCorner<10, 10>()" << std::endl;
+//             std::cout << dhessv[i].topLeftCorner<10, 10>() << std::endl;
+//           }
+          
+          std::vector<Triplet<double>> dtripletList;
+          dtripletList.reserve(nstateparms*nstateparms);
+          for (unsigned int j = 0; j < nstateparms; ++j) {
+            for (unsigned int k = 0; k < nstateparms; ++k) {
+              const double val = dhessv[i](j, k);
+              if (std::abs(val) > 0.) {
+                dtripletList.push_back(Triplet<double>(j,k,val));
+              }
+            }
+          }
+          SparseMatrix<double> sparsedhess(nstateparms, nstateparms);
+          sparsedhess.setFromTriplets(dtripletList.begin(), dtripletList.end());
+          
+          dhessvsparse[i] = Cinvdsparse.solve(sparsedhess);
+          
+          
+          
+//           dhessv[i] = (Cinvd.solve(dhessv[i])).eval();
+        }
+        
+        for (unsigned int i = 0; i < (nstateparms + nparsBfield + nparsEloss); ++i) {
+          const unsigned int istate = i < nstateparms ? i/5 : (i-nstateparms)/2;
+//           const double gradval = -dhessv[i].trace();
+//           const double gradval = -dhessvsparse[i].trace();
+          const double gradval = -dhessvsparse[i].diagonal().sum();
+          gradfull[i] += gradval;
+          
+//           std::cout << "dhessv[i].topLeftCorner<20, 20>()" << std::endl;
+//           std::cout << dhessv[i].topLeftCorner<20, 20>() << std::endl;
+          
+//           const double gradval = -(Cfull*dhessv[i]).trace();
+//           const double gradvalalt = -(Cfull.array()*dhessv[i].array()).sum();
+//           std::cout << "i = " << i << " gradval = " << gradval << " gradvalalt = " << gradvalalt << std::endl;
+          const SparseMatrix<double> dhessT = dhessvsparse[i].transpose();
+          
+          for (unsigned int j = i; j < (nstateparms + nparsBfield + nparsEloss); ++j) {
+            const unsigned int jstate = i < nstateparms ? i/5 : (i-nstateparms)/2;
+            
+            bool nonzero = istate == jstate || ( i < nstateparms && (jstate-istate)<2) || (j < nstateparms && (jstate-istate)<3);
+            
+//             if (!nonzero) {
+//               continue;
+//             }
+            
+//             const double hessval = (dhessv[i].array()*dhessv[j].array()).matrix().sum();
+//             const double hessvalalt = (dhessv[i]*dhessv[j]).trace();
+            
+//             const double hessval = (dhessv[i].cwiseProduct(dhessv[j].transpose())).sum();
+//             const double hessval = (dhessvsparse[i]*dhessvsparse[j]).eval().diagonal().sum();
+            const double hessval = dhessT.cwiseProduct(dhessvsparse[j]).sum();
+//             const double hessval = dhessvsparse[i].transpose().cwiseProduct(dhessvsparse[j]).sum();
+            
+            
+//             const double hessval = (dhessvsparse[i].cwiseProduct(dhessvsparse[j].transpose())).sum();
+            
+//             const double hessval = (dhessv[i]*dhessv[j]).trace();
+            
+//             std::cout << "hessval = " << hessval << " hessvalalt = " << hessvalalt << std::endl;
+//             if (std::abs(hessval) > 0.) {
+//               std::cout << "nonzero hessval: i = " << i << " j = " << j << std::endl;
+//             }
+            
+//             if (i==j) {
+//               std::cout << "i = " << i << " gradval =  " << gradval << " hessval = " << hessval << std::endl;
+//             }
+            
+            hessfull(i, j) += hessval;
+            if (i != j) {
+              hessfull(j, i) += hessval;
+            }
+//             const double hessval = (Cfull*dhessv[i]*Cfull*dhessv[j]).trace();
+//             const double hessvalalt = (Cfull.array()*dhessv[i].array()*Cfull.array()*dhessv[j].array()).sum();
+//             std::cout << "i = " << i << " j = " << j << " hessval = " << hessval << " hessvalalt = " << hessvalalt << std::endl;
+
+          }
+        }
         
         // add ln det terms to gradient and hessian
   //       MatrixXd dhessfulli;
   //       MatrixXd dhessfullj;
   //       VectorXd dgradfull;
         // TODO should this cover correction parameter part of the matrix as well?
-        for (unsigned int ihit=0; ihit < nhits; ++ihit) {
+//         for (unsigned int ihit=0; ihit < nhits; ++ihit) {
+// //           constexpr unsigned int localstateidx = 0;
+// //           const unsigned int fullstateidx = 3*ihit;
+// 
+//           constexpr unsigned int nlocalstate = 10;
+//           constexpr unsigned int nlocalbfield = 1;
+//           constexpr unsigned int nlocaleloss = 1;
+//           constexpr unsigned int nlocalparms = nlocalbfield + nlocaleloss;
+//           
+//           constexpr unsigned int nlocal = nlocalstate + nlocalbfield + nlocaleloss;
+//                     
 //           constexpr unsigned int localstateidx = 0;
-//           const unsigned int fullstateidx = 3*ihit;
-
-          constexpr unsigned int nlocalstate = 10;
-          constexpr unsigned int nlocalbfield = 1;
-          constexpr unsigned int nlocaleloss = 1;
-          constexpr unsigned int nlocalparms = nlocalbfield + nlocaleloss;
-          
-          constexpr unsigned int nlocal = nlocalstate + nlocalbfield + nlocaleloss;
-                    
-          constexpr unsigned int localstateidx = 0;
-
-          constexpr unsigned int localparmidx = localstateidx + nlocalstate;
-          
-          const unsigned int fullstateidx = 5*ihit;
-          const unsigned int fullparmidx = nstateparms + 2*ihit;
-          
-//           constexpr std::array<unsigned int, 2> localsizes = {{ nlocalstate, nlocalparms }};
-//           constexpr std::array<unsigned int, 2> localidxs = {{ localstateidx, localparmidx }};
-//           const std::array<unsigned int, 2> fullidxs = {{ fullstateidx, fullparmidx }};
-          
-          constexpr std::array<unsigned int, 1> localsizes = {{ nlocalstate }};
-          constexpr std::array<unsigned int, 1> localidxs = {{ localstateidx }};
-          const std::array<unsigned int, 1> fullidxs = {{ fullstateidx }};
-          
-          Matrix<double, nlocal, nlocal> Cblock = Matrix<double, nlocal, nlocal>::Zero();
-          
-          for (unsigned int iidx = 0; iidx < localidxs.size(); ++iidx) {
-            for (unsigned int jidx = 0; jidx < localidxs.size(); ++jidx) {
-//               std::cout << "nstateparms = " << nstateparms << " nparmsfull = " << nparmsfull << " localidxi = " << localidxs[iidx] << " localsizei = " << localsizes[iidx] << " fullidxi = " << fullidxs[iidx] << " localidxj = " << localidxs[jidx] << " localsizej = " << localsizes[jidx] << " fullidxj = " << fullidxs[jidx] << std::endl;
-              Cblock.block(localidxs[iidx], localidxs[jidx], localsizes[iidx], localsizes[jidx]) = Cfull.block(fullidxs[iidx], fullidxs[jidx], localsizes[iidx], localsizes[jidx]);
-            }
-          }
-          
-          gradfull[fullstateidx] += (Cblock*dhessv[ihit]).trace();
-          hessfull(fullstateidx, fullstateidx) += (-Cblock*dhessv[ihit]*Cblock*dhessv[ihit]).trace();
-          
-          
-        }
+// 
+//           constexpr unsigned int localparmidx = localstateidx + nlocalstate;
+//           
+//           const unsigned int fullstateidx = 5*ihit;
+//           const unsigned int fullparmidx = nstateparms + 2*ihit;
+//           
+// //           constexpr std::array<unsigned int, 2> localsizes = {{ nlocalstate, nlocalparms }};
+// //           constexpr std::array<unsigned int, 2> localidxs = {{ localstateidx, localparmidx }};
+// //           const std::array<unsigned int, 2> fullidxs = {{ fullstateidx, fullparmidx }};
+//           
+//           constexpr std::array<unsigned int, 1> localsizes = {{ nlocalstate }};
+//           constexpr std::array<unsigned int, 1> localidxs = {{ localstateidx }};
+//           const std::array<unsigned int, 1> fullidxs = {{ fullstateidx }};
+//           
+//           Matrix<double, nlocal, nlocal> Cblock = Matrix<double, nlocal, nlocal>::Zero();
+//           
+//           for (unsigned int iidx = 0; iidx < localidxs.size(); ++iidx) {
+//             for (unsigned int jidx = 0; jidx < localidxs.size(); ++jidx) {
+// //               std::cout << "nstateparms = " << nstateparms << " nparmsfull = " << nparmsfull << " localidxi = " << localidxs[iidx] << " localsizei = " << localsizes[iidx] << " fullidxi = " << fullidxs[iidx] << " localidxj = " << localidxs[jidx] << " localsizej = " << localsizes[jidx] << " fullidxj = " << fullidxs[jidx] << std::endl;
+//               Cblock.block(localidxs[iidx], localidxs[jidx], localsizes[iidx], localsizes[jidx]) = Cfull.block(fullidxs[iidx], fullidxs[jidx], localsizes[iidx], localsizes[jidx]);
+//             }
+//           }
+//           
+//           gradfull[fullstateidx] += (Cblock*dhessv[ihit]).trace();
+//           hessfull(fullstateidx, fullstateidx) += (-Cblock*dhessv[ihit]*Cblock*dhessv[ihit]).trace();
+//           
+//           
+//         }
         
         
       
       }
+      
+      //now do the expensive calculations and fill outputs
+      auto const& dchisqdx = gradfull.head(nstateparms);
+      auto const& dchisqdparms = gradfull.tail(npars);
+      
+      auto const& d2chisqdx2 = hessfull.topLeftCorner(nstateparms, nstateparms);
+      auto const& d2chisqdxdparms = hessfull.topRightCorner(nstateparms, npars);
+      auto const& d2chisqdparms2 = hessfull.bottomRightCorner(npars, npars);
       
       Cinvd.compute(d2chisqdx2);
       
@@ -3149,12 +3343,16 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
       
       const Matrix<double, 1, 1> deltachisq = 0.5*dchisqdx.transpose()*dxfull;
       
+//       if (islikelihood) {
+//         dxfull *= 0.5;
+//       }
+      
 //       const Matrix<double, 1, 1> deltachisqalt = dchisqdx.transpose()*dxfull + 0.5*dxfull.transpose()*d2chisqdx2*dxfull;
-//       
+// //       
 //       const VectorXd deltachisqv = 0.5*dchisqdx.array()*dxfull.array();
 // //       const VectorXd deltachisqvabs = deltachisqv.array().abs();
-// //       const unsigned int maxidx = deltachisqvabs.maxCoeff();
-//       
+// // //       const unsigned int maxidx = deltachisqvabs.maxCoeff();
+// //       
 //       unsigned int maxidx = 0;
 //       double maxval = 0.;
 //       for (unsigned int i=0; i < deltachisqv.size(); ++i) {
@@ -3164,10 +3362,10 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
 //           maxidx = i;
 //         }
 //       }
-//       
+// //       
 //       std::cout << "deltachisq = " << deltachisq[0] << " deltachisqalt = " << deltachisqalt << " size = " << deltachisqv.size() <<  " maxidx = " << maxidx << " maxval = " << maxval << std::endl;
-//       
-//       
+// //       
+// //       
 //       std::cout << "i dchisqdx dxfull deltachisqv" << std::endl;
 //       for (unsigned int i=0; i < deltachisqv.size(); ++i) {
 //         std::cout << i << " " << dchisqdx[i] << " " << dxfull[i] << " " << deltachisqv[i] << std::endl;
@@ -3291,6 +3489,16 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
         valid = false;
         break;
       }
+      
+
+      
+      const double nll0val = 0.5*chisq0val - 0.5*logdetH;
+      const double nllval = nll0val + deltachisq[0];
+      
+      
+      std::cout << "iiter = " << iiter << " edmval = " << edmval << " chisqval = " << chisqval << " chisq0val = " << chisq0val << " logdetH = " << logdetH << " nll0val = " << nll0val << " nllval = " << nllval << std::endl;
+
+      
       
 //       std::cout << "iiter = " << iiter << " edmval = " << edmval << " chisqval = " << chisqval << std::endl;
 //       std::cout <<"dxRef" << std::endl;

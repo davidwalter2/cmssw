@@ -1268,7 +1268,7 @@ std::tuple<TrajectoryStateOnSurface, Geant4ePropagator::AlgebraicMatrix57, Algeb
 
 
 
- std::tuple<bool, Eigen::Matrix<double, 7, 1>, Eigen::Matrix<double, 5, 5>, Eigen::Matrix<double, 5, 7>, double> Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 7, 1> &ftsStart,
+ std::tuple<bool, Eigen::Matrix<double, 7, 1>, Eigen::Matrix<double, 5, 5>, Eigen::Matrix<double, 5, 7>, double, Eigen::Matrix<double, 5, 5>> Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 7, 1> &ftsStart,
                                                                                 const GloballyPositioned<double> &pDest) const {
                           
   using namespace Eigen;
@@ -1276,7 +1276,7 @@ std::tuple<TrajectoryStateOnSurface, Geant4ePropagator::AlgebraicMatrix57, Algeb
                                                                                   
   auto retDefault = []() {
 //     return std::tuple<TrajectoryStateOnSurface, AlgebraicMatrix57, AlgebraicMatrix55, double>();
-    return std::tuple<bool, Matrix<double, 7, 1>, Matrix<double, 5, 5>, Matrix<double, 5, 7>, double>(false, Matrix<double, 7, 1>::Zero(), Matrix<double, 5, 5>::Zero(), Matrix<double, 5, 7>::Zero(), 0.);
+    return std::tuple<bool, Matrix<double, 7, 1>, Matrix<double, 5, 5>, Matrix<double, 5, 7>, double, Matrix<double, 5, 5>>(false, Matrix<double, 7, 1>::Zero(), Matrix<double, 5, 5>::Zero(), Matrix<double, 5, 7>::Zero(), 0., Matrix<double, 5, 5>::Zero());
   };
   
 //   std::cout << "start propagation" << std::endl;
@@ -1396,7 +1396,8 @@ std::tuple<TrajectoryStateOnSurface, Geant4ePropagator::AlgebraicMatrix57, Algeb
 //   Matrix<double, 7, 1> ftsEnd = ftsStart;
 
   
-  G4ErrorTrajErr dQ(5, 0);
+//   G4ErrorTrajErr dQ(5, 0);
+  Matrix<double, 5, 5> dQ = Matrix<double, 5, 5>::Zero();
 
   double dEdxlast = 0.;
 //   double masslast = 0.;
@@ -1434,6 +1435,7 @@ std::tuple<TrajectoryStateOnSurface, Geant4ePropagator::AlgebraicMatrix57, Algeb
 
     const double thisPathLength = TrackPropagation::g4doubleToCmsDouble(g4eTrajState.GetG4Track()->GetStepLength());
 
+    const double pPre = g4eTrajState.GetMomentum().mag()/GeV;
     const double ePre = g4eTrajState.GetG4Track()->GetStep()->GetPreStepPoint()->GetTotalEnergy() / GeV;
     const double ePost = g4eTrajState.GetG4Track()->GetStep()->GetPostStepPoint()->GetTotalEnergy() / GeV;
     const double dEdx = (ePost - ePre)/thisPathLength;
@@ -1475,6 +1477,7 @@ std::tuple<TrajectoryStateOnSurface, Geant4ePropagator::AlgebraicMatrix57, Algeb
     // transport contribution to error
     g4errorEnd = (transportJac.leftCols<5>()*g4errorEnd*transportJac.leftCols<5>().transpose()).eval();
     
+    dQ = (transportJac.leftCols<5>()*dQ*transportJac.leftCols<5>().transpose()).eval();
     
 //     const G4ErrorMatrix &transferMatrix = g4eTrajState.GetTransfMat();
     
@@ -1511,6 +1514,9 @@ std::tuple<TrajectoryStateOnSurface, Geant4ePropagator::AlgebraicMatrix57, Algeb
     
     g4errorEnd += errMSIout;
     
+    
+
+    
     if (std::abs(thisPathLength) > 0.) {
       dErrorDxLast = errMSIout/thisPathLength;
     }
@@ -1523,6 +1529,74 @@ std::tuple<TrajectoryStateOnSurface, Geant4ePropagator::AlgebraicMatrix57, Algeb
     //b-field and material contributions to jacobian
     jac.rightCols<2>() += transportJac.rightCols<2>();
         
+    
+//     const double betaPre = pPre/ePre;    
+//     G4ErrorTrajErr errMS = errMSI;
+//     errMS(0+1, 0+1) = 0.;
+// //     std::cout << "ppre = " << pPre << " betaPre = " << betaPre << " mass = " << mass << " ePre  = " << ePre << std::endl;
+// //     G4ErrorTrajErr dQpre = 2.*pPre*(betaPre*betaPre + 2.*mass*mass/ePre/ePre)*errMS;
+//     G4ErrorTrajErr dQpre = (2.*pPre + 4.*mass*mass/pPre)*betaPre*betaPre*errMS;
+//     
+//     for (unsigned int i = 0; i < 5; i++) {
+//       for (unsigned int j = 0; j < 5; j++) {
+//         double w = charge;
+//         if (i==0) {
+//           w *= charge;
+//         }
+//         if (j==0) {
+//           w *= charge;
+//         }
+//         w *= jac(0,0);
+//         dQ(i, j) += w*dQpre(i+1, j+1);
+//       }
+//     }
+    
+    Matrix<double, 5, 5> errMS = errMSIout;
+    errMS(0,0) = 0.;
+    
+    Matrix<double, 5, 5> errIoni = Matrix<double, 5, 5>::Zero();
+    errIoni(0,0) = errMSIout(0,0);
+    
+    const double q = charge;
+    const double qop = charge/pPre;
+    const double eMass = 510.99906e-6;
+                                            
+    const double x0 = std::pow(q, 2);
+    const double x1 = std::pow(mass, 2)*std::pow(qop, 2);
+    const double x2 = 1./(qop*(x0 + x1));
+    const Matrix<double, 5, 5> dQms = 2.*errMS*x2*(x0 + 2.*x1);
+    const Matrix<double, 5, 5> dQion = errIoni*x2*(4.0*x0 + 10.0*x1);
+
+
+
+//     std::cout << "dQionNorm" << std::endl;
+//     std::cout << dQion/errIoni(0,0) << std::endl;
+
+    
+//      const double dQmsNorm = 2*x0*(x1 + 2*x4)/(x1 + x4);
+//      std::cout << "dQmsNorm = " << dQmsNorm << std::endl;
+
+//     std::cout << "errMSIout" << std::endl;
+//     std::cout << errMSIout << std::endl;
+//     
+//     std::cout << "dQms" << std::endl;
+//     std::cout << dQms << std::endl;
+//     
+//     std::cout << "dQion" << std::endl;
+//     std::cout << dQion << std::endl;
+    
+    
+
+
+
+    
+    dQ += 0.*jac(0,0)*dQion;
+    dQ += jac(0,0)*dQms;
+    
+    
+    
+    
+    
     LogDebug("Geant4e") << "step Length was " << thisPathLength << " cm, current global position: "
                         << TrackPropagation::hepPoint3DToGlobalPoint(g4eTrajState.GetPosition()) << std::endl;
 
@@ -1576,7 +1650,7 @@ std::tuple<TrajectoryStateOnSurface, Geant4ePropagator::AlgebraicMatrix57, Algeb
   ftsEnd[5] = g4eTrajState.GetMomentum().z()/GeV;
   ftsEnd[6] = charge;
   
-  return std::tuple<bool, Matrix<double, 7, 1>, Matrix<double, 5, 5>, Matrix<double, 5, 7>, double>(true, ftsEnd, g4errorEnd, jac, dEdxlast);
+  return std::tuple<bool, Matrix<double, 7, 1>, Matrix<double, 5, 5>, Matrix<double, 5, 7>, double, Matrix<double, 5, 5>>(true, ftsEnd, g4errorEnd, jac, dEdxlast, dQ);
   
 //   return std::tuple<TrajectoryStateOnSurface, AlgebraicMatrix57, AlgebraicMatrix55, double>(TrajectoryStateOnSurface(localparms, localerr, pDest, theField, side), jacfinal, dQfinal, dEdxlast);
 }

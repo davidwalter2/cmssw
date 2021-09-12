@@ -66,7 +66,7 @@ public:
   std::tuple<TrajectoryStateOnSurface, Geant4ePropagator::AlgebraicMatrix57, AlgebraicMatrix55, double> propagateGenericWithJacobianAlt(const FreeTrajectoryState &ftsStart,
                                                                const Plane &pDest) const;
                                                                
-  std::tuple<bool, Eigen::Matrix<double, 7, 1>, Eigen::Matrix<double, 5, 5>, Eigen::Matrix<double, 5, 7>, double> propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 7, 1> &ftsStart,
+  std::tuple<bool, Eigen::Matrix<double, 7, 1>, Eigen::Matrix<double, 5, 5>, Eigen::Matrix<double, 5, 7>, double, Eigen::Matrix<double, 5, 5>> propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 7, 1> &ftsStart,
                                                                                 const GloballyPositioned<double> &pDest) const;
   
 private:
