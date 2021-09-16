@@ -728,6 +728,22 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
           
   //         std::cout << "firsthitshared = " << firsthitshared << std::endl;
           
+          double dbetavalref = 0.;
+          for (unsigned int id = 0; id < 2; ++id) {
+              auto &hits = hitsarr[id];
+              auto const& hit = hits[0];
+              
+              const uint32_t gluedid = trackerTopology->glued(hit->det()->geographicalId());
+              const bool isglued = gluedid != 0;
+              const DetId parmdetid = isglued ? DetId(gluedid) : hit->geographicalId();
+
+              const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(6, parmdetid));                
+              
+              const double dbetaval = corparms_[bfieldglobalidx];
+              dbetavalref += 0.5*dbetaval;    
+          }
+
+          
           for (unsigned int id = 0; id < 2; ++id) {
     //         FreeTrajectoryState refFts = outparts[id]->currentState().freeTrajectoryState();
 //             FreeTrajectoryState &refFts = refftsarr[id];
@@ -804,7 +820,9 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
 //             
 //             double dEdxlast = std::get<3>(propresultref);
 
-            const Matrix<double, 5, 6> hybrid2curvref = hybrid2curvJacobianD(refFts, field);
+            
+
+            const Matrix<double, 5, 6> hybrid2curvref = hybrid2curvJacobianD(refFts, field, dbetavalref);
 
             Matrix<double, 7, 1> updtsos = refFts;
             
@@ -901,6 +919,12 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
               const GeomDet* parmDet = isglued ? globalGeometry->idToDet(parmdetid) : hit->det();
               const double xifraction = isglued ? hit->det()->surface().mediumProperties().xi()/parmDet->surface().mediumProperties().xi() : 1.;
 
+              const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(6, parmdetid));                
+              const unsigned int elossglobalidx = detidparms.at(std::make_pair(7, parmdetid));
+              
+              const double dbetaval = corparms_[bfieldglobalidx];
+              const double dxival = corparms_[elossglobalidx];
+              
 //               if (ihit > 0) {
 //                 if (std::abs(updtsos.globalMomentum().eta()) > 4.0) {
 //                   std::cout << "WARNING:  Invalid state!!!" << std::endl;
@@ -932,18 +956,25 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
               
               
               const GloballyPositioned<double> &surface = surfacemapD_.at(hit->geographicalId());
-              auto propresult = g4prop->propagateGenericWithJacobianAltD(updtsos, surface);
+              auto propresult = g4prop->propagateGenericWithJacobianAltD(updtsos, surface, dbetaval, dxival);
               if (!std::get<0>(propresult)) {
                 std::cout << "Abort: Propagation Failed!" << std::endl;
                 valid = false;
                 break;
               }
               
+//               auto propresultalt = g4prop->propagateGenericWithJacobianAltD(updtsos, surface, 10.);
+//               const Matrix<double, 5, 5> Qcurvalt = std::get<2>(propresultalt);
+              
               updtsos = std::get<1>(propresult);
               const Matrix<double, 5, 5> Qcurv = std::get<2>(propresult);
               const Matrix<double, 5, 7> FdFm = std::get<3>(propresult);
               const double dEdxlast = std::get<4>(propresult);
 
+//               std::cout << "Qcurv" << std::endl;
+//               std::cout << Qcurv << std::endl;
+//               std::cout << "Qcurvalt" << std::endl;
+//               std::cout << Qcurvalt << std::endl;
 
               
               // compute convolution correction in local coordinates (BEFORE material effects are applied)
@@ -956,7 +987,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
 //               const Matrix<double, 5, 5> Hm = curv2localJacobianAlt(updtsos);
 //               const Matrix<double, 5, 5> Hm = curv2localJacobianAlteloss(updtsos, dEdxlast, mmu);
               
-              const Matrix<double, 5, 5> Hm = curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, mmu);
+              const Matrix<double, 5, 5> Hm = curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, mmu, dbetaval);
               
               //get the process noise matrix
 //               AlgebraicMatrix55 const Qmat = updtsos.localError().matrix();
@@ -993,7 +1024,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
                 //save current parameters  
                 
                 Matrix<double, 7, 1>& oldtsos = layerStates[ihit];
-                const Matrix<double, 5, 5> Hold = curv2localJacobianAltelossD(oldtsos, field, surface, dEdxlast, mmu);
+                const Matrix<double, 5, 5> Hold = curv2localJacobianAltelossD(oldtsos, field, surface, dEdxlast, mmu, dbetaval);
 //                 const Matrix<double, 5, 1> dxlocal = Hold*dxfull.segment<5>(5*(ihit+1));
                 const Matrix<double, 5, 1> dxlocal = Hold*dxfull.segment<5>(trackstateidx + 3 + 5*ihit);
                 
@@ -1122,7 +1153,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
 //               const Matrix<double, 5, 5> Hp = Map<const Matrix<double, 5, 5, RowMajor>>(curv2localjacp.Array());
 //               const Matrix<double, 5, 5> Hp = curv2localJacobianAlt(updtsos);
 //               const Matrix<double, 5, 5> Hp = curv2localJacobianAlteloss(updtsos, dEdxlast, mmu);
-              const Matrix<double, 5, 5> Hp = curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, mmu);
+              const Matrix<double, 5, 5> Hp = curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, mmu, dbetaval);
               
   //             const Matrix<double, 5, 5> Hpalt = curv2localJacobianAlt(updtsos);
   //             
@@ -1132,11 +1163,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
   //             std::cout << Hpalt << std::endl;
               
               
-              if (true) {
-                
-                const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(6, parmdetid));                
-                const unsigned int elossglobalidx = detidparms.at(std::make_pair(7, parmdetid));
-                
+              if (true) {                
     //             std::cout << "EdE first hit:" << std::endl;
     //             std::cout << EdE << std::endl;
     //             
@@ -1196,10 +1223,12 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
                   }
                   
                   // initialize active scalars for correction parameters                  
-                  MSScalar dbeta(corparms_[bfieldglobalidx]);
+//                   MSScalar dbeta(corparms_[bfieldglobalidx]);
+                  MSScalar dbeta(0.);
                   init_twice_active_var(dbeta, nlocal, localparmidx);
                   
-                  MSScalar dxi(corparms_[elossglobalidx]);
+//                   MSScalar dxi(corparms_[elossglobalidx]);
+                  MSScalar dxi(0.);
                   init_twice_active_var(dxi, nlocal, localparmidx + 1);
                   
                   const Matrix<MSScalar, 5, 1> dprop = dx0.cast<MSScalar>() + Hpstate*du - Hmstate*Fvtx*dvtx - Hmstate*Fmom*dmom - Hmstate*Fb*dbeta - Hmstate*Fxi*dxi;
@@ -1265,10 +1294,12 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
                     init_twice_active_var(du[j], nlocal, localstateidx + 5 + j);
                   }
                   
-                  MSScalar dbeta(corparms_[bfieldglobalidx]);
+//                   MSScalar dbeta(corparms_[bfieldglobalidx]);
+                  MSScalar dbeta(0.);
                   init_twice_active_var(dbeta, nlocal, localparmidx);
                   
-                  MSScalar dxi(corparms_[elossglobalidx]);
+//                   MSScalar dxi(corparms_[elossglobalidx]);
+                  MSScalar dxi(0.);
                   init_twice_active_var(dxi, nlocal, localparmidx + 1);
                               
                   const Matrix<MSScalar, 5, 1> dprop = dx0.cast<MSScalar>() + Hpstate*du - Hmstate*Fstate*dum - Hmstate*Fb*dbeta - Hmstate*Fxi*dxi;
@@ -1486,10 +1517,10 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
                   // order in which to use parameters, especially relevant in case nlocalalignment < 6
                   constexpr std::array<unsigned int, 6> alphaidxs = {{5, 0, 1, 2, 3, 4}};
                   
-                  for (unsigned int idim=0; idim<nlocalalignment; ++idim) {
-                    const unsigned int xglobalidx = detidparms.at(std::make_pair(alphaidxs[idim], preciseHit->geographicalId()));
-                    dalpha[alphaidxs[idim]] = AlignScalar(corparms_[xglobalidx]);
-                  }
+//                   for (unsigned int idim=0; idim<nlocalalignment; ++idim) {
+//                     const unsigned int xglobalidx = detidparms.at(std::make_pair(alphaidxs[idim], preciseHit->geographicalId()));
+//                     dalpha[alphaidxs[idim]] = AlignScalar(corparms_[xglobalidx]);
+//                   }
                   
                   for (unsigned int idim=0; idim<nlocalalignment; ++idim) {
       //               init_twice_active_var(dalpha[idim], nlocal, localalignmentidx+idim);

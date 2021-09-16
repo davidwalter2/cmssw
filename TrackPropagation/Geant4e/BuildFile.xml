@@ -11,6 +11,7 @@
 <use name="DataFormats/CLHEP"/>
 <use name="CLHEP"/>
 <use name="Eigen"/>
+<use name="SimG4Core/MagneticField"/>
 <export>
   <lib name="1"/>
 </export>

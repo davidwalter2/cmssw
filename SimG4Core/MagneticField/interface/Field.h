@@ -15,6 +15,9 @@ namespace sim {
     Field(const MagneticField *f, double d);
     ~Field() override;
     inline void GetFieldValue(const G4double p[], G4double b[3]) const override;
+    void SetOffset(double x, double y, double z);
+    void SetMaterialOffset(double offset) { dxi = offset; }
+    double GetMaterialOffset() const { return dxi; }
 
   private:
     const MagneticField *theCMSMagneticField;
@@ -22,6 +25,9 @@ namespace sim {
 
     mutable double oldx[3];
     mutable double oldb[3];
+
+    double offset[3];
+    double dxi;
   };
 };  // namespace sim
 
@@ -41,9 +47,9 @@ void sim::Field::GetFieldValue(const G4double xyz[], G4double bfield[3]) const {
     oldx[2] = xyz[2];
   }
 
-  bfield[0] = oldb[0];
-  bfield[1] = oldb[1];
-  bfield[2] = oldb[2];
+  bfield[0] = oldb[0] + offset[0];
+  bfield[1] = oldb[1] + offset[1];
+  bfield[2] = oldb[2] + offset[2];
 }
 
 #endif

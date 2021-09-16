@@ -214,14 +214,14 @@ protected:
   
   Matrix<double, 5, 5> curv2localJacobianAlteloss(const TrajectoryStateOnSurface &state, double dEdx, double mass) const;
   
-  Matrix<double, 5, 5> curv2localJacobianAltelossD(const Matrix<double, 7, 1> &state, const MagneticField *field, const GloballyPositioned<double> &surface, double dEdx, double mass) const;
+  Matrix<double, 5, 5> curv2localJacobianAltelossD(const Matrix<double, 7, 1> &state, const MagneticField *field, const GloballyPositioned<double> &surface, double dEdx, double mass, double dBz = 0.) const;
   
   Matrix<double, 6, 5> curv2cartJacobianAlt(const FreeTrajectoryState &state) const;
   Matrix<double, 6, 5> curv2cartJacobianAltD(const Matrix<double, 7, 1> &state) const;
                                                              
   Matrix<double, 5, 6> hybrid2curvJacobian(const FreeTrajectoryState &state) const;
   
-  Matrix<double, 5, 6> hybrid2curvJacobianD(const Matrix<double, 7, 1> &state, const MagneticField *field) const;
+  Matrix<double, 5, 6> hybrid2curvJacobianD(const Matrix<double, 7, 1> &state, const MagneticField *field, double dBz = 0.) const;
          
   Matrix<double, 5, 7> hybrid2localTransportJacobian(const FreeTrajectoryState& start,
                                               const std::pair<TrajectoryStateOnSurface, double>& propresult) const;

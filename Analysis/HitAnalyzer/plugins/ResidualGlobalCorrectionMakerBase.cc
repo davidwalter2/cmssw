@@ -554,14 +554,15 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       unsigned int idx;
       float val;
       
-      cortree->SetBranchAddress("idx", &idx);
+//       cortree->SetBranchAddress("idx", &idx);
       cortree->SetBranchAddress("x", &val);
       
       const unsigned int nparms = cortree->GetEntries();
       assert(nparms == parmset.size());
       for (unsigned int iparm = 0; iparm < nparms; ++iparm) {
         cortree->GetEntry(iparm);
-        corparms_[idx] = val;
+        corparms_[iparm] = val;
+//         corparms_[idx] = val;
       }
     }
   
@@ -603,11 +604,11 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
 //       const float db = corparms_[dbdx];
       const float dxi = corparms_[dxiidx];
       
-//       float dy = 0.;
-//       if (align2d) {
-//         const unsigned int dyidx = detidparms.at(std::make_pair(1, det->geographicalId())); 
-//         dy = -corparms_[dyidx];
-//       }
+      float dy = 0.;
+      if (align2d) {
+        const unsigned int dyidx = detidparms.at(std::make_pair(1, det->geographicalId())); 
+        dy = -corparms_[dyidx];
+      }
       
       const Surface &surface = det->surface();
       Point3DBase<double, GlobalTag> pos = surface.position();
@@ -618,6 +619,9 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
               surface.rotation().yx(), surface.rotation().yy(), surface.rotation().yz(),
               surface.rotation().zx(), surface.rotation().zy(), surface.rotation().zz();
               
+//       std::cout << "rot check pre:" << std::endl;
+//       std::cout << rot.transpose()*rot << std::endl;
+            
       for (unsigned int i = 0; i < 3; ++i) {
         for (unsigned int j = 0; j < i; ++j) {
           rot.row(i) = (rot.row(i) - (rot.row(i)*rot.row(j).transpose())[0]/rot.row(j).squaredNorm()*rot.row(j)).eval();
@@ -627,21 +631,35 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
           rot.row(i) = (rot.row(i)/rot.row(i).norm()).eval();
       }
       
+//       std::cout << "rot check post:" << std::endl;
+//       std::cout << rot.transpose()*rot << std::endl;
+      
       const TkRotation<double> tkrot(rot(0,0), rot(0,1), rot(0,2),
                                      rot(1,0), rot(1,1), rot(1,2),
                                      rot(2,0), rot(2,1), rot(2,2));
       
       
-      const GloballyPositioned<double> surfaceD(pos, tkrot);
+      GloballyPositioned<double> surfaceD(pos, tkrot);
       
       
       ReferenceCountingPointer<Plane> plane = Plane::build(det->surface());
 //       std::shared_ptr<Plane> plane = std::make_shared<Plane>(det->surface());
       
       //move, rotate and modify material
-//       plane->move(plane->toGlobal(LocalVector(dx, dy, 0.)));
-//       plane->rotate(Surface::RotationType(Surface::RotationType::BasicVector(plane->toGlobal(LocalVector(0.,0.,1.))), dtheta));
+      plane->move(plane->toGlobal(LocalVector(dx, dy, 0.)));
+      plane->rotate(Surface::RotationType(Surface::RotationType::BasicVector(plane->toGlobal(LocalVector(0.,0.,1.))), dtheta));
       
+      surfaceD.move(surfaceD.toGlobal(Vector3DBase<double, LocalTag>(dx, dy, 0.)));
+      surfaceD.rotate(TkRotation<double>(TkRotation<double>::BasicVector(surfaceD.toGlobal(Vector3DBase<double, LocalTag>(0.,0.,1.))), dtheta));
+      
+//       Matrix<double, 3, 3> rot2;
+//       rot2 << surfaceD.rotation().xx(), surfaceD.rotation().xy(), surfaceD.rotation().xz(),
+//               surfaceD.rotation().yx(), surfaceD.rotation().yy(), surfaceD.rotation().yz(),
+//               surfaceD.rotation().zx(), surfaceD.rotation().zy(), surfaceD.rotation().zz();
+//       
+//       std::cout << "rot2 check:" << std::endl;
+//       std::cout << rot2.transpose()*rot2 << std::endl;
+              
 //       if (plane->mediumProperties().xi() + xifraction*dxi < 0.05*plane->mediumProperties().xi()) {
 //         std::cout << "xi value clipped!" << std::endl;
 //       }
@@ -1352,11 +1370,11 @@ Matrix<double, 5, 6> ResidualGlobalCorrectionMakerBase::hybrid2curvJacobian(cons
 
 }
 
-Matrix<double, 5, 6> ResidualGlobalCorrectionMakerBase::hybrid2curvJacobianD(const Matrix<double, 7, 1> &state, const MagneticField *field) const {
+Matrix<double, 5, 6> ResidualGlobalCorrectionMakerBase::hybrid2curvJacobianD(const Matrix<double, 7, 1> &state, const MagneticField *field, double dBz) const {
   
   const GlobalPoint pos(state[0], state[1], state[2]);  
   const GlobalVector &bfield = field->inInverseGeV(pos);
-  const Matrix<double, 3, 1> Bv(bfield.x(), bfield.y(), bfield.z());
+  const Matrix<double, 3, 1> Bv(bfield.x(), bfield.y(), double(bfield.z()) + 2.99792458e-3*dBz);
   
   const double q = state[6];
   
@@ -2597,12 +2615,12 @@ Matrix<double, 5, 5> ResidualGlobalCorrectionMakerBase::curv2localJacobianAltelo
 // 
 // }
 
-Matrix<double, 5, 5> ResidualGlobalCorrectionMakerBase::curv2localJacobianAltelossD(const Matrix<double, 7, 1> &state, const MagneticField *field, const GloballyPositioned<double> &surface, double dEdx, double mass) const {
+Matrix<double, 5, 5> ResidualGlobalCorrectionMakerBase::curv2localJacobianAltelossD(const Matrix<double, 7, 1> &state, const MagneticField *field, const GloballyPositioned<double> &surface, double dEdx, double mass, double dBz) const {
   
   
   const GlobalPoint pos(state[0], state[1], state[2]);  
   const GlobalVector &bfield = field->inInverseGeV(pos);
-  const Matrix<double, 3, 1> Bv(bfield.x(), bfield.y(), bfield.z());
+  const Matrix<double, 3, 1> Bv(bfield.x(), bfield.y(), double(bfield.z()) + 2.99792458e-3*dBz);
   
   const double q = state[6];
   
