@@ -210,7 +210,8 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
     tree->SetAutoFlush(0);
     
     tree->Branch("nParms", &nParms, basketSize);
-    tree->Branch("globalidxv", globalidxv.data(), "globalidxv[nParms]/i", basketSize);
+//     tree->Branch("globalidxv", globalidxv.data(), "globalidxv[nParms]/i", basketSize);
+    tree->Branch("globalidxv", &globalidxvfinal, basketSize);
     
     if (fillGrads_) {
       tree->Branch("gradv", gradv.data(), "gradv[nParms]/F", basketSize);

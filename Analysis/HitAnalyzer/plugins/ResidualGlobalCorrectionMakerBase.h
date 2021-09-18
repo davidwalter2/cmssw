@@ -362,6 +362,7 @@ protected:
   std::vector<float> gradv;
   std::vector<float> jacrefv;
   std::vector<unsigned int> globalidxv;
+  std::vector<unsigned int> globalidxvfinal;
   
   std::vector<float> hesspackedv;
   
