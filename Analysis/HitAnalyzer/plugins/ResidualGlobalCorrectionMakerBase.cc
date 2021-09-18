@@ -283,8 +283,8 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
   edm::ESHandle<GlobalTrackingGeometry> globalGeometry;
   es.get<GlobalTrackingGeometryRecord>().get(globalGeometry);
   
-//   edm::ESHandle<TrackerGeometry> globalGeometry;
-//   es.get<TrackerDigiGeometryRecord>().get("idealForDigi", globalGeometry);
+  edm::ESHandle<TrackerGeometry> globalGeometryIdeal;
+  es.get<TrackerDigiGeometryRecord>().get("idealForDigi", globalGeometryIdeal);
   
   edm::ESHandle<TrackerTopology> trackerTopology;
   es.get<TrackerTopologyRcd>().get(trackerTopology);
@@ -384,6 +384,10 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
     float bx;
     float by;
     float bz;
+    float dx;
+    float dy;
+    float dz;
+    float dtheta;
 
     runtree->Branch("iidx", &iidx);
     runtree->Branch("parmtype", &parmtype);
@@ -401,6 +405,10 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
     runtree->Branch("bx", &bx);
     runtree->Branch("by", &by);
     runtree->Branch("bz", &bz);
+    runtree->Branch("dx", &dx);
+    runtree->Branch("dy", &dy);
+    runtree->Branch("dz", &dz);
+    runtree->Branch("dtheta", &dtheta);
     
     unsigned int globalidx = 0;
     for (const auto& key: parmset) {
@@ -414,6 +422,26 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       
         const DetId& detid = key.second;
         const GeomDet* det = globalGeometry->idToDet(detid);
+        
+        const Surface &surface = det->surface();
+        
+        const Surface &surfaceIdeal = globalGeometryIdeal->idToDet(detid)->surface();
+        
+        const GloballyPositioned<double> surfaceD = surfaceToDouble(surface);
+        const GloballyPositioned<double> surfaceDIdeal = surfaceToDouble(surfaceIdeal);
+        
+        const Vector3DBase<double, GlobalTag> dpos = surfaceDIdeal.position() - surfaceD.position();
+        
+        dx = dpos.x();
+        dy = dpos.y();
+        dz = dpos.z();
+        
+        const Vector3DBase<double, LocalTag> localx(1., 0., 0.);
+        const Vector3DBase<double, GlobalTag> xglob = surfaceD.toGlobal(localx);
+        const Vector3DBase<double, GlobalTag> xglobIdeal = surfaceDIdeal.toGlobal(localx);
+        
+        const double dtheta = std::acos(xglob.dot(xglobIdeal));
+        
         
     //     if (detid.rawId() == 302122272) {
     //       std::cout << "width: " << det->surface().bounds().width() << std::endl;
@@ -611,35 +639,37 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       }
       
       const Surface &surface = det->surface();
-      Point3DBase<double, GlobalTag> pos = surface.position();
+//       Point3DBase<double, GlobalTag> pos = surface.position();
+//       
+//       //re-orthogonalize
+//       Matrix<double, 3, 3> rot;
+//       rot << surface.rotation().xx(), surface.rotation().xy(), surface.rotation().xz(),
+//               surface.rotation().yx(), surface.rotation().yy(), surface.rotation().yz(),
+//               surface.rotation().zx(), surface.rotation().zy(), surface.rotation().zz();
+//               
+// //       std::cout << "rot check pre:" << std::endl;
+// //       std::cout << rot.transpose()*rot << std::endl;
+//             
+//       for (unsigned int i = 0; i < 3; ++i) {
+//         for (unsigned int j = 0; j < i; ++j) {
+//           rot.row(i) = (rot.row(i) - (rot.row(i)*rot.row(j).transpose())[0]/rot.row(j).squaredNorm()*rot.row(j)).eval();
+//         }
+//       }
+//       for (unsigned int i = 0; i < 3; ++i) {
+//           rot.row(i) = (rot.row(i)/rot.row(i).norm()).eval();
+//       }
+//       
+// //       std::cout << "rot check post:" << std::endl;
+// //       std::cout << rot.transpose()*rot << std::endl;
+//       
+//       const TkRotation<double> tkrot(rot(0,0), rot(0,1), rot(0,2),
+//                                      rot(1,0), rot(1,1), rot(1,2),
+//                                      rot(2,0), rot(2,1), rot(2,2));
+//       
+//       
+//       GloballyPositioned<double> surfaceD(pos, tkrot);
       
-      //re-orthogonalize
-      Matrix<double, 3, 3> rot;
-      rot << surface.rotation().xx(), surface.rotation().xy(), surface.rotation().xz(),
-              surface.rotation().yx(), surface.rotation().yy(), surface.rotation().yz(),
-              surface.rotation().zx(), surface.rotation().zy(), surface.rotation().zz();
-              
-//       std::cout << "rot check pre:" << std::endl;
-//       std::cout << rot.transpose()*rot << std::endl;
-            
-      for (unsigned int i = 0; i < 3; ++i) {
-        for (unsigned int j = 0; j < i; ++j) {
-          rot.row(i) = (rot.row(i) - (rot.row(i)*rot.row(j).transpose())[0]/rot.row(j).squaredNorm()*rot.row(j)).eval();
-        }
-      }
-      for (unsigned int i = 0; i < 3; ++i) {
-          rot.row(i) = (rot.row(i)/rot.row(i).norm()).eval();
-      }
-      
-//       std::cout << "rot check post:" << std::endl;
-//       std::cout << rot.transpose()*rot << std::endl;
-      
-      const TkRotation<double> tkrot(rot(0,0), rot(0,1), rot(0,2),
-                                     rot(1,0), rot(1,1), rot(1,2),
-                                     rot(2,0), rot(2,1), rot(2,2));
-      
-      
-      GloballyPositioned<double> surfaceD(pos, tkrot);
+      GloballyPositioned<double> surfaceD = surfaceToDouble(surface);
       
       
       ReferenceCountingPointer<Plane> plane = Plane::build(det->surface());
@@ -685,6 +715,37 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
   
 }
 
+
+GloballyPositioned<double> ResidualGlobalCorrectionMakerBase::surfaceToDouble(const Surface &surface) const {
+  Point3DBase<double, GlobalTag> pos = surface.position();
+  //re-orthogonalize
+  Matrix<double, 3, 3> rot;
+  rot << surface.rotation().xx(), surface.rotation().xy(), surface.rotation().xz(),
+          surface.rotation().yx(), surface.rotation().yy(), surface.rotation().yz(),
+          surface.rotation().zx(), surface.rotation().zy(), surface.rotation().zz();
+          
+//       std::cout << "rot check pre:" << std::endl;
+//       std::cout << rot.transpose()*rot << std::endl;
+        
+  for (unsigned int i = 0; i < 3; ++i) {
+    for (unsigned int j = 0; j < i; ++j) {
+      rot.row(i) = (rot.row(i) - (rot.row(i)*rot.row(j).transpose())[0]/rot.row(j).squaredNorm()*rot.row(j)).eval();
+    }
+  }
+  for (unsigned int i = 0; i < 3; ++i) {
+      rot.row(i) = (rot.row(i)/rot.row(i).norm()).eval();
+  }
+  
+//       std::cout << "rot check post:" << std::endl;
+//       std::cout << rot.transpose()*rot << std::endl;
+  
+  const TkRotation<double> tkrot(rot(0,0), rot(0,1), rot(0,2),
+                                  rot(1,0), rot(1,1), rot(1,2),
+                                  rot(2,0), rot(2,1), rot(2,2));
+  
+  
+  return GloballyPositioned<double>(pos, tkrot);
+}
 
 // ------------ method called when ending the processing of a run  ------------
 /*

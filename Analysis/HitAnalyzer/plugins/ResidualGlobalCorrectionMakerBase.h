@@ -183,6 +183,7 @@ protected:
   //virtual void beginLuminosityBlock(edm::LuminosityBlock const&, edm::EventSetup const&) override;
   //virtual void endLuminosityBlock(edm::LuminosityBlock const&, edm::EventSetup const&) override;
 
+  GloballyPositioned<double> surfaceToDouble(const Surface &surface) const;
   
   Matrix<double, 5, 6> localTransportJacobian(const TrajectoryStateOnSurface& start,
                                               const std::pair<TrajectoryStateOnSurface, double>& propresult,
