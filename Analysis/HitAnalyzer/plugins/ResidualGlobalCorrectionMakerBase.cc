@@ -385,6 +385,10 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
     float bx;
     float by;
     float bz;
+    float bradial;
+    float baxial;
+    float b0;
+    float b0trivial;
     float dx;
     float dy;
     float dz;
@@ -406,6 +410,10 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
     runtree->Branch("bx", &bx);
     runtree->Branch("by", &by);
     runtree->Branch("bz", &bz);
+    runtree->Branch("bradial", &bradial);
+    runtree->Branch("baxial", &baxial);
+    runtree->Branch("b0", &b0);
+    runtree->Branch("b0trivial", &b0trivial);
     runtree->Branch("dx", &dx);
     runtree->Branch("dy", &dy);
     runtree->Branch("dz", &dz);
@@ -524,6 +532,21 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
         bx = bfieldval.x();
         by = bfieldval.y();
         bz = bfieldval.z();
+        
+        const GlobalVector posv(det->surface().position().x(), det->surface().position().y(), det->surface().position().z());
+        
+        const GlobalVector posxy(det->surface().position().x(), det->surface().position().y(), 0.);
+        bradial = bfieldval.dot(posxy)/posxy.mag();
+        
+        const GlobalVector rphi = posxy.cross(GlobalVector(0.,0.,1.));
+        baxial = bfieldval.dot(rphi)/rphi.mag();
+        
+        const GlobalVector b0dir = posv.cross(rphi)/posv.mag()/rphi.mag();
+        
+        b0 = bfieldval.dot(b0dir)/b0dir.mag();
+        
+        const GlobalVector btrivial(0., 0., 3.8);
+        b0trivial = btrivial.dot(b0dir)/b0dir.mag();
         
         detidlayermap[detid] = {{ subdet, layer, stereo }};
       }
