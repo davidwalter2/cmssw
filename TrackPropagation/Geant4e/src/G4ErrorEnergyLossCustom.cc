@@ -26,7 +26,8 @@
 
 #include "TrackPropagation/Geant4e/interface/G4ErrorEnergyLossCustom.h"
 #include "G4ErrorPropagatorData.hh"
-#include "G4EnergyLossForExtrapolator.hh"
+// #include "G4EnergyLossForExtrapolator.hh"
+#include "TrackPropagation/Geant4e/interface/G4EnergyLossForExtrapolatorCustom.h"
 #include "G4TransportationManager.hh"
 #include "G4FieldManager.hh"
 
@@ -41,7 +42,8 @@ G4ErrorEnergyLossCustom::G4ErrorEnergyLossCustom(const G4String& processName,
     G4cout << GetProcessName() << " is created " << G4endl;
   }
 
-  theELossForExtrapolator = new G4EnergyLossForExtrapolator;
+//   theELossForExtrapolator = new G4EnergyLossForExtrapolator;
+  theELossForExtrapolator = new G4EnergyLossForExtrapolatorCustom;
 
   theStepLimit = 1.;
   

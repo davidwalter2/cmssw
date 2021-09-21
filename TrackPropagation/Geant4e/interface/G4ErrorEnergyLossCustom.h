@@ -42,7 +42,7 @@
 #include "G4VContinuousProcess.hh"
 #include "G4ProcessType.hh"
 
-class G4EnergyLossForExtrapolator;
+class G4EnergyLossForExtrapolatorCustom;
 
 class G4ErrorEnergyLossCustom : public G4VContinuousProcess
 {
@@ -82,7 +82,7 @@ private:
   G4ErrorEnergyLossCustom & operator=(const G4ErrorEnergyLossCustom &right) = delete;
 
 private:
-  G4EnergyLossForExtrapolator* theELossForExtrapolator;
+  G4EnergyLossForExtrapolatorCustom* theELossForExtrapolator;
 
   G4double theStepLimit;
 };
