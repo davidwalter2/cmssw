@@ -333,6 +333,7 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
 //       parmset.emplace(3, det->geographicalId());
 //       parmset.emplace(4, det->geographicalId());
       parmset.emplace(5, det->geographicalId());
+      parmset.emplace(2, det->geographicalId());
       
       if (align2d) {
         //local y alignment parameters only for pixels for now
@@ -656,11 +657,11 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
 //       const float db = corparms_[dbdx];
       const float dxi = corparms_[dxiidx];
       
-      float dy = 0.;
-      if (align2d) {
-        const unsigned int dyidx = detidparms.at(std::make_pair(1, det->geographicalId())); 
-        dy = -corparms_[dyidx];
-      }
+//       float dy = 0.;
+//       if (align2d) {
+//         const unsigned int dyidx = detidparms.at(std::make_pair(1, det->geographicalId())); 
+//         dy = -corparms_[dyidx];
+//       }
       
       const Surface &surface = det->surface();
 //       Point3DBase<double, GlobalTag> pos = surface.position();
@@ -700,11 +701,11 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
 //       std::shared_ptr<Plane> plane = std::make_shared<Plane>(det->surface());
       
       //move, rotate and modify material
-      plane->move(plane->toGlobal(LocalVector(dx, dy, 0.)));
-      plane->rotate(Surface::RotationType(Surface::RotationType::BasicVector(plane->toGlobal(LocalVector(0.,0.,1.))), dtheta));
-      
-      surfaceD.move(surfaceD.toGlobal(Vector3DBase<double, LocalTag>(dx, dy, 0.)));
-      surfaceD.rotate(TkRotation<double>(TkRotation<double>::BasicVector(surfaceD.toGlobal(Vector3DBase<double, LocalTag>(0.,0.,1.))), dtheta));
+//       plane->move(plane->toGlobal(LocalVector(dx, dy, 0.)));
+//       plane->rotate(Surface::RotationType(Surface::RotationType::BasicVector(plane->toGlobal(LocalVector(0.,0.,1.))), dtheta));
+//       
+//       surfaceD.move(surfaceD.toGlobal(Vector3DBase<double, LocalTag>(dx, dy, 0.)));
+//       surfaceD.rotate(TkRotation<double>(TkRotation<double>::BasicVector(surfaceD.toGlobal(Vector3DBase<double, LocalTag>(0.,0.,1.))), dtheta));
       
 //       Matrix<double, 3, 3> rot2;
 //       rot2 << surfaceD.rotation().xx(), surfaceD.rotation().xy(), surfaceD.rotation().xz(),

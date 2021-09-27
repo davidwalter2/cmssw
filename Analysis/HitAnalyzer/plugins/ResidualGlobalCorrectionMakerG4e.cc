@@ -1162,7 +1162,8 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
 //     const unsigned int nparsAlignment = nstriphits + 2*npixhits;
 //     const unsigned int nvalidstrip = nvalid - nvalidpixel;
 //     const unsigned int nparsAlignment = nvalidstrip + 2*nvalidpixel;
-    const unsigned int nparsAlignment = 2*nvalid + nvalidalign2d;
+//     const unsigned int nparsAlignment = 2*nvalid + nvalidalign2d;
+    const unsigned int nparsAlignment = 3*nvalid + nvalidalign2d;
 //     const unsigned int nparsAlignment = 6*nvalid;
     const unsigned int nparsBfield = nhits;
     const unsigned int nparsEloss = nhits;
@@ -1906,8 +1907,10 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
         const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(6, parmdetid));                
         const unsigned int elossglobalidx = detidparms.at(std::make_pair(7, parmdetid));
         
-        const double dbetaval = corparms_[bfieldglobalidx];
-        const double dxival = corparms_[elossglobalidx];
+//         const double dbetaval = corparms_[bfieldglobalidx];
+//         const double dxival = corparms_[elossglobalidx];
+        const double dbetaval = 0.;
+        const double dxival = 0.;
         
         const PSimHit *simhit = nullptr;
         
@@ -2466,10 +2469,12 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
               init_twice_active_var(du[j], nlocal, localstateidx + 5 + j);
             }
             
-            MSScalar dbeta(0.);
+            MSScalar dbeta(corparms_[bfieldglobalidx]);
+//             MSScalar dbeta(0.);
             init_twice_active_var(dbeta, nlocal, localparmidx);
 
-            MSScalar dxi(0.);
+            MSScalar dxi(corparms_[elossglobalidx]);
+//             MSScalar dxi(0.);
             init_twice_active_var(dxi, nlocal, localparmidx + 1);
                         
             const Matrix<MSScalar, 5, 1> dprop = dx0.cast<MSScalar>() + Hpstate*du - Hmstate*Fstate*dum - Hmstate*Fb*dbeta - Hmstate*Fxi*dxi;
@@ -2872,7 +2877,14 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
             
             Matrix<AlignScalar, 6, 1> dalpha = Matrix<AlignScalar, 6, 1>::Zero();
             // order in which to use parameters, especially relevant in case nlocalalignment < 6
-            constexpr std::array<unsigned int, 6> alphaidxs = {{5, 0, 1, 2, 3, 4}};
+//             constexpr std::array<unsigned int, 6> alphaidxs = {{5, 0, 1, 2, 3, 4}};
+            constexpr std::array<unsigned int, 6> alphaidxs = {{2, 5, 0, 1, 3, 4}};
+            
+            for (unsigned int idim=0; idim<nlocalalignment; ++idim) {
+              const unsigned int xglobalidx = detidparms.at(std::make_pair(alphaidxs[idim], preciseHit->geographicalId()));
+              dalpha[alphaidxs[idim]] = AlignScalar(corparms_[xglobalidx]);
+            }
+            
             for (unsigned int idim=0; idim<nlocalalignment; ++idim) {
 //               init_twice_active_var(dalpha[idim], nlocal, localalignmentidx+idim);
               init_twice_active_var(dalpha[alphaidxs[idim]], nlocal, localalignmentidx+idim);
@@ -2891,10 +2903,12 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
             A(0,0) = AlignScalar(1.);
             // dy/dy
             A(1,1) = AlignScalar(1.);
-            // dx/dz
-            A(0,2) = localdxdzval;
-            // dy/dz
-            A(1,2) = localdydzval;
+//                   // dx/dz
+//                   A(0,2) = localdxdzval;
+//                   // dy/dz
+//                   A(1,2) = localdydzval;
+            // dx/dr, r = spurious charge-dependent position bias
+            A(0,2) = std::copysign(1., localqopval);
             // dx/dtheta_x
             A(0,3) = -localyval*localdxdzval;
             // dy/dtheta_x
@@ -3123,10 +3137,12 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
           };
                     
           if (align2d) {
-            fillAlignGrads(std::integral_constant<unsigned int, 3>());
+//             fillAlignGrads(std::integral_constant<unsigned int, 3>());
+            fillAlignGrads(std::integral_constant<unsigned int, 4>());
           }
           else {
-            fillAlignGrads(std::integral_constant<unsigned int, 2>());
+//             fillAlignGrads(std::integral_constant<unsigned int, 2>());
+            fillAlignGrads(std::integral_constant<unsigned int, 3>());
           }
 //           fillAlignGrads(std::integral_constant<unsigned int, 6>());
           
