@@ -994,6 +994,9 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
             assert(pixhit != nullptr);
             
             hitquality = !pixhit->isOnEdge() && cluster.sizeX() > 1;
+//             hitquality = !pixhit->isOnEdge() && cluster.sizeX() > 1 && cluster.sizeY() > 1;
+            
+            
 //             hitquality = !pixhit->isOnEdge();
 //             hitquality = cluster.sizeX() > 1;
             
@@ -1020,6 +1023,9 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
             
 //             hitquality = !isOnEdge;
             hitquality = true;
+            
+//             const bool isstereo = trackerTopology->isStereo(detectorG->geographicalId());
+//             hitquality = !isstereo;
             
             
             
@@ -2664,6 +2670,11 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
 //               }
 //             }
             
+//             const bool hit1d = preciseHit->dimension() == 1 || (detidlayermap.at(preciseHit->geographicalId())[0] == 0 && detidlayermap.at(preciseHit->geographicalId())[1] == 1);
+//             const bool hit1d = preciseHit->dimension() == 1 || ispixel;
+            
+            const bool hit1d = preciseHit->dimension() == 1;
+            
             
             Matrix<AlignScalar, 2, 2> Hu = Hp.bottomRightCorner<2,2>().cast<AlignScalar>();
 
@@ -2672,7 +2683,8 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
             // rotation from module to strip coordinates
 //             Matrix<AlignScalar, 2, 2> R;
             Matrix2d R;
-            if (preciseHit->dimension() == 1) {
+//             if (preciseHit->dimension() == 1) {
+            if (hit1d) {
 //               std::cout << "1d hit" << std::endl;
 //               assert(!align2d);
 //               dy0[0] = AlignScalar(matchedsim->localPosition().x() - updtsos.localPosition().x());
@@ -3014,11 +3026,13 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
             if (iiter == 0) {
               
               // fill hit validation information
-              Vector2d dyrecgenlocal;
-              dyrecgenlocal << dy0[0].value().value(), dy0[1].value().value();
-              const Vector2d dyrecgeneig = R*dyrecgenlocal;
-              dxrecgen.push_back(dyrecgeneig[0]);
-              dyrecgen.push_back(dyrecgeneig[1]);
+//               Vector2d dyrecgenlocal;
+//               dyrecgenlocal << dy0[0].value().value(), dy0[1].value().value();
+//               const Vector2d dyrecgeneig = R*dyrecgenlocal;
+//               dxrecgen.push_back(dyrecgeneig[0]);
+//               dyrecgen.push_back(dyrecgeneig[1]);
+              dxrecgen.push_back(dy0[0].value().value());
+              dyrecgen.push_back(dy0[1].value().value());
               
               dxerr.push_back(1./std::sqrt(Vinv(0,0).value().value()));
               dyerr.push_back(1./std::sqrt(Vinv(1,1).value().value()));
