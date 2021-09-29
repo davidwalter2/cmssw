@@ -674,9 +674,9 @@ void ResidualGlobalCorrectionMakerSimG4e::analyze(const edm::Event &iEvent, cons
     globalidxv.resize(npars, 0);
     
     nParms = npars;
-    if (fillTrackTree_) {
-      tree->SetBranchAddress("globalidxv", globalidxv.data());
-    }
+//     if (fillTrackTree_) {
+//       tree->SetBranchAddress("globalidxv", globalidxv.data());
+//     }
     
 //     TrajectoryStateOnSurface currtsos;
     
@@ -2182,6 +2182,12 @@ void ResidualGlobalCorrectionMakerSimG4e::analyze(const edm::Event &iEvent, cons
 //       const AlgebraicVector5& refVec = track.parameters();
       CurvilinearTrajectoryParameters curvparms(refFts.position(), refFts.momentum(), refFts.charge());
       const AlgebraicVector5& refVec = curvparms.vector();
+      
+//       std::cout << "refVec:" << std::endl;
+//       std::cout << refVec << std::endl;
+//       std::cout << "dxRef" << std::endl;
+//       std::cout << dxRef << std::endl;
+      
       Map<Vector5f>(refParms.data()) = (Map<const Vector5d>(refVec.Array()) + dxRef).cast<float>();
       Map<Matrix<float, 5, 5, RowMajor> >(refCov.data()).triangularView<Upper>() = (2.*Cinner).cast<float>().triangularView<Upper>();
       
