@@ -324,6 +324,8 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
 //       const bool align2d = ispixel || isendcap;
 //       const bool align2d = true;
       const bool align2d = ispixel;
+//       const bool align2d = false;
+//       const bool align2d = isendcap && !ispixel;
 
       
       //always have parameters for local x alignment, in-plane rotation, bfield, and e-loss
@@ -639,7 +641,10 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       
       const double xifraction = isglued ? det->surface().mediumProperties().xi()/parmDet->surface().mediumProperties().xi() : 1.;
       
-      const bool align2d = ispixel;
+//       const bool align2d = ispixel;
+//       const bool align2d = false;
+
+      const bool align2d = detidparms.count(std::make_pair(1, det->geographicalId()));
 
       
 

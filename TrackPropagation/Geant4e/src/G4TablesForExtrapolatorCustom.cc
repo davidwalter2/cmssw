@@ -62,6 +62,7 @@
 #include "G4EmParameters.hh"
 #include "G4MollerBhabhaModel.hh"
 #include "G4BetheBlochModel.hh"
+#include "G4MuBetheBlochModel.hh"
 #include "G4eBremsstrahlungRelModel.hh"
 #include "G4MuPairProductionModel.hh"
 #include "G4MuBremsstrahlungModel.hh"
@@ -324,6 +325,7 @@ G4TablesForExtrapolatorCustom::ComputeMuonDEDX(const G4ParticleDefinition* part,
 					 G4PhysicsTable* table)
 {
   G4BetheBlochModel* ioni = new G4BetheBlochModel();
+//   G4MuBetheBlochModel* ionialt = new G4MuBetheBlochModel();
   G4MuPairProductionModel* pair = new G4MuPairProductionModel();
   G4MuBremsstrahlungModel* brem = new G4MuBremsstrahlungModel();
   ioni->Initialise(part, cuts);
@@ -350,12 +352,43 @@ G4TablesForExtrapolatorCustom::ComputeMuonDEDX(const G4ParticleDefinition* part,
     }
     const G4MaterialCutsCouple* couple = couples[i];
     G4PhysicsVector* aVector = (*table)[i];
+    
+// //     std::cout << "material = " << mat->GetName() << std::endl;
+// //     std::cout << "computing dedxmin" << std::endl;
+//     double dedxionimin = std::numeric_limits<double>::max();
+// //     double emin = 0.;
+// //     double dedxioniminalt = std::numeric_limits<double>::max();
+// //     double eminalt = 0.;
+//     for(G4int j=0; j<=nbins; j++) {
+//       G4double e = aVector->Energy(j);
+//       const double dedxioni = ioni->ComputeDEDX(couple,part,e,e);
+// //       const double dedxionialt = ionialt->ComputeDEDX(couple,part,e,e);
+// //       std::cout << "e = " << e << " dedxioni = " << dedxioni << " dedxionialt = " << dedxionialt << std::endl;
+//       dedxionimin = std::min(dedxionimin, dedxioni);
+// //       if (dedxioni < dedxionimin) {
+// //         dedxionimin = dedxioni;
+// //         emin = e;
+// //       }
+// //       if (dedxionialt < dedxioniminalt) {
+// //         dedxioniminalt = dedxionialt;
+// //         eminalt = e;
+// //       }
+//     }
+    
+    
+//     std::cout << mat->GetName() << " dedxmin = " << dedxionimin << " emin = " << emin << " dedxioniminalt = " << dedxioniminalt << " eminalt = " << eminalt << std::endl;
+    
     for(G4int j=0; j<=nbins; j++) {
         
        G4double e = aVector->Energy(j);
+//        G4double dedx = std::min(ioni->ComputeDEDX(couple,part,e,e), dedxionimin) +
+// 	               pair->ComputeDEDX(couple,part,e,e) +
+// 	               brem->ComputeDEDX(couple,part,e,e);
        G4double dedx = ioni->ComputeDEDX(couple,part,e,e) +
 	               pair->ComputeDEDX(couple,part,e,e) +
 	               brem->ComputeDEDX(couple,part,e,e);
+//        dedx *= 1e-6;
+//        dedx *= 1e-12;
        aVector->PutValue(j,dedx);
        if(1<verbose) {
          G4cout << "j= " << j

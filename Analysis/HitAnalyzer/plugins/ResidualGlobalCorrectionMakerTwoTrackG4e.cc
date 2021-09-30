@@ -247,8 +247,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::beginStream(edm::StreamID streami
     tree->Branch("Muplus_refParms", Muplus_refParms.data(), "Muplus_refParms[3]/F");
     tree->Branch("Muminus_refParms", Muminus_refParms.data(), "Muminus_refParms[3]/F");
     
-//     tree->Branch("Muplus_jacRef", &Muplus_jacRef);
-//     tree->Branch("Muminus_jacRef", &Muminus_jacRef);
+    tree->Branch("Muplus_jacRef", &Muplus_jacRef);
+    tree->Branch("Muminus_jacRef", &Muminus_jacRef);
     
     tree->Branch("Muplus_nhits", &Muplus_nhits);
     tree->Branch("Muplus_nvalid", &Muplus_nvalid);
@@ -430,6 +430,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
 //                 }
                 
                 hitquality = !pixhit->isOnEdge() && cluster.sizeX() > 1;
+//                 hitquality = !pixhit->isOnEdge() && cluster.sizeX() > 1 && cluster.sizeY() > 1;
               }
               else {
                 assert(tkhit->cluster_strip().isNonnull());
@@ -692,6 +693,9 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
         
 
         double chisqvalold = std::numeric_limits<double>::max();
+
+        std::array<unsigned int, 2> trackstateidxarr;
+        std::array<int, 2> muchargearr;
         
   //       constexpr unsigned int niters = 1;
 //         constexpr unsigned int niters = 3;
@@ -700,6 +704,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
         
 //         const unsigned int niters = icons == 0 ? 3 : 1;
         
+
         for (unsigned int iiter=0; iiter<niters; ++iiter) {
           
           gradfull = VectorXd::Zero(nparmsfull);
@@ -714,7 +719,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
 //           }
           
           std::array<Matrix<double, 5, 7>, 2> FdFmrefarr;
-          std::array<unsigned int, 2> trackstateidxarr;
+//           std::array<unsigned int, 2> trackstateidxarr;
           std::array<unsigned int, 2> trackparmidxarr;
           
           unsigned int trackstateidx = 3;
@@ -1362,6 +1367,9 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
 
                   //TODO add hit validation stuff
                   //TODO add simhit stuff
+
+//                   const bool hit1d = preciseHit->dimension() == 1 || ispixel;
+                  const bool hit1d = preciseHit->dimension() == 1;
                   
                   Matrix<AlignScalar, 2, 2> Hu = Hp.bottomRightCorner<2,2>().cast<AlignScalar>();
 
@@ -1370,7 +1378,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
                   // rotation from module to strip coordinates
       //             Matrix<AlignScalar, 2, 2> R;
                   Matrix2d R;
-                  if (preciseHit->dimension() == 1) {
+//                   if (preciseHit->dimension() == 1) {
+                  if (hit1d) {
                     dy0[0] = AlignScalar(preciseHit->localPosition().x() - localparms[3]);
                     dy0[1] = AlignScalar(0.);
                     
@@ -2081,7 +2090,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
 
           std::array<ROOT::Math::PxPyPzMVector, 2> muarr;
           std::array<Vector3d, 2> mucurvarr;
-          std::array<int, 2> muchargearr;
+//           std::array<int, 2> muchargearr;
           
     //       std::cout << dimu_vertex->position() << std::endl;
           
@@ -2436,6 +2445,59 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
         if (!valid) {
           break;
         }
+
+        auto const& dchisqdx = gradfull.head(nstateparms);
+        auto const& dchisqdparms = gradfull.tail(npars);
+
+        auto const& d2chisqdx2 = hessfull.topLeftCorner(nstateparms, nstateparms);
+        auto const& d2chisqdxdparms = hessfull.topRightCorner(nstateparms, npars);
+        auto const& d2chisqdparms2 = hessfull.bottomRightCorner(npars, npars);
+
+        std::unordered_map<unsigned int, unsigned int> idxmap;
+
+        globalidxvfinal.clear();
+        globalidxvfinal.reserve(npars);
+        idxmap.reserve(npars);
+
+        for (unsigned int idx : globalidxv) {
+          if (!idxmap.count(idx)) {
+            idxmap[idx] = globalidxvfinal.size();
+            globalidxvfinal.push_back(idx);
+          }
+        }
+
+        const unsigned int nparsfinal = globalidxvfinal.size();
+
+        VectorXd dchisqdparmsfinal = VectorXd::Zero(nparsfinal);
+        MatrixXd d2chisqdxdparmsfinal = MatrixXd::Zero(nstateparms, nparsfinal);
+        MatrixXd d2chisqdparms2final = MatrixXd::Zero(nparsfinal, nparsfinal);
+
+        for (unsigned int i = 0; i < npars; ++i) {
+          const unsigned int iidx = idxmap.at(globalidxv[i]);
+          dchisqdparmsfinal[iidx] += dchisqdparms[i];
+          d2chisqdxdparmsfinal.col(iidx) += d2chisqdxdparms.col(i);
+          for (unsigned int j = 0; j < npars; ++j) {
+            const unsigned int jidx = idxmap.at(globalidxv[j]);
+            d2chisqdparms2final(iidx, jidx) += d2chisqdparms2(i, j);
+          }
+        }
+
+        dxdparms = -Cinvd.solve(d2chisqdxdparmsfinal).transpose();
+
+    //     grad = dchisqdparmsfinal + dxdparms*dchisqdx;
+        grad = dchisqdparmsfinal + d2chisqdxdparmsfinal.transpose()*dxfull;
+        hess = d2chisqdparms2final + dxdparms*d2chisqdxdparmsfinal;
+
+        if (icons == 0) {
+          const unsigned int idxplus = muchargearr[0] > 0 ? 0 : 1;
+          const unsigned int idxminus = muchargearr[0] > 0 ? 1 : 0;
+
+          Muplus_jacRef.resize(3*nparsfinal);
+          Map<Matrix<float, 3, Dynamic, RowMajor>>(Muplus_jacRef.data(), 3, nparsfinal) = dxdparms.block(0, trackstateidxarr[idxplus], nparsfinal, 3).transpose().cast<float>();
+
+          Muminus_jacRef.resize(3*nparsfinal);
+          Map<Matrix<float, 3, Dynamic, RowMajor>>(Muminus_jacRef.data(), 3, nparsfinal) = dxdparms.block(0, trackstateidxarr[idxminus], nparsfinal, 3).transpose().cast<float>();
+        }
       
       }
       
@@ -2445,47 +2507,47 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
       
 //       std::cout << "gradfull rows cols " << gradfull.rows() << "  " << gradfull.cols() << "nstateparms = " << nstateparms << std::endl;
     
-      auto const& dchisqdx = gradfull.head(nstateparms);
-      auto const& dchisqdparms = gradfull.tail(npars);
-      
-      auto const& d2chisqdx2 = hessfull.topLeftCorner(nstateparms, nstateparms);
-      auto const& d2chisqdxdparms = hessfull.topRightCorner(nstateparms, npars);
-      auto const& d2chisqdparms2 = hessfull.bottomRightCorner(npars, npars);
-      
-      std::unordered_map<unsigned int, unsigned int> idxmap;
-      
-      globalidxvfinal.clear();
-      globalidxvfinal.reserve(npars);
-      idxmap.reserve(npars);
-      
-      for (unsigned int idx : globalidxv) {
-        if (!idxmap.count(idx)) {
-          idxmap[idx] = globalidxvfinal.size();
-          globalidxvfinal.push_back(idx);
-        }
-      }
-      
+//       auto const& dchisqdx = gradfull.head(nstateparms);
+//       auto const& dchisqdparms = gradfull.tail(npars);
+//
+//       auto const& d2chisqdx2 = hessfull.topLeftCorner(nstateparms, nstateparms);
+//       auto const& d2chisqdxdparms = hessfull.topRightCorner(nstateparms, npars);
+//       auto const& d2chisqdparms2 = hessfull.bottomRightCorner(npars, npars);
+//
+//       std::unordered_map<unsigned int, unsigned int> idxmap;
+//
+//       globalidxvfinal.clear();
+//       globalidxvfinal.reserve(npars);
+//       idxmap.reserve(npars);
+//
+//       for (unsigned int idx : globalidxv) {
+//         if (!idxmap.count(idx)) {
+//           idxmap[idx] = globalidxvfinal.size();
+//           globalidxvfinal.push_back(idx);
+//         }
+//       }
+//
       const unsigned int nparsfinal = globalidxvfinal.size();
-      
-      VectorXd dchisqdparmsfinal = VectorXd::Zero(nparsfinal);
-      MatrixXd d2chisqdxdparmsfinal = MatrixXd::Zero(nstateparms, nparsfinal);
-      MatrixXd d2chisqdparms2final = MatrixXd::Zero(nparsfinal, nparsfinal);
-      
-      for (unsigned int i = 0; i < npars; ++i) {
-        const unsigned int iidx = idxmap.at(globalidxv[i]);
-        dchisqdparmsfinal[iidx] += dchisqdparms[i];
-        d2chisqdxdparmsfinal.col(iidx) += d2chisqdxdparms.col(i);
-        for (unsigned int j = 0; j < npars; ++j) {
-          const unsigned int jidx = idxmap.at(globalidxv[j]);
-          d2chisqdparms2final(iidx, jidx) += d2chisqdparms2(i, j);
-        }
-      }
-      
-      dxdparms = -Cinvd.solve(d2chisqdxdparmsfinal).transpose();
-      
-  //     grad = dchisqdparmsfinal + dxdparms*dchisqdx; 
-      grad = dchisqdparmsfinal + d2chisqdxdparmsfinal.transpose()*dxfull;
-      hess = d2chisqdparms2final + dxdparms*d2chisqdxdparmsfinal;
+//
+//       VectorXd dchisqdparmsfinal = VectorXd::Zero(nparsfinal);
+//       MatrixXd d2chisqdxdparmsfinal = MatrixXd::Zero(nstateparms, nparsfinal);
+//       MatrixXd d2chisqdparms2final = MatrixXd::Zero(nparsfinal, nparsfinal);
+//
+//       for (unsigned int i = 0; i < npars; ++i) {
+//         const unsigned int iidx = idxmap.at(globalidxv[i]);
+//         dchisqdparmsfinal[iidx] += dchisqdparms[i];
+//         d2chisqdxdparmsfinal.col(iidx) += d2chisqdxdparms.col(i);
+//         for (unsigned int j = 0; j < npars; ++j) {
+//           const unsigned int jidx = idxmap.at(globalidxv[j]);
+//           d2chisqdparms2final(iidx, jidx) += d2chisqdparms2(i, j);
+//         }
+//       }
+//
+//       dxdparms = -Cinvd.solve(d2chisqdxdparmsfinal).transpose();
+//
+//   //     grad = dchisqdparmsfinal + dxdparms*dchisqdx;
+//       grad = dchisqdparmsfinal + d2chisqdxdparmsfinal.transpose()*dxfull;
+//       hess = d2chisqdparms2final + dxdparms*d2chisqdxdparmsfinal;
       
   //     if (debugprintout_) {
   //       std::cout << "dxrefdparms" << std::endl;

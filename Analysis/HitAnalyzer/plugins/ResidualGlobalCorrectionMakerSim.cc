@@ -660,9 +660,9 @@ void ResidualGlobalCorrectionMakerSim::analyze(const edm::Event &iEvent, const e
     globalidxv.resize(npars, 0);
     
     nParms = npars;
-    if (fillTrackTree_) {
-      tree->SetBranchAddress("globalidxv", globalidxv.data());
-    }
+//     if (fillTrackTree_) {
+//       tree->SetBranchAddress("globalidxv", globalidxv.data());
+//     }
     
 //     TrajectoryStateOnSurface currtsos;
     
@@ -1773,7 +1773,8 @@ void ResidualGlobalCorrectionMakerSim::analyze(const edm::Event &iEvent, const e
               Matrix2d iV;
               iV << std::pow(30e-4, 2), 0.,
                     0., std::pow(30e-4, 2);
-              if (ispixel) {
+              if (true) {
+//               if (ispixel) {
                 //take 2d hit as-is for pixels
 //                 dy0[0] = AlignScalar(matchedsim->localPosition().x() - updtsos.localPosition().x());
 //                 dy0[1] = AlignScalar(matchedsim->localPosition().y() - updtsos.localPosition().y());
