@@ -4386,6 +4386,393 @@ Matrix<double, 2, 1> ResidualGlobalCorrectionMakerBase::localPositionConvolution
 }
 
 
+Matrix<double, 2, 1> ResidualGlobalCorrectionMakerBase::localPositionConvolutionD(const Matrix<double, 7, 1>& state, const Matrix<double, 5, 5> &curvcov, const GloballyPositioned<double> &surface) const {
+
+  const double q = state[6];
+
+  const double qop = q/state.segment<3>(3).norm();
+  const double lam = std::atan(state[5]/std::sqrt(state[3]*state[3] + state[4]*state[4]));
+  const double phi = std::atan2(state[4], state[3]);
+  const double xt = 0.;
+  const double yt = 0.;
+
+  // curvilinear parameters
+//   const CurvilinearTrajectoryParameters curv(tsos.globalPosition(), tsos.globalMomentum(), tsos.charge());
+//   const double qop = curv.Qbp();
+//   const double lam = curv.lambda();
+//   const double phi = curv.phi();
+//   const double xt = curv.xT();
+//   const double yt = curv.yT();
+//   const double xt = 0.;
+//   const double yt = 0.;
+
+  const Matrix<double, 3, 1> p0(state[3], state[4], state[5]);
+  const Matrix<double, 3, 1> W0 = p0.normalized();
+  const Matrix<double, 3, 1> zhat(0., 0., 1.);
+
+  const Matrix<double, 3, 1> U0 = zhat.cross(W0).normalized();
+  const Matrix<double, 3, 1> V0 = W0.cross(U0);
+
+//   std::cout << "U0" << std::endl;
+//   std::cout << U0 << std::endl;
+//   std::cout << "V0" << std::endl;
+//   std::cout << V0 << std::endl;
+
+//   const Matrix<double, 3, 1> x0alt = xt*U0 + yt*V0;
+//   std::cout << "global pos" << std::endl;
+//   std::cout << tsos.globalPosition() << std::endl;
+//   std::cout << "x0alt" << std::endl;
+//   std::cout << x0alt << std::endl;
+//   std::cout << "xt" << std::endl;
+//   std::cout << xt << std::endl;
+//   std::cout << "yt" << std::endl;
+//   std::cout << yt << std::endl;
+
+  const Vector3DBase<double, LocalTag> lx(1.,0.,0.);
+  const Vector3DBase<double, LocalTag> ly(0.,1.,0.);
+  const Vector3DBase<double, LocalTag> lz(0.,0.,1.);
+  const Vector3DBase<double, GlobalTag> I = surface.toGlobal(lz);
+  const Vector3DBase<double, GlobalTag> J = surface.toGlobal(lx);
+  const Vector3DBase<double, GlobalTag> K = surface.toGlobal(ly);
+
+  const Point3DBase<double, LocalTag> l0(0., 0.);
+  const Point3DBase<double, GlobalTag> r = surface.toGlobal(l0);
+
+  const double Ux = U0[0];
+  const double Uy = U0[1];
+//   const double Uz = U0[2];
+
+  const double Vx = V0[0];
+  const double Vy = V0[1];
+  const double Vz = V0[2];
+
+  const double Ix = I.x();
+  const double Iy = I.y();
+  const double Iz = I.z();
+
+  const double Jx = J.x();
+  const double Jy = J.y();
+  const double Jz = J.z();
+
+  const double Kx = K.x();
+  const double Ky = K.y();
+  const double Kz = K.z();
+
+  const double rx = r.x();
+  const double ry = r.y();
+  const double rz = r.z();
+
+  const double pos0x = state[0];
+  const double pos0y = state[1];
+  const double pos0z = state[2];
+
+  //sympy stuff goes here
+  const double x0 = std::sin(lam);
+  const double x1 = Iz*x0;
+  const double x2 = std::cos(lam);
+  const double x3 = std::cos(phi);
+  const double x4 = Ix*x3;
+  const double x5 = x2*x4;
+  const double x6 = std::sin(phi);
+  const double x7 = Iy*x6;
+  const double x8 = x2*x7;
+  const double x9 = x5 + x8;
+  const double x10 = x1 + x9;
+  const double x11 = 1.0/x10;
+  const double x12 = Ix*rx;
+  const double x13 = Iy*ry;
+  const double x14 = Iz*rz;
+  const double x15 = Ix*pos0x;
+  const double x16 = Iy*pos0y;
+  const double x17 = Iz*pos0z;
+  const double x18 = Ux*xt;
+  const double x19 = Ix*x18;
+  const double x20 = Vx*yt;
+  const double x21 = Ix*x20;
+  const double x22 = Uy*xt;
+  const double x23 = Iy*x22;
+  const double x24 = Vy*yt;
+  const double x25 = Iy*x24;
+  const double x26 = Vz*yt;
+  const double x27 = Iz*x26;
+  const double x28 = x12 + x13 + x14 - x15 - x16 - x17 - x19 - x21 - x23 - x25 - x27;
+  const double x29 = pos0z + x26;
+  const double x30 = Iz*x2;
+  const double x31 = x0*x4;
+  const double x32 = x0*x7;
+  const double x33 = x30 - x31 - x32;
+  const double x34 = x2*x28;
+  const double x35 = x29*x33 + x34;
+  const double x36 = Jz*x11;
+  const double x37 = pos0x + x18 + x20;
+  const double x38 = x0*x28;
+  const double x39 = -x3*x38 + x33*x37;
+  const double x40 = Jx*x11;
+  const double x41 = pos0y + x22 + x24;
+  const double x42 = x33*x41 - x38*x6;
+  const double x43 = Jy*x11;
+  const double x44 = std::pow(x10, -2);
+  const double x45 = -x30 + x31 + x32;
+  const double x46 = x44*x45;
+  const double x47 = x10*x29 + x38;
+  const double x48 = Jz*x47;
+  const double x49 = x3*x34;
+  const double x50 = x10*x37 + x49;
+  const double x51 = Jx*x50;
+  const double x52 = x34*x6;
+  const double x53 = x10*x41 + x52;
+  const double x54 = Jy*x46;
+  const double x55 = -x5 - x8;
+  const double x56 = -x1 + x55;
+  const double x57 = -x12 - x13 - x14 + x15 + x16 + x17 + x19 + x21 + x23 + x25 + x27;
+  const double x58 = x2*x57;
+  const double x59 = x3*x58;
+  const double x60 = x37*x56 + x59;
+  const double x61 = x41*x56 + x58*x6;
+  const double x62 = x29*x56 - x38;
+  const double x63 = Jz*x46;
+  const double x64 = 2*x35;
+  const double x65 = Jx*x46;
+  const double x66 = 2*x39;
+  const double x67 = 2*x42;
+  const double x68 = std::pow(x10, -3);
+  const double x69 = x45*x68;
+  const double x70 = x69*(-2*x30 + 2*x31 + 2*x32);
+  const double x71 = Jy*x53;
+  const double x72 = x0*x6;
+  const double x73 = Ix*x72;
+  const double x74 = x0*x3;
+  const double x75 = Iy*x74;
+  const double x76 = x73 - x75;
+  const double x77 = x29*x36;
+  const double x78 = x2*x3;
+  const double x79 = Iy*x78;
+  const double x80 = x2*x6;
+  const double x81 = Ix*x80;
+  const double x82 = x79 - x81;
+  const double x83 = x29*x82;
+  const double x84 = x41*x76 + x57*x74;
+  const double x85 = x37*x76 - x57*x72;
+  const double x86 = x44*(-x73 + x75);
+  const double x87 = -x79 + x81;
+  const double x88 = x44*x87;
+  const double x89 = Jz*x88;
+  const double x90 = x41*x82 + x49;
+  const double x91 = -x52;
+  const double x92 = x37*x82 + x91;
+  const double x93 = Jx*x88;
+  const double x94 = Jy*x88;
+  const double x95 = -2*x79 + 2*x81;
+  const double x96 = x69*x95;
+  const double x97 = Ix*Ux;
+  const double x98 = Iy*Uy;
+  const double x99 = -x97 - x98;
+  const double x100 = x36*x99;
+  const double x101 = x0*x99;
+  const double x102 = x97 + x98;
+  const double x103 = Ux*x33 + x102*x74;
+  const double x104 = Uy*x33 + x102*x72;
+  const double x105 = x78*x99;
+  const double x106 = Ux*x10 + x105;
+  const double x107 = Uy*x10 + x80*x99;
+  const double x108 = Ix*Vx;
+  const double x109 = Iy*Vy;
+  const double x110 = Iz*Vz;
+  const double x111 = x108 + x109 + x110;
+  const double x112 = Vx*x33 + x111*x74;
+  const double x113 = Vy*x33 + x111*x72;
+  const double x114 = -x108 - x109 - x110;
+  const double x115 = x114*x2;
+  const double x116 = Vz*x33 + x115;
+  const double x117 = Vz*x10 + x0*x114;
+  const double x118 = x117*x46;
+  const double x119 = x115*x3;
+  const double x120 = Vx*x10 + x119;
+  const double x121 = Vy*x10 + x115*x6;
+  const double x122 = 2*x83;
+  const double x123 = x37*x55 + x59;
+  const double x124 = x41*x55 + x91;
+  const double x125 = x44*x9;
+  const double x126 = 2*x90;
+  const double x127 = 2*x92;
+  const double x128 = x68*x87*x95;
+  const double x129 = Ux*x82 + x102*x80;
+  const double x130 = Uy*x82 + x105;
+  const double x131 = Vz*x82;
+  const double x132 = Vx*x82 + x111*x80;
+  const double x133 = Vy*x82 + x119;
+  const double x134 = Kz*x11;
+  const double x135 = Kx*x11;
+  const double x136 = Ky*x11;
+  const double x137 = Kz*x47;
+  const double x138 = Kx*x46;
+  const double x139 = Ky*x46;
+  const double x140 = Kz*x46;
+  const double x141 = Kx*x50;
+  const double x142 = Ky*x53;
+  const double x143 = x134*x29;
+  const double x144 = Kz*x88;
+  const double x145 = Kx*x88;
+  const double x146 = Ky*x88;
+  const double x147 = x134*x99;
+  const double shat = x11*x28;
+  const double dvdqop = 0;
+  const double d2vdqopdqop = 0;
+  const double d2vdqopdlam = 0;
+  const double d2vdqopdphi = 0;
+  const double d2vdqopdxt = 0;
+  const double d2vdqopdyt = 0;
+  const double dvdlam = x35*x36 + x39*x40 + x42*x43 + x46*x48 + x46*x51 + x53*x54;
+  const double d2vdlamdlam = x36*x47 + x36*x62 + x40*x50 + x40*x60 + x43*x53 + x43*x61 + x48*x70 + x51*x70 + x54*x67 + x63*x64 + x65*x66 + x70*x71;
+  const double d2vdlamdphi = x35*x89 + x39*x93 + x40*x85 + x42*x94 + x43*x84 + x48*x86 + x48*x96 + x51*x86 + x51*x96 + x54*x90 + x63*x83 + x65*x92 + x71*x86 + x71*x96 + x76*x77;
+  const double d2vdlamdxt = x100*x2 + x101*x63 + x103*x40 + x104*x43 + x106*x65 + x107*x54;
+  const double d2vdlamdyt = Jz*x118 + x112*x40 + x113*x43 + x116*x36 + x120*x65 + x121*x54;
+  const double dvdphi = x40*x92 + x43*x90 + x48*x88 + x51*x88 + x53*x94 + x77*x82;
+  const double d2vdphidphi = x122*x89 + x123*x40 + x124*x43 + x125*x48 + x125*x51 + x125*x71 + x126*x94 + x127*x93 + x128*x48 + x128*x51 + x128*x71 + x55*x77;
+  const double d2vdphidxt = x101*x89 + x106*x93 + x107*x94 + x129*x40 + x130*x43;
+  const double d2vdphidyt = x117*x89 + x120*x93 + x121*x94 + x131*x36 + x132*x40 + x133*x43;
+  const double dvdxt = x0*x100 + x106*x40 + x107*x43;
+  const double d2vdxtdxt = 0;
+  const double d2vdxtdyt = 0;
+  const double dvdyt = x117*x36 + x120*x40 + x121*x43;
+  const double d2vdytdyt = 0;
+  const double dwdqop = 0;
+  const double d2wdqopdqop = 0;
+  const double d2wdqopdlam = 0;
+  const double d2wdqopdphi = 0;
+  const double d2wdqopdxt = 0;
+  const double d2wdqopdyt = 0;
+  const double dwdlam = x134*x35 + x135*x39 + x136*x42 + x137*x46 + x138*x50 + x139*x53;
+  const double d2wdlamdlam = x134*x47 + x134*x62 + x135*x50 + x135*x60 + x136*x53 + x136*x61 + x137*x70 + x138*x66 + x139*x67 + x140*x64 + x141*x70 + x142*x70;
+  const double d2wdlamdphi = x135*x85 + x136*x84 + x137*x86 + x137*x96 + x138*x92 + x139*x90 + x140*x83 + x141*x86 + x141*x96 + x142*x86 + x142*x96 + x143*x76 + x144*x35 + x145*x39 + x146*x42;
+  const double d2wdlamdxt = x101*x140 + x103*x135 + x104*x136 + x106*x138 + x107*x139 + x147*x2;
+  const double d2wdlamdyt = Kz*x118 + x112*x135 + x113*x136 + x116*x134 + x120*x138 + x121*x139;
+  const double dwdphi = x135*x92 + x136*x90 + x137*x88 + x143*x82 + x145*x50 + x146*x53;
+  const double d2wdphidphi = x122*x144 + x123*x135 + x124*x136 + x125*x137 + x125*x141 + x125*x142 + x126*x146 + x127*x145 + x128*x137 + x128*x141 + x128*x142 + x143*x55;
+  const double d2wdphidxt = x101*x144 + x106*x145 + x107*x146 + x129*x135 + x130*x136;
+  const double d2wdphidyt = x117*x144 + x120*x145 + x121*x146 + x131*x134 + x132*x135 + x133*x136;
+  const double dwdxt = x0*x147 + x106*x135 + x107*x136;
+  const double d2wdxtdxt = 0;
+  const double d2wdxtdyt = 0;
+  const double dwdyt = x117*x134 + x120*x135 + x121*x136;
+  const double d2wdytdyt = 0;
+  Matrix<double, 5, 5> d2vdx2;
+  d2vdx2(0, 0) = d2vdqopdqop;
+  d2vdx2(0, 1) = d2vdqopdlam;
+  d2vdx2(0, 2) = d2vdqopdphi;
+  d2vdx2(0, 3) = d2vdqopdxt;
+  d2vdx2(0, 4) = d2vdqopdyt;
+  d2vdx2(1, 0) = d2vdqopdlam;
+  d2vdx2(1, 1) = d2vdlamdlam;
+  d2vdx2(1, 2) = d2vdlamdphi;
+  d2vdx2(1, 3) = d2vdlamdxt;
+  d2vdx2(1, 4) = d2vdlamdyt;
+  d2vdx2(2, 0) = d2vdqopdphi;
+  d2vdx2(2, 1) = d2vdlamdphi;
+  d2vdx2(2, 2) = d2vdphidphi;
+  d2vdx2(2, 3) = d2vdphidxt;
+  d2vdx2(2, 4) = d2vdphidyt;
+  d2vdx2(3, 0) = d2vdqopdxt;
+  d2vdx2(3, 1) = d2vdlamdxt;
+  d2vdx2(3, 2) = d2vdphidxt;
+  d2vdx2(3, 3) = d2vdxtdxt;
+  d2vdx2(3, 4) = d2vdxtdyt;
+  d2vdx2(4, 0) = d2vdqopdyt;
+  d2vdx2(4, 1) = d2vdlamdyt;
+  d2vdx2(4, 2) = d2vdphidyt;
+  d2vdx2(4, 3) = d2vdxtdyt;
+  d2vdx2(4, 4) = d2vdytdyt;
+  Matrix<double, 5, 5> d2wdx2;
+  d2wdx2(0, 0) = d2wdqopdqop;
+  d2wdx2(0, 1) = d2wdqopdlam;
+  d2wdx2(0, 2) = d2wdqopdphi;
+  d2wdx2(0, 3) = d2wdqopdxt;
+  d2wdx2(0, 4) = d2wdqopdyt;
+  d2wdx2(1, 0) = d2wdqopdlam;
+  d2wdx2(1, 1) = d2wdlamdlam;
+  d2wdx2(1, 2) = d2wdlamdphi;
+  d2wdx2(1, 3) = d2wdlamdxt;
+  d2wdx2(1, 4) = d2wdlamdyt;
+  d2wdx2(2, 0) = d2wdqopdphi;
+  d2wdx2(2, 1) = d2wdlamdphi;
+  d2wdx2(2, 2) = d2wdphidphi;
+  d2wdx2(2, 3) = d2wdphidxt;
+  d2wdx2(2, 4) = d2wdphidyt;
+  d2wdx2(3, 0) = d2wdqopdxt;
+  d2wdx2(3, 1) = d2wdlamdxt;
+  d2wdx2(3, 2) = d2wdphidxt;
+  d2wdx2(3, 3) = d2wdxtdxt;
+  d2wdx2(3, 4) = d2wdxtdyt;
+  d2wdx2(4, 0) = d2wdqopdyt;
+  d2wdx2(4, 1) = d2wdlamdyt;
+  d2wdx2(4, 2) = d2wdphidyt;
+  d2wdx2(4, 3) = d2wdxtdyt;
+  d2wdx2(4, 4) = d2wdytdyt;
+  Matrix<double, 5, 1> dvdx;
+  dvdx[0] = dvdqop;
+  dvdx[1] = dvdlam;
+  dvdx[2] = dvdphi;
+  dvdx[3] = dvdxt;
+  dvdx[4] = dvdyt;
+  Matrix<double, 5, 1> dwdx;
+  dwdx[0] = dwdqop;
+  dwdx[1] = dwdlam;
+  dwdx[2] = dwdphi;
+  dwdx[3] = dwdxt;
+  dwdx[4] = dwdyt;
+
+
+
+//   std::cout << "dvdx" << std::endl;
+//   std::cout << dvdx << std::endl;
+//
+//   std::cout << "dwdx" << std::endl;
+//   std::cout << dwdx << std::endl;
+//
+//   std::cout << "d2vdx2" << std::endl;
+//   std::cout << d2vdx2 << std::endl;
+//
+//   std::cout << "d2wdx2" << std::endl;
+//   std::cout << d2wdx2 << std::endl;
+
+//   std::cout << "shat" << std::endl;
+//   std::cout << shat << std::endl;
+
+  // covariance matrix in curvilinear parameters
+//   const AlgebraicMatrix55 curvcovsmat = tsos.curvilinearError().matrix();
+
+  // map to eigen data structure
+//   const Map<const Matrix<double, 5, 5, RowMajor>> curvcov(curvcovsmat.Array());
+
+//   std::cout << "curvcov" << std::endl;
+//   std::cout << curvcov << std::endl;
+
+  // compute eigendecomposition
+  SelfAdjointEigenSolver<Matrix<double, 5, 5>> es;
+  es.compute(curvcov);
+
+  // cov = VDV^(-1)
+//   auto const& sqrtD = es.eigenvalues().cwiseSqrt();
+  auto const& D = es.eigenvalues();
+  auto const& V = es.eigenvectors();
+
+  // compute second order correction to local positions
+//   Matrix<double, 2, 1> res;
+//   res[0] = 0.5*sqrtD.transpose()*V.transpose()*d2vdx2*V*sqrtD;
+//   res[1] = 0.5*sqrtD.transpose()*V.transpose()*d2wdx2*V*sqrtD;
+
+  Matrix<double, 2, 1> res = Matrix<double, 2, 1>::Zero();
+  for (unsigned int i=0; i<5; ++i) {
+    res[0] += 0.5*D[i]*V.col(i).transpose()*d2vdx2*V.col(i);
+    res[1] += 0.5*D[i]*V.col(i).transpose()*d2wdx2*V.col(i);
+  }
+
+//   res[0] = d2vdx2*curvc
+
+  return res;
+
+}
+
 
 AlgebraicVector5 ResidualGlobalCorrectionMakerBase::update(const TrajectoryStateOnSurface& tsos, const TrackingRecHit& aRecHit) {
   switch (aRecHit.dimension()) {

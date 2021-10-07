@@ -147,6 +147,8 @@ void ResidualGlobalCorrectionMakerG4e::beginStream(edm::StreamID streamid)
       tree->Branch("dyrecgen", &dyrecgen);
       tree->Branch("dxsimgen", &dxsimgen);
       tree->Branch("dysimgen", &dysimgen);
+      tree->Branch("dxsimgenconv", &dxsimgenconv);
+      tree->Branch("dysimgenconv", &dysimgenconv);
       tree->Branch("dxsimgenlocal", &dxsimgenlocal);
       tree->Branch("dysimgenlocal", &dysimgenlocal);
       tree->Branch("dxrecsim", &dxrecsim);
@@ -1522,6 +1524,12 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
         
         dysimgen.clear();
         dysimgen.reserve(nvalid);
+
+        dxsimgenconv.clear();
+        dxsimgenconv.reserve(nvalid);
+
+        dysimgenconv.clear();
+        dysimgenconv.reserve(nvalid);
         
         dxsimgenlocal.clear();
         dxsimgenlocal.reserve(nvalid);
@@ -1805,7 +1813,7 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
 //       std::cout << "Fcurv g4e" << std::endl;
 //       std::cout << propresultjac.second << std::endl;
       
-      
+      Matrix<double, 5, 5> Qtot = Matrix<double, 5, 5>::Zero();
       
       float e = genpart == nullptr ? -99. : std::sqrt(genpart->momentum().mag2() + mmu*mmu);
       float epred = std::sqrt(refFts.segment<3>(3).squaredNorm() + mmu*mmu);
@@ -2002,7 +2010,9 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
 //         if (ihit == (hits.size() - 1)) {
 //           dEdxout = dEdxlast;
 //         }
-        
+        Qtot = (FdFm.leftCols<5>()*Qtot*FdFm.leftCols<5>().transpose()).eval();
+        Qtot += Qcurv;
+
         
 //         const GlobalPoint postmp(updtsos[0], updtsos[1], updtsos[2]);
 //         const GlobalVector bvtmp = field->inTesla(postmp);
@@ -2386,9 +2396,9 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
         
 //         const Matrix<double, 5, 5> curvcov = covfull.block<5, 5>(5*(ihit+1), 5*(ihit+1));
 //         
-//         const Matrix<double, 2, 1> localconv = localPositionConvolution(updtsos, curvcov);
+        const Matrix<double, 2, 1> localconv = localPositionConvolutionD(updtsos, Qtot, surface);
 //         
-//         if (abs(localconv[0]) > 1e-4 || abs(localconv[1]) > 1e-4) {
+//         if (abs(localconv[0]) > 5e-3 || abs(localconv[1]) > 5e-3) {
 //           std::cout << "localconv" << std::endl;
 //           std::cout << localconv << std::endl;
 //         }
@@ -3107,6 +3117,12 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
   //                     dxsimgen.push_back(simhit->localPosition().x() - updtsos.localPosition().x());
   //                     dysimgen.push_back(simhit->localPosition().y() - updtsos.localPosition().y());
                   
+                  Vector2d dy0simgenlocalconv;
+                  dy0simgenlocalconv << simhit->localPosition().x() - localxval - localconv[0],
+                                  simhit->localPosition().y() - localyval - localconv[1];
+                  const Vector2d dysimgeneigconv = R*dy0simgenlocalconv;
+                  dxsimgenconv.push_back(dysimgeneigconv[0]);
+                  dysimgenconv.push_back(dysimgeneigconv[1]);
                   
                   dxsimgenlocal.push_back(dy0simgenlocal[0]);
                   dysimgenlocal.push_back(dy0simgenlocal[1]);
@@ -3124,6 +3140,8 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
                 else {
                   dxsimgen.push_back(-99.);
                   dysimgen.push_back(-99.);
+                  dxsimgenconv.push_back(-99.);
+                  dysimgenconv.push_back(-99.);
                   dxsimgenlocal.push_back(-99.);
                   dysimgenlocal.push_back(-99.);
                   dxrecsim.push_back(-99.);

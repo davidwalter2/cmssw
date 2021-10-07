@@ -250,6 +250,8 @@ protected:
   
   Matrix<double, 2, 1> localPositionConvolution(const TrajectoryStateOnSurface& tsos, const Matrix<double, 5, 5> &curvcov) const;
   
+  Matrix<double, 2, 1> localPositionConvolutionD(const Matrix<double, 7, 1>& state, const Matrix<double, 5, 5> &curvcov, const GloballyPositioned<double> &surface) const;
+
   template <unsigned int D>
   AlgebraicVector5 lupdate(const TrajectoryStateOnSurface& tsos, const TrackingRecHit& aRecHit);
 
@@ -371,6 +373,8 @@ protected:
   std::vector<float> dyrecgen;
   std::vector<float> dxsimgen;
   std::vector<float> dysimgen;
+  std::vector<float> dxsimgenconv;
+  std::vector<float> dysimgenconv;
   std::vector<float> dxsimgenlocal;
   std::vector<float> dysimgenlocal;
   std::vector<float> dxrecsim;
