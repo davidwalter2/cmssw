@@ -340,6 +340,9 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
   
   std::array<MatrixXd, 2> jacarr;
   
+  run = iEvent.run();
+  lumi = iEvent.luminosityBlock();
+  event = iEvent.id().event();
   
   // loop over combinatorics of track pairs
   for (auto itrack = trackOrigH->begin(); itrack != trackOrigH->end(); ++itrack) {
