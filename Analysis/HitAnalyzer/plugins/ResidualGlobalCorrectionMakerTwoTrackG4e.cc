@@ -17,6 +17,8 @@
 #include "RecoVertex/KinematicFit/interface/MultiTrackMassKinematicConstraint.h"
 #include "RecoVertex/KinematicFit/interface/MultiTrackPointingKinematicConstraint.h"
 #include "RecoVertex/KinematicFit/interface/CombinedKinematicConstraint.h"
+#include "DataFormats/MuonReco/interface/Muon.h"
+
 
 #include "Math/Vector4Dfwd.h"
 
@@ -142,6 +144,26 @@ private:
   unsigned int Muminus_nmatchedvalid;
   unsigned int Muminus_nambiguousmatchedvalid;
   
+  bool Muplus_isMuon;
+  bool Muplus_muonLoose;
+  bool Muplus_muonMedium;
+  bool Muplus_muonTight;
+  bool Muplus_muonIsPF;
+  bool Muplus_muonIsTracker;
+  bool Muplus_muonIsGlobal;
+  bool Muplus_muonIsStandalone;
+  bool Muplus_muonInnerTrackBest;
+
+  bool Muminus_isMuon;
+  bool Muminus_muonLoose;
+  bool Muminus_muonMedium;
+  bool Muminus_muonTight;
+  bool Muminus_muonIsPF;
+  bool Muminus_muonIsTracker;
+  bool Muminus_muonIsGlobal;
+  bool Muminus_muonIsStandalone;
+  bool Muminus_muonInnerTrackBest;
+
 //   std::vector<float> hessv;
   
 
@@ -261,7 +283,27 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::beginStream(edm::StreamID streami
     tree->Branch("Muminus_nvalidpixel", &Muminus_nvalidpixel);
     tree->Branch("Muminus_nmatchedvalid", &Muminus_nmatchedvalid);
     tree->Branch("Muminus_nambiguousmatchedvalid", &Muminus_nambiguousmatchedvalid);
-  
+
+    tree->Branch("Muplus_isMuon", &Muplus_isMuon);
+    tree->Branch("Muplus_muonLoose", &Muplus_muonLoose);
+    tree->Branch("Muplus_muonMedium", &Muplus_muonMedium);
+    tree->Branch("Muplus_muonTight", &Muplus_muonTight);
+    tree->Branch("Muplus_muonIsPF", &Muplus_muonIsPF);
+    tree->Branch("Muplus_muonIsTracker", &Muplus_muonIsTracker);
+    tree->Branch("Muplus_muonIsGlobal", &Muplus_muonIsGlobal);
+    tree->Branch("Muplus_muonIsStandalone", &Muplus_muonIsStandalone);
+    tree->Branch("Muplus_muonInnerTrackBest", &Muplus_muonInnerTrackBest);
+
+    tree->Branch("Muminus_isMuon", &Muminus_isMuon);
+    tree->Branch("Muminus_muonLoose", &Muminus_muonLoose);
+    tree->Branch("Muminus_muonMedium", &Muminus_muonMedium);
+    tree->Branch("Muminus_muonTight", &Muminus_muonTight);
+    tree->Branch("Muminus_muonIsPF", &Muminus_muonIsPF);
+    tree->Branch("Muminus_muonIsTracker", &Muminus_muonIsTracker);
+    tree->Branch("Muminus_muonIsGlobal", &Muminus_muonIsGlobal);
+    tree->Branch("Muminus_muonIsStandalone", &Muminus_muonIsStandalone);
+    tree->Branch("Muminus_muonInnerTrackBest", &Muminus_muonInnerTrackBest);
+
 //     tree->Branch("hessv", &hessv);
     
   }
@@ -298,22 +340,28 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
   const MagneticField* field = thePropagator->magneticField();
   const Geant4ePropagator *g4prop = dynamic_cast<const Geant4ePropagator*>(thePropagator.product());
   
-  Handle<std::vector<reco::GenParticle>> genPartCollection;
+//   Handle<std::vector<reco::GenParticle>> genPartCollection;
+  Handle<edm::View<reco::Candidate>> genPartCollection;
   Handle<std::vector<int>> genPartBarcodes;
   if (doGen_) {
     iEvent.getByToken(GenParticlesToken_, genPartCollection);
-    iEvent.getByToken(genParticlesBarcodeToken_, genPartBarcodes);
   }
   
   std::vector<Handle<std::vector<PSimHit>>> simHits(inputSimHits_.size());
   edm::Handle<std::vector<SimTrack>> simTracks;
   if (doSim_) {
+    iEvent.getByToken(genParticlesBarcodeToken_, genPartBarcodes);
     for (unsigned int isimhit = 0; isimhit<inputSimHits_.size(); ++isimhit) {
       iEvent.getByToken(inputSimHits_[isimhit], simHits[isimhit]);
     }
     iEvent.getByToken(inputSimTracks_, simTracks);
   }
   
+  Handle<edm::View<reco::Muon> > muons;
+  if (doMuons_) {
+    iEvent.getByToken(inputMuons_, muons);
+  }
+
   KFUpdator updator;
   TkClonerImpl const& cloner = static_cast<TkTransientTrackingRecHitBuilder const *>(ttrh.product())->cloner();
   
@@ -346,13 +394,54 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
   
   // loop over combinatorics of track pairs
   for (auto itrack = trackOrigH->begin(); itrack != trackOrigH->end(); ++itrack) {
+    if (itrack->isLooper()) {
+      continue;
+    }
+
     const reco::TransientTrack itt = TTBuilder->build(*itrack);
+
+
+    const reco::Muon *matchedmuon0 = nullptr;
+    if (doMuons_) {
+      for (auto const &muon : *muons) {
+        if (muon.bestTrack()->algo() == itrack->algo()) {
+          if ( (muon.bestTrack()->momentum() - itrack->momentum()).mag2() < 1e-3 ) {
+            matchedmuon0 = &muon;
+          }
+        }
+        else if (muon.innerTrack().isNonnull() && muon.innerTrack()->algo() == itrack->algo()) {
+          if ( (muon.innerTrack()->momentum() - itrack->momentum()).mag2() < 1e-3 ) {
+            matchedmuon0 = &muon;
+          }
+        }
+      }
+    }
+
     for (auto jtrack = itrack + 1; jtrack != trackOrigH->end(); ++jtrack) {
+      if (jtrack->isLooper()) {
+        continue;
+      }
+
       const reco::TransientTrack jtt = TTBuilder->build(*jtrack);
-      
-      
-      const reco::GenParticle *mu0gen = nullptr;
-      const reco::GenParticle *mu1gen = nullptr;
+
+      const reco::Muon *matchedmuon1 = nullptr;
+      if (doMuons_) {
+        for (auto const &muon : *muons) {
+          if (muon.bestTrack()->algo() == jtrack->algo()) {
+            if ( (muon.bestTrack()->momentum() - jtrack->momentum()).mag2() < 1e-3 ) {
+              matchedmuon1 = &muon;
+            }
+          }
+          else if (muon.innerTrack().isNonnull() && muon.innerTrack()->algo() == jtrack->algo()) {
+            if ( (muon.innerTrack()->momentum() - jtrack->momentum()).mag2() < 1e-3 ) {
+              matchedmuon1 = &muon;
+            }
+          }
+        }
+      }
+
+      const reco::Candidate *mu0gen = nullptr;
+      const reco::Candidate *mu1gen = nullptr;
       
       double massconstraintval = massConstraint_;
       if (doGen_ && !doSim_) {
@@ -399,6 +488,10 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
       
       
         for (auto it = track.recHitsBegin(); it != track.recHitsEnd(); ++it) {
+          if ((*it)->geographicalId().det() != DetId::Tracker) {
+            continue;
+          }
+
           const GeomDet* detectorG = globalGeometry->idToDet((*it)->geographicalId());
           const GluedGeomDet* detglued = dynamic_cast<const GluedGeomDet*>(detectorG);
           
@@ -555,7 +648,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
             for (auto const& simTrack : *simTracks) {
               if (simTrack.trackId() == trackid) {
                 // now find corresponding gen particle
-                for (std::vector<reco::GenParticle>::const_iterator g = genPartCollection->begin(); g != genPartCollection->end(); ++g) {
+                for (auto g = genPartCollection->begin(); g != genPartCollection->end(); ++g) {
                   const int genBarcode = (*genPartBarcodes)[g - genPartCollection->begin()];
                   if (genBarcode == simTrack.genpartIndex()) {
                     if (id == 0) {
@@ -574,6 +667,10 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
           }
         }
         
+      }
+
+      if (nhitsarr[0] == 0 || nhitsarr[1] == 0) {
+        continue;
       }
       
 //       if (mu0gen == nullptr || mu1gen == nullptr || mu0gen->eta()<2.2 || mu1gen->eta()<2.2) {
@@ -2330,8 +2427,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
             Jpsikincons_mass = jpsimomkin.mass();            
           }
           
-          const reco::GenParticle *muplusgen = nullptr;
-          const reco::GenParticle *muminusgen = nullptr;
+          const reco::Candidate *muplusgen = nullptr;
+          const reco::Candidate *muminusgen = nullptr;
           
           if (doGen_) {
             for (auto const &genpart : *genPartCollection) {
@@ -2398,6 +2495,57 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
             Jpsigen_x = -99.;
             Jpsigen_y = -99.;
             Jpsigen_z = -99.;
+          }
+
+
+          Muplus_isMuon = false;
+          Muplus_muonLoose = false;
+          Muplus_muonMedium = false;
+          Muplus_muonTight = false;
+          Muplus_muonIsPF = false;
+          Muplus_muonIsTracker = false;
+          Muplus_muonIsGlobal = false;
+          Muplus_muonIsStandalone = false;
+          Muplus_muonInnerTrackBest = false;
+
+          Muminus_isMuon = false;
+          Muminus_muonLoose = false;
+          Muminus_muonMedium = false;
+          Muminus_muonTight = false;
+          Muminus_muonIsPF = false;
+          Muminus_muonIsTracker = false;
+          Muminus_muonIsGlobal = false;
+          Muminus_muonIsStandalone = false;
+          Muminus_muonInnerTrackBest = false;
+
+          if (doMuons_) {
+            const reco::Muon *matchedmuonplus = idxplus == 0 ? matchedmuon0 : matchedmuon1;
+            const reco::Muon *matchedmuonminus = idxminus == 0 ? matchedmuon0 : matchedmuon1;
+
+            if (matchedmuonplus != nullptr) {
+              Muplus_isMuon = true;
+              Muplus_muonLoose = matchedmuonplus->passed(reco::Muon::CutBasedIdLoose);
+              Muplus_muonMedium = matchedmuonplus->passed(reco::Muon::CutBasedIdMedium);
+              Muplus_muonTight = matchedmuonplus->passed(reco::Muon::CutBasedIdTight);
+              Muplus_muonIsPF = matchedmuonplus->isPFMuon();
+              Muplus_muonIsTracker = matchedmuonplus->isTrackerMuon();
+              Muplus_muonIsGlobal = matchedmuonplus->isGlobalMuon();
+              Muplus_muonIsStandalone = matchedmuonplus->isStandAloneMuon();
+              Muplus_muonInnerTrackBest = matchedmuonplus->muonBestTrackType() == reco::Muon::InnerTrack;
+            }
+
+            if (matchedmuonminus != nullptr) {
+              Muminus_isMuon = true;
+              Muminus_muonLoose = matchedmuonminus->passed(reco::Muon::CutBasedIdLoose);
+              Muminus_muonMedium = matchedmuonminus->passed(reco::Muon::CutBasedIdMedium);
+              Muminus_muonTight = matchedmuonminus->passed(reco::Muon::CutBasedIdTight);
+              Muminus_muonIsPF = matchedmuonminus->isPFMuon();
+              Muminus_muonIsTracker = matchedmuonminus->isTrackerMuon();
+              Muminus_muonIsGlobal = matchedmuonminus->isGlobalMuon();
+              Muminus_muonIsStandalone = matchedmuonminus->isStandAloneMuon();
+              Muminus_muonInnerTrackBest = matchedmuonminus->muonBestTrackType() == reco::Muon::InnerTrack;
+            }
+
           }
           
           

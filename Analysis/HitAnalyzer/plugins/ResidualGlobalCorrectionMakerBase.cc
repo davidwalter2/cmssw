@@ -70,6 +70,7 @@
 #include "CondFormats/Alignment/interface/Alignments.h"
 #include "DataFormats/TrackerRecHit2D/interface/SiPixelRecHit.h"
 #include "RecoLocalTracker/SiStripClusterizer/interface/SiStripClusterInfo.h"
+#include "DataFormats/MuonReco/interface/Muon.h"
 
 
 
@@ -135,11 +136,14 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
 
   
   if (doGen_) {
-    GenParticlesToken_ = consumes<std::vector<reco::GenParticle>>(edm::InputTag("genParticles"));
-    genParticlesBarcodeToken_ = consumes<std::vector<int>>(edm::InputTag("genParticles"));
+//     GenParticlesToken_ = consumes<std::vector<reco::GenParticle>>(edm::InputTag("genParticles"));
+//     GenParticlesToken_ = consumes<edm::View<reco::Candidate>>(edm::InputTag("genParticles"));
+    GenParticlesToken_ = consumes<edm::View<reco::Candidate>>(iConfig.getParameter<edm::InputTag>("genParticles"));
   }
   
   if (doSim_) {
+    genParticlesBarcodeToken_ = consumes<std::vector<int>>(edm::InputTag("genParticles"));
+
 //     inputSimHits_ = consumes<std::vector<PSimHit>>(edm::InputTag("g4SimHits","TrackerHitsTECLowTof"));
     std::vector<std::string> labels;
     labels.push_back("TrackerHitsPixelBarrelLowTof");
@@ -157,7 +161,8 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   }
   
   if (doMuons_) {
-    inputMuons_ = consumes<reco::MuonCollection>(edm::InputTag(iConfig.getParameter<edm::InputTag>("muons")));
+//     inputMuons_ = consumes<reco::MuonCollection>(edm::InputTag(iConfig.getParameter<edm::InputTag>("muons")));
+    inputMuons_ = consumes<edm::View<reco::Muon>>(edm::InputTag(iConfig.getParameter<edm::InputTag>("muons")));
   }
   
   inputGeometry_ = consumes<int>(edm::InputTag("geopro"));

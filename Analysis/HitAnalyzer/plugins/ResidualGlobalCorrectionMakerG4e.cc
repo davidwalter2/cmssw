@@ -120,6 +120,20 @@ void ResidualGlobalCorrectionMakerG4e::beginStream(edm::StreamID streamid)
 //     tree->Branch("outPtStart", &outPtStart);
 //     tree->Branch("outEtaStart", &outEtaStart);
 //     tree->Branch("outPhiStart", &outPhiStart);
+
+    tree->Branch("muonPt", &muonPt);
+    tree->Branch("muonLoose", &muonLoose);
+    tree->Branch("muonMedium", &muonMedium);
+    tree->Branch("muonTight", &muonTight);
+
+    tree->Branch("muonIsPF", &muonIsPF);
+    tree->Branch("muonIsTracker", &muonIsTracker);
+    tree->Branch("muonIsGlobal", &muonIsGlobal);
+    tree->Branch("muonIsStandalone", &muonIsStandalone);
+
+    tree->Branch("muonInnerTrackBest", &muonInnerTrackBest);
+
+    tree->Branch("trackExtraAssoc", &trackExtraAssoc);
     
     if (fitFromGenParms_) {
 
@@ -192,21 +206,6 @@ void ResidualGlobalCorrectionMakerG4e::beginStream(edm::StreamID streamid)
       
       tree->Branch("deigx", &deigx);
       tree->Branch("deigy", &deigy);
-      
-      tree->Branch("muonPt", &muonPt);
-      tree->Branch("muonLoose", &muonLoose);
-      tree->Branch("muonMedium", &muonMedium);
-      tree->Branch("muonTight", &muonTight);
-      
-      tree->Branch("muonIsPF", &muonIsPF);
-      tree->Branch("muonIsTracker", &muonIsTracker);
-      tree->Branch("muonIsGlobal", &muonIsGlobal);
-      tree->Branch("muonIsStandalone", &muonIsStandalone);
-      
-      tree->Branch("muonInnerTrackBest", &muonInnerTrackBest);
-      
-      tree->Branch("trackExtraAssoc", &trackExtraAssoc);
-    
     }
     
     
@@ -315,32 +314,34 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
   iEvent.getByToken(inputBs_, bsH);
 
   
-  Handle<std::vector<reco::GenParticle>> genPartCollection;
+//   Handle<std::vector<reco::GenParticle>> genPartCollection;
+  Handle<edm::View<reco::Candidate>> genPartCollection;
   Handle<std::vector<int>> genPartBarcodes;
   if (doGen_) {
     iEvent.getByToken(GenParticlesToken_, genPartCollection);
-    iEvent.getByToken(genParticlesBarcodeToken_, genPartBarcodes);
   }
   
 //   Handle<std::vector<PSimHit>> tecSimHits;
   std::vector<Handle<std::vector<PSimHit>>> simHits(inputSimHits_.size());
   edm::Handle<std::vector<SimTrack>> simTracks;
   if (doSim_) {
+    iEvent.getByToken(genParticlesBarcodeToken_, genPartBarcodes);
     for (unsigned int isimhit = 0; isimhit<inputSimHits_.size(); ++isimhit) {
       iEvent.getByToken(inputSimHits_[isimhit], simHits[isimhit]);
     }
     iEvent.getByToken(inputSimTracks_, simTracks);
   }
   
-  Handle<reco::MuonCollection> muons;
+//   Handle<reco::MuonCollection> muons;
+  Handle<edm::View<reco::Muon> > muons;
   if (doMuons_) {
     iEvent.getByToken(inputMuons_, muons);
   }
   
-  Handle<edm::Association<reco::TrackExtraCollection>> assoc;
-  if (doMuons_) {
-    iEvent.getByToken(inputAssoc_, assoc);
-  }
+//   Handle<edm::Association<reco::TrackExtraCollection>> assoc;
+//   if (doMuons_) {
+//     iEvent.getByToken(inputAssoc_, assoc);
+//   }
   
 //   if (doSim_) {
 //     iEvent.getByToken(inputSimHits_, tecSimHits);
@@ -461,8 +462,8 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
   if (false) {
     
     //sim hit debugging
-    const reco::GenParticle* genmuon = nullptr;
-    for (const reco::GenParticle& genPart : *genPartCollection) {
+    const reco::Candidate* genmuon = nullptr;
+    for (const reco::Candidate& genPart : *genPartCollection) {
       if (genPart.status()==1 && std::abs(genPart.pdgId()) == 13) {
         genmuon = &genPart;
         break;
@@ -814,7 +815,7 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
     
 //     std::cout << "track charge: " << track.charge() << " trackorig charge " << trackOrig.charge() << "inner state charge " << tms.back().updatedState().charge() << std::endl;
     
-    const reco::GenParticle* genpart = nullptr;
+    const reco::Candidate* genpart = nullptr;
     
     genPt = -99.;
     genEta = -99.;
@@ -840,7 +841,7 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
       
       float drmin = 0.1;
       
-      for (std::vector<reco::GenParticle>::const_iterator g = genPartCollection->begin(); g != genPartCollection->end(); ++g)
+      for (auto g = genPartCollection->begin(); g != genPartCollection->end(); ++g)
       {
         if (g->status() != 1) {
           continue;
@@ -861,7 +862,9 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
           
           genpart = &(*g);
           
-          genBarcode = (*genPartBarcodes)[g - genPartCollection->begin()];
+          if (doSim_) {
+            genBarcode = (*genPartBarcodes)[g - genPartCollection->begin()];
+          }
           
           genPt = g->pt();
           genEta = g->eta();
@@ -916,28 +919,54 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
     muonInnerTrackBest = false;
     trackExtraAssoc = false;
 
+    const reco::Muon *matchedmuon = nullptr;
+
     if (doMuons_) {
       for (auto const &muon : *muons) {
-        if (muon.innerTrack() == trackref) {
-          muonPt = muon.pt();
-          muonLoose = muon.passed(reco::Muon::CutBasedIdLoose);
-          muonMedium = muon.passed(reco::Muon::CutBasedIdMedium);
-          muonTight = muon.passed(reco::Muon::CutBasedIdTight);
-          muonIsPF = muon.isPFMuon();
-          muonIsTracker = muon.isTrackerMuon();
-          muonIsGlobal = muon.isGlobalMuon();
-          muonIsStandalone = muon.isStandAloneMuon();
-          if (muon.muonBestTrack() == trackref) {
-            muonInnerTrackBest = true;
+        if (muon.bestTrack()->algo() == track.algo()) {
+          if ( (muon.bestTrack()->momentum() - track.momentum()).mag2() < 1e-3 ) {
+            matchedmuon = &muon;
           }
-        } 
-      }
-      if (assoc->contains(track.extra().id())) {
-        const reco::TrackExtraRef &trackextraref = (*assoc)[track.extra()];
-        if (trackextraref.isNonnull()) {
-          trackExtraAssoc = true;
         }
+        else if (muon.innerTrack().isNonnull() && muon.innerTrack()->algo() == track.algo()) {
+          if ( (muon.innerTrack()->momentum() - track.momentum()).mag2() < 1e-3 ) {
+            matchedmuon = &muon;
+          }
+        }
+
+
+//         if (muon.innerTrack() == trackref) {
+//           muonPt = muon.pt();
+//           muonLoose = muon.passed(reco::Muon::CutBasedIdLoose);
+//           muonMedium = muon.passed(reco::Muon::CutBasedIdMedium);
+//           muonTight = muon.passed(reco::Muon::CutBasedIdTight);
+//           muonIsPF = muon.isPFMuon();
+//           muonIsTracker = muon.isTrackerMuon();
+//           muonIsGlobal = muon.isGlobalMuon();
+//           muonIsStandalone = muon.isStandAloneMuon();
+//           if (muon.muonBestTrack() == trackref) {
+//             muonInnerTrackBest = true;
+//           }
+//         }
       }
+//       if (assoc->contains(track.extra().id())) {
+//         const reco::TrackExtraRef &trackextraref = (*assoc)[track.extra()];
+//         if (trackextraref.isNonnull()) {
+//           trackExtraAssoc = true;
+//         }
+//       }
+    }
+
+    if (matchedmuon != nullptr) {
+      muonPt = matchedmuon->pt();
+      muonLoose = matchedmuon->passed(reco::Muon::CutBasedIdLoose);
+      muonMedium = matchedmuon->passed(reco::Muon::CutBasedIdMedium);
+      muonTight = matchedmuon->passed(reco::Muon::CutBasedIdTight);
+      muonIsPF = matchedmuon->isPFMuon();
+      muonIsTracker = matchedmuon->isTrackerMuon();
+      muonIsGlobal = matchedmuon->isGlobalMuon();
+      muonIsStandalone = matchedmuon->isStandAloneMuon();
+      muonInnerTrackBest = matchedmuon->muonBestTrackType() == reco::Muon::InnerTrack;
     }
     
     
@@ -945,8 +974,8 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
 //     PropagationDirection rpropdir = traj.direction();
 //     PropagationDirection fpropdir = rpropdir == alongMomentum ? oppositeToMomentum : alongMomentum;
     
-    //TODO properly handle the outside-in case
-    assert(track.seedDirection() == alongMomentum);
+    //TODO properly handle the outside-in case (maybe ok now)
+//     assert(track.seedDirection() == alongMomentum);
     
     //prepare hits
     TransientTrackingRecHit::RecHitContainer hits;
@@ -957,14 +986,40 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
 //     printf("building hits\n");
     
     std::set<std::array<int, 3>> hitlayers;
+
+//     std::cout << "track: algo = " << track.algo() << " originalAlgo = " << track.originalAlgo() << std::endl;
+//
+//
+//     if (track.seedDirection() == oppositeToMomentum) {
+// //       std::cout << "track with oppositeToMomentum: algo = " << track.algo() << " originalAlgo = " << track.originalAlgo() << std::endl;
+//       std::cout << "track with oppositeToMomentum:" << std::endl;
+//     }
+
+
     
     for (auto it = track.recHitsBegin(); it != track.recHitsEnd(); ++it) {
+//       if (track.seedDirection() == oppositeToMomentum) {
+//         std::cout << "det = " << (*it)->geographicalId().det() << std::endl;
+//       }
+
+
+      if ((*it)->geographicalId().det() != DetId::Tracker) {
+        continue;
+      }
+
       const GeomDet* detectorG = globalGeometry->idToDet((*it)->geographicalId());
       const GluedGeomDet* detglued = dynamic_cast<const GluedGeomDet*>(detectorG);
       
+//       if (track.seedDirection() == oppositeToMomentum) {
+//         std::cout << "position mag = " << detectorG->surface().position().mag() << std::endl;
+//       }
+
       // split matched invalid hits
       if (detglued != nullptr && !(*it)->isValid()) {
         bool order = detglued->stereoDet()->surface().position().mag() > detglued->monoDet()->surface().position().mag();
+//         if (track.seedDirection() == oppositeToMomentum) {
+//           order = !order;
+//         }
         const GeomDetUnit* detinner = order ? detglued->monoDet() : detglued->stereoDet();
         const GeomDetUnit* detouter = order ? detglued->stereoDet() : detglued->monoDet();
         
@@ -1101,11 +1156,20 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
 //         hitlayers.insert(layer);
       }
     }
+
+//     if (track.seedDirection() == oppositeToMomentum) {
+//       std::reverse(hits.begin(), hits.end());
+//     }
     
 //     printf("done building hits\n");
     
 //     const unsigned int nhits = track.recHitsSize();
     const unsigned int nhits = hits.size();
+
+    if (nhits == 0) {
+      continue;
+    }
+
     nHits = nhits;
 //     unsigned int npixhits = 0;
 

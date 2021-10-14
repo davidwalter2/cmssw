@@ -288,7 +288,8 @@ protected:
   
   // ----------member data ---------------------------
   edm::EDGetTokenT<std::vector<Trajectory>> inputTraj_;
-  edm::EDGetTokenT<std::vector<reco::GenParticle>> GenParticlesToken_;
+//   edm::EDGetTokenT<std::vector<reco::GenParticle>> GenParticlesToken_;
+  edm::EDGetTokenT<edm::View<reco::Candidate>> GenParticlesToken_;
   edm::EDGetTokenT<std::vector<int>> genParticlesBarcodeToken_;
 //   edm::EDGetTokenT<TrajTrackAssociationCollection> inputTrack_;
   edm::EDGetTokenT<reco::TrackCollection> inputTrack_;
@@ -299,7 +300,8 @@ protected:
   std::vector<edm::EDGetTokenT<std::vector<PSimHit>>> inputSimHits_;
   edm::EDGetTokenT<std::vector<SimTrack>> inputSimTracks_;
   
-  edm::EDGetTokenT<reco::MuonCollection> inputMuons_;
+//   edm::EDGetTokenT<reco::MuonCollection> inputMuons_;
+  edm::EDGetTokenT<edm::View<reco::Muon>> inputMuons_;
   edm::EDGetTokenT<int> inputGeometry_;
   
   std::string corFile_;
