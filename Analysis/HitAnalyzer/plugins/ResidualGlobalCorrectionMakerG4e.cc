@@ -316,9 +316,11 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
   
 //   Handle<std::vector<reco::GenParticle>> genPartCollection;
   Handle<edm::View<reco::Candidate>> genPartCollection;
+  Handle<GenEventInfoProduct> genEventInfo;
   Handle<std::vector<int>> genPartBarcodes;
   if (doGen_) {
     iEvent.getByToken(GenParticlesToken_, genPartCollection);
+    iEvent.getByToken(genEventInfoToken_, genEventInfo);
   }
   
 //   Handle<std::vector<PSimHit>> tecSimHits;
@@ -765,6 +767,11 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
   run = iEvent.run();
   lumi = iEvent.luminosityBlock();
   event = iEvent.id().event();
+
+  genweight = 1.;
+  if (doGen_) {
+    genweight = genEventInfo->weight();
+  }
   
 //   for (const reco::Track &track : *trackOrigH) {
   for (unsigned int itrack = 0; itrack < trackOrigH->size(); ++itrack) {

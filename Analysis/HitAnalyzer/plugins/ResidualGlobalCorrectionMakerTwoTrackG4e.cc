@@ -342,9 +342,11 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
   
 //   Handle<std::vector<reco::GenParticle>> genPartCollection;
   Handle<edm::View<reco::Candidate>> genPartCollection;
+  Handle<GenEventInfoProduct> genEventInfo;
   Handle<std::vector<int>> genPartBarcodes;
   if (doGen_) {
     iEvent.getByToken(GenParticlesToken_, genPartCollection);
+    iEvent.getByToken(genEventInfoToken_, genEventInfo);
   }
   
   std::vector<Handle<std::vector<PSimHit>>> simHits(inputSimHits_.size());
@@ -391,6 +393,11 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::analyze(const edm::Event &iEvent,
   run = iEvent.run();
   lumi = iEvent.luminosityBlock();
   event = iEvent.id().event();
+
+  genweight = 1.;
+  if (doGen_) {
+    genweight = genEventInfo->weight();
+  }
   
   // loop over combinatorics of track pairs
   for (auto itrack = trackOrigH->begin(); itrack != trackOrigH->end(); ++itrack) {

@@ -73,6 +73,7 @@
 #include "RecoLocalTracker/SiStripClusterizer/interface/SiStripClusterInfo.h"
 
 #include "DataFormats/MuonReco/interface/MuonFwd.h"
+#include "SimDataFormats/GeneratorProducts/interface/GenEventInfoProduct.h"
 
 
 #include "FWCore/ServiceRegistry/interface/Service.h"
@@ -290,6 +291,7 @@ protected:
   edm::EDGetTokenT<std::vector<Trajectory>> inputTraj_;
 //   edm::EDGetTokenT<std::vector<reco::GenParticle>> GenParticlesToken_;
   edm::EDGetTokenT<edm::View<reco::Candidate>> GenParticlesToken_;
+  edm::EDGetTokenT<GenEventInfoProduct> genEventInfoToken_;
   edm::EDGetTokenT<std::vector<int>> genParticlesBarcodeToken_;
 //   edm::EDGetTokenT<TrajTrackAssociationCollection> inputTrack_;
   edm::EDGetTokenT<reco::TrackCollection> inputTrack_;
@@ -477,6 +479,8 @@ protected:
   
   float chisqval;
   unsigned int ndof;
+
+  float genweight;
   
   TH2D *hetaphi = nullptr;
   

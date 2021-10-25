@@ -139,6 +139,7 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
 //     GenParticlesToken_ = consumes<std::vector<reco::GenParticle>>(edm::InputTag("genParticles"));
 //     GenParticlesToken_ = consumes<edm::View<reco::Candidate>>(edm::InputTag("genParticles"));
     GenParticlesToken_ = consumes<edm::View<reco::Candidate>>(iConfig.getParameter<edm::InputTag>("genParticles"));
+    genEventInfoToken_ = consumes<GenEventInfoProduct>(edm::InputTag("generator"));
   }
   
   if (doSim_) {
@@ -237,6 +238,8 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
     
     tree->Branch("chisqval", &chisqval);
     tree->Branch("ndof", &ndof);
+
+    tree->Branch("genweight", &genweight);
     
     nParms = 0.;
 
