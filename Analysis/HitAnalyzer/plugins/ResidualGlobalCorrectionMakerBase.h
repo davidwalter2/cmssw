@@ -6,7 +6,7 @@
 
 // user include files
 #include "FWCore/Framework/interface/Frameworkfwd.h"
-#include "FWCore/Framework/interface/stream/EDAnalyzer.h"
+#include "FWCore/Framework/interface/stream/EDProducer.h"
 
 #include "FWCore/Framework/interface/Event.h"
 #include "FWCore/Framework/interface/ESHandle.h"
@@ -156,6 +156,9 @@ namespace std{
   };
 }
 
+namespace pat {
+  class Muon;
+}
 
 //double active scalar for autodiff grad+hessian
 //template arguments are datatype, and size of gradient
@@ -165,7 +168,7 @@ namespace std{
 template<typename T, int N>
 using AANT = AutoDiffScalar<Matrix<AutoDiffScalar<Matrix<T, N, 1>>, Dynamic, 1, 0, N, 1>>;
 
-class ResidualGlobalCorrectionMakerBase : public edm::stream::EDAnalyzer<>
+class ResidualGlobalCorrectionMakerBase : public edm::stream::EDProducer<>
 {
 public:
   explicit ResidualGlobalCorrectionMakerBase(const edm::ParameterSet &);
@@ -305,6 +308,9 @@ protected:
 //   edm::EDGetTokenT<reco::MuonCollection> inputMuons_;
   edm::EDGetTokenT<edm::View<reco::Muon>> inputMuons_;
   edm::EDGetTokenT<int> inputGeometry_;
+
+  edm::EDGetTokenT<edm::Association<std::vector<pat::Muon>>> inputMuonAssoc_;
+  bool doMuonAssoc_;
   
   std::string corFile_;
   
@@ -426,6 +432,7 @@ protected:
   bool fitFromGenParms_;
   bool fillTrackTree_;
   bool fillGrads_;
+  bool fillRunTree_;
   
   bool debugprintout_;
   

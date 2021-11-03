@@ -72,8 +72,6 @@
 #include "RecoLocalTracker/SiStripClusterizer/interface/SiStripClusterInfo.h"
 #include "DataFormats/MuonReco/interface/Muon.h"
 
-
-
 #include "FWCore/ServiceRegistry/interface/Service.h"
 #include "CommonTools/UtilAlgos/interface/TFileService.h"
 
@@ -125,6 +123,7 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   fitFromGenParms_ = iConfig.getParameter<bool>("fitFromGenParms");
   fillTrackTree_ = iConfig.getParameter<bool>("fillTrackTree");
   fillGrads_ = iConfig.getParameter<bool>("fillGrads");
+  fillRunTree_ = iConfig.getParameter<bool>("fillRunTree");
   doGen_ = iConfig.getParameter<bool>("doGen");
   doSim_ = iConfig.getParameter<bool>("doSim");
   bsConstraint_ = iConfig.getParameter<bool>("bsConstraint");
@@ -170,6 +169,11 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   
   debugprintout_ = false;
 
+  doMuonAssoc_ = iConfig.getParameter<bool>("doMuonAssoc");
+  if (doMuonAssoc_) {
+    inputMuonAssoc_ = consumes<edm::Association<std::vector<pat::Muon>>>(iConfig.getParameter<edm::InputTag>("src"));
+  }
+
 
 //   fout = new TFile("trackTreeGrads.root", "RECREATE");
 //   fout = new TFile("trackTreeGradsdebug.root", "RECREATE");
@@ -201,9 +205,11 @@ ResidualGlobalCorrectionMakerBase::~ResidualGlobalCorrectionMakerBase()
 // ------------ method called once each job just before starting event loop  ------------
 void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
 {
-  std::stringstream filenamestream;
-  filenamestream << "globalcor_" << streamid.value() << ".root";
-  fout = new TFile(filenamestream.str().c_str(), "RECREATE");
+  if (fillTrackTree_ || fillRunTree_) {
+    std::stringstream filenamestream;
+    filenamestream << "globalcor_" << streamid.value() << ".root";
+    fout = new TFile(filenamestream.str().c_str(), "RECREATE");
+  }
   
 //   runtree = new TTree("runtree","");
 //   gradtree = fs->make<TTree>("gradtree","");
@@ -373,12 +379,8 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
     detidparms.clear();
     detidparmsrev.clear();
     
-  //   assert(0);
-    
-  //   TFile *runfout = new TFile("trackTreeGradsParmInfo.root", "RECREATE");
-    fout->cd();
-    TTree *runtree = new TTree("runtree", "");
-    
+    TTree *runtree = nullptr;
+
     unsigned int iidx;
     int parmtype;
     unsigned int rawdetid;
@@ -404,30 +406,40 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
     float dz;
     float dtheta;
 
-    runtree->Branch("iidx", &iidx);
-    runtree->Branch("parmtype", &parmtype);
-    runtree->Branch("rawdetid", &rawdetid);
-    runtree->Branch("subdet", &subdet);
-    runtree->Branch("layer", &layer);
-    runtree->Branch("stereo", &stereo);
-    runtree->Branch("x", &x);
-    runtree->Branch("y", &y);
-    runtree->Branch("z", &z);
-    runtree->Branch("eta", &eta);
-    runtree->Branch("phi", &phi);
-    runtree->Branch("rho", &rho);
-    runtree->Branch("xi", &xi);
-    runtree->Branch("bx", &bx);
-    runtree->Branch("by", &by);
-    runtree->Branch("bz", &bz);
-    runtree->Branch("bradial", &bradial);
-    runtree->Branch("baxial", &baxial);
-    runtree->Branch("b0", &b0);
-    runtree->Branch("b0trivial", &b0trivial);
-    runtree->Branch("dx", &dx);
-    runtree->Branch("dy", &dy);
-    runtree->Branch("dz", &dz);
-    runtree->Branch("dtheta", &dtheta);
+
+
+  //   assert(0);
+    if (fillRunTree_) {
+    //   TFile *runfout = new TFile("trackTreeGradsParmInfo.root", "RECREATE");
+      fout->cd();
+      runtree = new TTree("runtree", "");
+
+      runtree->Branch("iidx", &iidx);
+      runtree->Branch("parmtype", &parmtype);
+      runtree->Branch("rawdetid", &rawdetid);
+      runtree->Branch("subdet", &subdet);
+      runtree->Branch("layer", &layer);
+      runtree->Branch("stereo", &stereo);
+      runtree->Branch("x", &x);
+      runtree->Branch("y", &y);
+      runtree->Branch("z", &z);
+      runtree->Branch("eta", &eta);
+      runtree->Branch("phi", &phi);
+      runtree->Branch("rho", &rho);
+      runtree->Branch("xi", &xi);
+      runtree->Branch("bx", &bx);
+      runtree->Branch("by", &by);
+      runtree->Branch("bz", &bz);
+      runtree->Branch("bradial", &bradial);
+      runtree->Branch("baxial", &baxial);
+      runtree->Branch("b0", &b0);
+      runtree->Branch("b0trivial", &b0trivial);
+      runtree->Branch("dx", &dx);
+      runtree->Branch("dy", &dy);
+      runtree->Branch("dz", &dz);
+      runtree->Branch("dtheta", &dtheta);
+
+    }
     
     unsigned int globalidx = 0;
     for (const auto& key: parmset) {
@@ -591,7 +603,9 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       
       globalidx++;
       
-      runtree->Fill();
+      if (fillRunTree_) {
+        runtree->Fill();
+      }
     }
     
   //   runfout->Write();

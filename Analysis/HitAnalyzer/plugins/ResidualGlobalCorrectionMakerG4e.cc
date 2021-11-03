@@ -3,6 +3,9 @@
 #include "DataFormats/MuonReco/interface/Muon.h"
 #include "TrackPropagation/Geant4e/interface/Geant4ePropagator.h"
 
+
+#include "DataFormats/PatCandidates/interface/Muon.h"
+
 #include "Math/Vector4Dfwd.h"
 #include "Math/Vector4D.h"
 
@@ -19,7 +22,7 @@ public:
 private:
   
   virtual void beginStream(edm::StreamID) override;
-  virtual void analyze(const edm::Event &, const edm::EventSetup &) override;
+  virtual void produce(edm::Event &, const edm::EventSetup &) override;
 
   edm::EDGetTokenT<edm::Association<reco::TrackExtraCollection>> inputAssoc_;
   
@@ -48,6 +51,9 @@ private:
   float outPtStart;
   float outEtaStart;
   float outPhiStart;
+
+  edm::EDPutTokenT<edm::ValueMap<float>> outputCorPt_;
+
   
 };
 
@@ -56,6 +62,8 @@ ResidualGlobalCorrectionMakerG4e::ResidualGlobalCorrectionMakerG4e(const edm::Pa
 {
   
   inputAssoc_ = consumes<edm::Association<reco::TrackExtraCollection>>(edm::InputTag("muonReducedTrackExtras"));
+
+  outputCorPt_ = produces<edm::ValueMap<float>>("corPt");
   
 }
 
@@ -215,7 +223,7 @@ void ResidualGlobalCorrectionMakerG4e::beginStream(edm::StreamID streamid)
 
 
 // ------------ method called for each event  ------------
-void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const edm::EventSetup &iSetup)
+void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::EventSetup &iSetup)
 {
   
   const bool dogen = fitFromGenParms_;
@@ -340,6 +348,11 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
     iEvent.getByToken(inputMuons_, muons);
   }
   
+  Handle<edm::Association<std::vector<pat::Muon>>> muonAssoc;
+  if (doMuonAssoc_) {
+    iEvent.getByToken(inputMuonAssoc_, muonAssoc);
+  }
+
 //   Handle<edm::Association<reco::TrackExtraCollection>> assoc;
 //   if (doMuons_) {
 //     iEvent.getByToken(inputAssoc_, assoc);
@@ -772,11 +785,22 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
   if (doGen_) {
     genweight = genEventInfo->weight();
   }
-  
+
+
+
+  std::vector<float> corPtV;
+
+  if (doMuonAssoc_) {
+    corPtV.assign(muonAssoc->ref()->size(), -99.);
+  }
+
 //   for (const reco::Track &track : *trackOrigH) {
   for (unsigned int itrack = 0; itrack < trackOrigH->size(); ++itrack) {
     const reco::Track &track = (*trackOrigH)[itrack];
     const reco::TrackRef trackref(trackOrigH, itrack);
+
+    const edm::Ref<std::vector<pat::Muon>> muonref = doMuonAssoc_ ? (*muonAssoc)[trackref] : edm::Ref<std::vector<pat::Muon>>();
+
 //     const Trajectory& traj = (*trajH)[itraj];
     
 //     const edm::Ref<std::vector<Trajectory> > trajref(trajH, j);
@@ -3401,6 +3425,14 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
         refParms_iter0 = refParms;
         refCov_iter0 = refCov;
       }
+
+      // fill values for valuemap
+      if (muonref.isNonnull()) {
+        const double ptupd = std::abs(qbpupd)*std::cos(lamupd);
+
+        corPtV[muonref.index()] = ptupd;
+      }
+
       
       
          
@@ -3839,7 +3871,22 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
     if (fillTrackTree_) {
       tree->Fill();
     }
+
+
   }
+
+  edm::ValueMap<float> corPtMap;
+
+  if (doMuons_ && doMuonAssoc_) {
+    edm::ValueMap<float>::Filler corPtMapFiller(corPtMap);
+
+    corPtMapFiller.insert(muonAssoc->ref(), std::make_move_iterator(corPtV.begin()), std::make_move_iterator(corPtV.end()));
+
+    corPtMapFiller.fill();
+  }
+
+  iEvent.emplace(outputCorPt_, std::move(corPtMap));
+
 }
 
 DEFINE_FWK_MODULE(ResidualGlobalCorrectionMakerG4e);

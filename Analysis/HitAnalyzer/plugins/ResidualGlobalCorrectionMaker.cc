@@ -2,6 +2,9 @@
 #include "MagneticFieldOffset.h"
 #include "DataFormats/MuonReco/interface/Muon.h"
 
+#include "DataFormats/Math/interface/deltaR.h"
+
+
 class ResidualGlobalCorrectionMaker : public ResidualGlobalCorrectionMakerBase
 {
 public:
@@ -13,7 +16,7 @@ public:
 private:
   
   virtual void beginStream(edm::StreamID) override;
-  virtual void analyze(const edm::Event &, const edm::EventSetup &) override;
+  virtual void produce(edm::Event &, const edm::EventSetup &) override;
 
   edm::EDGetTokenT<edm::Association<reco::TrackExtraCollection>> inputAssoc_;
   
@@ -176,7 +179,7 @@ void ResidualGlobalCorrectionMaker::beginStream(edm::StreamID streamid)
 
 
 // ------------ method called for each event  ------------
-void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm::EventSetup &iSetup)
+void ResidualGlobalCorrectionMaker::produce(edm::Event &iEvent, const edm::EventSetup &iSetup)
 {
   
   const bool dogen = fitFromGenParms_;
@@ -798,7 +801,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //           continue;
 //         }
         
-        float dR = deltaR(g->phi(), trackPhi, g->eta(), trackEta);
+        float dR = deltaR(*g, track);
         
         if (dR < drmin)
         {

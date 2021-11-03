@@ -18,6 +18,8 @@
 #include "RecoVertex/KinematicFit/interface/MultiTrackPointingKinematicConstraint.h"
 #include "RecoVertex/KinematicFit/interface/CombinedKinematicConstraint.h"
 
+#include "DataFormats/Math/interface/deltaR.h"
+
 #include "Math/Vector4Dfwd.h"
 
 
@@ -34,7 +36,7 @@ private:
   Matrix<double, 1, 6> massJacobian(const FreeTrajectoryState &state0, const FreeTrajectoryState &state1, double dmass) const;
   
   virtual void beginStream(edm::StreamID) override;
-  virtual void analyze(const edm::Event &, const edm::EventSetup &) override;
+  virtual void produce(edm::Event &, const edm::EventSetup &) override;
   
   bool doMassConstraint_;
   double massConstraint_;
@@ -190,7 +192,7 @@ void ResidualGlobalCorrectionMakerTwoTrack::beginStream(edm::StreamID streamid)
 
 
 // ------------ method called for each event  ------------
-void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, const edm::EventSetup &iSetup)
+void ResidualGlobalCorrectionMakerTwoTrack::produce(edm::Event &iEvent, const edm::EventSetup &iSetup)
 {
   
   const bool dogen = fitFromGenParms_;
@@ -293,12 +295,14 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
             continue;
           }
           
-          float dR0 = deltaR(genpart.phi(), itrack->phi(), genpart.eta(), itrack->eta());
+//           float dR0 = deltaR(genpart.phi(), itrack->phi(), genpart.eta(), itrack->eta());
+          float dR0 = deltaR(genpart, *itrack);
           if (dR0 < 0.1 && genpart.charge() == itrack->charge()) {
             mu0gen = &genpart;
           }
           
-          float dR1 = deltaR(genpart.phi(), jtrack->phi(), genpart.eta(), jtrack->eta());
+//           float dR1 = deltaR(genpart.phi(), jtrack->phi(), genpart.eta(), jtrack->eta());
+          float dR1 = deltaR(genpart, *jtrack);
           if (dR1 < 0.1 && genpart.charge() == jtrack->charge()) {
             mu1gen = &genpart;
           }
@@ -2033,12 +2037,14 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
               continue;
             }
             
-            float dRplus = deltaR(genpart.phi(), muarr[idxplus].phi(), genpart.eta(), muarr[idxplus].eta());
+//             float dRplus = deltaR(genpart.phi(), muarr[idxplus].phi(), genpart.eta(), muarr[idxplus].eta());
+            float dRplus = deltaR(genpart, muarr[idxplus]);
             if (dRplus < 0.1 && genpart.charge() > 0) {
               muplusgen = &genpart;
             }
             
-            float dRminus = deltaR(genpart.phi(), muarr[idxminus].phi(), genpart.eta(), muarr[idxminus].eta());
+//             float dRminus = deltaR(genpart.phi(), muarr[idxminus].phi(), genpart.eta(), muarr[idxminus].eta());
+            float dRminus = deltaR(genpart, muarr[idxminus]);
             if (dRminus < 0.1 && genpart.charge() < 0) {
               muminusgen = &genpart;
             }

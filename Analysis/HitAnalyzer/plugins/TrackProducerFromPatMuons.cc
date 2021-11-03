@@ -20,6 +20,7 @@ private:
   
   edm::EDGetTokenT<std::vector<pat::Muon>> inputMuons_;
   edm::EDPutTokenT<reco::TrackCollection> outputTrack_;
+  edm::EDPutTokenT<edm::Association<std::vector<pat::Muon>>> outputAssoc_;
   bool innerTrackOnly_;
 
 };
@@ -30,6 +31,7 @@ TrackProducerFromPatMuons::TrackProducerFromPatMuons(const edm::ParameterSet &iC
 {
   inputMuons_ = consumes<std::vector<pat::Muon>>(iConfig.getParameter<edm::InputTag>("src"));
   outputTrack_ = produces<reco::TrackCollection>();
+  outputAssoc_ = produces<edm::Association<std::vector<pat::Muon>>>();
   innerTrackOnly_ = iConfig.getParameter<bool>("innerTrackOnly");
 }
 
@@ -42,16 +44,31 @@ void TrackProducerFromPatMuons::produce(edm::Event &iEvent, const edm::EventSetu
   iEvent.getByToken(inputMuons_, muons);
 
   reco::TrackCollection tracksOut;
+
+  edm::Association<std::vector<pat::Muon>> association;
+  edm::Association<std::vector<pat::Muon>>::Filler assocfiller(association);
+
+  edm::RefProd<std::vector<pat::Muon>> muonRefProd(muons);
+  association.setRef(muonRefProd);
   
-  for (auto const &muon : *muons) {
+  std::vector<int> associdxs;
+
+  for (unsigned int iMuon = 0; iMuon < muons->size(); ++iMuon) {
+    auto const &muon = (*muons)[iMuon];
+
     const reco::TrackRef trackRef = innerTrackOnly_ ? muon.innerTrack() : muon.muonBestTrack();
     if (trackRef.isNonnull() && trackRef->extra().isAvailable()) {
       tracksOut.emplace_back(*trackRef);
+      associdxs.push_back(iMuon);
     }
   }
   
-  iEvent.emplace(outputTrack_, std::move(tracksOut));
-  
+  auto trackouth = iEvent.emplace(outputTrack_, std::move(tracksOut));
+  assocfiller.insert(trackouth, associdxs.begin(), associdxs.end());
+  assocfiller.fill();
+  iEvent.emplace(outputAssoc_, std::move(association));
+
+
 }
 
 DEFINE_FWK_MODULE(TrackProducerFromPatMuons);

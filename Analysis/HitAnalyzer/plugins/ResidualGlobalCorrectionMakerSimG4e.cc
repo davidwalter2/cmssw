@@ -12,7 +12,7 @@ public:
 private:
   
   virtual void beginStream(edm::StreamID) override;
-  virtual void analyze(const edm::Event &, const edm::EventSetup &) override;
+  virtual void produce(edm::Event &, const edm::EventSetup &) override;
 
   
 };
@@ -147,7 +147,7 @@ void ResidualGlobalCorrectionMakerSimG4e::beginStream(edm::StreamID streamid)
 
 
 // ------------ method called for each event  ------------
-void ResidualGlobalCorrectionMakerSimG4e::analyze(const edm::Event &iEvent, const edm::EventSetup &iSetup)
+void ResidualGlobalCorrectionMakerSimG4e::produce(edm::Event &iEvent, const edm::EventSetup &iSetup)
 {
   
   const bool dogen = fitFromGenParms_;
