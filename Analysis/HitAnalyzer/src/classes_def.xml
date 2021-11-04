@@ -1,7 +1,7 @@
 <lcgdict>
   <class name="vector<ROOT::Math::SMatrix<double,2,2,ROOT::Math::MatRepStd<double,2,2> >>"/>
-      <class name="edm::ValueMap<std::vector<unsigned int>>"/>
-      <class name = "edm::Wrapper<edm::ValueMap<std::vector<unsigned int> > >" />
+      <class name="edm::ValueMap<std::vector<int>>"/>
+      <class name = "edm::Wrapper<edm::ValueMap<std::vector<int> > >" />
       <class name="edm::ValueMap<std::vector<float>>"/>
       <class name = "edm::Wrapper<edm::ValueMap<std::vector<float> > >" />
 </lcgdict>
