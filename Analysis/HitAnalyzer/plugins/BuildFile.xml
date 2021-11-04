@@ -6,6 +6,7 @@
 <use name="DataFormats/SiStripDetId"/>
 <use name="DataFormats/HepMCCandidate"/>
 <use name="DataFormats/MuonReco"/>
+<use name="DataFormats/PatCandidates"/>
 <use name="TrackingTools/PatternTools"/>
 <use name="Geometry/CommonDetUnit"/>
 <use name="Geometry/Records"/>

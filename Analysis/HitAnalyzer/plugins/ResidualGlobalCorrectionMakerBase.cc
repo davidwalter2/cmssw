@@ -257,36 +257,39 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
 // ------------ method called once each job just after ending the event loop  ------------
 void ResidualGlobalCorrectionMakerBase::endStream()
 {
-  fout->cd();
-  
-//   TTree *gradtree = new TTree("gradtree","");
-//   unsigned int idx;
-//   double gradval;
-//   gradtree->Branch("idx",&idx);
-//   gradtree->Branch("gradval",&gradval);
-//   for (unsigned int i=0; i<gradagg.size(); ++i) {
-//     idx = i;
-//     gradval = gradagg[i];
-//     gradtree->Fill();
-//   }
-//   
-//   TTree *hesstree = new TTree("hesstree","");
-//   unsigned int iidx;
-//   unsigned int jidx;
-//   double hessval;
-//   hesstree->Branch("iidx",&iidx);
-//   hesstree->Branch("jidx",&jidx);
-//   hesstree->Branch("hessval",&hessval);
-//   
-//   for (auto const& item : hessaggsparse) {
-//     iidx = item.first.first;
-//     jidx = item.first.second;
-//     hessval = item.second;
-//     hesstree->Fill();
-//   }
-  
-  fout->Write();
-  fout->Close();
+  if (fout != nullptr) {
+
+    fout->cd();
+
+  //   TTree *gradtree = new TTree("gradtree","");
+  //   unsigned int idx;
+  //   double gradval;
+  //   gradtree->Branch("idx",&idx);
+  //   gradtree->Branch("gradval",&gradval);
+  //   for (unsigned int i=0; i<gradagg.size(); ++i) {
+  //     idx = i;
+  //     gradval = gradagg[i];
+  //     gradtree->Fill();
+  //   }
+  //
+  //   TTree *hesstree = new TTree("hesstree","");
+  //   unsigned int iidx;
+  //   unsigned int jidx;
+  //   double hessval;
+  //   hesstree->Branch("iidx",&iidx);
+  //   hesstree->Branch("jidx",&jidx);
+  //   hesstree->Branch("hessval",&hessval);
+  //
+  //   for (auto const& item : hessaggsparse) {
+  //     iidx = item.first.first;
+  //     jidx = item.first.second;
+  //     hessval = item.second;
+  //     hesstree->Fill();
+  //   }
+
+    fout->Write();
+    fout->Close();
+  }
 }
 
 // ------------ method called when starting to processes a run  ------------
@@ -304,9 +307,13 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
   edm::ESHandle<TrackerTopology> trackerTopology;
   es.get<TrackerTopologyRcd>().get(trackerTopology);
   
-  edm::ESHandle<Propagator> thePropagator;
-  es.get<TrackingComponentsRecord>().get("RungeKuttaTrackerPropagator", thePropagator);
-  const MagneticField* field = thePropagator->magneticField();
+//   edm::ESHandle<Propagator> thePropagator;
+//   es.get<TrackingComponentsRecord>().get("RungeKuttaTrackerPropagator", thePropagator);
+//   const MagneticField* field = thePropagator->magneticField();
+
+  edm::ESHandle<MagneticField> magfield;
+  es.get<IdealMagneticFieldRecord>().get(magfield);
+  auto field = magfield.product();
   
   std::set<std::pair<int, DetId> > parmset;
   

@@ -22,6 +22,7 @@ private:
   edm::EDPutTokenT<reco::TrackCollection> outputTrack_;
   edm::EDPutTokenT<edm::Association<std::vector<pat::Muon>>> outputAssoc_;
   bool innerTrackOnly_;
+  double ptMin_;
 
 };
 
@@ -33,6 +34,7 @@ TrackProducerFromPatMuons::TrackProducerFromPatMuons(const edm::ParameterSet &iC
   outputTrack_ = produces<reco::TrackCollection>();
   outputAssoc_ = produces<edm::Association<std::vector<pat::Muon>>>();
   innerTrackOnly_ = iConfig.getParameter<bool>("innerTrackOnly");
+  ptMin_ = iConfig.getParameter<double>("ptMin");
 }
 
 // ------------ method called for each event  ------------
@@ -55,6 +57,8 @@ void TrackProducerFromPatMuons::produce(edm::Event &iEvent, const edm::EventSetu
 
   for (unsigned int iMuon = 0; iMuon < muons->size(); ++iMuon) {
     auto const &muon = (*muons)[iMuon];
+
+    if (muon.pt() < ptMin_) continue;
 
     const reco::TrackRef trackRef = innerTrackOnly_ ? muon.innerTrack() : muon.muonBestTrack();
     if (trackRef.isNonnull() && trackRef->extra().isAvailable()) {

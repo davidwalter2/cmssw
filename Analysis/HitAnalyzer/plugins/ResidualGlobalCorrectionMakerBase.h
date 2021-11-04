@@ -317,8 +317,8 @@ protected:
 //   SiStripClusterInfo siStripClusterInfo_;
 
   
-  TFile *fout;
-  TTree *tree;
+  TFile *fout = nullptr;
+  TTree *tree = nullptr;
 //   TTree *runtree;
 //   TTree *gradtree;
 //   TTree *hesstree;
