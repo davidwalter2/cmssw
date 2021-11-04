@@ -66,7 +66,7 @@ private:
 ResidualGlobalCorrectionMakerG4e::ResidualGlobalCorrectionMakerG4e(const edm::ParameterSet &iConfig) : ResidualGlobalCorrectionMakerBase(iConfig) 
 {
   
-  inputAssoc_ = consumes<edm::Association<reco::TrackExtraCollection>>(edm::InputTag("muonReducedTrackExtras"));
+//   inputAssoc_ = consumes<edm::Association<reco::TrackExtraCollection>>(edm::InputTag("muonReducedTrackExtras"));
 
   outputCorPt_ = produces<edm::ValueMap<float>>("corPt");
   outputCorEta_ = produces<edm::ValueMap<float>>("corEta");
