@@ -809,6 +809,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   std::vector<std::vector<int>> globalidxsV;
   std::vector<std::vector<float>> jacRefV;
 
+  std::array<double, 3> refParmsMomD;
+
   if (doMuonAssoc_) {
     corPtV.assign(muonAssoc->ref()->size(), -99.);
     corEtaV.assign(muonAssoc->ref()->size(), -99.);
@@ -3442,6 +3444,10 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       refParms[1] = lamupd;
       refParms[2] = phiupd;
       //TODO (longstanding) fix filling of position parameters
+
+      refParmsMomD[0] = qbpupd;
+      refParmsMomD[1] = lamupd;
+      refParmsMomD[2] = phiupd;
       
       Map<Matrix<float, 5, 5, RowMajor> >(refCov.data()).triangularView<Upper>() = (Cinner).cast<float>().triangularView<Upper>();
       
@@ -3450,19 +3456,19 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         refCov_iter0 = refCov;
       }
 
-      // fill values for valuemap
-      if (muonref.isNonnull()) {
-        const double ptupd = std::cos(lamupd)/std::abs(qbpupd);
-        const double chargeupd = std::copysign(1., qbpupd);
-
-        const double thetaupd = M_PI_2 - lamupd;
-        const double etaupd = -std::log(std::tan(0.5*thetaupd));
-
-        corPtV[muonref.index()] = ptupd;
-        corEtaV[muonref.index()] = etaupd;
-        corPhiV[muonref.index()] = phiupd;
-        corChargeV[muonref.index()] = chargeupd;
-      }
+//       // fill values for valuemap
+//       if (muonref.isNonnull()) {
+//         const double ptupd = std::cos(lamupd)/std::abs(qbpupd);
+//         const double chargeupd = std::copysign(1., qbpupd);
+//
+//         const double thetaupd = M_PI_2 - lamupd;
+//         const double etaupd = -std::log(std::tan(0.5*thetaupd));
+//
+//         corPtV[muonref.index()] = ptupd;
+//         corEtaV[muonref.index()] = etaupd;
+//         corPhiV[muonref.index()] = phiupd;
+//         corChargeV[muonref.index()] = chargeupd;
+//       }
 
       
       
@@ -3906,8 +3912,22 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
 
 
-
     if (muonref.isNonnull()) {
+      const double qbpupd = refParmsMomD[0];
+      const double lamupd = refParmsMomD[1];
+      const double phiupd = refParmsMomD[2];
+
+      const double ptupd = std::cos(lamupd)/std::abs(qbpupd);
+      const double chargeupd = std::copysign(1., qbpupd);
+
+      const double thetaupd = M_PI_2 - lamupd;
+      const double etaupd = -std::log(std::tan(0.5*thetaupd));
+
+      corPtV[muonref.index()] = ptupd;
+      corEtaV[muonref.index()] = etaupd;
+      corPhiV[muonref.index()] = phiupd;
+      corChargeV[muonref.index()] = chargeupd;
+
       auto &iglobalidxv = globalidxsV[muonref.key()];
       iglobalidxv.clear();
       iglobalidxv.reserve(globalidxvfinal.size());
