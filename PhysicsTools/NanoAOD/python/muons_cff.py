@@ -306,23 +306,32 @@ muonTable = simplePATMuonFlatTableProducer.clone(
         cvhEta = ExtVar(cms.InputTag("trackrefit:corEta"), float, doc="Refitted track eta", precision=12),
         cvhPhi = ExtVar(cms.InputTag("trackrefit:corPhi"), float, doc="Refitted track phi", precision=12),
         cvhCharge = ExtVar(cms.InputTag("trackrefit:corCharge"), int, doc="Refitted track charge"),
-        # can you declare a max number of bits here?  technically for the moment this needs 16 bits, but might eventually need 17 or 18
-        #cvhGlobalIdxs = ExtVar(cms.InputTag("trackrefit:globalIdxs"), "std::vector<int>", doc="Indices for correction parameters")
-        # optimal precision tbd, but presumably can work the same way as for scalar floats
-        #cvhJacRef = ExtVar(cms.InputTag("trackrefit:jacRef"), "std::vector<float>", doc="jacobian for corrections", precision = 12)
         cvhbsPt = ExtVar(cms.InputTag("trackrefitbs:corPt"), float, doc="Refitted track pt (with bs constraint)", precision=-1),
         cvhbsEta = ExtVar(cms.InputTag("trackrefitbs:corEta"), float, doc="Refitted track eta (with bs constraint)", precision=12),
         cvhbsPhi = ExtVar(cms.InputTag("trackrefitbs:corPhi"), float, doc="Refitted track phi (with bs constraint)", precision=12),
         cvhbsCharge = ExtVar(cms.InputTag("trackrefitbs:corCharge"), int, doc="Refitted track charge (with bs constraint)"),
-        # optimal precision tbd, but presumably can work the same way as for scalar floats
-        #cvhbsJacRef = ExtVar(cms.InputTag("trackrefitbs:jacRef"), "std::vector<float>", doc="Jacobian for corrections (with bs constraint)", precision = 12)
-
     ),
 )
 
 # Increase precision of eta and phi
 muonTable.variables.eta.precision = 16
 muonTable.variables.phi.precision = 16
+
+muonExternalVecVarsTable = cms.EDProducer("FlattenedCandValueMapVectorTableProducer",
+    name = cms.string(muonTable.name.value()+"_cvh"),
+    src = muonTable.src,
+    cut = muonTable.cut,
+    doc = muonTable.doc,
+    variables = cms.PSet(
+        # can you declare a max number of bits here?  technically for the moment this needs 16 bits, but might eventually need 17 or 18
+        GlobalIdxs = ExtVar(cms.InputTag("trackrefit:globalIdxs"), "std::vector<int>", doc="Indices for correction parameters", precision = 16),
+        # optimal precision tbd, but presumably can work the same way as for scalar floats
+        JacRef = ExtVar(cms.InputTag("trackrefit:jacRef"), "std::vector<float>", doc="jacobian for corrections", precision = 12),
+        # optimal precision tbd, but presumably can work the same way as for scalar floats
+        bsJacRef = ExtVar(cms.InputTag("trackrefitbs:jacRef"), "std::vector<float>", doc="Jacobian for corrections (with bs constraint)", precision = 12),
+    )
+)
+
 
 
 # Revert back to AK4 CHS jets for Run 2
@@ -354,4 +363,5 @@ muonMCTable = cms.EDProducer("CandMCMatchTableProducer",
 
 muonTask = cms.Task(slimmedMuonsUpdated,isoForMu,ptRatioRelForMu,slimmedMuonsWithUserData,finalMuons,finalLooseMuons)
 muonMCTask = cms.Task(muonsMCMatchForTable,muonMCTable)
-muonTablesTask = cms.Task(muonPROMPTMVA,muonMVALowPt,muonBSConstrain,muonTable,muonMVAID,muonPNetVariables,muonPNetScores)
+muonTablesTask = cms.Task(muonPROMPTMVA,muonMVALowPt,muonBSConstrain,muonTable,muonMVAID,muonPNetVariables,muonPNetScores,muonExternalVecVarsTable)
+
