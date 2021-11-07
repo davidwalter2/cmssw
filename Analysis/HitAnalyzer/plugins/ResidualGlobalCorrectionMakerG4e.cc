@@ -3910,8 +3910,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     if (muonref.isNonnull()) {
       auto &iglobalidxv = globalidxsV[muonref.key()];
       iglobalidxv.clear();
-      iglobalidxv.reserve(globalidxv.size());
-      for (auto val : globalidxv) {
+      iglobalidxv.reserve(globalidxvfinal.size());
+      for (auto val : globalidxvfinal) {
         iglobalidxv.push_back(val);
       }
 
