@@ -587,6 +587,28 @@ def nanoAOD_wmassLowPU(process):
     removal. As in 10_6 there is no CVH refit for low-PU: the production
     scripts do not add nanoAOD_addCvhMuon.
     """
+    from PhysicsTools.NanoAOD.triggerObjects_cff import mksel
+    process.triggerObjectTable.selections.Electron = cms.PSet(
+        doc = cms.string("PixelMatched e/gamma, low-PU 2017H menu"),  # this may also select photons!
+        id = cms.int32(11),
+        sel = cms.string("type(92) && pt > 7 && coll('hltEgammaCandidates') && filter('*PixelMatchFilter')"),
+        l1seed = cms.string("type(-98)"), l1deltaR = cms.double(0.3),
+        skipObjectsNotPassingQualityBits = cms.bool(True),
+        qualityBits = cms.VPSet(
+            mksel("filter('hltEle20WPLoose1GsfTrackIsoFilter*')", "Ele20"),
+            mksel("filter('hltEle17WPLoose1GsfTrackIsoFilterForHI')", "Ele17HI"),
+        ),
+    )
+    process.triggerObjectTable.selections.Muon = cms.PSet(
+        id = cms.int32(13),
+        sel = cms.string("type(83) && pt > 5 && (coll('hltIterL3MuonCandidates') || (pt > 45 && coll('hltHighPtTkMuonCands')) || (pt > 95 && coll('hltOldL3MuonCandidates')))"),
+        l1seed = cms.string("type(-81)"), l1deltaR = cms.double(0.5),
+        l2seed = cms.string("type(83) && coll('hltL2MuonCandidates')"), l2deltaR = cms.double(0.3),
+        skipObjectsNotPassingQualityBits = cms.bool(True),
+        qualityBits = cms.VPSet(
+            mksel("filter('hltL3fL1sMu10lqL1f0L2f10L3Filtered17')", "Mu17"),
+        ),
+    )
     return process
 
 
