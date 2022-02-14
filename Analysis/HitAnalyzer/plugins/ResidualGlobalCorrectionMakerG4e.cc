@@ -241,6 +241,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   
   const bool dogen = fitFromGenParms_;
   
+  const bool dolocalupdate = true;
+
+
   using namespace edm;
 
   Handle<reco::TrackCollection> trackOrigH;
@@ -1280,6 +1283,10 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 //         }
 //       }
 //     }
+
+    if (nvalid == 0) {
+      continue;
+    }
     
     nValidHits = nvalid;
     nValidPixelHits = nvalidpixel;
@@ -1619,6 +1626,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     
     double chisqvalold = std::numeric_limits<double>::max();
     
+    bool anomDebug = false;
+
 //     constexpr unsigned int niters = 1;
 //     constexpr unsigned int niters = 3;
 //     constexpr unsigned int niters = 5;
@@ -2238,68 +2247,70 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         //momentum kink residual
 //         AlgebraicVector5 idx0(0., 0., 0., 0., 0.);
         Matrix<double, 5, 1> idx0 = Matrix<double, 5, 1>::Zero();
-        if (iiter==0) {
-//         if (true) {
-          layerStates.push_back(updtsos);
-//           layerStatesStart.push_back(updtsos);
-          
+        if (dolocalupdate) {
+          if (iiter==0) {
+  //         if (true) {
+            layerStates.push_back(updtsos);
+  //           layerStatesStart.push_back(updtsos);
 
-        }
-        else {
-          //current state from previous state on this layer
-          //save current parameters  
-          
-          Matrix<double, 7, 1>& oldtsos = layerStates[ihit];
-          const Matrix<double, 5, 5> Hold = curv2localJacobianAltelossD(oldtsos, field, surface, dEdxlast, mmu, dbetaval);
-          const Matrix<double, 5, 1> dxlocal = Hold*dxfull.segment<5>(5*(ihit+1));
-          
-          const Point3DBase<double, GlobalTag> pos(oldtsos[0], oldtsos[1], oldtsos[2]);
-          const Point3DBase<double, LocalTag> localpos = surface.toLocal(pos);
-          
-          const Point3DBase<double, LocalTag> localposupd(localpos.x() + dxlocal[3], localpos.y() + dxlocal[4], localpos.z());
-          const Point3DBase<double, GlobalTag> posupd = surface.toGlobal(localposupd);
-         
-          
-          const Vector3DBase<double, GlobalTag> mom(oldtsos[3], oldtsos[4], oldtsos[5]);
-          const Vector3DBase<double, LocalTag> localmom = surface.toLocal(mom);
-          
-          const double dxdz = localmom.x()/localmom.z();
-          const double dydz = localmom.y()/localmom.z();
-          
-          
-          
-          const double dxdzupd = dxdz + dxlocal[1];
-          const double dydzupd = dydz + dxlocal[2];
-          
-          const double qop = oldtsos[6]/oldtsos.segment<3>(3).norm();
-          const double qopupd = qop + dxlocal[0];
-          
-          const double pupd = std::abs(1./qopupd);
-          const double charge = std::copysign(1., qopupd);
-          
-          const double signpz = std::copysign(1., localmom.z());
-          const double localmomfact = signpz/std::sqrt(1. + dxdzupd*dxdzupd + dydzupd*dydzupd);
-          const Vector3DBase<double, LocalTag> localmomupd(pupd*dxdzupd*localmomfact, pupd*dydzupd*localmomfact, pupd*localmomfact);
-          const Vector3DBase<double, GlobalTag> momupd = surface.toGlobal(localmomupd);
-                    
-          oldtsos[0] = posupd.x();
-          oldtsos[1] = posupd.y();
-          oldtsos[2] = posupd.z();
-          oldtsos[3] = momupd.x();
-          oldtsos[4] = momupd.y();
-          oldtsos[5] = momupd.z();
-          oldtsos[6] = charge;          
-          
-          updtsos = oldtsos;
-                    
-          localparms[0] = qopupd;
-          localparms[1] = dxdzupd;
-          localparms[2] = dydzupd;
-          localparms[3] = localposupd.x();
-          localparms[4] = localposupd.y();
-          
-          idx0 = localparms - localparmsprop;
-          
+
+          }
+          else {
+            //current state from previous state on this layer
+            //save current parameters
+
+            Matrix<double, 7, 1>& oldtsos = layerStates[ihit];
+            const Matrix<double, 5, 5> Hold = curv2localJacobianAltelossD(oldtsos, field, surface, dEdxlast, mmu, dbetaval);
+            const Matrix<double, 5, 1> dxlocal = Hold*dxfull.segment<5>(5*(ihit+1));
+
+            const Point3DBase<double, GlobalTag> pos(oldtsos[0], oldtsos[1], oldtsos[2]);
+            const Point3DBase<double, LocalTag> localpos = surface.toLocal(pos);
+
+            const Point3DBase<double, LocalTag> localposupd(localpos.x() + dxlocal[3], localpos.y() + dxlocal[4], localpos.z());
+            const Point3DBase<double, GlobalTag> posupd = surface.toGlobal(localposupd);
+
+
+            const Vector3DBase<double, GlobalTag> mom(oldtsos[3], oldtsos[4], oldtsos[5]);
+            const Vector3DBase<double, LocalTag> localmom = surface.toLocal(mom);
+
+            const double dxdz = localmom.x()/localmom.z();
+            const double dydz = localmom.y()/localmom.z();
+
+
+
+            const double dxdzupd = dxdz + dxlocal[1];
+            const double dydzupd = dydz + dxlocal[2];
+
+            const double qop = oldtsos[6]/oldtsos.segment<3>(3).norm();
+            const double qopupd = qop + dxlocal[0];
+
+            const double pupd = std::abs(1./qopupd);
+            const double charge = std::copysign(1., qopupd);
+
+            const double signpz = std::copysign(1., localmom.z());
+            const double localmomfact = signpz/std::sqrt(1. + dxdzupd*dxdzupd + dydzupd*dydzupd);
+            const Vector3DBase<double, LocalTag> localmomupd(pupd*dxdzupd*localmomfact, pupd*dydzupd*localmomfact, pupd*localmomfact);
+            const Vector3DBase<double, GlobalTag> momupd = surface.toGlobal(localmomupd);
+
+            oldtsos[0] = posupd.x();
+            oldtsos[1] = posupd.y();
+            oldtsos[2] = posupd.z();
+            oldtsos[3] = momupd.x();
+            oldtsos[4] = momupd.y();
+            oldtsos[5] = momupd.z();
+            oldtsos[6] = charge;
+
+            updtsos = oldtsos;
+
+            localparms[0] = qopupd;
+            localparms[1] = dxdzupd;
+            localparms[2] = dydzupd;
+            localparms[3] = localposupd.x();
+            localparms[4] = localposupd.y();
+
+            idx0 = localparms - localparmsprop;
+
+          }
         }
         
 //         if (false) {
@@ -3511,8 +3522,14 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       niter = iiter + 1;
       edmval = -deltachisq[0];
       
-      if (std::isnan(edmval) || std::isinf(edmval) || std::abs(lamupd) > M_PI_2 || (iiter>0 && edmval > 1e4) ) {
-        std::cout << "WARNING: invalid parameter update!!!" << std::endl;
+      const double threshparam = dolocalupdate ? edmval : std::fabs(deltachisqval);
+
+//       if (iiter>0 && threshparam > 1e4) {
+//         anomDebug = true;
+//       }
+
+      if (std::isnan(edmval) || std::isinf(edmval) || std::abs(lamupd) > M_PI_2 || (iiter>0 && threshparam > 1e5) || (iiter>1 && threshparam > 1e4) ) {
+        std::cout << "WARNING: invalid parameter update!!!" << " edmval = " << edmval << " lamupd = " << lamupd << " deltachisqval = " << deltachisqval << std::endl;
         valid = false;
         break;
       }
@@ -3532,6 +3549,13 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       
       
 //       std::cout << "iiter = " << iiter << " edmval = " << edmval << " chisqval = " << chisqval << std::endl;
+
+//       std::cout << "iiter = " << iiter << " edmval = " << edmval << " deltachisqval = " << deltachisqval << " chisqval = " << chisqval << std::endl;
+
+      if (anomDebug) {
+        std::cout << "anomDebug: iiter = " << iiter << " edmval = " << edmval << " deltachisqval = " << deltachisqval << " chisqval = " << chisqval << std::endl;
+      }
+
 //       std::cout <<"dxRef" << std::endl;
 //       std::cout << dxRef << std::endl;
 //       std::cout <<"dxOut" << std::endl;
@@ -3548,7 +3572,10 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 //         break;
 //       }
       
-      if (edmval < 1e-5) {
+      if (dolocalupdate && edmval < 1e-5) {
+        break;
+      }
+      else if (!dolocalupdate && std::fabs(deltachisqval)<1e-5) {
         break;
       }
 //       else if (iiter==2) {
@@ -3581,7 +3608,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       continue;
     }
     
-    if (!nValidPixelHitsFinal) {
+    if (!nValidHitsFinal) {
       continue;
     }
     
