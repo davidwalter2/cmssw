@@ -56,10 +56,12 @@ private:
   edm::EDPutTokenT<edm::ValueMap<float>> outputCorEta_;
   edm::EDPutTokenT<edm::ValueMap<float>> outputCorPhi_;
   edm::EDPutTokenT<edm::ValueMap<int>> outputCorCharge_;
+  edm::EDPutTokenT<edm::ValueMap<float>> outputEdmval_;
 
   edm::EDPutTokenT<edm::ValueMap<std::vector<int>>> outputGlobalIdxs_;
 
   edm::EDPutTokenT<edm::ValueMap<std::vector<float>>> outputJacRef_;
+  edm::EDPutTokenT<edm::ValueMap<std::vector<float>>> outputMomCov_;
 
 };
 
@@ -73,10 +75,12 @@ ResidualGlobalCorrectionMakerG4e::ResidualGlobalCorrectionMakerG4e(const edm::Pa
   outputCorEta_ = produces<edm::ValueMap<float>>("corEta");
   outputCorPhi_ = produces<edm::ValueMap<float>>("corPhi");
   outputCorCharge_ = produces<edm::ValueMap<int>>("corCharge");
+  outputEdmval_ = produces<edm::ValueMap<float>>("edmval");
 
   outputGlobalIdxs_ = produces<edm::ValueMap<std::vector<int>>>("globalIdxs");
 
   outputJacRef_ = produces<edm::ValueMap<std::vector<float>>>("jacRef");
+  outputMomCov_ = produces<edm::ValueMap<std::vector<float>>>("momCov");
   
 }
 
@@ -808,9 +812,11 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   std::vector<float> corEtaV;
   std::vector<float> corPhiV;
   std::vector<int> corChargeV;
+  std::vector<float> edmvalV;
 
   std::vector<std::vector<int>> globalidxsV;
   std::vector<std::vector<float>> jacRefV;
+  std::vector<std::vector<float>> momCovV;
 
   std::array<double, 3> refParmsMomD;
 
@@ -818,9 +824,11 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     corPtV.assign(muonAssoc->ref()->size(), -99.);
     corEtaV.assign(muonAssoc->ref()->size(), -99.);
     corPhiV.assign(muonAssoc->ref()->size(), -99.);
-    corChargeV.assign(muonAssoc->ref()->size(), -99.);
+    corChargeV.assign(muonAssoc->ref()->size(), -99);
+    edmvalV.assign(muonAssoc->ref()->size(), -99.);
     globalidxsV.assign(muonAssoc->ref()->size(), std::vector<int>());
     jacRefV.assign(muonAssoc->ref()->size(), std::vector<float>());
+    momCovV.assign(muonAssoc->ref()->size(), std::vector<float>());
   }
 
 //   for (const reco::Track &track : *trackOrigH) {
@@ -3958,6 +3966,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       corEtaV[muonref.index()] = etaupd;
       corPhiV[muonref.index()] = phiupd;
       corChargeV[muonref.index()] = chargeupd;
+      edmvalV[muonref.index()] = edmval;
 
       auto &iglobalidxv = globalidxsV[muonref.key()];
       iglobalidxv.clear();
@@ -3971,6 +3980,15 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       //eigen representation of the underlying vector storage
       Map<Matrix<float, 3, Dynamic, RowMajor> > momjacrefout(ijacrefv.data(), 3, nparsfinal);
       momjacrefout = ( (dxdparms).leftCols<3>().transpose() ).cast<float>();
+
+      auto &imomCov = momCovV[muonref.key()];
+      imomCov.assign(3*3, 0.);
+      Map<Matrix<float, 3, 3, RowMajor>> momCovout(imomCov.data(), 3, 3);
+      momCovout.triangularView<Upper>() = covfull.topLeftCorner<3,3>().cast<float>();
+//       std::cout << "covfull.topLeftCorner<3,3>()" << std::endl;
+//       std::cout << covfull.topLeftCorner<3,3>() << std::endl;
+//       std::cout << "momcovout" << std::endl;
+//       std::cout << momCovout << std::endl;
     }
 
 
@@ -3981,10 +3999,12 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   edm::ValueMap<float> corEtaMap;
   edm::ValueMap<float> corPhiMap;
   edm::ValueMap<int> corChargeMap;
+  edm::ValueMap<float> edmvalMap;
 
   edm::ValueMap<std::vector<int>> globalidxsMap;
 
   edm::ValueMap<std::vector<float>> jacRefMap;
+  edm::ValueMap<std::vector<float>> momCovMap;
 
   if (doMuonAssoc_) {
     edm::ValueMap<float>::Filler corPtMapFiller(corPtMap);
@@ -4003,6 +4023,10 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     corChargeMapFiller.insert(muonAssoc->ref(), std::make_move_iterator(corChargeV.begin()), std::make_move_iterator(corChargeV.end()));
     corChargeMapFiller.fill();
 
+    edm::ValueMap<float>::Filler edmvalMapFiller(edmvalMap);
+    edmvalMapFiller.insert(muonAssoc->ref(), std::make_move_iterator(edmvalV.begin()), std::make_move_iterator(edmvalV.end()));
+    edmvalMapFiller.fill();
+
     edm::ValueMap<std::vector<int>>::Filler globalidxsMapFiller(globalidxsMap);
     globalidxsMapFiller.insert(muonAssoc->ref(), std::make_move_iterator(globalidxsV.begin()), std::make_move_iterator(globalidxsV.end()));
     globalidxsMapFiller.fill();
@@ -4011,16 +4035,21 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     jacRefMapFiller.insert(muonAssoc->ref(), std::make_move_iterator(jacRefV.begin()), std::make_move_iterator(jacRefV.end()));
     jacRefMapFiller.fill();
 
+    edm::ValueMap<std::vector<float>>::Filler momCovMapFiller(momCovMap);
+    momCovMapFiller.insert(muonAssoc->ref(), std::make_move_iterator(momCovV.begin()), std::make_move_iterator(momCovV.end()));
+    momCovMapFiller.fill();
   }
 
   iEvent.emplace(outputCorPt_, std::move(corPtMap));
   iEvent.emplace(outputCorEta_, std::move(corEtaMap));
   iEvent.emplace(outputCorPhi_, std::move(corPhiMap));
   iEvent.emplace(outputCorCharge_, std::move(corChargeMap));
+  iEvent.emplace(outputEdmval_, std::move(edmvalMap));
 
   iEvent.emplace(outputGlobalIdxs_, std::move(globalidxsMap));
 
   iEvent.emplace(outputJacRef_, std::move(jacRefMap));
+  iEvent.emplace(outputMomCov_, std::move(momCovMap));
 
 }
 
