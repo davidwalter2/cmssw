@@ -44,14 +44,15 @@ nanotpSequence = cms.Sequence(
         nanoMetadata + 
         muonSequence + vertexSequence+
         isoTrackSequence + # must be after all the leptons
-        muonTable + vertexTables+ isoTrackTables + generalTrackTable
+        muonTable + vertexTables+ isoTrackTables + generalTrackTable + standaloneMuonTable +
+        triggerObjectTables + l1bits
         )
 
 nanotpSequenceMC = cms.Sequence(
         nanoMetadata + 
         muonSequence + vertexSequence+
         isoTrackSequence + # must be after all the leptons
-        muonTable + vertexTables+ isoTrackTables + generalTrackTable +
+        muonTable + vertexTables+ isoTrackTables + generalTrackTable + standaloneMuonTable +
         genParticleSequence + genParticleTable +
         genWeightsTable + genVertexTables + puTable + genTable + 
         muonMC + 
