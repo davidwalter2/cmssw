@@ -540,6 +540,8 @@ def nanoAOD_wmassMuonVariables(process):
     (muons_cff.py of WmassNanoProd_10_6_26; standalone* also exist in the MUO
     POG custom_muon_cff with the same definitions)."""
     v = process.muonTable.variables
+    v.innerTrackAlgo = Var('? innerTrack().isNonnull() ? innerTrack().algo() : -99', 'int', precision=-1, doc='Track algo enum, check DataFormats/TrackReco/interface/TrackBase.h for details.')
+    v.innerTrackOriginalAlgo = Var('? innerTrack().isNonnull() ? innerTrack().originalAlgo() : -99', 'int', precision=-1, doc='Track original algo enum')
     v.standalonePt = Var("? standAloneMuon().isNonnull() ? standAloneMuon().pt() : -1", float, doc="pt of the standalone muon", precision=14)
     v.standaloneEta = Var("? standAloneMuon().isNonnull() ? standAloneMuon().eta() : -99", float, doc="eta of the standalone muon", precision=14)
     v.standalonePhi = Var("? standAloneMuon().isNonnull() ? standAloneMuon().phi() : -99", float, doc="phi of the standalone muon", precision=14)
