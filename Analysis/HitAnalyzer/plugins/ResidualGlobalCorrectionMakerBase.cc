@@ -123,12 +123,14 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   fitFromGenParms_ = iConfig.getParameter<bool>("fitFromGenParms");
   fillTrackTree_ = iConfig.getParameter<bool>("fillTrackTree");
   fillGrads_ = iConfig.getParameter<bool>("fillGrads");
+  fillJac_ = iConfig.getParameter<bool>("fillJac");
   fillRunTree_ = iConfig.getParameter<bool>("fillRunTree");
   doGen_ = iConfig.getParameter<bool>("doGen");
   doSim_ = iConfig.getParameter<bool>("doSim");
   bsConstraint_ = iConfig.getParameter<bool>("bsConstraint");
   applyHitQuality_ = iConfig.getParameter<bool>("applyHitQuality");
   doMuons_ = iConfig.getParameter<bool>("doMuons");
+  doTrigger_ = iConfig.getParameter<bool>("doTrigger");
   corFile_ = iConfig.getParameter<std::string>("corFile");
 
   inputBs_ = consumes<reco::BeamSpot>(edm::InputTag("offlineBeamSpot"));
@@ -139,6 +141,7 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
 //     GenParticlesToken_ = consumes<edm::View<reco::Candidate>>(edm::InputTag("genParticles"));
     GenParticlesToken_ = consumes<edm::View<reco::Candidate>>(iConfig.getParameter<edm::InputTag>("genParticles"));
     genEventInfoToken_ = consumes<GenEventInfoProduct>(edm::InputTag("generator"));
+    pileupSummaryToken_ = consumes<std::vector<PileupSummaryInfo>>(edm::InputTag("addPileupInfo"));
   }
   
   if (doSim_) {
@@ -165,6 +168,12 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
     inputMuons_ = consumes<edm::View<reco::Muon>>(edm::InputTag(iConfig.getParameter<edm::InputTag>("muons")));
   }
   
+  if (doTrigger_) {
+    inputTriggerResults_ = consumes<edm::TriggerResults>(edm::InputTag("TriggerResults","","HLT"));
+    triggers_ = iConfig.getParameter<std::vector<std::string>>("triggers");
+    triggerDecisions_.assign(triggers_.size(), 0);
+  }
+  
   inputGeometry_ = consumes<int>(edm::InputTag("geopro"));
   
   debugprintout_ = false;
@@ -187,6 +196,7 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
 //   tree = new TTree("tree", "tree");
   
 
+  outprefix = iConfig.getUntrackedParameter<std::string>("outprefix", "globalcor");
 
 }
 
@@ -207,7 +217,8 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
 {
   if (fillTrackTree_ || fillRunTree_) {
     std::stringstream filenamestream;
-    filenamestream << "globalcor_" << streamid.value() << ".root";
+//     filenamestream << "globalcor_" << streamid.value() << ".root";
+    filenamestream << outprefix << "_" << streamid.value() << ".root";
     fout = new TFile(filenamestream.str().c_str(), "RECREATE");
   }
   
@@ -247,8 +258,15 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
 
     tree->Branch("genweight", &genweight);
     
+    tree->Branch("Pileup_nPU", &Pileup_nPU);
+    tree->Branch("Pileup_nTrueInt", &Pileup_nTrueInt);
+    
     nParms = 0.;
 
+    
+    for (std::size_t itrig = 0; itrig < triggers_.size(); ++itrig) {
+      tree->Branch(triggers_[itrig].c_str(), &triggerDecisions_[itrig]);
+    }
     
   }
 
@@ -342,9 +360,9 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
 // //       const bool align2d = ispixel || isglued || isendcap;      
 //       const DetId parmdetid = isglued ? DetId(gluedid) : det->geographicalId();
       
-//       const bool align2d = ispixel || isendcap;
+      const bool align2d = ispixel || isendcap;
 //       const bool align2d = true;
-      const bool align2d = ispixel;
+//       const bool align2d = ispixel;
 //       const bool align2d = false;
 //       const bool align2d = isendcap && !ispixel;
 
@@ -352,13 +370,13 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       //always have parameters for local x alignment, in-plane rotation, bfield, and e-loss
       parmset.emplace(0, det->geographicalId());
 //       parmset.emplace(1, det->geographicalId());
-//       parmset.emplace(2, det->geographicalId());
-//       parmset.emplace(3, det->geographicalId());
-//       parmset.emplace(4, det->geographicalId());
+      parmset.emplace(2, det->geographicalId());
+      parmset.emplace(3, det->geographicalId());
+      parmset.emplace(4, det->geographicalId());
       parmset.emplace(5, det->geographicalId());
       
       if (align2d) {
-        //local y alignment parameters only for pixels for now
+        //local y alignment parameters only for pixels and wedge modules
         parmset.emplace(1, det->geographicalId());
       }
       // bfield and material parameters are associated to glued detids where applicable
@@ -394,24 +412,33 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
     int subdet;
     int layer;
     int stereo;
-    float x;
-    float y;
-    float z;
-    float eta;
-    float phi;
-    float rho;
-    float xi;
-    float bx;
-    float by;
-    float bz;
-    float bradial;
-    float baxial;
-    float b0;
-    float b0trivial;
-    float dx;
-    float dy;
-    float dz;
-    float dtheta;
+    double x;
+    double y;
+    double z;
+    double eta;
+    double phi;
+    double rho;
+    double xi;
+    double bx;
+    double by;
+    double bz;
+    double bradial;
+    double baxial;
+    double b0;
+    double b0trivial;
+    double dx;
+    double dy;
+    double dz;
+    double dtheta;
+    double nx;
+    double ny;
+    double nz;
+    double lxx;
+    double lxy;
+    double lxz;
+    double lyx;
+    double lyy;
+    double lyz;
 
 
 
@@ -445,6 +472,15 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       runtree->Branch("dy", &dy);
       runtree->Branch("dz", &dz);
       runtree->Branch("dtheta", &dtheta);
+      runtree->Branch("nx", &nx);
+      runtree->Branch("ny", &ny);
+      runtree->Branch("nz", &nz);
+      runtree->Branch("lxx", &lxx);
+      runtree->Branch("lxy", &lxy);
+      runtree->Branch("lxz", &lxz);
+      runtree->Branch("lyx", &lyx);
+      runtree->Branch("lyy", &lyy);
+      runtree->Branch("lyz", &lyz);
 
     }
     
@@ -556,6 +592,30 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
         phi = det->surface().position().phi();
         rho = det->surface().position().perp();
         xi = det->surface().mediumProperties().xi();
+        
+//         nx = det->surface().normalVector().x();
+//         ny = det->surface().normalVector().y();
+//         nz = det->surface().normalVector().z();
+
+        const LocalVector lx(1.,0.,0.);
+        const LocalVector ly(0.,1.,0.);
+        const LocalVector lz(0.,0.,1.);
+
+        const GlobalVector J1 = det->surface().toGlobal<double>(lx);
+        const GlobalVector K1 = det->surface().toGlobal<double>(ly);
+        const GlobalVector I1 = det->surface().toGlobal<double>(lz);
+
+        lxx = J1.x();
+        lxy = J1.y();
+        lxz = J1.z();
+
+        lyx = K1.x();
+        lyy = K1.y();
+        lyz = K1.z();
+
+        nx = I1.x();
+        ny = I1.y();
+        nz = I1.z();
         
         auto const bfieldval = field->inTesla(det->surface().position());
         bx = bfieldval.x();
@@ -2911,6 +2971,150 @@ Matrix<double, 5, 5> ResidualGlobalCorrectionMakerBase::curv2localJacobianAltelo
                                               
 }
 
+Matrix<double, 2, 8> ResidualGlobalCorrectionMakerBase::curv2localJacobianAltelossDalign(const Matrix<double, 7, 1> &state, const MagneticField *field, const GloballyPositioned<double> &surface, double dEdx, double mass, double dBz) const {
+  
+  
+  const GlobalPoint pos(state[0], state[1], state[2]);  
+  const GlobalVector &bfield = field->inInverseGeV(pos);
+  const Matrix<double, 3, 1> Bv(bfield.x(), bfield.y(), double(bfield.z()) + 2.99792458e-3*dBz);
+  
+  const double q = state[6];
+  
+  const double qop0 = q/state.segment<3>(3).norm();
+  const double lam0 = std::atan(state[5]/std::sqrt(state[3]*state[3] + state[4]*state[4]));
+  const double phi0 = std::atan2(state[4], state[3]);
+  
+  GlobalVector mom(state[3], state[4], state[5]);
+  CurvilinearTrajectoryParameters curvparms(pos, mom, state[6]);
+  const double xt0 = curvparms.xT();
+  const double yt0 = curvparms.yT();
+  
+  const Matrix<double, 3, 1> W0 = state.segment<3>(3).normalized();
+  const double W0x = W0[0];
+  const double W0y = W0[1];
+  const double W0z = W0[2];
+  
+  const double M0x = state[0];
+  const double M0y = state[1];
+  const double M0z = state[2];
+  
+  const Vector3DBase<double, LocalTag> lx(1.,0.,0.);
+  const Vector3DBase<double, LocalTag> ly(0.,1.,0.);
+  const Vector3DBase<double, LocalTag> lz(0.,0.,1.);
+  const Point3DBase<double, LocalTag> l0(0., 0., 0.);
+  
+//   const Vector3DBase<double, GlobalTag> I1 = surface.toGlobal<double>(lz);
+//   const Vector3DBase<double, GlobalTag> J1 = surface.toGlobal<double>(lx);
+//   const Vector3DBase<double, GlobalTag> K1 = surface.toGlobal<double>(ly);  
+//   const Point3DBase<double, GlobalTag> r1 = surface.toGlobal<double>(l0);
+  
+  const Vector3DBase<double, GlobalTag> I1 = surface.toGlobal(lz);
+  const Vector3DBase<double, GlobalTag> J1 = surface.toGlobal(lx);
+  const Vector3DBase<double, GlobalTag> K1 = surface.toGlobal(ly);  
+  const Point3DBase<double, GlobalTag> r1 = surface.toGlobal(l0);
+  
+//   const Vector3DBase<double, GlobalTag> I1 = toGlobal(surface, lz);
+//   const Vector3DBase<double, GlobalTag> J1 = toGlobal(surface, lx);
+//   const Vector3DBase<double, GlobalTag> K1 = toGlobal(surface, ly);  
+//   const Point3DBase<double, GlobalTag> r1 = toGlobal(surface, l0);
+  
+  const double Ix1 = I1.x();
+  const double Iy1 = I1.y();
+  const double Iz1 = I1.z();
+  
+  const double Jx1 = J1.x();
+  const double Jy1 = J1.y();
+  const double Jz1 = J1.z();
+  
+  const double Kx1 = K1.x();
+  const double Ky1 = K1.y();
+  const double Kz1 = K1.z();
+  
+  const double rx1 = r1.x();
+  const double ry1 = r1.y();
+  const double rz1 = r1.z();
+    
+  const double B = Bv.norm();
+  const Matrix<double, 3, 1> H = Bv.normalized();
+  const double hx = H[0];
+  const double hy = H[1];
+  const double hz = H[2];
+          
+  const double x0 = Ix1*W0y - Iy1*W0x;
+  const double x1 = std::sin(lam0);
+  const double x2 = std::cos(lam0);
+  const double x3 = x2*std::cos(phi0);
+  const double x4 = x2*std::sin(phi0);
+  const double x5 = Jx1*x3 + Jy1*x4 + Jz1*x1;
+  const double x6 = Ix1*x3 + Iy1*x4 + Iz1*x1;
+  const double x7 = 1.0/x6;
+  const double x8 = std::pow(W0x, 2) + std::pow(W0y, 2);
+  const double x9 = std::sqrt(x8);
+  const double x10 = 1.0/x9;
+  const double x11 = x10*x7;
+  const double x12 = x6*x8;
+  const double x13 = W0z*x6;
+  const double x14 = W0x*W0z;
+  const double x15 = W0y*W0z;
+  const double x16 = Iz1*x8;
+  const double x17 = Ix1*x14 + Iy1*x15 - x16;
+  const double x18 = Ix1*Jx1 + Iy1*Jy1 + Iz1*Jz1;
+  const double x19 = Ix1*Kx1 + Iy1*Ky1 + Iz1*Kz1;
+  const double x20 = -x6*(Jx1*Kx1 + Jy1*Ky1 + Jz1*Kz1);
+  const double x21 = std::pow(Ix1, 2) + std::pow(Iy1, 2) + std::pow(Iz1, 2);
+  const double x22 = M0x*W0x + M0y*W0y + M0z*W0z;
+  const double x23 = W0z*x22 - rz1 + x9*yt0;
+  const double x24 = x23*x9;
+  const double x25 = x22*x9;
+  const double x26 = -W0x*x25 + W0y*xt0 + rx1*x9 + x14*yt0;
+  const double x27 = Kx1*x26;
+  const double x28 = W0x*xt0 + W0y*x25 - ry1*x9 - x15*yt0;
+  const double x29 = Jz1*x24;
+  const double x30 = -x28;
+  const double x31 = Jx1*x26 + Jy1*x30 - x29;
+  const double x32 = -x16*x23*x6 + x6*x9*(Ix1*x26 + Iy1*x30);
+  const double x33 = x7/x8;
+  const double x34 = Ky1*x30 - Kz1*x23*x9 + x27;
+  const double x35 = Kx1*x3 + Ky1*x4 + Kz1*x1;
+  const double dxdxt0 = x11*(x0*x5 + x6*(-Jx1*W0y + Jy1*W0x));
+  const double dxdyt0 = x11*(Jz1*x12 - x13*(Jx1*W0x + Jy1*W0y) + x17*x5);
+  const double dxdalpha_x = x7*(x18*x5 - x6*(std::pow(Jx1, 2) + std::pow(Jy1, 2) + std::pow(Jz1, 2)));
+  const double dxdalpha_y = x7*(x19*x5 + x20);
+  const double dxdalpha_z = x7*(-x18*x6 + x21*x5);
+  const double dxdtheta_x = x11*x5*(Ky1*x28 + Kz1*x24 - x27);
+  const double dxdtheta_y = x33*(x31*x5*x9 + x32);
+  const double dxdtheta_z = -x10*x34;
+  const double dydxt0 = x11*(x0*x35 + x6*(-Kx1*W0y + Ky1*W0x));
+  const double dydyt0 = x11*(Kz1*x12 - x13*(Kx1*W0x + Ky1*W0y) + x17*x35);
+  const double dydalpha_x = x7*(x18*x35 + x20);
+  const double dydalpha_y = x7*(x19*x35 - x6*(std::pow(Kx1, 2) + std::pow(Ky1, 2) + std::pow(Kz1, 2)));
+  const double dydalpha_z = x7*(-x19*x6 + x21*x35);
+  const double dydtheta_x = x33*(-x32 - x34*x35*x9);
+  const double dydtheta_y = x11*x35*(Jx1*x26 - Jy1*x28 - x29);
+  const double dydtheta_z = x10*x31;
+  Matrix<double, 2, 8> res;
+  res(0,0) = dxdxt0;
+  res(0,1) = dxdyt0;
+  res(0,2) = dxdalpha_x;
+  res(0,3) = dxdalpha_y;
+  res(0,4) = dxdalpha_z;
+  res(0,5) = dxdtheta_x;
+  res(0,6) = dxdtheta_y;
+  res(0,7) = dxdtheta_z;
+  res(1,0) = dydxt0;
+  res(1,1) = dydyt0;
+  res(1,2) = dydalpha_x;
+  res(1,3) = dydalpha_y;
+  res(1,4) = dydalpha_z;
+  res(1,5) = dydtheta_x;
+  res(1,6) = dydtheta_y;
+  res(1,7) = dydtheta_z;
+
+  
+  return res;
+                                              
+}
+
 Matrix<double, 6, 5> ResidualGlobalCorrectionMakerBase::curv2cartJacobianAlt(const FreeTrajectoryState &state) const {
   
   const GlobalTrajectoryParameters &globalSource = state.parameters();
@@ -4751,6 +4955,12 @@ Matrix<double, 2, 1> ResidualGlobalCorrectionMakerBase::localPositionConvolution
   dwdx[4] = dwdyt;
 
 
+  Matrix<double, 2, 1> res;
+  res[0] = 0.5*(d2vdx2*curvcov).trace();
+  res[1] = 0.5*(d2wdx2*curvcov).trace();
+
+
+  return res;
 
 //   std::cout << "dvdx" << std::endl;
 //   std::cout << dvdx << std::endl;
@@ -4777,28 +4987,28 @@ Matrix<double, 2, 1> ResidualGlobalCorrectionMakerBase::localPositionConvolution
 //   std::cout << curvcov << std::endl;
 
   // compute eigendecomposition
-  SelfAdjointEigenSolver<Matrix<double, 5, 5>> es;
-  es.compute(curvcov);
-
-  // cov = VDV^(-1)
-//   auto const& sqrtD = es.eigenvalues().cwiseSqrt();
-  auto const& D = es.eigenvalues();
-  auto const& V = es.eigenvectors();
-
-  // compute second order correction to local positions
-//   Matrix<double, 2, 1> res;
-//   res[0] = 0.5*sqrtD.transpose()*V.transpose()*d2vdx2*V*sqrtD;
-//   res[1] = 0.5*sqrtD.transpose()*V.transpose()*d2wdx2*V*sqrtD;
-
-  Matrix<double, 2, 1> res = Matrix<double, 2, 1>::Zero();
-  for (unsigned int i=0; i<5; ++i) {
-    res[0] += 0.5*D[i]*V.col(i).transpose()*d2vdx2*V.col(i);
-    res[1] += 0.5*D[i]*V.col(i).transpose()*d2wdx2*V.col(i);
-  }
-
-//   res[0] = d2vdx2*curvc
-
-  return res;
+//   SelfAdjointEigenSolver<Matrix<double, 5, 5>> es;
+//   es.compute(curvcov);
+// 
+//   // cov = VDV^(-1)
+// //   auto const& sqrtD = es.eigenvalues().cwiseSqrt();
+//   auto const& D = es.eigenvalues();
+//   auto const& V = es.eigenvectors();
+// 
+//   // compute second order correction to local positions
+// //   Matrix<double, 2, 1> res;
+// //   res[0] = 0.5*sqrtD.transpose()*V.transpose()*d2vdx2*V*sqrtD;
+// //   res[1] = 0.5*sqrtD.transpose()*V.transpose()*d2wdx2*V*sqrtD;
+// 
+//   Matrix<double, 2, 1> res = Matrix<double, 2, 1>::Zero();
+//   for (unsigned int i=0; i<5; ++i) {
+//     res[0] += 0.5*D[i]*V.col(i).transpose()*d2vdx2*V.col(i);
+//     res[1] += 0.5*D[i]*V.col(i).transpose()*d2wdx2*V.col(i);
+//   }
+// 
+// //   res[0] = d2vdx2*curvc
+// 
+//   return res;
 
 }
 
@@ -5070,6 +5280,458 @@ Matrix<double, 1, 6> ResidualGlobalCorrectionMakerBase::massJacobianAltD(const M
 
 
 
+  
+  return res;
+}
+
+Matrix<double, 6, 6> ResidualGlobalCorrectionMakerBase::massHessianAltD(const Matrix<double, 7, 1> &state0, const Matrix<double, 7, 1> &state1, double dmass) const {
+  
+  const double mp = dmass;
+  
+  const double qop0 = state0[6]/state0.segment<3>(3).norm();
+  const double lam0 = std::atan(state0[5]/std::sqrt(state0[3]*state0[3] + state0[4]*state0[4]));
+  const double phi0 = std::atan2(state0[4], state0[3]);
+  
+  const double qop1 = state1[6]/state1.segment<3>(3).norm();
+  const double lam1 = std::atan(state1[5]/std::sqrt(state1[3]*state1[3] + state1[4]*state1[4]));
+  const double phi1 = std::atan2(state1[4], state1[3]);
+
+  const double xf0 = std::pow(mp, 2);
+  const double xf1 = std::sin(lam0);
+  const double xf2 = std::sin(lam1);
+  const double xf3 = 1.0/std::fabs(qop0);
+  const double xf4 = 1.0/std::fabs(qop1);
+  const double xf5 = xf3*xf4;
+  const double xf6 = xf2*xf5;
+  const double xf7 = xf1*xf6;
+  const double xf8 = std::cos(lam0);
+  const double xf9 = std::cos(lam1);
+  const double xf10 = xf5*xf9;
+  const double xf11 = xf10*xf8;
+  const double xf12 = std::sin(phi0);
+  const double xf13 = std::sin(phi1);
+  const double xf14 = xf12*xf13;
+  const double xf15 = xf11*xf14;
+  const double xf16 = std::cos(phi0);
+  const double xf17 = std::cos(phi1);
+  const double xf18 = xf16*xf17;
+  const double xf19 = xf11*xf18;
+  const double xf20 = std::pow(qop0, -2);
+  const double xf21 = xf0 + xf20;
+  const double xf22 = std::sqrt(xf21);
+  const double xf23 = std::pow(qop1, -2);
+  const double xf24 = xf0 + xf23;
+  const double xf25 = std::sqrt(xf24);
+  const double xf26 = 2*xf0 - 2*xf15 - 2*xf19 + 2*xf22*xf25 - 2*xf7;
+  const double xf27 = std::pow(xf26, -1.0/2.0);
+  const double xf28 = xf1*xf2;
+  const double xf29 = 2*xf28;
+  const double xf30 = std::pow(qop0, -3);
+  const double xf31 = (((qop0) > 0) - ((qop0) < 0));
+  const double xf32 = xf31*xf4;
+  const double xf33 = xf30*xf32;
+  const double xf34 = 2*xf33;
+  const double xf35 = xf8*xf9;
+  const double xf36 = xf14*xf35;
+  const double xf37 = xf18*xf35;
+  const double xf38 = 1.0/xf22;
+  const double xf39 = xf20*xf32;
+  const double xf40 = xf35*xf39;
+  const double xf41 = xf14*xf40 + xf18*xf40 - xf25*xf30*xf38 + xf28*xf39;
+  const double xf42 = -xf41;
+  const double xf43 = std::pow(xf26, -3.0/2.0);
+  const double xf44 = xf41*xf43;
+  const double xf45 = xf1*xf9;
+  const double xf46 = xf39*xf45;
+  const double xf47 = xf27*(-xf14*xf46 - xf18*xf46 + xf2*xf20*xf31*xf4*xf8);
+  const double xf48 = xf1*xf10;
+  const double xf49 = xf14*xf48 + xf18*xf48 - xf2*xf3*xf4*xf8;
+  const double xf50 = -xf49;
+  const double xf51 = xf12*xf17;
+  const double xf52 = -xf13*xf16*xf20*xf31*xf4*xf8*xf9 + xf40*xf51;
+  const double xf53 = -xf27*xf52;
+  const double xf54 = xf11*xf51 - xf13*xf16*xf3*xf4*xf8*xf9;
+  const double xf55 = -xf54;
+  const double xf56 = (((qop1) > 0) - ((qop1) < 0));
+  const double xf57 = xf23*xf56;
+  const double xf58 = xf20*xf31*xf57;
+  const double xf59 = std::pow(qop1, -3);
+  const double xf60 = 1.0/xf25;
+  const double xf61 = xf27*(-xf28*xf58 + xf30*xf38*xf59*xf60 - xf36*xf58 - xf37*xf58);
+  const double xf62 = xf3*xf57;
+  const double xf63 = xf35*xf62;
+  const double xf64 = xf14*xf63 + xf18*xf63 - xf22*xf59*xf60 + xf28*xf62;
+  const double xf65 = -xf64;
+  const double xf66 = xf2*xf8;
+  const double xf67 = xf39*xf66;
+  const double xf68 = xf27*(xf1*xf20*xf31*xf4*xf9 - xf14*xf67 - xf18*xf67);
+  const double xf69 = xf6*xf8;
+  const double xf70 = -xf1*xf3*xf4*xf9 + xf14*xf69 + xf18*xf69;
+  const double xf71 = -xf70;
+  const double xf72 = xf27*xf52;
+  const double xf73 = xf43*xf49;
+  const double xf74 = xf15 + xf19;
+  const double xf75 = xf27*(xf7 + xf74);
+  const double xf76 = -xf1*xf13*xf16*xf3*xf4*xf9 + xf48*xf51;
+  const double xf77 = -xf27*xf76;
+  const double xf78 = xf45*xf62;
+  const double xf79 = xf27*(-xf14*xf78 - xf18*xf78 + xf2*xf23*xf3*xf56*xf8);
+  const double xf80 = xf27*(-xf11 - xf14*xf7 - xf18*xf7);
+  const double xf81 = xf27*xf76;
+  const double xf82 = xf43*xf54;
+  const double xf83 = xf27*xf74 + xf55*xf82;
+  const double xf84 = -xf13*xf16*xf23*xf3*xf56*xf8*xf9 + xf51*xf63;
+  const double xf85 = -xf27*xf84;
+  const double xf86 = -xf13*xf16*xf2*xf3*xf4*xf8 + xf51*xf69;
+  const double xf87 = -xf27*xf86;
+  const double xf88 = -xf27*xf74;
+  const double xf89 = xf43*xf64;
+  const double xf90 = xf3*xf56*xf59;
+  const double xf91 = 2*xf90;
+  const double xf92 = xf62*xf66;
+  const double xf93 = xf27*(xf1*xf23*xf3*xf56*xf9 - xf14*xf92 - xf18*xf92);
+  const double xf94 = xf27*xf84;
+  const double xf95 = xf43*xf70;
+  const double xf96 = xf27*xf86;
+  const double xf97 = xf43*xf55;
+  const double d2mdqop0dqop0 = xf27*(-xf29*xf33 - xf34*xf36 - xf34*xf37 + 3*xf25*xf38/std::pow(qop0, 4) - xf25/(std::pow(qop0, 6)*std::pow(xf21, 3.0/2.0))) + xf42*xf44;
+  const double d2mdqop0dlam0 = xf44*xf50 + xf47;
+  const double d2mdqop0dphi0 = xf44*xf55 + xf53;
+  const double d2mdqop0dqop1 = xf44*xf65 + xf61;
+  const double d2mdqop0dlam1 = xf44*xf71 + xf68;
+  const double d2mdqop0dphi1 = xf44*xf54 + xf72;
+  const double d2mdlam0dqop0 = xf42*xf73 + xf47;
+  const double d2mdlam0dlam0 = xf50*xf73 + xf75;
+  const double d2mdlam0dphi0 = xf55*xf73 + xf77;
+  const double d2mdlam0dqop1 = xf65*xf73 + xf79;
+  const double d2mdlam0dlam1 = xf71*xf73 + xf80;
+  const double d2mdlam0dphi1 = xf54*xf73 + xf81;
+  const double d2mdphi0dqop0 = xf42*xf82 + xf53;
+  const double d2mdphi0dlam0 = xf50*xf82 + xf77;
+  const double d2mdphi0dphi0 = xf83;
+  const double d2mdphi0dqop1 = xf65*xf82 + xf85;
+  const double d2mdphi0dlam1 = xf71*xf82 + xf87;
+  const double d2mdphi0dphi1 = xf43*std::pow(xf54, 2) + xf88;
+  const double d2mdqop1dqop0 = xf42*xf89 + xf61;
+  const double d2mdqop1dlam0 = xf50*xf89 + xf79;
+  const double d2mdqop1dphi0 = xf55*xf89 + xf85;
+  const double d2mdqop1dqop1 = xf27*(-xf29*xf90 - xf36*xf91 - xf37*xf91 + 3*xf22*xf60/std::pow(qop1, 4) - xf22/(std::pow(qop1, 6)*std::pow(xf24, 3.0/2.0))) + xf65*xf89;
+  const double d2mdqop1dlam1 = xf71*xf89 + xf93;
+  const double d2mdqop1dphi1 = xf64*xf82 + xf94;
+  const double d2mdlam1dqop0 = xf42*xf95 + xf68;
+  const double d2mdlam1dlam0 = xf50*xf95 + xf80;
+  const double d2mdlam1dphi0 = xf55*xf95 + xf87;
+  const double d2mdlam1dqop1 = xf65*xf95 + xf93;
+  const double d2mdlam1dlam1 = xf71*xf95 + xf75;
+  const double d2mdlam1dphi1 = xf70*xf82 + xf96;
+  const double d2mdphi1dqop0 = xf42*xf97 + xf72;
+  const double d2mdphi1dlam0 = xf50*xf97 + xf81;
+  const double d2mdphi1dphi0 = xf43*std::pow(xf55, 2) + xf88;
+  const double d2mdphi1dqop1 = xf65*xf97 + xf94;
+  const double d2mdphi1dlam1 = xf71*xf97 + xf96;
+  const double d2mdphi1dphi1 = xf83;
+  Matrix<double, 6, 6> res;
+  res(0,0) = d2mdqop0dqop0;
+  res(0,1) = d2mdqop0dlam0;
+  res(0,2) = d2mdqop0dphi0;
+  res(0,3) = d2mdqop0dqop1;
+  res(0,4) = d2mdqop0dlam1;
+  res(0,5) = d2mdqop0dphi1;
+  res(1,0) = d2mdlam0dqop0;
+  res(1,1) = d2mdlam0dlam0;
+  res(1,2) = d2mdlam0dphi0;
+  res(1,3) = d2mdlam0dqop1;
+  res(1,4) = d2mdlam0dlam1;
+  res(1,5) = d2mdlam0dphi1;
+  res(2,0) = d2mdphi0dqop0;
+  res(2,1) = d2mdphi0dlam0;
+  res(2,2) = d2mdphi0dphi0;
+  res(2,3) = d2mdphi0dqop1;
+  res(2,4) = d2mdphi0dlam1;
+  res(2,5) = d2mdphi0dphi1;
+  res(3,0) = d2mdqop1dqop0;
+  res(3,1) = d2mdqop1dlam0;
+  res(3,2) = d2mdqop1dphi0;
+  res(3,3) = d2mdqop1dqop1;
+  res(3,4) = d2mdqop1dlam1;
+  res(3,5) = d2mdqop1dphi1;
+  res(4,0) = d2mdlam1dqop0;
+  res(4,1) = d2mdlam1dlam0;
+  res(4,2) = d2mdlam1dphi0;
+  res(4,3) = d2mdlam1dqop1;
+  res(4,4) = d2mdlam1dlam1;
+  res(4,5) = d2mdlam1dphi1;
+  res(5,0) = d2mdphi1dqop0;
+  res(5,1) = d2mdphi1dlam0;
+  res(5,2) = d2mdphi1dphi0;
+  res(5,3) = d2mdphi1dqop1;
+  res(5,4) = d2mdphi1dlam1;
+  res(5,5) = d2mdphi1dphi1;
+
+
+  
+  return res;
+}
+
+Matrix<double, 1, 6> ResidualGlobalCorrectionMakerBase::massinvsqJacobianAltD(const Matrix<double, 7, 1> &state0, const Matrix<double, 7, 1> &state1, double dmass) const {
+  
+  const double mp = dmass;
+  
+  const double qop0 = state0[6]/state0.segment<3>(3).norm();
+  const double lam0 = std::atan(state0[5]/std::sqrt(state0[3]*state0[3] + state0[4]*state0[4]));
+  const double phi0 = std::atan2(state0[4], state0[3]);
+  
+  const double qop1 = state1[6]/state1.segment<3>(3).norm();
+  const double lam1 = std::atan(state1[5]/std::sqrt(state1[3]*state1[3] + state1[4]*state1[4]));
+  const double phi1 = std::atan2(state1[4], state1[3]);
+
+  const double xf0 = std::sin(lam0);
+  const double xf1 = std::sin(lam1);
+  const double xf2 = xf0*xf1;
+  const double xf3 = std::pow(qop0, -2);
+  const double xf4 = 1.0/std::fabs(qop1);
+  const double xf5 = 2*xf4;
+  const double xf6 = xf3*xf5*(((qop0) > 0) - ((qop0) < 0));
+  const double xf7 = std::sin(phi0);
+  const double xf8 = std::sin(phi1);
+  const double xf9 = xf7*xf8;
+  const double xf10 = std::cos(lam0);
+  const double xf11 = std::cos(lam1);
+  const double xf12 = xf10*xf11;
+  const double xf13 = xf12*xf6;
+  const double xf14 = std::cos(phi0);
+  const double xf15 = std::cos(phi1);
+  const double xf16 = xf14*xf15;
+  const double xf17 = std::pow(mp, 2);
+  const double xf18 = std::sqrt(xf17 + xf3);
+  const double xf19 = std::pow(qop1, -2);
+  const double xf20 = std::sqrt(xf17 + xf19);
+  const double xf21 = 1.0/std::fabs(qop0);
+  const double xf22 = xf21*xf5;
+  const double xf23 = xf1*xf22;
+  const double xf24 = xf11*xf22;
+  const double xf25 = xf10*xf24;
+  const double xf26 = 1.0/std::pow(-xf0*xf23 - xf16*xf25 + 2*xf17 + 2*xf18*xf20 - xf25*xf9, 2);
+  const double xf27 = xf0*xf24;
+  const double xf28 = -2*xf10*xf11*xf14*xf21*xf4*xf8 + xf15*xf25*xf7;
+  const double xf29 = 2*xf19*xf21*(((qop1) > 0) - ((qop1) < 0));
+  const double xf30 = xf12*xf29;
+  const double xf31 = xf10*xf23;
+  const double dminvsqdqop0 = xf26*(-xf13*xf16 - xf13*xf9 - xf2*xf6 + 2*xf20/(std::pow(qop0, 3)*xf18));
+  const double dminvsqdlam0 = xf26*(2*xf1*xf10*xf21*xf4 - xf16*xf27 - xf27*xf9);
+  const double dminvsqdphi0 = -xf26*xf28;
+  const double dminvsqdqop1 = xf26*(-xf16*xf30 - xf2*xf29 - xf30*xf9 + 2*xf18/(std::pow(qop1, 3)*xf20));
+  const double dminvsqdlam1 = xf26*(2*xf0*xf11*xf21*xf4 - xf16*xf31 - xf31*xf9);
+  const double dminvsqdphi1 = xf26*xf28;
+  Matrix<double, 1, 6> res;
+  res(0,0) = dminvsqdqop0;
+  res(0,1) = dminvsqdlam0;
+  res(0,2) = dminvsqdphi0;
+  res(0,3) = dminvsqdqop1;
+  res(0,4) = dminvsqdlam1;
+  res(0,5) = dminvsqdphi1;
+  
+//   std::cout << "massJacobianAlt m = " << m << std::endl;
+
+
+
+
+  
+  return res;
+}
+
+Matrix<double, 6, 6> ResidualGlobalCorrectionMakerBase::massinvsqHessianAltD(const Matrix<double, 7, 1> &state0, const Matrix<double, 7, 1> &state1, double dmass) const {
+  
+  const double mp = dmass;
+  
+  const double qop0 = state0[6]/state0.segment<3>(3).norm();
+  const double lam0 = std::atan(state0[5]/std::sqrt(state0[3]*state0[3] + state0[4]*state0[4]));
+  const double phi0 = std::atan2(state0[4], state0[3]);
+  
+  const double qop1 = state1[6]/state1.segment<3>(3).norm();
+  const double lam1 = std::atan(state1[5]/std::sqrt(state1[3]*state1[3] + state1[4]*state1[4]));
+  const double phi1 = std::atan2(state1[4], state1[3]);
+
+  const double xf0 = std::sin(lam0);
+  const double xf1 = std::sin(lam1);
+  const double xf2 = xf0*xf1;
+  const double xf3 = std::pow(qop0, -3);
+  const double xf4 = 1.0/std::fabs(qop1);
+  const double xf5 = (((qop0) > 0) - ((qop0) < 0));
+  const double xf6 = xf4*xf5;
+  const double xf7 = 4*xf3*xf6;
+  const double xf8 = std::cos(lam0);
+  const double xf9 = xf7*xf8;
+  const double xf10 = std::cos(lam1);
+  const double xf11 = std::sin(phi0);
+  const double xf12 = std::sin(phi1);
+  const double xf13 = xf11*xf12;
+  const double xf14 = xf10*xf13;
+  const double xf15 = std::cos(phi0);
+  const double xf16 = std::cos(phi1);
+  const double xf17 = xf15*xf16;
+  const double xf18 = xf10*xf17;
+  const double xf19 = std::pow(mp, 2);
+  const double xf20 = std::pow(qop0, -2);
+  const double xf21 = xf19 + xf20;
+  const double xf22 = std::pow(qop1, -2);
+  const double xf23 = xf19 + xf22;
+  const double xf24 = std::sqrt(xf23);
+  const double xf25 = std::sqrt(xf21);
+  const double xf26 = 1.0/xf25;
+  const double xf27 = 1.0/std::fabs(qop0);
+  const double xf28 = xf27*xf4;
+  const double xf29 = xf1*xf28;
+  const double xf30 = 2*xf0;
+  const double xf31 = xf29*xf30;
+  const double xf32 = xf10*xf28;
+  const double xf33 = 2*xf8;
+  const double xf34 = xf32*xf33;
+  const double xf35 = xf13*xf34 + xf17*xf34;
+  const double xf36 = xf31 + xf35;
+  const double xf37 = 2*xf19 + 2*xf24*xf25 - xf36;
+  const double xf38 = 1.0/std::pow(xf37, 2);
+  const double xf39 = 4*xf0;
+  const double xf40 = xf20*xf6;
+  const double xf41 = xf1*xf40;
+  const double xf42 = 4*xf8;
+  const double xf43 = xf40*xf42;
+  const double xf44 = -xf14*xf43 - xf18*xf43 + 4*xf24*xf26*xf3 - xf39*xf41;
+  const double xf45 = xf1*xf30;
+  const double xf46 = xf33*xf40;
+  const double xf47 = 1.0/std::pow(xf37, 3);
+  const double xf48 = xf47*(-xf14*xf46 - xf18*xf46 + 2*xf24*xf26*xf3 - xf40*xf45);
+  const double xf49 = xf33*xf41;
+  const double xf50 = xf10*xf30;
+  const double xf51 = xf40*xf50;
+  const double xf52 = xf38*(xf13*xf51 + xf17*xf51 - xf49);
+  const double xf53 = xf32*xf39;
+  const double xf54 = 4*xf1*xf27*xf4*xf8 - xf13*xf53 - xf17*xf53;
+  const double xf55 = xf11*xf16;
+  const double xf56 = xf10*xf46;
+  const double xf57 = xf12*xf15;
+  const double xf58 = xf55*xf56 - xf56*xf57;
+  const double xf59 = xf38*xf58;
+  const double xf60 = -4*xf10*xf12*xf15*xf27*xf4*xf8 + xf32*xf42*xf55;
+  const double xf61 = -xf60;
+  const double xf62 = (((qop1) > 0) - ((qop1) < 0));
+  const double xf63 = xf20*xf22*xf5*xf62;
+  const double xf64 = xf33*xf63;
+  const double xf65 = 1.0/xf24;
+  const double xf66 = std::pow(qop1, -3);
+  const double xf67 = xf38*(xf14*xf64 + xf18*xf64 - 2*xf26*xf3*xf65*xf66 + xf45*xf63);
+  const double xf68 = xf27*xf62;
+  const double xf69 = xf22*xf68;
+  const double xf70 = xf1*xf69;
+  const double xf71 = xf42*xf69;
+  const double xf72 = -xf14*xf71 - xf18*xf71 + 4*xf25*xf65*xf66 - xf39*xf70;
+  const double xf73 = xf38*(xf13*xf49 + xf17*xf49 - xf51);
+  const double xf74 = xf29*xf8;
+  const double xf75 = 4*xf74;
+  const double xf76 = 4*xf0*xf10*xf27*xf4 - xf13*xf75 - xf17*xf75;
+  const double xf77 = -xf38*xf58;
+  const double xf78 = xf30*xf32;
+  const double xf79 = xf47*(2*xf1*xf27*xf4*xf8 - xf13*xf78 - xf17*xf78);
+  const double xf80 = -xf36*xf38;
+  const double xf81 = xf55*xf78 - xf57*xf78;
+  const double xf82 = xf38*xf81;
+  const double xf83 = xf33*xf70;
+  const double xf84 = xf50*xf69;
+  const double xf85 = xf38*(xf13*xf84 + xf17*xf84 - xf83);
+  const double xf86 = xf38*(xf13*xf31 + xf17*xf31 + xf34);
+  const double xf87 = -xf38*xf81;
+  const double xf88 = -2*xf10*xf12*xf15*xf27*xf4*xf8 + xf34*xf55;
+  const double xf89 = -xf47*xf88;
+  const double xf90 = -xf35*xf38;
+  const double xf91 = xf33*xf69;
+  const double xf92 = xf10*xf91;
+  const double xf93 = xf55*xf92 - xf57*xf92;
+  const double xf94 = xf38*xf93;
+  const double xf95 = 2*xf74;
+  const double xf96 = xf55*xf95 - xf57*xf95;
+  const double xf97 = xf38*xf96;
+  const double xf98 = xf35*xf38;
+  const double xf99 = xf47*(-xf14*xf91 - xf18*xf91 + 2*xf25*xf65*xf66 - xf45*xf69);
+  const double xf100 = 4*xf66*xf68;
+  const double xf101 = xf100*xf8;
+  const double xf102 = xf38*(xf13*xf83 + xf17*xf83 - xf84);
+  const double xf103 = -xf38*xf93;
+  const double xf104 = xf47*(2*xf0*xf10*xf27*xf4 - xf13*xf95 - xf17*xf95);
+  const double xf105 = -xf38*xf96;
+  const double xf106 = xf47*xf88;
+  const double d2minvsqdqop0dqop0 = xf38*(xf14*xf9 + xf18*xf9 + xf2*xf7 - 6*xf24*xf26/std::pow(qop0, 4) + 2*xf24/(std::pow(qop0, 6)*std::pow(xf21, 3.0/2.0))) + xf44*xf48;
+  const double d2minvsqdqop0dlam0 = xf48*xf54 + xf52;
+  const double d2minvsqdqop0dphi0 = xf48*xf61 + xf59;
+  const double d2minvsqdqop0dqop1 = xf48*xf72 + xf67;
+  const double d2minvsqdqop0dlam1 = xf48*xf76 + xf73;
+  const double d2minvsqdqop0dphi1 = xf48*xf60 + xf77;
+  const double d2minvsqdlam0dqop0 = xf44*xf79 + xf52;
+  const double d2minvsqdlam0dlam0 = xf54*xf79 + xf80;
+  const double d2minvsqdlam0dphi0 = xf61*xf79 + xf82;
+  const double d2minvsqdlam0dqop1 = xf72*xf79 + xf85;
+  const double d2minvsqdlam0dlam1 = xf76*xf79 + xf86;
+  const double d2minvsqdlam0dphi1 = xf60*xf79 + xf87;
+  const double d2minvsqdphi0dqop0 = xf44*xf89 + xf59;
+  const double d2minvsqdphi0dlam0 = xf54*xf89 + xf82;
+  const double d2minvsqdphi0dphi0 = xf61*xf89 + xf90;
+  const double d2minvsqdphi0dqop1 = xf72*xf89 + xf94;
+  const double d2minvsqdphi0dlam1 = xf76*xf89 + xf97;
+  const double d2minvsqdphi0dphi1 = xf60*xf89 + xf98;
+  const double d2minvsqdqop1dqop0 = xf44*xf99 + xf67;
+  const double d2minvsqdqop1dlam0 = xf54*xf99 + xf85;
+  const double d2minvsqdqop1dphi0 = xf61*xf99 + xf94;
+  const double d2minvsqdqop1dqop1 = xf38*(xf100*xf2 + xf101*xf14 + xf101*xf18 - 6*xf25*xf65/std::pow(qop1, 4) + 2*xf25/(std::pow(qop1, 6)*std::pow(xf23, 3.0/2.0))) + xf72*xf99;
+  const double d2minvsqdqop1dlam1 = xf102 + xf76*xf99;
+  const double d2minvsqdqop1dphi1 = xf103 + xf60*xf99;
+  const double d2minvsqdlam1dqop0 = xf104*xf44 + xf73;
+  const double d2minvsqdlam1dlam0 = xf104*xf54 + xf86;
+  const double d2minvsqdlam1dphi0 = xf104*xf61 + xf97;
+  const double d2minvsqdlam1dqop1 = xf102 + xf104*xf72;
+  const double d2minvsqdlam1dlam1 = xf104*xf76 + xf80;
+  const double d2minvsqdlam1dphi1 = xf104*xf60 + xf105;
+  const double d2minvsqdphi1dqop0 = xf106*xf44 + xf77;
+  const double d2minvsqdphi1dlam0 = xf106*xf54 + xf87;
+  const double d2minvsqdphi1dphi0 = xf106*xf61 + xf98;
+  const double d2minvsqdphi1dqop1 = xf103 + xf106*xf72;
+  const double d2minvsqdphi1dlam1 = xf105 + xf106*xf76;
+  const double d2minvsqdphi1dphi1 = xf106*xf60 + xf90;
+  Matrix<double, 6, 6> res;
+  res(0,0) = d2minvsqdqop0dqop0;
+  res(0,1) = d2minvsqdqop0dlam0;
+  res(0,2) = d2minvsqdqop0dphi0;
+  res(0,3) = d2minvsqdqop0dqop1;
+  res(0,4) = d2minvsqdqop0dlam1;
+  res(0,5) = d2minvsqdqop0dphi1;
+  res(1,0) = d2minvsqdlam0dqop0;
+  res(1,1) = d2minvsqdlam0dlam0;
+  res(1,2) = d2minvsqdlam0dphi0;
+  res(1,3) = d2minvsqdlam0dqop1;
+  res(1,4) = d2minvsqdlam0dlam1;
+  res(1,5) = d2minvsqdlam0dphi1;
+  res(2,0) = d2minvsqdphi0dqop0;
+  res(2,1) = d2minvsqdphi0dlam0;
+  res(2,2) = d2minvsqdphi0dphi0;
+  res(2,3) = d2minvsqdphi0dqop1;
+  res(2,4) = d2minvsqdphi0dlam1;
+  res(2,5) = d2minvsqdphi0dphi1;
+  res(3,0) = d2minvsqdqop1dqop0;
+  res(3,1) = d2minvsqdqop1dlam0;
+  res(3,2) = d2minvsqdqop1dphi0;
+  res(3,3) = d2minvsqdqop1dqop1;
+  res(3,4) = d2minvsqdqop1dlam1;
+  res(3,5) = d2minvsqdqop1dphi1;
+  res(4,0) = d2minvsqdlam1dqop0;
+  res(4,1) = d2minvsqdlam1dlam0;
+  res(4,2) = d2minvsqdlam1dphi0;
+  res(4,3) = d2minvsqdlam1dqop1;
+  res(4,4) = d2minvsqdlam1dlam1;
+  res(4,5) = d2minvsqdlam1dphi1;
+  res(5,0) = d2minvsqdphi1dqop0;
+  res(5,1) = d2minvsqdphi1dlam0;
+  res(5,2) = d2minvsqdphi1dphi0;
+  res(5,3) = d2minvsqdphi1dqop1;
+  res(5,4) = d2minvsqdphi1dlam1;
+  res(5,5) = d2minvsqdphi1dphi1;
   
   return res;
 }

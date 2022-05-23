@@ -81,8 +81,10 @@
 
 #include "SimDataFormats/Track/interface/SimTrack.h"
 
+#include "DataFormats/Common/interface/TriggerResults.h"
+#include "DataFormats/Provenance/interface/ParameterSetID.h"
 
-
+#include "SimDataFormats/PileupSummaryInfo/interface/PileupSummaryInfo.h"
 
 // #include "../interface/OffsetMagneticField.h"
 // #include "../interface/ParmInfo.h"
@@ -221,6 +223,9 @@ protected:
   
   Matrix<double, 5, 5> curv2localJacobianAltelossD(const Matrix<double, 7, 1> &state, const MagneticField *field, const GloballyPositioned<double> &surface, double dEdx, double mass, double dBz = 0.) const;
   
+  Matrix<double, 2, 8> curv2localJacobianAltelossDalign(const Matrix<double, 7, 1> &state, const MagneticField *field, const GloballyPositioned<double> &surface, double dEdx, double mass, double dBz = 0.) const;
+
+  
   Matrix<double, 6, 5> curv2cartJacobianAlt(const FreeTrajectoryState &state) const;
   Matrix<double, 6, 5> curv2cartJacobianAltD(const Matrix<double, 7, 1> &state) const;
                                                              
@@ -274,6 +279,12 @@ protected:
   
   Matrix<double, 1, 6> massJacobianAltD(const Matrix<double, 7, 1> &state0, const Matrix<double, 7, 1> &state1, double dmass) const;
   
+  Matrix<double, 6, 6> massHessianAltD(const Matrix<double, 7, 1> &state0, const Matrix<double, 7, 1> &state1, double dmass) const;
+
+  Matrix<double, 1, 6> massinvsqJacobianAltD(const Matrix<double, 7, 1> &state0, const Matrix<double, 7, 1> &state1, double dmass) const;
+  
+  Matrix<double, 6, 6> massinvsqHessianAltD(const Matrix<double, 7, 1> &state0, const Matrix<double, 7, 1> &state1, double dmass) const;  
+  
   Matrix<double, 1, 6> massJacobianInvSq(const FreeTrajectoryState &state0, const FreeTrajectoryState &state1, double dmass) const;
   
   Matrix<double, 1, 6> mrJacobian(const FreeTrajectoryState &state0, const FreeTrajectoryState &state1, double dmass) const;
@@ -297,6 +308,9 @@ protected:
   edm::EDGetTokenT<GenEventInfoProduct> genEventInfoToken_;
   edm::EDGetTokenT<std::vector<int>> genParticlesBarcodeToken_;
 //   edm::EDGetTokenT<TrajTrackAssociationCollection> inputTrack_;
+  
+  edm::EDGetTokenT<std::vector<PileupSummaryInfo>> pileupSummaryToken_;
+  
   edm::EDGetTokenT<reco::TrackCollection> inputTrack_;
   edm::EDGetTokenT<reco::TrackCollection> inputTrackOrig_;
   edm::EDGetTokenT<std::vector<int> > inputIndices_;
@@ -311,6 +325,14 @@ protected:
 
   edm::EDGetTokenT<edm::Association<std::vector<pat::Muon>>> inputMuonAssoc_;
   bool doMuonAssoc_;
+  
+  edm::EDGetTokenT<edm::TriggerResults> inputTriggerResults_;
+  bool doTrigger_;
+  edm::ParameterSetID triggerNamesId_;
+  std::vector<std::string> triggers_;
+  std::vector<std::size_t> triggerIdxs_;
+  std::vector<int> triggerDecisions_;
+  
   
   std::string corFile_;
   
@@ -396,6 +418,8 @@ protected:
   std::vector<int> clusterSizeX;
   std::vector<int> clusterSizeY;
   std::vector<int> clusterCharge;
+
+  std::vector<int> stripsToEdge;
   
   std::vector<int> clusterChargeBin;
   std::vector<int> clusterOnEdge;
@@ -412,6 +436,9 @@ protected:
   std::vector<float> localdydz;
   std::vector<float> localx;
   std::vector<float> localy;
+
+  std::vector<float> localphi;
+  std::vector<float> hitphi;
   
   std::map<std::pair<int, DetId>, unsigned int> detidparms;
   std::vector<std::pair<int, DetId>> detidparmsrev;
@@ -432,6 +459,7 @@ protected:
   bool fitFromGenParms_;
   bool fillTrackTree_;
   bool fillGrads_;
+  bool fillJac_;
   bool fillRunTree_;
   
   bool debugprintout_;
@@ -489,7 +517,12 @@ protected:
 
   float genweight;
   
+  int Pileup_nPU = 0;
+  float Pileup_nTrueInt = 0.;
+  
   TH2D *hetaphi = nullptr;
+
+  std::string outprefix;
   
 //   bool filledRunTree_;
   

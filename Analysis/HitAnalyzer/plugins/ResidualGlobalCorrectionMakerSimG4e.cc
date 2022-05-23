@@ -239,7 +239,7 @@ void ResidualGlobalCorrectionMakerSimG4e::produce(edm::Event &iEvent, const edm:
   iEvent.getByToken(inputBs_, bsH);
 
   
-  Handle<std::vector<reco::GenParticle>> genPartCollection;
+  Handle<edm::View<reco::Candidate>> genPartCollection;
   if (doGen_) {
     iEvent.getByToken(GenParticlesToken_, genPartCollection);
   }
@@ -431,7 +431,7 @@ void ResidualGlobalCorrectionMakerSimG4e::produce(edm::Event &iEvent, const edm:
 //     
 // //     std::cout << "track charge: " << track.charge() << " trackorig charge " << trackOrig.charge() << "inner state charge " << tms.back().updatedState().charge() << std::endl;
     
-    const reco::GenParticle* genpart = nullptr;
+    const reco::Candidate* genpart = nullptr;
     
     genPt = -99.;
     genEta = -99.;
@@ -443,44 +443,44 @@ void ResidualGlobalCorrectionMakerSimG4e::produce(edm::Event &iEvent, const edm:
     genParms.fill(0.);
     
     if (doGen_) {
-      for (std::vector<reco::GenParticle>::const_iterator g = genPartCollection->begin(); g != genPartCollection->end(); ++g)
+      for (auto const &genpartt : *genPartCollection)
       {
-        if (g->status() != 1) {
+        if (genpartt.status() != 1) {
           continue;
         }
-        if (std::abs(g->pdgId()) != 13) {
+        if (std::abs(genpartt.pdgId()) != 13) {
           continue;
         }
         
-//         float dR = deltaR(g->phi(), trackPhi, g->eta(), trackEta);
+//         float dR = deltaR(genpartt.phi(), trackPhi, genpartt.eta(), trackEta);
         
         if (true)
-        {
-          genpart = &(*g);
+        {          
+          genpart = &genpartt;
           
-          genPt = g->pt();
-          genEta = g->eta();
-          genPhi = g->phi();
-          genCharge = g->charge();
+          genPt = genpartt.pt();
+          genEta = genpartt.eta();
+          genPhi = genpartt.phi();
+          genCharge = genpartt.charge();
           
-          genX = g->vertex().x();
-          genY = g->vertex().y();
-          genZ = g->vertex().z();
+          genX = genpartt.vertex().x();
+          genY = genpartt.vertex().y();
+          genZ = genpartt.vertex().z();
           
-          auto const& vtx = g->vertex();
+          auto const& vtx = genpartt.vertex();
           auto const& myBeamSpot = bsH->position(vtx.z());
           
           //q/|p|
-          genParms[0] = g->charge()/g->p();
+          genParms[0] = genpartt.charge()/genpartt.p();
           //lambda
-          genParms[1] = M_PI_2 - g->momentum().theta();
+          genParms[1] = M_PI_2 - genpartt.momentum().theta();
           //phi
-          genParms[2] = g->phi();
+          genParms[2] = genpartt.phi();
           //dxy
-          genParms[3] = (-(vtx.x() - myBeamSpot.x()) * g->py() + (vtx.y() - myBeamSpot.y()) * g->px()) / g->pt();
+          genParms[3] = (-(vtx.x() - myBeamSpot.x()) * genpartt.py() + (vtx.y() - myBeamSpot.y()) * genpartt.px()) / genpartt.pt();
           //dsz
-          genParms[4] = (vtx.z() - myBeamSpot.z()) * g->pt() / g->p() -
-            ((vtx.x() - myBeamSpot.x()) * g->px() + (vtx.y() - myBeamSpot.y()) * g->py()) / g->pt() * g->pz() / g->p();
+          genParms[4] = (vtx.z() - myBeamSpot.z()) * genpartt.pt() / genpartt.p() -
+            ((vtx.x() - myBeamSpot.x()) * genpartt.px() + (vtx.y() - myBeamSpot.y()) * genpartt.py()) / genpartt.pt() * genpartt.pz() / genpartt.p();
         }
         else {
           continue;
@@ -2033,12 +2033,18 @@ void ResidualGlobalCorrectionMakerSimG4e::produce(edm::Event &iEvent, const edm:
               }
             }
             
+            std::cout << "detid = " << preciseHit->detUnitId() << std::endl;
+            std::cout << "dy0\n" << dy0 << std::endl;
+
             // fill hit validation information
             Vector2d dyrecgenlocal;
             dyrecgenlocal << dy0[0].value().value(), dy0[1].value().value();
             const Vector2d dyrecgeneig = R*dyrecgenlocal;
             dxrecgen.push_back(dyrecgeneig[0]);
             dyrecgen.push_back(dyrecgeneig[1]);
+            
+            dxsimgenlocal.push_back(dyrecgenlocal[0]);
+            dysimgenlocal.push_back(dyrecgenlocal[0]);
             
             dxerr.push_back(1./std::sqrt(Vinv(0,0).value().value()));
             dyerr.push_back(1./std::sqrt(Vinv(1,1).value().value()));
