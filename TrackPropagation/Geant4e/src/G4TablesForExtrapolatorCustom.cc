@@ -48,6 +48,7 @@
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo....
 
 #include "TrackPropagation/Geant4e/interface/G4TablesForExtrapolatorCustom.h"
+#include "TrackPropagation/Geant4e/interface/Geant4ePropagator.h"
 #include "G4PhysicalConstants.hh"
 #include "G4SystemOfUnits.hh"
 #include "G4PhysicsLogVector.hh"
@@ -69,12 +70,14 @@
 #include "G4ProductionCuts.hh"
 #include "G4LossTableBuilder.hh"
 #include "G4WentzelVIModel.hh"
+#include "G4ProductionCutsTable.hh"
+#include "G4RunManagerKernel.hh"
 
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo....
 
 G4TablesForExtrapolatorCustom::G4TablesForExtrapolatorCustom(G4int verb, G4int bins, 
-                                                 G4double e1, G4double e2)
-  : verbose(verb), nbins(bins), emin(e1), emax(e2)
+                                                 G4double e1, G4double e2, G4bool iononly)
+  : verbose(verb), nbins(bins), emin(e1), emax(e2), ionOnly(iononly)
 {
   Initialisation();
 }
@@ -325,10 +328,12 @@ G4TablesForExtrapolatorCustom::ComputeMuonDEDX(const G4ParticleDefinition* part,
 					 G4PhysicsTable* table)
 {
   G4BetheBlochModel* ioni = new G4BetheBlochModel();
-//   G4MuBetheBlochModel* ionialt = new G4MuBetheBlochModel();
+  G4MuBetheBlochModel* ionialt = new G4MuBetheBlochModel();
+//   G4MuBetheBlochModel* ioni = new G4MuBetheBlochModel();
   G4MuPairProductionModel* pair = new G4MuPairProductionModel();
   G4MuBremsstrahlungModel* brem = new G4MuBremsstrahlungModel();
   ioni->Initialise(part, cuts);
+  ionialt->Initialise(part, cuts);
   pair->Initialise(part, cuts);
   brem->Initialise(part, cuts);
 
@@ -338,11 +343,27 @@ G4TablesForExtrapolatorCustom::ComputeMuonDEDX(const G4ParticleDefinition* part,
 
   const G4MaterialTable* mtable = G4Material::GetMaterialTable();
 
+
+//   G4ProductionCutsTable::GetProductionCutsTable()->UpdateCoupleTable(G4RunManagerKernel::GetRunManagerKernel()->GetCurrentWorld());
+
+//   const G4ProductionCutsTable* theCoupleTable=
+//     G4ProductionCutsTable::GetProductionCutsTable();
+
+//   std::cout << "couple table size = " << theCoupleTable->GetTableSize() << std::endl;
+
+//   const G4DataVector *theCuts =
+//     static_cast<const G4DataVector*>(theCoupleTable->GetEnergyCutsVector(1));
+
   if(0<verbose) {
     G4cout << "G4TablesForExtrapolatorCustom::ComputeMuonDEDX for " 
 	   << part->GetParticleName() 
            << G4endl;
   }
+ 
+  const double mass = 0.1056583745;
+  const double massev = mass*1e9;
+  G4double eMass     = 0.51099906 / GeV;
+  G4double massRatio = eMass / mass;
  
   for(G4int i=0; i<nmat; ++i) {  
 
@@ -352,6 +373,24 @@ G4TablesForExtrapolatorCustom::ComputeMuonDEDX(const G4ParticleDefinition* part,
     }
     const G4MaterialCutsCouple* couple = couples[i];
     G4PhysicsVector* aVector = (*table)[i];
+
+//     const size_t icouple = couple->GetIndex();
+//     const G4double cut  = (*theCuts)[icouple];
+//     const G4double cut  = 0.;
+
+//     int icouple = -1;
+//     G4double cut = 0.;
+//     for (unsigned int j=0; j<theCoupleTable->GetTableSize(); ++j) {
+//       if (theCoupleTable->GetMaterialCutsCouple(j)->GetMaterial() == mat) {
+//         icouple = j;
+// //         cut = (*theCuts)[j];
+//         cut = theCoupleTable->GetMaterialCutsCouple(j)->GetProductionCuts()->GetProductionCut("e-");
+//         break;
+//       }
+//     }
+//
+//     std::cout << "i= " << i << "  mat= " << mat->GetName() << " icouple = " << icouple << " cut = " << cut << std::endl;
+//     std::cout << "i= " << i << "  mat= " << mat->GetName() << std::endl;
     
 // //     std::cout << "material = " << mat->GetName() << std::endl;
 // //     std::cout << "computing dedxmin" << std::endl;
@@ -377,16 +416,88 @@ G4TablesForExtrapolatorCustom::ComputeMuonDEDX(const G4ParticleDefinition* part,
     
     
 //     std::cout << mat->GetName() << " dedxmin = " << dedxionimin << " emin = " << emin << " dedxioniminalt = " << dedxioniminalt << " eminalt = " << eminalt << std::endl;
+
+//     const double cut = 0.121694;
     
+    G4double effZ, effA;
+    Geant4ePropagator::CalculateEffectiveZandA(mat, effZ, effA);
+    G4double I = 16.*pow(effZ,0.9);
+    const double f2 = effZ <= 2. ? 0. : 2./effZ;
+    const double f1 = 1. - f2;
+    const double e2 = 10.*effZ*effZ;
+    const double e1 = pow(I/pow(e2,f2),1./f1);
+    const double r = 0.4;
+
     for(G4int j=0; j<=nbins; j++) {
         
        G4double e = aVector->Energy(j);
+       
+       
+       G4double pgev = e / GeV;
+       G4double Etot = sqrt(pgev*pgev + mass*mass);
+       G4double beta = pgev/Etot;
+       G4double gamma = Etot / mass;
+       G4double eta       = beta * gamma;
+       G4double etasq     = eta * eta;
+       G4double F1        = 2 * eMass * etasq;
+       G4double F2        = 1. + 2. * massRatio * gamma + massRatio * massRatio;
+       G4double Emax      = 1.E+6 * F1 / F2;  // now in keV
+        
+        
+       const double emaxev = Emax*1e3; // keV -> eV
+       
+
+       const double sigma1partial = f1*(log(2.*massev*beta*beta*gamma*gamma/e1) - beta*beta)/e1/(log(2.*massev*beta*beta*gamma*gamma/I) - beta*beta)*(1.-r);
+
+       const double sigma2partial = f1*(log(2.*massev*beta*beta*gamma*gamma/e2) - beta*beta)/e2/(log(2.*massev*beta*beta*gamma*gamma/I) - beta*beta)*(1.-r);
+
+       const double sigma3partial = emaxev/I/(emaxev+I)/log((emaxev+I)/I)*r;
+
+       const double e3med = I/(1. - 0.5*emaxev/(emaxev + I));
+       const double e3mean = I*(emaxev +I)*log((emaxev+I)/I)/emaxev;
+       const double e3mode = I;
+
+       const double emed = sigma1partial*e1 + sigma2partial*e2 + sigma3partial*e3med;
+       const double emean = sigma1partial*e1 + sigma2partial*e2 + sigma3partial*e3mean;
+       const double emode = sigma1partial*e1 + sigma2partial*e2 + sigma3partial*e3mode;
+
+       const double dedxratio = emed/emean;
+       const double moderatio = emode/emean;
+       const double alpha = 0.996;
+//        const double alpha = 0.999;
+       
+       const double ealpha = I/(1. - alpha*emaxev/(emaxev + I));
+//        const double ealphamev = ealpha*1e-6;
+
 //        G4double dedx = std::min(ioni->ComputeDEDX(couple,part,e,e), dedxionimin) +
 // 	               pair->ComputeDEDX(couple,part,e,e) +
 // 	               brem->ComputeDEDX(couple,part,e,e);
-       G4double dedx = ioni->ComputeDEDX(couple,part,e,e) +
-	               pair->ComputeDEDX(couple,part,e,e) +
+//        G4double dedx = ioni->ComputeDEDX(couple,part,e,cut) +
+// 	               pair->ComputeDEDX(couple,part,e,e) +
+// 	               brem->ComputeDEDX(couple,part,e,e);
+//        const double cut = i == 18 ? 0.121694 : e; // energy cut only for silicon for now
+//        const double cut = e;
+//        const double cut = 100.;
+//        const double cut = ealphamev;
+       const double dedxioni = e > 1000 ? ionialt->ComputeDEDX(couple,part,e,e) : ioni->ComputeDEDX(couple,part,e,e);
+//        const double dedxioni = ioni->ComputeDEDX(couple,part,e,cut);
+//        const double dedxioni = ioni->ComputeDEDX(couple,part,e,e);
+//        const double dedxioni = dedxratio*ioni->ComputeDEDX(couple,part,e,e);
+//        const double dedxioni = ioni->ComputeDEDX(couple,part,e,ealpha);
+       G4double dedx = ionOnly ? dedxioni : dedxioni + pair->ComputeDEDX(couple,part,e,e) +
 	               brem->ComputeDEDX(couple,part,e,e);
+//        G4double dedx = dedxioni;
+//        const double dedxionicut = ioni->ComputeDEDX(couple,part,e,cut);
+//        const double dedxioni = ioni->ComputeDEDX(couple,part,e,e);
+//        G4double dedx = ioni->ComputeDEDX(couple,part,e,e) +
+// 	               pair->ComputeDEDX(couple,part,e,e) +
+// 	               brem->ComputeDEDX(couple,part,e,e);
+//         std::cout << "material = " << mat->GetName() << " e = " << e << " cut = " << cut << " dedxioni = " << dedxioni << " dedx = " << dedx << std::endl;
+        std::cout << "material = " << mat->GetName() << " e = " << e << " dedxratio = " << dedxratio << " moderatio = " << moderatio << " dedxioni = " << dedxioni << " dedx = " << dedx << std::endl;
+
+
+//        std::cout << "e = " << e << " dedxionicut = " << dedxionicut << " dedxioni = " << dedxioni << " dedx = " << dedx << std::endl;
+
 //        dedx *= 1e-6;
 //        dedx *= 1e-12;
        aVector->PutValue(j,dedx);
@@ -402,6 +513,7 @@ G4TablesForExtrapolatorCustom::ComputeMuonDEDX(const G4ParticleDefinition* part,
     if(splineFlag) { aVector->FillSecondDerivatives(); }
   }
   delete ioni;
+  delete ionialt;
 }
 
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo....

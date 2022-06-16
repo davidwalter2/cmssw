@@ -76,7 +76,7 @@ class G4TablesForExtrapolatorCustom
 {
 public:
 
-  explicit G4TablesForExtrapolatorCustom(G4int verb, G4int bins, G4double e1, G4double e2);
+  explicit G4TablesForExtrapolatorCustom(G4int verb, G4int bins, G4double e1, G4double e2, G4bool iononly = false);
 
   ~G4TablesForExtrapolatorCustom();
 
@@ -140,6 +140,8 @@ private:
   G4double    charge2;
 
   G4bool      splineFlag;
+
+  G4bool      ionOnly;
 };
 
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo....

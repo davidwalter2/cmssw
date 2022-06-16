@@ -14,6 +14,8 @@
 
 #include <Eigen/Core>
 
+#include "TrackPropagation/Geant4e/interface/G4UniversalFluctuationForExtrapolator.hh"
+
 
 /** Propagator based on the Geant4e package. Uses the Propagator class
  *  in the TrackingTools/GeomPropagators package to define the interface.
@@ -68,7 +70,9 @@ public:
                                                                
   std::tuple<bool, Eigen::Matrix<double, 7, 1>, Eigen::Matrix<double, 5, 5>, Eigen::Matrix<double, 5, 7>, double, Eigen::Matrix<double, 5, 5>> propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 7, 1> &ftsStart,
                                                                                 const GloballyPositioned<double> &pDest, double dBz = 0., double dxi = 0., double pforced = -1.) const;
-  
+
+  static void CalculateEffectiveZandA(const G4Material* mate, G4double& effZ, G4double& effA);
+                                                                                
 private:
   typedef std::pair<TrajectoryStateOnSurface, double> TsosPP;
   typedef std::pair<bool, std::shared_ptr<G4ErrorTarget>> ErrorTargetPair;
@@ -157,8 +161,6 @@ private:
   Eigen::Matrix<double, 5, 5> PropagateErrorMSC( const G4Track* aTrack, double pforced = -1. ) const;
                              
   double computeErrorIoni(const G4Track* aTrack, double pforced = -1.) const;
-
-  void CalculateEffectiveZandA(const G4Material* mate, G4double& effZ, G4double& effA) const;
   
   AlgebraicMatrix55 curv2localJacobianAlt(const GlobalTrajectoryParameters &globalSource, const Surface &surface) const;
   
@@ -181,6 +183,8 @@ private:
   Eigen::Matrix<double, 6, 1> transportResult(const FreeTrajectoryState &start, double s, double dEdx, double mass) const;
   
   Eigen::Matrix<double, 6, 1> transportResultD(const Eigen::Matrix<double, 7, 1> &start, double s, double dEdx, double mass, double bzoffset) const;
+
+  G4UniversalFluctuationForExtrapolator *fluct = nullptr;
   
 };
 

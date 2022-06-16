@@ -63,6 +63,8 @@ Geant4ePropagator::Geant4ePropagator(const MagneticField *field,
   // has to be called here, doing it later will not load the G4 physics list
   // properly when using the G4 ES Producer. Reason: unclear
   ensureGeant4eIsInitilized(true);
+  fluct = new G4UniversalFluctuationForExtrapolator();
+  fluct->SetParticleAndCharge(G4ParticleTable::GetParticleTable()->FindParticle(generateParticleName(1)), 1);
 }
 
 /** Destructor.
@@ -73,6 +75,7 @@ Geant4ePropagator::~Geant4ePropagator() {
   // don't close the g4 Geometry here, because the propagator might have been
   // cloned
   // but there is only one, globally-shared Geometry
+  delete fluct;
 }
 
 //
@@ -90,6 +93,8 @@ void Geant4ePropagator::ensureGeant4eIsInitilized(bool) const {
   if (G4StateManager::GetStateManager()->GetCurrentState() == G4State_PreInit) {
     man->SetVerboseLevel(0);
     //G4UImanager::GetUIpointer()->ApplyCommand("/exerror/setField -10. kilogauss");
+
+//     G4ProductionCutsTable::GetProductionCutsTable()->UpdateCoupleTable(G4RunManagerKernel::GetRunManagerKernel()->GetCurrentWorld());
 
     theG4eManager->SetUserInitialization(new G4ErrorPhysicsListCustom());
     theG4eManager->InitGeant4e();
@@ -293,6 +298,14 @@ std::pair<TrajectoryStateOnSurface, double> Geant4ePropagator::propagateGeneric(
   //
   //* Set the target surface
 
+  const G4Field *field = G4TransportationManager::GetTransportationManager()->GetFieldManager()->GetDetectorField();
+//   //FIXME check thread safety of this
+//   sim::Field *cmsField = const_cast<sim::Field*>(static_cast<const sim::Field*>(field));
+//   
+// //   cmsField->SetOffset(0., 0., dBz);
+// //   cmsField->SetMaterialOffset(dxi);
+//   cmsField->SetMaterialOffset(std::log(1e-10));
+                                                                                  
   ErrorTargetPair g4eTarget_center = transformToG4SurfaceTarget(pDest, false);
 
   // * Get the starting point and direction and convert them to
@@ -1286,6 +1299,8 @@ std::tuple<TrajectoryStateOnSurface, Geant4ePropagator::AlgebraicMatrix57, Algeb
   
   cmsField->SetOffset(0., 0., dBz);
   cmsField->SetMaterialOffset(dxi);
+//   cmsField->SetMaterialOffset(std::log(1e-6));
+//   cmsField->SetMaterialOffset(std::log(1e-10));
   
   auto retDefault = [cmsField]() {
     cmsField->SetOffset(0., 0., 0.);
@@ -1691,6 +1706,11 @@ std::tuple<TrajectoryStateOnSurface, Geant4ePropagator::AlgebraicMatrix57, Algeb
     }
   }
 
+//   std::cout << "propgationDirection = " << propagationDirection() << " finalPathLength = " << finalPathLength << std::endl;
+//   if (finalPathLength < 0.) {
+//     throw std::runtime_error("negative path length!");
+//   }
+  
   // CMSSW Tracking convention, backward propagations have negative path length
   if (propagationDirection() == oppositeToMomentum)
     finalPathLength = -finalPathLength;
@@ -1830,7 +1850,11 @@ Eigen::Matrix<double, 5, 5> Geant4ePropagator::PropagateErrorMSC( const G4Track*
   if( iverbose >= 4 ) G4cout << std::setprecision(6) << std::setw(6) << "G4EP:MSC: RI=X/X0 " << RI << " stepLengthCm " << stepLengthCm << " radlen/cm " << (mate->GetRadlen()/cm) << " RI*1.e10:" << RI*1.e10 << G4endl;
 #endif
   G4double charge = aTrack->GetDynamicParticle()->GetCharge();
-  G4double DD = 1.8496E-4*RI*(charge/pBeta * charge/pBeta );
+  G4double DDold = 1.8496E-4*RI*(charge/pBeta * charge/pBeta );
+  G4double X0 = mate->GetRadlen()/cm;
+  G4double Xs = X0*(effZ + 1.)*std::log(287./std::sqrt(effZ))/std::log(159.*std::pow(effZ, -1./3.))/effZ;
+  G4double DD = 2.25e-4*stepLengthCm*(charge/pBeta * charge/pBeta )/Xs;
+//   std::cout << "DDold = " << DDold << " DD = " << DD << std::endl;
 #ifdef G4EVERBOSE
   if( iverbose >= 3 ) G4cout << "G4EP:MSC: D*1E6= " << DD*1.E6 <<" pBeta " << pBeta << G4endl;
 #endif
@@ -1910,8 +1934,8 @@ double Geant4ePropagator::computeErrorIoni(const G4Track* aTrack, double pforced
 
 //   std::cout << "eMass = " << eMass << " mass = " << mass << std::endl;
   //  * *** and now sigma**2  in GeV
-  G4double dedxSq =
-    XI * Emax * (1. - (beta * beta / 2.)) * 1.E-12;  // now in GeV^2
+//   G4double dedxSq =
+//     XI * Emax * (1. - (beta * beta / 2.)) * 1.E-12;  // now in GeV^2
   /*The above  formula for var(1/p) good for dens scatterers. However, for MIPS
     passing through a gas it leads to overestimation. Further more for incident
     electrons the Emax is almost equal to incident energy. This leads  to
@@ -1943,78 +1967,112 @@ double Geant4ePropagator::computeErrorIoni(const G4Track* aTrack, double pforced
   
   // Implementation based on PANDA Report PV/01-07 Section 7
   // TODO understand implications for thick scatterer split into small steps
+
+#if 0
+  G4double dedxSq;
   
-//   G4double dedxSq;
-  
-//   const double kappa = XI/Emax;
+  const double kappa = XI/Emax;
 //   std::cout << "steplength = " << stepLengthCm << " xi = " << XI*1e-6 << " xi/dx = " << XI*1e-6/stepLengthCm << " emax = " << Emax*1e-6 << " kappa = " << kappa << " effZ = " << effZ << std::endl;
   
-//   if (kappa > 0.005) {
-//     //vavilov distribution (or gaussian limit which is equivalent for the variance)
-//   
-//     dedxSq = XI * Emax * (1. - (beta * beta / 2.)) * 1.E-12;  // now in GeV^2
-//   }
-//   else {
-//   
-//   
-//     const double I = 16.*pow(effZ,0.9);
-//     const double f2 = effZ <= 2. ? 0. : 2./effZ;
-//     const double f1 = 1. - f2;
-//     const double e2 = 10.*effZ*effZ;
-//     const double e1 = pow(I/pow(e2,f2),1./f1);
-//     const double r = 0.4;
+  if (kappa > 0.005) {
+    //vavilov distribution (or gaussian limit which is equivalent for the variance)
+  
+    dedxSq = XI * Emax * (1. - (beta * beta / 2.)) * 1.E-12;  // now in GeV^2
+    
+    std::cout << "vavilov: dedxSq = " << dedxSq << std::endl;
+  }
+  else {
+  
+  
+    const double I = 16.*pow(effZ,0.9);
+    const double f2 = effZ <= 2. ? 0. : 2./effZ;
+    const double f1 = 1. - f2;
+    const double e2 = 10.*effZ*effZ;
+    const double e1 = pow(I/pow(e2,f2),1./f1);
+    const double r = 0.4;
 //     const double emaxev = Emax*1e6;
-//     const double massev = mass*1e9;
-//     
-//     const double ePre = aTrack->GetStep()->GetPreStepPoint()->GetTotalEnergy() / GeV;
-//     const double ePost = aTrack->GetStep()->GetPostStepPoint()->GetTotalEnergy() / GeV;
-//     const double C = (ePre-ePost)/stepLengthCm*1e9;
-//     
-//     const double sigma1 = C*f1*(log(2.*massev*beta*beta*gamma*gamma/e1) - beta*beta)/e1/(log(2.*massev*beta*beta*gamma*gamma/I) - beta*beta)*(1.-r);
-//     
-//     const double sigma2 = C*f1*(log(2.*massev*beta*beta*gamma*gamma/e2) - beta*beta)/e2/(log(2.*massev*beta*beta*gamma*gamma/I) - beta*beta)*(1.-r);
-//     
-//     const double sigma3 = C*emaxev/I/(emaxev+I)/log((emaxev+I)/I)*r;
-//     
-//     const double Nc = (sigma1 + sigma2 + sigma3)*stepLengthCm;
-//     
-// //     std::cout << "Nc = " << Nc << std::endl;
-//     
-//     if (Nc > 50.) {
-// //     if (false) {
-//       //landau
-//       dedxSq = 15.76*15.76*XI*XI*1e-12; //corresponds to 0.996 quantile
+    const double emaxev = Emax*1e3; // keV -> eV
+    const double massev = mass*1e9;
+    
+    const double ePre = aTrack->GetStep()->GetPreStepPoint()->GetTotalEnergy() / GeV;
+    const double ePost = aTrack->GetStep()->GetPostStepPoint()->GetTotalEnergy() / GeV;
+    const double C = (ePre-ePost)/stepLengthCm*1e9;
+    
+    const double sigma1 = C*f1*(log(2.*massev*beta*beta*gamma*gamma/e1) - beta*beta)/e1/(log(2.*massev*beta*beta*gamma*gamma/I) - beta*beta)*(1.-r);
+    
+    const double sigma2 = C*f1*(log(2.*massev*beta*beta*gamma*gamma/e2) - beta*beta)/e2/(log(2.*massev*beta*beta*gamma*gamma/I) - beta*beta)*(1.-r);
+    
+    const double sigma3 = C*emaxev/I/(emaxev+I)/log((emaxev+I)/I)*r;
+    
+    const double Nc = (sigma1 + sigma2 + sigma3)*stepLengthCm;
+    
+//     std::cout << "Nc = " << Nc << std::endl;
+    
+    if (Nc > 50.) {
+//     if (false) {
+      //landau
+      constexpr double sigalpha = 15.76; //corresponds to 0.996 quantile
+//       constexpr double sigalpha = 22.33; //corresponds to 0.998 quantile
+//       constexpr double sigalpha = 31.59; //corresponds to 0.999 quantile
+      
+      dedxSq = sigalpha*sigalpha*XI*XI*1e-12;
+      
+      const double dedxsqvavilov = XI * Emax * (1. - (beta * beta / 2.)) * 1.E-12;
+      
+      std::cout << "dedxsq: vavilov = " << dedxsqvavilov << " landau = " << dedxSq << std::endl;
+//       std::cout << "landau\n";
+    }
+    else {
+      //sub-landau
+      const double alpha = 0.996;
+//       const double alpha = 0.998;
+//       const double alpha = 0.999;
+//       const double alpha = 1.;
+      const double ealpha = I/(1. - alpha*emaxev/(emaxev + I));
+      const double e3 = I*(emaxev +I)*log(ealpha/I)/emaxev;
+      const double e3sq = I*(emaxev + I)*(ealpha - I)/emaxev;
+      const double sigmae3sq = e3sq  - e3*e3;
+      
+      dedxSq = sigma1*stepLengthCm*e1*e1 + sigma2*stepLengthCm*e2*e2 + sigma3*stepLengthCm*e3*e3 + sigma3*stepLengthCm*sigmae3sq*(sigma3*stepLengthCm + 1.);
+      dedxSq *= 1e-18;
+      
+      const double dedxsqlandau = 15.76*15.76*XI*XI*1e-12;
+      const double dedxsqvavilov = XI * Emax * (1. - (beta * beta / 2.)) * 1.E-12;
 //       
-//       const double dedxsqvavilov = XI * Emax * (1. - (beta * beta / 2.)) * 1.E-12;
-//       
-//       std::cout << "dedxsq: vavilov = " << dedxsqvavilov << " landau = " << dedxSq << std::endl;
-//     }
-//     else {
-//       //sub-landau
-//       const double alpha = 0.996;
-// //       const double alpha = 1.;
-//       const double ealpha = I/(1. - alpha*emaxev/(emaxev + I));
-//       const double e3 = I*(emaxev +I)*log(ealpha/I)/emaxev;
-//       const double e3sq = I*(emaxev + I)*(ealpha - I)/emaxev;
-//       const double sigmae3sq = e3sq  - e3*e3;
-//       
-//       dedxSq = sigma1*stepLengthCm*e1*e1 + sigma2*stepLengthCm*e2*e2 + sigma3*stepLengthCm*e3*e3 + sigma3*stepLengthCm*sigmae3sq*(sigma3*stepLengthCm + 1.);
-//       dedxSq *= 1e-18;
-//       
-//       const double dedxsqlandau = 15.76*15.76*XI*XI*1e-12;
-//       const double dedxsqvavilov = XI * Emax * (1. - (beta * beta / 2.)) * 1.E-12;
-// //       
-//       std::cout << "dedxsq:  vavilov = " << dedxsqvavilov << " landau = " << dedxsqlandau << " sublandau = " << dedxSq << std::endl;;
-//       
-//     }
-//     
-//   
-//   }
+      std::cout << "dedxsq:  vavilov = " << dedxsqvavilov << " landau = " << dedxsqlandau << " sublandau = " << dedxSq << " Emax = " << Emax << " ealpha = " << ealpha << std::endl;;
+//       std::cout << "sublandau\n";
+      
+    }
+    
   
+  }
+#endif
   
-//   dedxSq = 1.7*1.7*XI*XI*1e-12;
+  G4double Emaxmev = Emax*1e-3;
+  G4double stepLengthmm = stepLengthCm*10;
+  const double ePre = aTrack->GetStep()->GetPreStepPoint()->GetKineticEnergy() / GeV;
+  const double ePost = aTrack->GetStep()->GetPostStepPoint()->GetKineticEnergy() / GeV;
+  G4double eav = (ePre-ePost)*1e3;
+//   G4double epremev = ePre*1e3;
+  G4double ekinmev = 0.5*(ePre + ePost)*1e3;
 
-//   if (false) {
+//   std::cout << "eav = " << eav << std::endl;
+
+  G4double dedxsqurban = 1e-6*fluct->SampleFluctuations(mate, aTrack->GetDynamicParticle(), Emaxmev, stepLengthmm, ekinmev);
+//   G4double dispurban = fluct->Dispersion(mate, aTrack->GetDynamicParticle(), Emaxmev, stepLengthmm);
+//   G4double dispurbansq = 1e-6*dispurban*dispurban;
+  
+  
+
+//   std::cout << "dedxSq = " << dedxSq << " dedxsqurban = " << dedxsqurban << std::endl;
+  
+  G4double dedxSq = dedxsqurban;
+
+
+//   dedxSq = 1.7*1.7*XI*XI*1e-12;
+//   dedxSq = 15.76*15.76*XI*XI*1e-12; //corresponds to 0.996 quantile
+
+//   if (true) {
 //     if(XI / Emax < 0.01)
 //       dedxSq *=
 //         XI / Emax * 100;  // Quench for low Elos, see above: newVar=odVar *k/0.01
@@ -2051,7 +2109,7 @@ double Geant4ePropagator::computeErrorIoni(const G4Track* aTrack, double pforced
 //------------------------------------------------------------------------
 void Geant4ePropagator::CalculateEffectiveZandA(const G4Material* mate,
                                                    G4double& effZ,
-                                                   G4double& effA) const
+                                                   G4double& effA)
 {
   effZ = 0.;
   effA = 0.;
