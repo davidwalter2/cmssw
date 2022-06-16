@@ -430,12 +430,25 @@ protected:
   std::vector<float> dxreccluster;
   std::vector<float> dyreccluster;
   
+  std::vector<float> simlocalqop;
+  std::vector<float> simlocaldxdz;
+  std::vector<float> simlocaldydz;
+  std::vector<float> simlocalx;
+  std::vector<float> simlocaly;
   
   std::vector<float> localqop;
   std::vector<float> localdxdz;
   std::vector<float> localdydz;
   std::vector<float> localx;
   std::vector<float> localy;
+  
+  std::vector<float> localqop_iter;
+  std::vector<float> localdxdz_iter;
+  std::vector<float> localdydz_iter;
+  std::vector<float> localx_iter;
+  std::vector<float> localy_iter;
+  
+  std::vector<float> localqoperr;
 
   std::vector<float> localphi;
   std::vector<float> hitphi;

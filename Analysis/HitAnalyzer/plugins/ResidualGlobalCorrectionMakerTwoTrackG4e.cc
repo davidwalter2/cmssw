@@ -639,6 +639,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 //                 }
                 
                 hitquality = !pixhit->isOnEdge() && cluster.sizeX() > 1;
+//                 hitquality = !pixhit->isOnEdge() && cluster.sizeX() > 1 && pixhit->qBin() < 2;
 //                 hitquality = !pixhit->isOnEdge() && cluster.sizeX() > 1 && cluster.sizeY() > 1;
               }
               else {
@@ -1598,9 +1599,30 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                   // rotation from module to strip coordinates
       //             Matrix<AlignScalar, 2, 2> R;
                   Matrix2d R;
+
+                  const double lxcor = localparms[3];
+                  const double lycor = localparms[4];
+
+      //             const double lxcor = localparms[3] - localconv[0];
+      //             const double lycor = localparms[4] - localconv[1];
+
+                  const Topology &topology = preciseHit->det()->topology();
+
+                  // undo deformation correction
+                  const LocalPoint lpnull(0., 0.);
+                  const MeasurementPoint mpnull = topology.measurementPosition(lpnull);
+                  const Topology::LocalTrackPred pred(tsostmp.localParameters().vector());
+
+                  auto const defcorr = topology.localPosition(mpnull, pred) - topology.localPosition(mpnull);
+
+                  const double hitx = preciseHit->localPosition().x() - defcorr.x();
+                  const double hity = preciseHit->localPosition().y() - defcorr.y();
+
+
 //                   if (preciseHit->dimension() == 1) {
                   if (hit1d) {
-                    dy0[0] = AlignScalar(preciseHit->localPosition().x() - localparms[3]);
+//                     dy0[0] = AlignScalar(preciseHit->localPosition().x() - localparms[3]);
+                    dy0[0] = AlignScalar(hitx - lxcor);
                     dy0[1] = AlignScalar(0.);
                     
       //               bool simvalid = false;
@@ -1633,8 +1655,11 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                     if (ispixel) {
 //                     if (true) {
                       //take 2d hit as-is for pixels
-                      dy0[0] = AlignScalar(preciseHit->localPosition().x() - localparms[3]);
-                      dy0[1] = AlignScalar(preciseHit->localPosition().y() - localparms[4]);
+//                       dy0[0] = AlignScalar(preciseHit->localPosition().x() - localparms[3]);
+//                       dy0[1] = AlignScalar(preciseHit->localPosition().y() - localparms[4]);
+
+                      dy0[0] = AlignScalar(hitx - lxcor);
+                      dy0[1] = AlignScalar(hity - lycor);
                     
                       Vinv = iV.inverse().cast<AlignScalar>();
                       //FIXME various temporary hacks;
@@ -1687,23 +1712,19 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                       constexpr bool dopolar = true;
 //                       constexpr bool dopolar = false;
 
-                      //TODO apply this consistently elsewhere?
-                      const double lxcor = localparms[3];
-                      const double lycor = localparms[4];
-
                       if (dopolar) {
                         // transform to polar coordinates to end the madness
                         //TODO handle the module deformations consistently here (currently equivalent to dropping/undoing deformation correction)
 
                         const ProxyStripTopology *proxytopology = dynamic_cast<const ProxyStripTopology*>(&(preciseHit->det()->topology()));
 
-                        // undo deformation correction
-                        const Topology::LocalTrackPred pred(tsostmp.localParameters().vector());
-
-                        auto const defcorr = proxytopology->localPosition(0., pred) - proxytopology->localPosition(0.);
-
-                        const double hitx = preciseHit->localPosition().x() - defcorr.x();
-                        const double hity = preciseHit->localPosition().y() - defcorr.y();
+//                         // undo deformation correction
+//                         const Topology::LocalTrackPred pred(tsostmp.localParameters().vector());
+//
+//                         auto const defcorr = proxytopology->localPosition(0., pred) - proxytopology->localPosition(0.);
+//
+//                         const double hitx = preciseHit->localPosition().x() - defcorr.x();
+//                         const double hity = preciseHit->localPosition().y() - defcorr.y();
 
                         const TkRadialStripTopology *radialtopology = dynamic_cast<const TkRadialStripTopology*>(&proxytopology->specificTopology());
 

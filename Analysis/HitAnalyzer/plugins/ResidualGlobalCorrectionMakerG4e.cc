@@ -217,6 +217,12 @@ void ResidualGlobalCorrectionMakerG4e::beginStream(edm::StreamID streamid)
       
       tree->Branch("dxreccluster", &dxreccluster);
       tree->Branch("dyreccluster", &dyreccluster);
+
+      tree->Branch("simlocalqop", &simlocalqop);
+      tree->Branch("simlocaldxdz", &simlocaldxdz);
+      tree->Branch("simlocaldydz", &simlocaldydz);
+      tree->Branch("simlocalx", &simlocalx);
+      tree->Branch("simlocaly", &simlocaly);
       
       tree->Branch("localqop", &localqop);
       tree->Branch("localdxdz", &localdxdz);
@@ -224,6 +230,14 @@ void ResidualGlobalCorrectionMakerG4e::beginStream(edm::StreamID streamid)
       tree->Branch("localx", &localx);
       tree->Branch("localy", &localy);
 
+      tree->Branch("localqop_iter", &localqop_iter);
+      tree->Branch("localdxdz_iter", &localdxdz_iter);
+      tree->Branch("localdydz_iter", &localdydz_iter);
+      tree->Branch("localx_iter", &localx_iter);
+      tree->Branch("localy_iter", &localy_iter);
+      
+      tree->Branch("localqoperr", &localqoperr);
+      
       tree->Branch("localphi", &localphi);
       tree->Branch("hitphi", &hitphi);
 
@@ -1147,8 +1161,14 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             const SiPixelRecHit *pixhit = dynamic_cast<const SiPixelRecHit*>(tkhit);
             const SiPixelCluster& cluster = *tkhit->cluster_pixel();
             assert(pixhit != nullptr);
+
+//             std::cout << "split cluster error: " << cluster.getSplitClusterErrorX() << " " << cluster.getSplitClusterErrorY() << std::endl;
+
+//             std::cout << "qbin = " << pixhit->qBin() << " probQ = " << pixhit->probabilityQ() << " hasFilledProb = " << pixhit->hasFilledProb() << std::endl;
             
+//             hitquality = false;
             hitquality = !pixhit->isOnEdge() && cluster.sizeX() > 1;
+//             hitquality = !pixhit->isOnEdge() && cluster.sizeX() > 1 && pixhit->qBin() < 2;
 //             hitquality = !pixhit->isOnEdge() && cluster.sizeX() > 1 && cluster.sizeY() > 1;
             
             
@@ -1703,7 +1723,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       }
 
 //       std::cout<< "iter " << iiter << std::endl;
-      
+            
       hitidxv.clear();
       hitidxv.reserve(nvalid);
       
@@ -1774,6 +1794,18 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         clusterSN.clear();
         clusterSN.reserve(nvalid);
         
+        simlocalqop.clear();
+        simlocaldxdz.clear();
+        simlocaldydz.clear();
+        simlocalx.clear();
+        simlocaly.clear();
+
+        simlocalqop.reserve(nvalid);
+        simlocaldxdz.reserve(nvalid);
+        simlocaldydz.reserve(nvalid);
+        simlocalx.reserve(nvalid);
+        simlocaly.reserve(nvalid);
+        
         localqop.clear();
         localdxdz.clear();
         localdydz.clear();
@@ -1785,6 +1817,14 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         localdydz.reserve(nvalid);
         localx.reserve(nvalid);
         localy.reserve(nvalid);
+        
+        localqop_iter.assign(nvalid, -99.);
+        localdxdz_iter.assign(nvalid, -99.);
+        localdydz_iter.assign(nvalid, -99.);
+        localx_iter.assign(nvalid, -99.);
+        localy_iter.assign(nvalid, -99.);
+        
+        localqoperr.assign(nvalid, -99.);
 
         localphi.clear();
         localphi.reserve(nvalid);
@@ -2975,6 +3015,18 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 //             const double lxcor = localparms[3] - localconv[0];
 //             const double lycor = localparms[4] - localconv[1];
 
+            const Topology &topology = preciseHit->det()->topology();
+
+            // undo deformation correction
+            const LocalPoint lpnull(0., 0.);
+            const MeasurementPoint mpnull = topology.measurementPosition(lpnull);
+            const Topology::LocalTrackPred pred(tsostmp.localParameters().vector());
+
+            auto const defcorr = topology.localPosition(mpnull, pred) - topology.localPosition(mpnull);
+
+            const double hitx = preciseHit->localPosition().x() - defcorr.x();
+            const double hity = preciseHit->localPosition().y() - defcorr.y();
+
             double lyoffset = 0.;
             double hitphival = -99.;
             double localphival = -99.;
@@ -2986,7 +3038,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 //               dy0[0] = AlignScalar(matchedsim->localPosition().x() - updtsos.localPosition().x());
               
 //               dy0[0] = AlignScalar(preciseHit->localPosition().x() - localparms[3]);
-              dy0[0] = AlignScalar(preciseHit->localPosition().x() - lxcor);
+//               dy0[0] = AlignScalar(preciseHit->localPosition().x() - lxcor);
+              dy0[0] = AlignScalar(hitx - lxcor);
 //               dy0[0] = AlignScalar(preciseHit->localPosition().x() - localparms[3] + localconv[0]);
               dy0[1] = AlignScalar(0.);
               
@@ -3031,8 +3084,11 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 //                 dy0[0] = AlignScalar(preciseHit->localPosition().x() - localparms[3]);
 //                 dy0[1] = AlignScalar(preciseHit->localPosition().y() - localparms[4]);
 
-                dy0[0] = AlignScalar(preciseHit->localPosition().x() - lxcor);
-                dy0[1] = AlignScalar(preciseHit->localPosition().y() - lycor);
+//                 dy0[0] = AlignScalar(preciseHit->localPosition().x() - lxcor);
+//                 dy0[1] = AlignScalar(preciseHit->localPosition().y() - lycor);
+
+                dy0[0] = AlignScalar(hitx - lxcor);
+                dy0[1] = AlignScalar(hity - lycor);
                 
 //                 dy0[0] = AlignScalar(preciseHit->localPosition().x() - localparms[3] + localconv[0]);
 //                 dy0[1] = AlignScalar(preciseHit->localPosition().y() - localparms[4] + localconv[1]);
@@ -3093,15 +3149,19 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
                   const ProxyStripTopology *proxytopology = dynamic_cast<const ProxyStripTopology*>(&(preciseHit->det()->topology()));
 
-                  // undo deformation correction
-                  const Topology::LocalTrackPred pred(tsostmp.localParameters().vector());
-
-                  auto const defcorr = proxytopology->localPosition(0., pred) - proxytopology->localPosition(0.);
-
-                  const double hitx = preciseHit->localPosition().x() - defcorr.x();
-                  const double hity = preciseHit->localPosition().y() - defcorr.y();
+//                   // undo deformation correction
+//                   const Topology::LocalTrackPred pred(tsostmp.localParameters().vector());
+//
+//                   auto const defcorr = proxytopology->localPosition(0., pred) - proxytopology->localPosition(0.);
+//
+//                   const double hitx = preciseHit->localPosition().x() - defcorr.x();
+//                   const double hity = preciseHit->localPosition().y() - defcorr.y();
 
                   const TkRadialStripTopology *radialtopology = dynamic_cast<const TkRadialStripTopology*>(&proxytopology->specificTopology());
+
+//                   if (preciseHit->det()->geographicalId() == 470438309 || preciseHit->det()->geographicalId() == 470438310) {
+//                     std::cout << "detid = " << preciseHit->det()->geographicalId().rawId() << " yAxisOrientation = " << radialtopology->yAxisOrientation() << " yCentreOfStripPlane = " << radialtopology->yCentreOfStripPlane() << std::endl;
+//                   }
 
                   const double rdir = radialtopology->yAxisOrientation();
                   const double radius = radialtopology->originToIntersection();
@@ -3398,6 +3458,15 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               }
             }
             
+            localqop_iter[ivalidhit] = localqopval;
+            localdxdz_iter[ivalidhit] = localdxdzval;
+            localdydz_iter[ivalidhit] = localdydzval;
+            localx_iter[ivalidhit] = localxval;
+            localy_iter[ivalidhit] = localyval;
+            
+            const double localqopvar = covfull(5*(ihit+1), 5*(ihit+1));
+            localqoperr[ivalidhit] = std::sqrt(localqopvar);
+            
             if (iiter == 0) {
               
               // fill hit validation information
@@ -3483,6 +3552,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               if (doSim_) {
                 if (simhit != nullptr) {
                   
+//                   std::cout << "ihit = " << ihit << " eloss = " << simhit->energyLoss() << std::endl;
+                  
                   Vector2d dy0simgenlocal;
                   dy0simgenlocal << simhit->localPosition().x() - localxval,
                                   simhit->localPosition().y() - localyval;
@@ -3511,6 +3582,19 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                   
                   dE.push_back(dEval);
                   
+                  auto const momsim = simhit->momentumAtEntry();
+
+                  const double eentry = std::sqrt(std::pow(simhit->pabs(), 2) + mmu*mmu);
+                  const double emid = eentry - 0.5*simhit->energyLoss();
+                  const double simqopval = genpart->charge()/std::sqrt(emid*emid - mmu*mmu);
+//                   std::cout << "eloss = " << simhit->energyLoss() << std::endl;
+                  
+                  simlocalqop.push_back(simqopval);
+                  simlocaldxdz.push_back(momsim.x()/momsim.z());
+                  simlocaldydz.push_back(momsim.y()/momsim.z());
+                  simlocalx.push_back(simhit->localPosition().x());
+                  simlocaly.push_back(simhit->localPosition().y());
+                  
                 }
                 else {
                   dxsimgen.push_back(-99.);
@@ -3522,6 +3606,12 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                   dxrecsim.push_back(-99.);
                   dyrecsim.push_back(-99.);
                   dE.push_back(-99.);
+                  
+                  simlocalqop.push_back(-99.);
+                  simlocaldxdz.push_back(-99.);
+                  simlocaldydz.push_back(-99.);
+                  simlocalx.push_back(-99.);
+                  simlocaly.push_back(-99.);
                 }
               }
 
@@ -3571,6 +3661,16 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           hessfull(i,i) = 1e6;
         }
       }
+
+//       // brute force constraint on reference point parameters
+//       if (dogen) {
+//         const double sigmaqop = 1e-6*1./genpart->p();
+//         hessfull(0,0) += 1./sigmaqop/sigmaqop;
+//         hessfull(1,1) += 1./1e-8/1e-8;
+//         hessfull(2,2) += 1./1e-8/1e-8;
+//         hessfull(3,3) += 1./1e-7/1e-7;
+//         hessfull(4,4) += 1./1e-7/1e-7;
+//       }
       
 
       
@@ -3953,6 +4053,14 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 //     grad = dchisqdparmsfinal + dxdparms*dchisqdx; 
     grad = dchisqdparmsfinal + d2chisqdxdparmsfinal.transpose()*dxfull;
     hess = d2chisqdparms2final + dxdparms*d2chisqdxdparmsfinal;
+
+
+//     std::cout <<"dchisqdparmsfinal:\n" << dchisqdparmsfinal << std::endl;
+//     std::cout << "grad\n" << grad << std::endl;
+//     std::cout << "dxfull\n" << dxfull << std::endl;
+
+//     std::cout << "gradalt\n" << gradalt << std::endl;
+
     
 //     dxdparms = -Cinvd.solve(d2chisqdxdparms).transpose();
     
@@ -4024,7 +4132,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     if (fillTrackTree_ && fillGrads_) {
       tree->SetBranchAddress("gradv", gradv.data());
     }
-    if (fillTrackTree_) {
+    if (fillTrackTree_ && fillJac_) {
       tree->SetBranchAddress("jacrefv", jacrefv.data());
     }
     

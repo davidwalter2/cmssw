@@ -715,6 +715,7 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
   surfacemapD_.clear();
   // fill map of modified surfaces with results of previous iteration if applicable
   for (const GeomDet* det : globalGeometry->detUnits()) {
+//   for (const GeomDet* det : globalGeometryIdeal->detUnits()) {
     if (!det) {
       continue;
     }
