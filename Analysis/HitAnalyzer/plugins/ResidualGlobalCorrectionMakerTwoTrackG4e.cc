@@ -2830,6 +2830,12 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           niter = iiter + 1;
           edmval = -deltachisq[0];
 
+          if (std::isnan(edmval) || std::isinf(edmval)) {
+            std::cout << "WARNING: invalid parameter update!!!" << " edmval = " << edmval << " deltachisqval = " << deltachisqval << std::endl;
+            valid = false;
+            break;
+          }
+          
           if (icons == 0) {
             edmval_cons0 = edmval;
             niter_cons0 = niter;

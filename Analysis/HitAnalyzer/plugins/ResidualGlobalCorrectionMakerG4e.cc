@@ -1984,11 +1984,11 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       const ROOT::Math::PxPyPzMVector momtmp(refFts[3], refFts[4], refFts[5], mmu);
 
       
-      if (!iscosmic && std::abs(momtmp.eta()) > 4.0) {
-        std::cout << "WARNING:  Invalid reference state!!!" << std::endl;
-        valid = false;
-        break;
-      }
+//       if (!iscosmic && std::abs(momtmp.eta()) > 4.0) {
+//         std::cout << "WARNING:  Invalid reference state!!!" << std::endl;
+//         valid = false;
+//         break;
+//       }
       
 //       const Matrix<double, 5, 1> Felossadhoc = elossAdHocJacobianD(refFts, mmu);
 //       const unsigned int etaphiidx = hetaphi->FindFixBin(momtmp.eta(), momtmp.phi());
@@ -2222,11 +2222,11 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       
         const ROOT::Math::PxPyPzMVector momtmp(updtsos[3], updtsos[4], updtsos[5], mmu);
       
-        if (std::abs(momtmp.eta()) > 4.0) {
-          std::cout << "WARNING:  Invalid state!!!" << std::endl;
-          valid = false;
-          break;
-        }
+//         if (std::abs(momtmp.eta()) > 4.0) {
+//           std::cout << "WARNING:  Invalid state!!!" << std::endl;
+//           valid = false;
+//           break;
+//         }
         
         
         
@@ -3876,7 +3876,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 //         anomDebug = true;
 //       }
 
-      if ( !iscosmic && (std::isnan(edmval) || std::isinf(edmval) || std::abs(lamupd) > M_PI_2 || (iiter>0 && threshparam > 1e5) || (iiter>1 && threshparam > 1e4) )) {
+//       if ( !iscosmic && (std::isnan(edmval) || std::isinf(edmval) || std::abs(lamupd) > M_PI_2 || (iiter>0 && threshparam > 1e5) || (iiter>1 && threshparam > 1e4) )) {
+      if (std::isnan(edmval) || std::isinf(edmval)) {
         std::cout << "WARNING: invalid parameter update!!!" << " edmval = " << edmval << " lamupd = " << lamupd << " deltachisqval = " << deltachisqval << std::endl;
         valid = false;
         break;
