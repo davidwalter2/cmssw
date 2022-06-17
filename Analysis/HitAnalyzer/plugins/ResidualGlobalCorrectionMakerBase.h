@@ -125,19 +125,6 @@ typedef MatrixXd AlignmentJacobianMatrix;
 typedef MatrixXd TransportJacobianMatrix;
 typedef MatrixXd ELossJacobianMatrix;
 
-
-// struct ParmInfo {
-//   int parmtype;
-//   int subdet;
-//   int layer;
-//   float x;
-//   float y;
-//   float z;
-//   float eta;
-//   float phi;
-//   float rho;
-// };
-
 //
 // class declaration
 //
@@ -185,86 +172,20 @@ protected:
   virtual void endStream() override;
 
   virtual void beginRun(edm::Run const&, edm::EventSetup const&) override;
-  //virtual void endRun(edm::Run const&, edm::EventSetup const&) override;
-  //virtual void beginLuminosityBlock(edm::LuminosityBlock const&, edm::EventSetup const&) override;
-  //virtual void endLuminosityBlock(edm::LuminosityBlock const&, edm::EventSetup const&) override;
 
   GloballyPositioned<double> surfaceToDouble(const Surface &surface) const;
-  
-  Matrix<double, 5, 6> localTransportJacobian(const TrajectoryStateOnSurface& start,
-                                              const std::pair<TrajectoryStateOnSurface, double>& propresult,
-                                              bool doReverse = false) const;
-                                              
-  Matrix<double, 5, 6> localTransportJacobianAlt(const TrajectoryStateOnSurface& start,
-                                              const std::pair<TrajectoryStateOnSurface, double>& propresult,
-                                              bool doReverse = false) const;
-                                              
-  Matrix<double, 5, 6> curv2localTransportJacobian(const FreeTrajectoryState& start,
-                                              const std::pair<TrajectoryStateOnSurface, double>& propresult,
-                                              bool doReverse = false) const;
 
-  Matrix<double, 5, 6> curv2curvTransportJacobian(const FreeTrajectoryState& start,
-                                              const std::pair<TrajectoryStateOnSurface, double>& propresult,
-                                              bool doReverse = false) const;
-                                              
-  Matrix<double, 5, 6> curvtransportJacobian(const GlobalTrajectoryParameters& globalSource,
-                                                             const GlobalTrajectoryParameters& globalDest,
-                                                             const double& s,
-                                                             const GlobalVector& bfield) const;
-                                              
-  Matrix<double, 5, 1> bfieldJacobian(const GlobalTrajectoryParameters& globalSource,
-                                                             const GlobalTrajectoryParameters& globalDest,
-                                                             const double& s,
-                                                             const GlobalVector& bfield) const;
-         
-  Matrix<double, 5, 5> curv2localJacobianAlt(const TrajectoryStateOnSurface &state) const;
-  
-  Matrix<double, 5, 5> curv2localJacobianAlteloss(const TrajectoryStateOnSurface &state, double dEdx, double mass) const;
-  
   Matrix<double, 5, 5> curv2localJacobianAltelossD(const Matrix<double, 7, 1> &state, const MagneticField *field, const GloballyPositioned<double> &surface, double dEdx, double mass, double dBz = 0.) const;
   
   Matrix<double, 2, 8> curv2localJacobianAltelossDalign(const Matrix<double, 7, 1> &state, const MagneticField *field, const GloballyPositioned<double> &surface, double dEdx, double mass, double dBz = 0.) const;
 
   
-  Matrix<double, 6, 5> curv2cartJacobianAlt(const FreeTrajectoryState &state) const;
   Matrix<double, 6, 5> curv2cartJacobianAltD(const Matrix<double, 7, 1> &state) const;
-                                                             
-  Matrix<double, 5, 6> hybrid2curvJacobian(const FreeTrajectoryState &state) const;
   
   Matrix<double, 5, 6> hybrid2curvJacobianD(const Matrix<double, 7, 1> &state, const MagneticField *field, double dBz = 0.) const;
-         
-  Matrix<double, 5, 7> hybrid2localTransportJacobian(const FreeTrajectoryState& start,
-                                              const std::pair<TrajectoryStateOnSurface, double>& propresult) const;
-  
-  Matrix<double, 5, 7> hybrid2curvTransportJacobian(const FreeTrajectoryState& start,
-                                              const std::pair<TrajectoryStateOnSurface, double>& propresult) const;
-                                              
-  Matrix<double, 5, 7> hybrid2curvTransportJacobian(const GlobalTrajectoryParameters& globalSource,
-                                                             const GlobalTrajectoryParameters& globalDest,
-                                                             const double& s,
-                                                             const GlobalVector& bfield) const;
-                                                             
-  Matrix<double, 5, 7> hybrid2curvTransportJacobianVar(const GlobalTrajectoryParameters& globalSource,
-                                                             const GlobalTrajectoryParameters& globalDest,
-                                                             const double& s,
-                                                             const GlobalVector& bfield) const;
-                                                             
-  AlgebraicVector5 localMSConvolution(const TrajectoryStateOnSurface& tsos, const MaterialEffectsUpdator& updator) const;
-                                                             
-  Matrix<double, 5, 6> materialEffectsJacobian(const TrajectoryStateOnSurface& tsos, const MaterialEffectsUpdator& updator);
-  
-  Matrix<double, 5, 6> materialEffectsJacobianVar(const TrajectoryStateOnSurface& tsos, const MaterialEffectsUpdator& updator);
-  
-  std::array<Matrix<double, 5, 5>, 5> processNoiseJacobians(const TrajectoryStateOnSurface& tsos, const MaterialEffectsUpdator& updator) const;
-  
-  Matrix<double, 2, 1> localPositionConvolution(const TrajectoryStateOnSurface& tsos, const Matrix<double, 5, 5> &curvcov) const;
-  
+
+    
   Matrix<double, 2, 1> localPositionConvolutionD(const Matrix<double, 7, 1>& state, const Matrix<double, 5, 5> &curvcov, const GloballyPositioned<double> &surface) const;
-
-  template <unsigned int D>
-  AlgebraicVector5 lupdate(const TrajectoryStateOnSurface& tsos, const TrackingRecHit& aRecHit);
-
-  AlgebraicVector5 update(const TrajectoryStateOnSurface& tsos, const TrackingRecHit& aRecHit);
 
   template <typename T>
   void init_twice_active_var(T &ad, const unsigned int d_num, const unsigned int idx) const;
@@ -272,10 +193,6 @@ protected:
   template <typename T>
   void init_twice_active_null(T &ad, const unsigned int d_num) const;
   
-//   Matrix<double, 5, 3> vertexToCurvilinearJacobian(const FreeTrajectoryState &state) const;
-  Matrix<double, 6, 6> cartesianToCartesianJacobian(const FreeTrajectoryState &state) const;
-  
-  Matrix<double, 1, 6> massJacobianAlt(const FreeTrajectoryState &state0, const FreeTrajectoryState &state1, double dmass) const;
   
   Matrix<double, 1, 6> massJacobianAltD(const Matrix<double, 7, 1> &state0, const Matrix<double, 7, 1> &state1, double dmass) const;
   
@@ -285,21 +202,7 @@ protected:
   
   Matrix<double, 6, 6> massinvsqHessianAltD(const Matrix<double, 7, 1> &state0, const Matrix<double, 7, 1> &state1, double dmass) const;  
   
-  Matrix<double, 1, 6> massJacobianInvSq(const FreeTrajectoryState &state0, const FreeTrajectoryState &state1, double dmass) const;
-  
-  Matrix<double, 1, 6> mrJacobian(const FreeTrajectoryState &state0, const FreeTrajectoryState &state1, double dmass) const;
-  
-  Matrix<double, 5, 1> elossAdHocJacobian(const FreeTrajectoryState &state, double mass) const;
   Matrix<double, 5, 1> elossAdHocJacobianD(const Matrix<double, 7, 1> &state, double mass) const;
-  
-
-//   Point3DBase<double, GlobalTag> toGlobal(const Surface &surface, const Point3DBase<double, LocalTag> &lp) const;
-//   
-//   Vector3DBase<double, GlobalTag> toGlobal(const Surface &surface, const Vector3DBase<double, LocalTag> &lv) const;
-//   
-//   Point3DBase<double, LocalTag> toLocal(const Surface &surface, const Point3DBase<double, GlobalTag> &gp) const;
-//   
-//   Vector3DBase<double, LocalTag> toLocal(const Surface &surface, const Vector3DBase<double, GlobalTag> &gv) const;
   
   // ----------member data ---------------------------
   edm::EDGetTokenT<std::vector<Trajectory>> inputTraj_;
@@ -540,47 +443,6 @@ protected:
 //   bool filledRunTree_;
   
 };
-
-template <unsigned int D>
-AlgebraicVector5 ResidualGlobalCorrectionMakerBase::lupdate(const TrajectoryStateOnSurface& tsos, const TrackingRecHit& aRecHit) {
-  typedef typename AlgebraicROOTObject<D, 5>::Matrix MatD5;
-  typedef typename AlgebraicROOTObject<5, D>::Matrix Mat5D;
-  typedef typename AlgebraicROOTObject<D, D>::SymMatrix SMatDD;
-  typedef typename AlgebraicROOTObject<D>::Vector VecD;
-  using ROOT::Math::SMatrixNoInit;
-
-  auto&& x = tsos.localParameters().vector();
-  auto&& C = tsos.localError().matrix();
-
-  // projection matrix (assume element of "H" to be just 0 or 1)
-  ProjectMatrix<double, 5, D> pf;
-
-  // Measurement matrix
-  VecD r, rMeas;
-  SMatDD V(SMatrixNoInit{}), VMeas(SMatrixNoInit{});
-
-  KfComponentsHolder holder;
-  holder.template setup<D>(&r, &V, &pf, &rMeas, &VMeas, x, C);
-  aRecHit.getKfComponents(holder);
-
-  r -= rMeas;
-
-  // and covariance matrix of residuals
-  SMatDD R = V + VMeas;
-  bool ok = invertPosDefMatrix(R);
-  if (!ok) {
-    return AlgebraicVector5();
-  }
-
-  // Compute Kalman gain matrix
-  AlgebraicMatrix55 M = AlgebraicMatrixID();
-  Mat5D K = C * pf.project(R);
-  pf.projectAndSubtractFrom(M, K);
-
-  // Compute local filtered state vector
-  AlgebraicVector5 fsvdiff = K * r;
-  return fsvdiff;
-}
 
 template <typename T>
 void ResidualGlobalCorrectionMakerBase::init_twice_active_var(T &ad, const unsigned int d_num, const unsigned int idx) const {
