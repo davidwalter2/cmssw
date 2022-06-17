@@ -8,5 +8,5 @@ Geant4ePropagator = cms.ESProducer("GeantPropagatorESProducer",
                                    ComponentName = cms.string("Geant4ePropagator"),
                                    PropagationDirection=cms.string("alongMomentum"),
                                    ParticleName=cms.string("mu"),
-                                   PropagationPtotLimit = cms.double(1.0) ## GeV/c
+                                   PropagationPtotLimit = cms.double(0.5) ## GeV/c
                                    )
