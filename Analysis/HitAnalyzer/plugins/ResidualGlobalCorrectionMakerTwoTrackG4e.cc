@@ -1217,8 +1217,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 //               AlgebraicMatrix55 const Qmat = updtsos.localError().matrix();
 //               const Map<const Matrix<double, 5, 5, RowMajor>>Q(Qmat.Array());
               
-              const Matrix<double, 5, 5> Q = Hm*Qcurv*Hm.transpose();
-
+//               const Matrix<double, 5, 5> Q = Hm*Qcurv*Hm.transpose();
+              const Matrix<double, 5, 5> Q = dolocalupdate ? Hm*Qcurv*Hm.transpose() : Qcurv;
 
               Matrix<double, 5, 1> localparmsprop;
               const Point3DBase<double, GlobalTag> posprop(updtsos[0], updtsos[1], updtsos[2]);
@@ -1457,7 +1457,14 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                   MSScalar dxi(0.);
                   init_twice_active_var(dxi, nlocal, localparmidx + 1);
                   
-                  const Matrix<MSScalar, 5, 1> dprop = dx0.cast<MSScalar>() + Hpstate*du - Hmstate*Fvtx*dvtx - Hmstate*Fmom*dmom - Hmstate*Fb*dbeta - Hmstate*Fxi*dxi;
+//                   const Matrix<MSScalar, 5, 1> dprop = dx0.cast<MSScalar>() + Hpstate*du - Hmstate*Fvtx*dvtx - Hmstate*Fmom*dmom - Hmstate*Fb*dbeta - Hmstate*Fxi*dxi;
+                  Matrix<MSScalar, 5, 1> dprop;
+                  if (dolocalupdate) {
+                    dprop = dx0.cast<MSScalar>() + Hpstate*du - Hmstate*Fvtx*dvtx - Hmstate*Fmom*dmom - Hmstate*Fb*dbeta - Hmstate*Fxi*dxi;
+                  }
+                  else {
+                    dprop = du - Fvtx*dvtx - Fmom*dmom - Fb*dbeta - Fxi*dxi;
+                  }
                   const MSScalar chisq = dprop.transpose()*Qinv*dprop;
                   
                   chisq0val += chisq.value().value();
@@ -1528,7 +1535,14 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                   MSScalar dxi(0.);
                   init_twice_active_var(dxi, nlocal, localparmidx + 1);
                               
-                  const Matrix<MSScalar, 5, 1> dprop = dx0.cast<MSScalar>() + Hpstate*du - Hmstate*Fstate*dum - Hmstate*Fb*dbeta - Hmstate*Fxi*dxi;
+//                   const Matrix<MSScalar, 5, 1> dprop = dx0.cast<MSScalar>() + Hpstate*du - Hmstate*Fstate*dum - Hmstate*Fb*dbeta - Hmstate*Fxi*dxi;
+                  Matrix<MSScalar, 5, 1> dprop;
+                  if (dolocalupdate) {
+                    dprop = dx0.cast<MSScalar>() + Hpstate*du - Hmstate*Fstate*dum - Hmstate*Fb*dbeta - Hmstate*Fxi*dxi;
+                  }
+                  else {
+                    dprop = du - Fstate*dum - Fb*dbeta - Fxi*dxi;
+                  }
                   const MSScalar chisq = dprop.transpose()*Qinv*dprop;
                   
                   chisq0val += chisq.value().value();

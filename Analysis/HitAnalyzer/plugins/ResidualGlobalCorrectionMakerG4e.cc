@@ -2372,7 +2372,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         //get the process noise matrix
 //         AlgebraicMatrix55 const Qmat = updtsos.localError().matrix();
 //         const Map<const Matrix<double, 5, 5, RowMajor>>Q(Qmat.Array());
-        const Matrix<double, 5, 5> Q = Hm*Qcurv*Hm.transpose();
+        const Matrix<double, 5, 5> Q = dolocalupdate ? Hm*Qcurv*Hm.transpose() : Qcurv;
         
 //         const Matrix<double, 5, 5> dQ = Hm*dQcurv*Hm.transpose();
         
@@ -2803,8 +2803,16 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             MSScalar dxi(0.);
             init_twice_active_var(dxi, nlocal, localparmidx + 1);
                         
-            const Matrix<MSScalar, 5, 1> dprop = dx0.cast<MSScalar>() + Hpstate*du - Hmstate*Fstate*dum - Hmstate*Fb*dbeta - Hmstate*Fxi*dxi;
+//             const Matrix<MSScalar, 5, 1> dprop = dolocalupdate ? dx0.cast<MSScalar>() + Hpstate*du - Hmstate*Fstate*dum - Hmstate*Fb*dbeta - Hmstate*Fxi*dxi : du - Fstate*dum - Fb*dbeta - Fxi*dxi;
 //             const Matrix<MSScalar, 5, 1> dprop = dx0.cast<MSScalar>() + du - Fstate*dum - Fb*dbeta;
+            
+            Matrix<MSScalar, 5, 1> dprop;
+            if (dolocalupdate) {
+              dprop = dx0.cast<MSScalar>() + Hpstate*du - Hmstate*Fstate*dum - Hmstate*Fb*dbeta - Hmstate*Fxi*dxi;
+            }
+            else {
+              dprop = du - Fstate*dum - Fb*dbeta - Fxi*dxi;
+            }
             
             
 //             const MSScalar chisq = dprop.transpose()*Qinv*dprop;
