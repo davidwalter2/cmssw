@@ -61,12 +61,6 @@ public:
   Geant4ePropagator *clone() const override { return new Geant4ePropagator(*this); }
 
   const MagneticField *magneticField() const override { return theField; }
-
-  std::tuple<TrajectoryStateOnSurface, Geant4ePropagator::AlgebraicMatrix57, AlgebraicMatrix55> propagateGenericWithJacobian(const FreeTrajectoryState &ftsStart,
-                                                               const Plane &pDest) const;
-                                                               
-  std::tuple<TrajectoryStateOnSurface, Geant4ePropagator::AlgebraicMatrix57, AlgebraicMatrix55, double> propagateGenericWithJacobianAlt(const FreeTrajectoryState &ftsStart,
-                                                               const Plane &pDest) const;
                                                                
   std::tuple<bool, Eigen::Matrix<double, 7, 1>, Eigen::Matrix<double, 5, 5>, Eigen::Matrix<double, 5, 7>, double, Eigen::Matrix<double, 5, 5>> propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 7, 1> &ftsStart,
                                                                                 const GloballyPositioned<double> &pDest, double dBz = 0., double dxi = 0., double pforced = -1.) const;
@@ -161,27 +155,11 @@ private:
   Eigen::Matrix<double, 5, 5> PropagateErrorMSC( const G4Track* aTrack, double pforced = -1. ) const;
                              
   double computeErrorIoni(const G4Track* aTrack, double pforced = -1.) const;
-  
-  AlgebraicMatrix55 curv2localJacobianAlt(const GlobalTrajectoryParameters &globalSource, const Surface &surface) const;
-  
-  AlgebraicMatrix55 curv2localJacobianAlteloss(const GlobalTrajectoryParameters &globalSource, const Surface &surface, double dEdx, double mass) const;
-  
-  Eigen::Matrix<double, 5, 7> transportJacobian(const FreeTrajectoryState &start, double s, double dEdx, double mass) const;
-  
-  Eigen::Matrix<double, 5, 7> transportJacobianBz(const FreeTrajectoryState &start, double s, double dEdx, double mass) const;
-  
+    
   Eigen::Matrix<double, 5, 7> transportJacobianBzD(const Eigen::Matrix<double, 7, 1> &start, double s, double dEdx, double mass, double dBz) const;
   
   Eigen::Matrix<double, 5, 7> transportJacobianD(const Eigen::Matrix<double, 7, 1> &start, double s, double dEdx, double mass) const;
 
-
-  
-  Eigen::Matrix<double, 5, 7> transportJacobianBzAdvanced(const FreeTrajectoryState &start, double s, double dEdx, double mass) const;
-  
-  Eigen::Matrix<double, 6, 5> curv2cartJacobianAlt(const FreeTrajectoryState &state) const;
-
-  Eigen::Matrix<double, 6, 1> transportResult(const FreeTrajectoryState &start, double s, double dEdx, double mass) const;
-  
   Eigen::Matrix<double, 6, 1> transportResultD(const Eigen::Matrix<double, 7, 1> &start, double s, double dEdx, double mass, double bzoffset) const;
 
   G4UniversalFluctuationForExtrapolator *fluct = nullptr;
