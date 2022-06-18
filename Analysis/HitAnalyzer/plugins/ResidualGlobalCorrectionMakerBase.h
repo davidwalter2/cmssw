@@ -177,9 +177,6 @@ protected:
 
   Matrix<double, 5, 5> curv2localJacobianAltelossD(const Matrix<double, 7, 1> &state, const MagneticField *field, const GloballyPositioned<double> &surface, double dEdx, double mass, double dBz = 0.) const;
   
-  Matrix<double, 2, 8> curv2localJacobianAltelossDalign(const Matrix<double, 7, 1> &state, const MagneticField *field, const GloballyPositioned<double> &surface, double dEdx, double mass, double dBz = 0.) const;
-
-  
   Matrix<double, 6, 5> curv2cartJacobianAltD(const Matrix<double, 7, 1> &state) const;
   
   Matrix<double, 5, 6> hybrid2curvJacobianD(const Matrix<double, 7, 1> &state, const MagneticField *field, double dBz = 0.) const;
@@ -201,9 +198,7 @@ protected:
   Matrix<double, 1, 6> massinvsqJacobianAltD(const Matrix<double, 7, 1> &state0, const Matrix<double, 7, 1> &state1, double dmass) const;
   
   Matrix<double, 6, 6> massinvsqHessianAltD(const Matrix<double, 7, 1> &state0, const Matrix<double, 7, 1> &state1, double dmass) const;  
-  
-  Matrix<double, 5, 1> elossAdHocJacobianD(const Matrix<double, 7, 1> &state, double mass) const;
-  
+
   // ----------member data ---------------------------
   edm::EDGetTokenT<std::vector<Trajectory>> inputTraj_;
 //   edm::EDGetTokenT<std::vector<reco::GenParticle>> GenParticlesToken_;

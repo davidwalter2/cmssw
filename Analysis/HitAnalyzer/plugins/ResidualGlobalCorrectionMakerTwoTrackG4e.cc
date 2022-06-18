@@ -36,9 +36,7 @@ public:
 //   static void fillDescriptions(edm::ConfigurationDescriptions &descriptions);
 
 private:
-  
-  Matrix<double, 1, 6> massJacobian(const FreeTrajectoryState &state0, const FreeTrajectoryState &state1, double dmass) const;
-  
+
   virtual void beginStream(edm::StreamID) override;
   virtual void produce(edm::Event &, const edm::EventSetup &) override;
   
@@ -3178,33 +3176,6 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
     }
   }
   
-}
-
-Matrix<double, 1, 6> ResidualGlobalCorrectionMakerTwoTrackG4e::massJacobian(const FreeTrajectoryState &state0, const FreeTrajectoryState &state1, double dmass) const {
-  Matrix<double, 1, 6> res = Matrix<double, 6, 1>::Zero();
-
-  const double e0 = std::sqrt(state0.momentum().mag2() + dmass*dmass);
-  const double e1 = std::sqrt(state1.momentum().mag2() + dmass*dmass);
-  
-  // dm^2/dp0x
-  res(0, 0) = 2.*e1*state0.momentum().x()/e0 - 2.*state1.momentum().x();
-  // dm^2/dp0y
-  res(0, 1) = 2.*e1*state0.momentum().y()/e0 - 2.*state1.momentum().y();
-  // dm^2/dp0z
-  res(0, 2) = 2.*e1*state0.momentum().z()/e0 - 2.*state1.momentum().z();
-  
-  // d^m/dp1x
-  res(0, 3) = 2.*e0*state1.momentum().x()/e1 - 2.*state0.momentum().x();
-  // d^m/dp1y
-  res(0, 4) = 2.*e0*state1.momentum().y()/e1 - 2.*state0.momentum().y();
-  // d^m/dp1z
-  res(0, 5) = 2.*e0*state1.momentum().z()/e1 - 2.*state0.momentum().z();
-  
-  const double m = std::sqrt(2.*dmass*dmass + 2.*e0*e1 - 2.*state0.momentum().x()*state1.momentum().x() - 2.*state0.momentum().y()*state1.momentum().y() - 2.*state0.momentum().z()*state1.momentum().z());
-  
-  res *= 0.5/m;
-  
-  return res;
 }
 
 
