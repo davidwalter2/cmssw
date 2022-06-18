@@ -158,10 +158,6 @@ private:
     
   Eigen::Matrix<double, 5, 7> transportJacobianBzD(const Eigen::Matrix<double, 7, 1> &start, double s, double dEdx, double mass, double dBz) const;
   
-//   Eigen::Matrix<double, 5, 7> transportJacobianD(const Eigen::Matrix<double, 7, 1> &start, double s, double dEdx, double mass) const;
-
-  Eigen::Matrix<double, 6, 1> transportResultD(const Eigen::Matrix<double, 7, 1> &start, double s, double dEdx, double mass, double bzoffset) const;
-
   G4UniversalFluctuationForExtrapolator *fluct = nullptr;
   
 };
