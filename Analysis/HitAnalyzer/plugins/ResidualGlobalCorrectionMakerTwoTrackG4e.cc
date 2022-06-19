@@ -40,10 +40,12 @@ private:
   virtual void beginStream(edm::StreamID) override;
   virtual void produce(edm::Event &, const edm::EventSetup &) override;
   
+  bool doVtxConstraint_;
   bool doMassConstraint_;
   double massConstraint_;
   double massConstraintWidth_;
   
+  float Jpsi_d;
   float Jpsi_x;
   float Jpsi_y;
   float Jpsi_z;
@@ -78,6 +80,7 @@ private:
   float Muminuskin_eta;
   float Muminuskin_phi;
   
+  float Jpsicons_d;
   float Jpsicons_x;
   float Jpsicons_y;
   float Jpsicons_z;
@@ -182,6 +185,7 @@ private:
 
 ResidualGlobalCorrectionMakerTwoTrackG4e::ResidualGlobalCorrectionMakerTwoTrackG4e(const edm::ParameterSet &iConfig) : ResidualGlobalCorrectionMakerBase(iConfig) 
 {
+  doVtxConstraint_ = iConfig.getParameter<bool>("doVtxConstraint");
   doMassConstraint_ = iConfig.getParameter<bool>("doMassConstraint");
   massConstraint_ = iConfig.getParameter<double>("massConstraint");
   massConstraintWidth_ = iConfig.getParameter<double>("massConstraintWidth");
@@ -192,6 +196,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::beginStream(edm::StreamID streami
   ResidualGlobalCorrectionMakerBase::beginStream(streamid);
   
   if (fillTrackTree_) {
+    tree->Branch("Jpsi_d", &Jpsi_d);
     tree->Branch("Jpsi_x", &Jpsi_x);
     tree->Branch("Jpsi_y", &Jpsi_y);
     tree->Branch("Jpsi_z", &Jpsi_z);
@@ -226,7 +231,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::beginStream(edm::StreamID streami
     tree->Branch("Muminuskin_eta", &Muminuskin_eta);
     tree->Branch("Muminuskin_phi", &Muminuskin_phi);
     
-    
+    tree->Branch("Jpsicons_d", &Jpsicons_d);
     tree->Branch("Jpsicons_x", &Jpsicons_x);
     tree->Branch("Jpsicons_y", &Jpsicons_y);
     tree->Branch("Jpsicons_z", &Jpsicons_z);
@@ -802,7 +807,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 //       const unsigned int nparsEloss = nhits + 2;
       const unsigned int npars = nparsAlignment + nparsBfield + nparsEloss;
       
-      const unsigned int nstateparms =  9 + 5*nhits;
+      const unsigned int nstateparms = 10 + 5*nhits;
       const unsigned int nparmsfull = nstateparms + npars;
       
     
@@ -939,18 +944,27 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 //           std::array<unsigned int, 2> trackstateidxarr;
           std::array<unsigned int, 2> trackparmidxarr;
           
-          unsigned int trackstateidx = 3;
+          unsigned int trackstateidx = 10;
           unsigned int parmidx = 0;
           unsigned int alignmentparmidx = 0;
           
           double chisq0val = 0.;
           
+          if (iiter > 0) {
+            //update current state from reference point state
+            const Matrix<double, 10, 1> statepca = twoTrackCart2pca(refftsarr[0], refftsarr[1]);
+            const Matrix<double, 10, 1> statepcaupd = statepca + dxfull.head<10>();
+
+            refftsarr = twoTrackPca2cart(statepcaupd);
+          }
+
           
   //         const bool firsthitshared = hitsarr[0][0]->sharesInput(&(*hitsarr[1][0]), TrackingRecHit::some);
           
   //         std::cout << "firsthitshared = " << firsthitshared << std::endl;
           
           double dbetavalref = 0.;
+          std::array<double, 2> dbetavalrefarr;
           for (unsigned int id = 0; id < 2; ++id) {
               auto &hits = hitsarr[id];
               auto const& hit = hits[0];
@@ -962,8 +976,11 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(6, parmdetid));                
               
               const double dbetaval = corparms_[bfieldglobalidx];
-              dbetavalref += 0.5*dbetaval;    
+              dbetavalref += 0.5*dbetaval;
+              dbetavalrefarr[id] = dbetaval;
           }
+
+          const Matrix<double, 10, 10> twotrackpca2curvref = twoTrackPca2curvJacobianD(refftsarr[0], refftsarr[1], field, dbetavalrefarr[0], dbetavalrefarr[1]);
 
           
           for (unsigned int id = 0; id < 2; ++id) {
@@ -981,30 +998,30 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             const unsigned int tracknhits = hits.size();
             
 //             if (iiter > 0 || icons > 0) {
-            if (iiter > 0) {
-              //update current state from reference point state (errors not needed beyond first iteration)
-
-              const double qbp = refFts[6]/refFts.segment<3>(3).norm();
-              const double lam = std::atan(refFts[5]/std::sqrt(refFts[3]*refFts[3] + refFts[4]*refFts[4]));
-              const double phi = std::atan2(refFts[4], refFts[3]);
-              
-              const double qbpupd = qbp + dxfull(trackstateidx);
-              const double lamupd = lam + dxfull(trackstateidx + 1);
-              const double phiupd = phi + dxfull(trackstateidx + 2);
-              
-              const double charge = std::copysign(1., qbpupd);
-              const double pupd = std::abs(1./qbpupd);
-              
-              const double pxupd = pupd*std::cos(lamupd)*std::cos(phiupd);
-              const double pyupd = pupd*std::cos(lamupd)*std::sin(phiupd);
-              const double pzupd = pupd*std::sin(lamupd);
-              
-              refFts.head<3>() += dxfull.head<3>();
-              refFts[3] = pxupd;
-              refFts[4] = pyupd;
-              refFts[5] = pzupd;
-              refFts[6] = charge;
-            }
+//             if (iiter > 0) {
+//               //update current state from reference point state (errors not needed beyond first iteration)
+//
+//               const double qbp = refFts[6]/refFts.segment<3>(3).norm();
+//               const double lam = std::atan(refFts[5]/std::sqrt(refFts[3]*refFts[3] + refFts[4]*refFts[4]));
+//               const double phi = std::atan2(refFts[4], refFts[3]);
+//
+//               const double qbpupd = qbp + dxfull(trackstateidx);
+//               const double lamupd = lam + dxfull(trackstateidx + 1);
+//               const double phiupd = phi + dxfull(trackstateidx + 2);
+//
+//               const double charge = std::copysign(1., qbpupd);
+//               const double pupd = std::abs(1./qbpupd);
+//
+//               const double pxupd = pupd*std::cos(lamupd)*std::cos(phiupd);
+//               const double pyupd = pupd*std::cos(lamupd)*std::sin(phiupd);
+//               const double pzupd = pupd*std::sin(lamupd);
+//
+//               refFts.head<3>() += dxfull.head<3>();
+//               refFts[3] = pxupd;
+//               refFts[4] = pyupd;
+//               refFts[5] = pzupd;
+//               refFts[6] = charge;
+//             }
             
 //             // initialize with zero uncertainty
 //             refFts = FreeTrajectoryState(refFts.parameters(), nullerr);
@@ -1032,6 +1049,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 //             TrajectoryStateOnSurface updtsos = std::get<0>(propresultref);
 //             
 //             const Matrix<double, 5, 6> hybrid2curvref = hybrid2curvJacobian(refFts);
+
 //             
 //   //           JacobianCartesianToCurvilinear cart2curvref(refFts.parameters());
 //   //           auto const &jacCart2CurvRef = Map<const Matrix<double, 5, 6, RowMajor>>(cart2curvref.jacobian().Array());
@@ -1044,7 +1062,9 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
             
 
-            const Matrix<double, 5, 6> hybrid2curvref = hybrid2curvJacobianD(refFts, field, dbetavalref);
+//             const Matrix<double, 5, 6> hybrid2curvref = hybrid2curvJacobianD(refFts, field, dbetavalref);
+
+//             std::cout << "id = " << id << " twotrackpca2curvref:\n" << twotrackpca2curvref << "\nhybrid2curvref:\n" << hybrid2curvref << std::endl;
 
             Matrix<double, 7, 1> updtsos = refFts;
             
@@ -1052,6 +1072,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             if (bsConstraint_) {
               // apply beamspot constraint
               // TODO add residual corrections for beamspot parameters?
+              // TODO impose constraints on individual tracks when not applying common vertex constraint?
               
               constexpr unsigned int nlocalvtx = 3;
               
@@ -1059,7 +1080,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               
               constexpr unsigned int localvtxidx = 0;
               
-              constexpr unsigned int fullvtxidx = 0;
+              constexpr unsigned int fullvtxidx = 7;
               
               using BSScalar = AANT<double, nlocal>;
               
@@ -1397,9 +1418,9 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 //                 const Vector5d dx0 = Map<const Vector5d>(idx0.Array());
                 const Vector5d dx0 = idx0;
 
-                if (ihit == 0) {                  
-                  constexpr unsigned int nvtxstate = 3;
-                  constexpr unsigned int nlocalstate = 8;
+                if (ihit == 0) {
+                  constexpr unsigned int nvtxstate = 10;
+                  constexpr unsigned int nlocalstate = 5;
                   constexpr unsigned int nlocalbfield = 1;
                   constexpr unsigned int nlocaleloss = 1;
                   constexpr unsigned int nlocalparms = nlocalbfield + nlocaleloss;
@@ -1416,12 +1437,10 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                   
                   using MSScalar = AANT<double, nlocal>;
                                   
-                  Matrix<MSScalar, 5, 3> Fvtx = (FdFm.leftCols<5>()*hybrid2curvref.rightCols<3>()).cast<MSScalar>();
-                  Matrix<MSScalar, 5, 3> Fmom = (FdFm.leftCols<5>()*hybrid2curvref.leftCols<3>()).cast<MSScalar>();
-                  
-  //                 Matrix<MSScalar, 5, 3> Fvtx = (FdFm.leftCols<5>()*jacCart2CurvRef.leftCols<3>()).cast<MSScalar>();
-  //                 Matrix<MSScalar, 5, 3> Fmom = FdFm.leftCols<3>().cast<MSScalar>();
-                  
+                  const unsigned int vtxjacidx = 5*id;
+
+                  Matrix<MSScalar, 5, 10> Fvtx = (FdFm.leftCols<5>()*twotrackpca2curvref.middleRows<5>(vtxjacidx)).cast<MSScalar>();
+
                   Matrix<MSScalar, 5, 1> Fb = FdFm.col(5).cast<MSScalar>();
                   Matrix<MSScalar, 5, 1> Fxi = FdFm.col(6).cast<MSScalar>();
                   
@@ -1431,19 +1450,14 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                   Matrix<MSScalar, 5, 5> Qinv = Q.inverse().cast<MSScalar>();
                   
                   // initialize active scalars for common vertex parameters
-                  Matrix<MSScalar, 3, 1> dvtx = Matrix<MSScalar, 3, 1>::Zero();
+                  Matrix<MSScalar, 10, 1> dvtx = Matrix<MSScalar, 10, 1>::Zero();
                   for (unsigned int j=0; j<dvtx.size(); ++j) {
                     init_twice_active_var(dvtx[j], nlocal, localvtxidx + j);
                   }
                   
-                  Matrix<MSScalar, 3, 1> dmom = Matrix<MSScalar, 3, 1>::Zero();
-                  for (unsigned int j=0; j<dmom.size(); ++j) {
-                    init_twice_active_var(dmom[j], nlocal, localstateidx + j);
-                  }
-                  
                   Matrix<MSScalar, 5, 1> du = Matrix<MSScalar, 5, 1>::Zero();
                   for (unsigned int j=0; j<du.size(); ++j) {
-                    init_twice_active_var(du[j], nlocal, localstateidx + 3 + j);
+                    init_twice_active_var(du[j], nlocal, localstateidx + j);
                   }
                   
                   // initialize active scalars for correction parameters                  
@@ -1458,10 +1472,10 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 //                   const Matrix<MSScalar, 5, 1> dprop = dx0.cast<MSScalar>() + Hpstate*du - Hmstate*Fvtx*dvtx - Hmstate*Fmom*dmom - Hmstate*Fb*dbeta - Hmstate*Fxi*dxi;
                   Matrix<MSScalar, 5, 1> dprop;
                   if (dolocalupdate) {
-                    dprop = dx0.cast<MSScalar>() + Hpstate*du - Hmstate*Fvtx*dvtx - Hmstate*Fmom*dmom - Hmstate*Fb*dbeta - Hmstate*Fxi*dxi;
+                    dprop = dx0.cast<MSScalar>() + Hpstate*du - Hmstate*Fvtx*dvtx - Hmstate*Fb*dbeta - Hmstate*Fxi*dxi;
                   }
                   else {
-                    dprop = du - Fvtx*dvtx - Fmom*dmom - Fb*dbeta - Fxi*dxi;
+                    dprop = du - Fvtx*dvtx - Fb*dbeta - Fxi*dxi;
                   }
                   const MSScalar chisq = dprop.transpose()*Qinv*dprop;
                   
@@ -1499,7 +1513,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                   constexpr unsigned int localstateidx = 0;
                   constexpr unsigned int localparmidx = localstateidx + nlocalstate;
                   
-                  const unsigned int fullstateidx = trackstateidx + 3 + 5*(ihit - 1);
+                  const unsigned int fullstateidx = trackstateidx + 5*(ihit - 1);
                   const unsigned int fullparmidx = nstateparms + parmidx;
                   
                   using MSScalar = AANT<double, nlocal>;
@@ -1593,7 +1607,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
                   using AlignScalar = AANT<double, nlocal>;
                   
-                  const unsigned int fullstateidx = trackstateidx + 3 + 5*ihit + 3;
+                  const unsigned int fullstateidx = trackstateidx + 5*ihit + 3;
                   const unsigned int fullparmidx = nstateparms + nparsBfield + nparsEloss + alignmentparmidx;
 
                   const bool ispixel = GeomDetEnumerators::isTrackerPixel(preciseHit->det()->subDetector());
@@ -1991,7 +2005,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               break;
             }
             
-            trackstateidx += 3 + 5*tracknhits;
+            trackstateidx += 5*tracknhits;
           }
           
           if (!valid) {
@@ -2022,6 +2036,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 //           if (icons == 1 && iiter > 3) {
           if (icons > 0) {
 //           if (false) {
+            //TODO simplify this to treat the 6 parameters contiguously (now that they are contiguous in the original vector)
+
             constexpr unsigned int nlocalstate0 = 3;
             constexpr unsigned int nlocalstate1 = 3;
             
@@ -2030,8 +2046,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             constexpr unsigned int localstateidx0 = 0;
             constexpr unsigned int localstateidx1 = localstateidx0 + nlocalstate0;
             
-            const unsigned int fullstateidx0 = trackstateidxarr[0];
-            const unsigned int fullstateidx1 = trackstateidxarr[1];
+            const unsigned int fullstateidx0 = 0;
+            const unsigned int fullstateidx1 = 3;
             
             using MScalar = AANT<double, nlocal>;
             
@@ -2244,14 +2260,14 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           };
           
           if (fitFromGenParms_) {
-            for (unsigned int i=0; i<3; ++i) {
+            for (unsigned int i=0; i<10; ++i) {
               freezeparm(i);
             }
-            for (unsigned int id = 0; id < 2; ++id) {
-              for (unsigned int i=0; i<3; ++i) {
-                freezeparm(trackstateidxarr[id] + i);
-              }
-            }
+          }
+
+          if (doVtxConstraint_) {
+            // freeze track pca distance to 0 to impose common vertex constraint
+            freezeparm(6);
           }
           
 //           if (fitFromGenParms_) {
@@ -2363,6 +2379,10 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           if (bsConstraint_) {
             ndof += 3;
           }
+
+          if (doVtxConstraint_) {
+            ++ndof;
+          }
           
           if (icons == 1) {
             ++ndof;
@@ -2444,17 +2464,26 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           }
           
           // apply the GBL fit results to the vertex position
-          const Vector3d vtxpos = refftsarr[0].head<3>() + dxfull.head<3>();
-          
+          const Matrix<double, 10, 1> statepca = twoTrackCart2pca(refftsarr[0], refftsarr[1]);
+          const Matrix<double, 10, 1> statepcaupd = statepca + dxfull.head<10>();
+
+//           std::cout << "statepcaupd d = " << statepcaupd[6] << std::endl;
+
+          const bool firstplus = statepcaupd[0] > 0.;
+
           if (icons == 0) {
-            Jpsi_x = vtxpos[0];
-            Jpsi_y = vtxpos[1];
-            Jpsi_z = vtxpos[2];
+            // define sign of d wrt charge of tracks
+            Jpsi_d = firstplus ? statepcaupd[6] : -statepcaupd[6];
+            Jpsi_x = statepcaupd[7];
+            Jpsi_y = statepcaupd[8];
+            Jpsi_z = statepcaupd[9];
           }
           else {
-            Jpsicons_x = vtxpos[0];
-            Jpsicons_y = vtxpos[1];
-            Jpsicons_z = vtxpos[2];
+            // define sign of d wrt charge of tracks
+            Jpsicons_d = firstplus ? statepcaupd[6] : -statepcaupd[6];
+            Jpsicons_x = statepcaupd[7];
+            Jpsicons_y = statepcaupd[8];
+            Jpsicons_z = statepcaupd[9];
           }
 
           std::array<ROOT::Math::PxPyPzMVector, 2> muarr;
@@ -2466,16 +2495,11 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           // apply the GBL fit results to the muon kinematics
           for (unsigned int id = 0; id < 2; ++id) {
             const Matrix<double, 7, 1> &refFts = refftsarr[id];
-            const unsigned int trackstateidx = trackstateidxarr[id];
+            const unsigned int trackstateidx = 3*id;
 
-            
-            const double qbp = refFts[6]/refFts.segment<3>(3).norm();
-            const double lam = std::atan(refFts[5]/std::sqrt(refFts[3]*refFts[3] + refFts[4]*refFts[4]));
-            const double phi = std::atan2(refFts[4], refFts[3]);
-            
-            const double qbpupd = qbp + dxfull(trackstateidx);
-            const double lamupd = lam + dxfull(trackstateidx + 1);
-            const double phiupd = phi + dxfull(trackstateidx + 2);
+            const double qbpupd = statepcaupd[trackstateidx];
+            const double lamupd = statepcaupd[trackstateidx + 1];
+            const double phiupd = statepcaupd[trackstateidx + 2];
             
             const double charge = std::copysign(1., qbpupd);
             const double pupd = std::abs(1./qbpupd);

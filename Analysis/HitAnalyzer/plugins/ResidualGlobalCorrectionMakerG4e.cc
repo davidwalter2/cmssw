@@ -277,6 +277,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   const bool dolocalupdate = false;
 
 
+
   using namespace edm;
 
   Handle<reco::TrackCollection> trackOrigH;
@@ -869,6 +870,10 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
     const bool iscosmic = track.algo() == reco::TrackBase::ctf || track.algo() == reco::TrackBase::cosmics;
     
+    const bool dopca = !dogen && !iscosmic;
+//     const bool dopca = false;
+
+
 //     const Trajectory& traj = (*trajH)[itraj];
     
 //     const edm::Ref<std::vector<Trajectory> > trajref(trajH, j);
@@ -1638,8 +1643,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         
         refFts.head<3>() = startpointv - 1.0*startmomv.normalized();
         refFts.segment<3>(3) = startmomv;
+
       }
-      
 //       const GlobalPoint refpos(refpoint.x(), refpoint.y(), refpoint.z());
 //       const GlobalVector refmom(trackmom.x(), trackmom.y(), trackmom.z()); 
 //       const GlobalTrajectoryParameters refglobal(refpos, refmom, track.charge(), field);
@@ -1653,6 +1658,13 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 //       refFts = FreeTrajectoryState(refpos, refmom, track.charge(), field);
 //       refFts = FreeTrajectoryState(refglobal, referr);
     }
+
+    if (dopca) {
+      // enforce that reference state is really a consistent PCA to the beamline (by adjusting the reference position if needed)
+      const Matrix<double, 5, 1> statepca = cart2pca(refFts, *bsH);
+      refFts = pca2cart(statepca, *bsH);
+    }
+
 
 //     std::vector<std::pair<TrajectoryStateOnSurface, double>> layerStates;
 //     std::vector<TrajectoryStateOnSurface> layerStates;
@@ -1913,49 +1925,51 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         //update current state from reference point state (errors not needed beyond first iteration)
 //         JacobianCurvilinearToCartesian curv2cart(refFts.parameters());
 //         const AlgebraicMatrix65& jac = curv2cart.jacobian();
-        const Matrix<double, 6, 5> jac = curv2cartJacobianAltD(refFts);
 //         const AlgebraicVector6 glob = refFts.parameters().vector();
         
         auto const& dxlocal = dxfull.head<5>();
 //         const Matrix<double, 6, 1> globupd = Map<const Matrix<double, 6, 1>>(glob.Array()) + Map<const Matrix<double, 6, 5, RowMajor>>(jac.Array())*dxlocal;
 //         const Matrix<double, 6, 1> globupd = Map<const Matrix<double, 6, 1>>(glob.Array()) + jac*dxlocal;
-        const Matrix<double, 6, 1> globupd = refFts.head<6>() + jac*dxlocal;
+
         
         
-        const double qbp = refFts[6]/refFts.segment<3>(3).norm();
-        const double lam = std::atan(refFts[5]/std::sqrt(refFts[3]*refFts[3] + refFts[4]*refFts[4]));
-        const double phi = std::atan2(refFts[4], refFts[3]);
+
         
-        
-//         const Vector6d dglob = Map<const Matrix<double, 6, 5, RowMajor>>(jac.Array())*dxlocal;
-//         
-//         std::cout << "iiter = " << iiter << std::endl;
-//         std::cout << "dxlocal "  << dxlocal << std::endl;
-//         std::cout << "glob " << glob << std::endl;
-//         std::cout << "dglob " << dglob << std::endl;
-        
-//         const GlobalPoint pos(globupd[0], globupd[1], globupd[2]);
-//         const GlobalVector mom(globupd[3], globupd[4], globupd[5]);
-//         const double charge = std::copysign(1., refFts.charge()/refFts.momentum().mag() + dxlocal[0]);
-        
-//         const CurvilinearTrajectoryParameters curv(refFts.position(), refFts.momentum(), refFts.charge());
-              
-        const double qbpupd = qbp + dxfull(0);
-        const double lamupd = lam + dxfull(1);
-        const double phiupd = phi + dxfull(2);
-        
-        const double charge = std::copysign(1., qbpupd);
-        const double pupd = std::abs(1./qbpupd);
-        
-        const double pxupd = pupd*std::cos(lamupd)*std::cos(phiupd);
-        const double pyupd = pupd*std::cos(lamupd)*std::sin(phiupd);
-        const double pzupd = pupd*std::sin(lamupd);
-        
-        refFts.head<3>() = globupd.head<3>();
-        refFts[3] = pxupd;
-        refFts[4] = pyupd;
-        refFts[5] = pzupd;
-        refFts[6] = charge;
+        if (dopca) {
+          // position transformation from track-beamline pca to cartesian is non-linear so do it exactly
+          const Matrix<double, 5, 1> statepca = cart2pca(refFts, *bsH);
+          const Matrix<double, 5, 1> statepcaupd = statepca + dxlocal;
+
+          refFts = pca2cart(statepcaupd, *bsH);
+
+        }
+        else {
+          // position transformation from curvilinear to cartesian is linear so just use the jacobian
+
+          const Matrix<double, 6, 5> jac = curv2cartJacobianAltD(refFts);
+          const Matrix<double, 6, 1> globupd = refFts.head<6>() + jac*dxlocal;
+
+          const double qbp = refFts[6]/refFts.segment<3>(3).norm();
+          const double lam = std::atan(refFts[5]/std::sqrt(refFts[3]*refFts[3] + refFts[4]*refFts[4]));
+          const double phi = std::atan2(refFts[4], refFts[3]);
+
+          const double qbpupd = qbp + dxlocal(0);
+          const double lamupd = lam + dxlocal(1);
+          const double phiupd = phi + dxlocal(2);
+
+          const double charge = std::copysign(1., qbpupd);
+          const double pupd = std::abs(1./qbpupd);
+
+          const double pxupd = pupd*std::cos(lamupd)*std::cos(phiupd);
+          const double pyupd = pupd*std::cos(lamupd)*std::sin(phiupd);
+          const double pzupd = pupd*std::sin(lamupd);
+
+          refFts.head<3>() = globupd.head<3>();
+          refFts[3] = pxupd;
+          refFts[4] = pyupd;
+          refFts[5] = pzupd;
+          refFts[6] = charge;
+        }
         
 //         const GlobalVector mom(pxupd, pyupd, pzupd);
         
@@ -2034,6 +2048,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       
 //       double dEdxlast = std::get<3>(propresultref);
       
+      Matrix<double, 5, 5> ref2curvjac = dopca ? pca2curvJacobianD(refFts, field, *bsH) : Matrix<double, 5, 5>::Identity();
+
       Matrix<double, 7, 1> updtsos = refFts;
       
 //       double dEdxout = 0.;
@@ -2067,19 +2083,19 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         // apply beamspot constraint
         // TODO add residual corrections for beamspot parameters?
         
-        constexpr unsigned int nlocalstate = 2;
+        constexpr unsigned int nlocalstate = 5;
         
         constexpr unsigned int nlocal = nlocalstate;
         
         constexpr unsigned int localstateidx = 0;
         
-        constexpr unsigned int fullstateidx = 3;
+        constexpr unsigned int fullstateidx = 0;
 
         using BSScalar = AANT<double, nlocal>;
         
 //         JacobianCurvilinearToCartesian curv2cart(refFts.parameters());
 //         const AlgebraicMatrix65& jac = curv2cart.jacobian();
-        const Matrix<double, 6, 5> jac = curv2cartJacobianAltD(refFts);
+        const Matrix<double, 6, 5> jac = dopca ? pca2cartJacobianD(refFts, *bsH) : curv2cartJacobianAltD(refFts);
         
         const double sigb1 = bsH->BeamWidthX();
         const double sigb2 = bsH->BeamWidthY();
@@ -2113,7 +2129,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 //         std::cout << "covBS:" << std::endl;
 //         std::cout << covBS << std::endl;
         
-        Matrix<BSScalar, 2, 1> du = Matrix<BSScalar, 2, 1>::Zero();
+        Matrix<BSScalar, 5, 1> du = Matrix<BSScalar, 5, 1>::Zero();
         for (unsigned int j=0; j<du.size(); ++j) {
           init_twice_active_var(du[j], nlocal, localstateidx + j);
         }
@@ -2127,7 +2143,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 //         std::cout << Map<const Matrix<double, 6, 5, RowMajor>>(jac.Array()).topLeftCorner<3,3>() << std::endl;
         
 //         const Matrix<BSScalar, 3, 2> jacpos = Map<const Matrix<double, 6, 5, RowMajor>>(jac.Array()).topRightCorner<3,2>().cast<BSScalar>();
-        const Matrix<BSScalar, 3, 2> jacpos = jac.topRightCorner<3,2>().cast<BSScalar>();
+        const Matrix<BSScalar, 3, 5> jacpos = jac.topRows<3>().cast<BSScalar>();
         const Matrix<BSScalar, 3, 3> covBSinv = covBS.inverse().cast<BSScalar>();
         
         const Matrix<BSScalar, 3, 1> dbs = dbs0 + jacpos*du;
@@ -2292,10 +2308,16 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         
         updtsos = std::get<1>(propresult);
         const Matrix<double, 5, 5> Qcurv = std::get<2>(propresult);
-        const Matrix<double, 5, 7> FdFm = std::get<3>(propresult);
+        const Matrix<double, 5, 7> FdFmcurv = std::get<3>(propresult);
         const double dEdxlast = std::get<4>(propresult);
 //         const Matrix<double, 5, 5> dQcurv = std::get<5>(propresult);
         
+        Matrix<double, 5, 7> FdFm = FdFmcurv;
+        if (ihit == 0) {
+          // extra jacobian from reference state to curvilinear potentially needed
+          FdFm.leftCols<5>() = (FdFm.leftCols<5>()*ref2curvjac).eval();
+        }
+
 //         if (ihit == (hits.size() - 1)) {
 //           dEdxout = dEdxlast;
 //         }

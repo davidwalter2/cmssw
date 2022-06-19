@@ -992,6 +992,957 @@ Matrix<double, 5, 6> ResidualGlobalCorrectionMakerBase::hybrid2curvJacobianD(con
 
 }
 
+Matrix<double, 7, 1> ResidualGlobalCorrectionMakerBase::pca2cart(const Matrix<double, 5, 1> &statepca, const reco::BeamSpot &bs) const {
+  const double x0bs = bs.x0();
+  const double y0bs = bs.y0();
+  const double z0bs = bs.z0();
+  const double dxdzbs = bs.dxdz();
+  const double dydzbs = bs.dydz();
+
+  const Matrix<double, 3, 1> bv(dxdzbs, dydzbs, 1.);
+
+  const double qop0 = statepca[0];
+  const double lam0 = statepca[1];
+  const double phi0 = statepca[2];
+  const double d0 = statepca[3];
+  const double z0 = statepca[4];
+
+  const double p0 = std::abs(1./qop0);
+  const double q = std::copysign(1., qop0);
+
+  const double px = p0*std::cos(lam0)*std::cos(phi0);
+  const double py = p0*std::cos(lam0)*std::sin(phi0);
+  const double pz = p0*std::sin(lam0);
+
+  const Matrix<double, 3, 1> mom(px, py, pz);
+
+  // pca on beamline
+  Matrix<double, 3, 1> pcabs;
+  pcabs[0] = x0bs + (z0 - z0bs)*dxdzbs;
+  pcabs[1] = y0bs + (z0 - z0bs)*dydzbs;
+  pcabs[2] = z0;
+
+  const Matrix<double, 3, 1> dv = bv.cross(mom).normalized()*d0;
+
+  const Matrix<double, 3, 1> xyz = pcabs + dv;
+
+  Matrix<double, 7, 1> res;
+  res.head<3>() = xyz;
+  res.segment<3>(3) = mom;
+  res[6] = q;
+
+  return res;
+
+}
+
+Matrix<double, 5, 1> ResidualGlobalCorrectionMakerBase::cart2pca(const Matrix<double, 7, 1> &state, const reco::BeamSpot &bs) const {
+
+  const double x0bs = bs.x0();
+  const double y0bs = bs.y0();
+  const double z0bs = bs.z0();
+  const double dxdzbs = bs.dxdz();
+  const double dydzbs = bs.dydz();
+
+  const Matrix<double, 3, 1> xyz0bs(x0bs, y0bs, z0bs);
+  const Matrix<double, 3, 1> bv(dxdzbs, dydzbs, 1.);
+  const Matrix<double, 3, 1> bhat = bv.normalized();
+
+  const Matrix<double, 3, 1> xyz0 = state.head<3>();
+  const Matrix<double, 3, 1> mom0 = state.segment<3>(3);
+
+  // track reference point in beamspot local coordinates
+  const double vpll = (xyz0 - xyz0bs).dot(bhat);
+
+  // point of closest approach on beamline
+  const Matrix<double, 3, 1> pcabs = xyz0bs + vpll*bhat;
+  const double z0 = pcabs[2];
+
+  // vector from pca on beamline to track reference point
+  const Matrix<double, 3, 1> dv = xyz0 - pcabs;
+  const double d0 = bhat.cross(mom0).normalized().dot(dv);
+
+  const double q = state[6];
+
+  const double qop0 = q/state.segment<3>(3).norm();
+  const double lam0 = std::atan(state[5]/std::sqrt(state[3]*state[3] + state[4]*state[4]));
+  const double phi0 = std::atan2(state[4], state[3]);
+
+  Matrix<double, 5, 1> res;
+  res[0] = qop0;
+  res[1] = lam0;
+  res[2] = phi0;
+  res[3] = d0;
+  res[4] = z0;
+
+  return res;
+
+}
+
+Matrix<double, 5, 5> ResidualGlobalCorrectionMakerBase::pca2curvJacobianD(const Matrix<double, 7, 1> &state, const MagneticField *field, const reco::BeamSpot &bs,  double dBz) const {
+
+  const GlobalPoint pos(state[0], state[1], state[2]);
+  const GlobalVector &bfield = field->inInverseGeV(pos);
+  const Matrix<double, 3, 1> Bv(bfield.x(), bfield.y(), double(bfield.z()) + 2.99792458e-3*dBz);
+
+  const double x0bs = bs.x0();
+  const double y0bs = bs.y0();
+  const double z0bs = bs.z0();
+  const double dxdzbs = bs.dxdz();
+  const double dydzbs = bs.dydz();
+
+  const Matrix<double, 3, 1> W0 = state.segment<3>(3).normalized();
+  const double W0x = W0[0];
+  const double W0y = W0[1];
+  const double W0z = W0[2];
+
+  const Matrix<double, 5, 1> statepca = cart2pca(state, bs);
+  const double qop0 = statepca[0];
+  const double lam0 = statepca[1];
+  const double phi0 = statepca[2];
+  const double d0 = statepca[3];
+  const double z0 = statepca[4];
+
+  const double B = Bv.norm();
+  const Matrix<double, 3, 1> H = Bv.normalized();
+  const double hx = H[0];
+  const double hy = H[1];
+  const double hz = H[2];
+
+  const double xf0 = std::sin(lam0);
+  const double xf1 = std::sin(phi0);
+  const double xf2 = std::pow(xf1, 2);
+  const double xf3 = std::cos(lam0);
+  const double xf4 = std::pow(xf3, 2);
+  const double xf5 = xf2*xf4;
+  const double xf6 = std::cos(phi0);
+  const double xf7 = std::pow(xf6, 2);
+  const double xf8 = xf4*xf7;
+  const double xf9 = xf5 + xf8;
+  const double xf10 = 1.0/xf9;
+  const double xf11 = xf0*xf3;
+  const double xf12 = std::sqrt(xf4)*(-hx*xf1 + hy*xf6);
+  const double xf13 = xf12/xf3;
+  const double xf14 = B*d0;
+  const double xf15 = qop0*xf14;
+  const double xf16 = dxdzbs*xf1;
+  const double xf17 = dydzbs*xf6;
+  const double xf18 = xf16 - xf17;
+  const double xf19 = std::pow(dxdzbs, 2);
+  const double xf20 = std::pow(dydzbs, 2);
+  const double xf21 = dxdzbs*xf0;
+  const double xf22 = xf3*xf6;
+  const double xf23 = dydzbs*xf0;
+  const double xf24 = xf1*xf3;
+  const double xf25 = std::pow(-2*xf16*xf17*xf4 - xf19*xf8 + xf19 + xf20*xf4*xf7 - xf20*xf4 + xf20 - 2*xf21*xf22 - 2*xf23*xf24 + xf4, -1.0/2.0);
+  const double xf26 = xf18*xf25;
+  const double xf27 = xf15*xf26;
+  const double xf28 = -xf1*xf23 - xf21*xf6 + xf3;
+  const double xf29 = xf25*xf28;
+  const double xf30 = -dxdzbs*xf22 - dydzbs*xf24 - xf0;
+  const double xf31 = B*qop0;
+  const double xf32 = xf30*xf31;
+  const double xf33 = std::tan(lam0);
+  const double xf34 = hx*xf33*xf6 + hy*xf1*xf33 - hz;
+  const double xf35 = xf15*xf3;
+  const double xf36 = xf21 - xf22;
+  const double xf37 = xf14*xf36;
+  const double xf38 = z0 - z0bs;
+  const double xf39 = dydzbs*xf38 + y0bs;
+  const double xf40 = xf23 - xf24;
+  const double xf41 = std::pow(xf18, 2);
+  const double xf42 = std::pow(xf36, 2) + xf4*xf41 + std::pow(xf40, 2);
+  const double xf43 = std::sqrt(xf42);
+  const double xf44 = B*xf39*xf43 - xf37;
+  const double xf45 = 1.0/qop0;
+  const double xf46 = std::pow(W0x, 2);
+  const double xf47 = std::pow(W0y, 2);
+  const double xf48 = xf46 + xf47;
+  const double xf49 = std::pow(xf48, -1.0/2.0);
+  const double xf50 = W0x*xf49;
+  const double xf51 = 1.0/xf43;
+  const double xf52 = 1.0/B;
+  const double xf53 = xf51*xf52;
+  const double xf54 = xf50*xf53;
+  const double xf55 = xf45*xf54;
+  const double xf56 = xf14*xf40;
+  const double xf57 = dxdzbs*xf38 + x0bs;
+  const double xf58 = B*xf43;
+  const double xf59 = xf57*xf58;
+  const double xf60 = xf56 + xf59;
+  const double xf61 = W0y*xf49;
+  const double xf62 = xf53*xf61;
+  const double xf63 = xf45*xf62;
+  const double xf64 = std::pow(qop0, -2);
+  const double xf65 = qop0*xf56 + qop0*xf59;
+  const double xf66 = B*qop0*xf39*xf43 - qop0*xf37;
+  const double xf67 = W0x*xf1 - W0y*xf6;
+  const double xf68 = xf3*xf67;
+  const double xf69 = d0*xf49;
+  const double xf70 = dxdzbs*xf3;
+  const double xf71 = xf0*xf6;
+  const double xf72 = dydzbs*xf3;
+  const double xf73 = xf0*xf1;
+  const double xf74 = -xf11*xf41 + (1.0/2.0)*xf36*(2*xf70 + 2*xf71) + (1.0/2.0)*xf40*(2*xf72 + 2*xf73);
+  const double xf75 = B*qop0*xf39*xf51*xf74 - xf15*(xf70 + xf71);
+  const double xf76 = xf31*xf51;
+  const double xf77 = xf15*(xf72 + xf73) + xf57*xf74*xf76;
+  const double xf78 = -xf74;
+  const double xf79 = std::pow(xf42, -3.0/2.0);
+  const double xf80 = xf45*xf52*xf79;
+  const double xf81 = xf78*xf80;
+  const double xf82 = xf50*xf66;
+  const double xf83 = xf61*xf65;
+  const double xf84 = dxdzbs*xf6;
+  const double xf85 = dydzbs*xf1;
+  const double xf86 = (1.0/2.0)*xf18*xf4*(2*xf84 + 2*xf85) - xf22*xf40 + xf24*xf36;
+  const double xf87 = B*qop0*xf39*xf51*xf86 - xf15*xf24;
+  const double xf88 = B*qop0*xf51*xf57*xf86 - xf15*xf22;
+  const double xf89 = -xf86;
+  const double xf90 = xf80*xf89;
+  const double xf91 = xf36*xf51;
+  const double xf92 = xf40*xf51;
+  const double xf93 = xf30*xf49;
+  const double xf94 = W0z*xf50;
+  const double xf95 = xf45*xf53*xf94;
+  const double xf96 = W0z*xf61;
+  const double xf97 = xf45*xf53*xf96;
+  const double xf98 = xf46*xf49 + xf47*xf49;
+  const double xf99 = xf18*xf3;
+  const double xf100 = xf58*z0;
+  const double xf101 = qop0*xf100 + xf15*xf99;
+  const double xf102 = xf51*xf98;
+  const double xf103 = -W0x*W0z*xf22 - W0y*W0z*xf24 + xf0*xf48;
+  const double xf104 = xf65*xf94;
+  const double xf105 = xf66*xf96;
+  const double dqopdqop0 = 1;
+  const double dqopdlam0 = 0;
+  const double dqopdphi0 = 0;
+  const double dqopdd0 = 0;
+  const double dqopdz0 = 0;
+  const double dlamdqop0 = 0;
+  const double dlamdlam0 = xf13*xf27 + (xf0*(xf11*xf2 + xf11*xf7)/std::pow(xf9, 3.0/2.0) + xf3/std::sqrt(xf9))/(std::pow(xf0, 2)*xf10 + 1);
+  const double dlamdphi0 = xf12*xf15*xf29;
+  const double dlamdd0 = 0;
+  const double dlamdz0 = xf13*xf32;
+  const double dphidqop0 = 0;
+  const double dphidlam0 = xf27*xf34;
+  const double dphidphi0 = xf10*xf5 + xf10*xf8 + xf29*xf34*xf35;
+  const double dphidd0 = 0;
+  const double dphidz0 = xf32*xf34;
+  const double dxtdqop0 = xf44*xf55 - xf54*xf64*xf66 - xf60*xf63 + xf62*xf64*xf65;
+  const double dxtdlam0 = xf26*xf68*xf69 + xf55*xf75 - xf63*xf77 + xf81*xf82 - xf81*xf83;
+  const double dxtdphi0 = xf29*xf4*xf67*xf69 + xf55*xf87 - xf63*xf88 + xf82*xf90 - xf83*xf90;
+  const double dxtdd0 = -xf50*xf91 - xf61*xf92;
+  const double dxtdz0 = -dxdzbs*xf61 + dydzbs*xf50 + xf68*xf93;
+  const double dytdqop0 = W0x*W0z*xf49*xf51*xf52*xf64*xf65 + W0y*W0z*xf49*xf51*xf52*xf64*xf66 - xf101*xf102*xf52*xf64 - xf44*xf97 + xf45*xf51*xf52*xf98*(xf100 + xf14*xf99) - xf60*xf95;
+  const double dytdlam0 = d0*xf103*xf18*xf25*xf49 + xf101*xf45*xf52*xf78*xf79*xf98 - xf104*xf81 - xf105*xf81 + xf45*xf51*xf52*xf98*(B*qop0*xf51*xf74*z0 - xf0*xf15*xf18) - xf75*xf97 - xf77*xf95;
+  const double dytdphi0 = d0*xf103*xf25*xf28*xf3*xf49 + xf101*xf45*xf52*xf79*xf89*xf98 - xf104*xf90 - xf105*xf90 + xf45*xf51*xf52*xf98*(xf35*(xf84 + xf85) + xf76*xf86*z0) - xf87*xf97 - xf88*xf95;
+  const double dytdd0 = xf102*xf99 + xf91*xf96 - xf92*xf94;
+  const double dytdz0 = -dxdzbs*xf94 - dydzbs*xf96 + xf103*xf93 + xf98;
+  Matrix<double, 5, 5> res;
+  res(0,0) = dqopdqop0;
+  res(0,1) = dqopdlam0;
+  res(0,2) = dqopdphi0;
+  res(0,3) = dqopdd0;
+  res(0,4) = dqopdz0;
+  res(1,0) = dlamdqop0;
+  res(1,1) = dlamdlam0;
+  res(1,2) = dlamdphi0;
+  res(1,3) = dlamdd0;
+  res(1,4) = dlamdz0;
+  res(2,0) = dphidqop0;
+  res(2,1) = dphidlam0;
+  res(2,2) = dphidphi0;
+  res(2,3) = dphidd0;
+  res(2,4) = dphidz0;
+  res(3,0) = dxtdqop0;
+  res(3,1) = dxtdlam0;
+  res(3,2) = dxtdphi0;
+  res(3,3) = dxtdd0;
+  res(3,4) = dxtdz0;
+  res(4,0) = dytdqop0;
+  res(4,1) = dytdlam0;
+  res(4,2) = dytdphi0;
+  res(4,3) = dytdd0;
+  res(4,4) = dytdz0;
+
+  return res;
+
+}
+
+
+Matrix<double, 6, 5> ResidualGlobalCorrectionMakerBase::pca2cartJacobianD(const Matrix<double, 7, 1> &state, const reco::BeamSpot &bs) const {
+
+  const double x0bs = bs.x0();
+  const double y0bs = bs.y0();
+  const double z0bs = bs.z0();
+  const double dxdzbs = bs.dxdz();
+  const double dydzbs = bs.dydz();
+
+  const Matrix<double, 5, 1> statepca = cart2pca(state, bs);
+  const double qop0 = statepca[0];
+  const double lam0 = statepca[1];
+  const double phi0 = statepca[2];
+  const double d0 = statepca[3];
+  const double z0 = statepca[4];
+
+  const double xf0 = std::sin(lam0);
+  const double xf1 = dxdzbs*xf0;
+  const double xf2 = std::cos(phi0);
+  const double xf3 = dydzbs*xf2;
+  const double xf4 = std::cos(lam0);
+  const double xf5 = std::pow(dxdzbs, 2);
+  const double xf6 = xf2*xf4;
+  const double xf7 = std::sin(phi0);
+  const double xf8 = dxdzbs*xf7;
+  const double xf9 = xf6*xf8;
+  const double xf10 = std::pow(xf2, 2);
+  const double xf11 = std::pow(dydzbs, 2);
+  const double xf12 = xf1 - xf6;
+  const double xf13 = xf4*xf7;
+  const double xf14 = dydzbs*xf0 - xf13;
+  const double xf15 = -xf3 + xf8;
+  const double xf16 = std::pow(xf12, 2) + std::pow(xf14, 2) + std::pow(xf15, 2)*std::pow(xf4, 2);
+  const double xf17 = d0/std::pow(xf16, 3.0/2.0);
+  const double xf18 = dxdzbs*xf2 + dydzbs*xf7;
+  const double xf19 = xf15*xf4;
+  const double xf20 = xf12*xf7 - xf14*xf2 + xf18*xf19;
+  const double xf21 = xf17*xf4;
+  const double xf22 = std::pow(xf16, -1.0/2.0);
+  const double xf23 = dxdzbs*xf4;
+  const double xf24 = std::pow(xf7, 2);
+  const double xf25 = xf0*xf11;
+  const double xf26 = 1.0/qop0;
+  const double xf27 = 1.0/std::fabs(qop0);
+  const double xf28 = xf27*xf6;
+  const double xf29 = xf0*xf27;
+  const double xf30 = xf13*xf27;
+  const double dxdqop0 = 0;
+  const double dxdlam0 = xf17*(std::pow(dydzbs, 3)*xf10*xf4 - dydzbs*xf10*xf4*xf5 + dydzbs*xf10*xf4 + dydzbs*xf4*xf5 + xf0*xf5*xf7 - xf1*xf3 - 2*xf11*xf9 - xf9);
+  const double dxdphi0 = xf21*(-xf14*xf20 - xf16*xf2);
+  const double dxdd0 = xf14*xf22;
+  const double dxdz0 = dxdzbs;
+  const double dydqop0 = 0;
+  const double dydlam0 = xf17*(-std::pow(dxdzbs, 3)*xf24*xf4 + dxdzbs*dydzbs*xf0*xf7 + dxdzbs*xf11*xf24*xf4 + 2*dydzbs*xf2*xf4*xf5*xf7 + dydzbs*xf2*xf4*xf7 - xf11*xf23 - xf2*xf25 - xf23*xf24);
+  const double dydphi0 = xf21*(xf12*xf20 - xf16*xf7);
+  const double dydd0 = -xf12*xf22;
+  const double dydz0 = dydzbs;
+  const double dzdqop0 = 0;
+  const double dzdlam0 = xf15*xf17*(dxdzbs*xf2*xf4 + dydzbs*xf4*xf7 - xf0*xf5 - xf25);
+  const double dzdphi0 = xf21*(-std::pow(xf15, 2)*xf4*(dxdzbs*xf6 + dydzbs*xf13 + xf0) + xf16*xf18);
+  const double dzdd0 = xf19*xf22;
+  const double dzdz0 = 1;
+  const double dpxdqop0 = -xf26*xf28;
+  const double dpxdlam0 = -xf2*xf29;
+  const double dpxdphi0 = -xf30;
+  const double dpxdd0 = 0;
+  const double dpxdz0 = 0;
+  const double dpydqop0 = -xf26*xf30;
+  const double dpydlam0 = -xf29*xf7;
+  const double dpydphi0 = xf28;
+  const double dpydd0 = 0;
+  const double dpydz0 = 0;
+  const double dpzdqop0 = -xf26*xf29;
+  const double dpzdlam0 = xf27*xf4;
+  const double dpzdphi0 = 0;
+  const double dpzdd0 = 0;
+  const double dpzdz0 = 0;
+  Matrix<double, 6, 5> res;
+  res(0,0) = dxdqop0;
+  res(0,1) = dxdlam0;
+  res(0,2) = dxdphi0;
+  res(0,3) = dxdd0;
+  res(0,4) = dxdz0;
+  res(1,0) = dydqop0;
+  res(1,1) = dydlam0;
+  res(1,2) = dydphi0;
+  res(1,3) = dydd0;
+  res(1,4) = dydz0;
+  res(2,0) = dzdqop0;
+  res(2,1) = dzdlam0;
+  res(2,2) = dzdphi0;
+  res(2,3) = dzdd0;
+  res(2,4) = dzdz0;
+  res(3,0) = dpxdqop0;
+  res(3,1) = dpxdlam0;
+  res(3,2) = dpxdphi0;
+  res(3,3) = dpxdd0;
+  res(3,4) = dpxdz0;
+  res(4,0) = dpydqop0;
+  res(4,1) = dpydlam0;
+  res(4,2) = dpydphi0;
+  res(4,3) = dpydd0;
+  res(4,4) = dpydz0;
+  res(5,0) = dpzdqop0;
+  res(5,1) = dpzdlam0;
+  res(5,2) = dpzdphi0;
+  res(5,3) = dpzdd0;
+  res(5,4) = dpzdz0;
+
+  return res;
+}
+
+std::array<Matrix<double, 7, 1>, 2> ResidualGlobalCorrectionMakerBase::twoTrackPca2cart(const Matrix<double, 10, 1> &statepca) const {
+
+  const double qopa0 = statepca[0];
+  const double lama0 = statepca[1];
+  const double phia0 = statepca[2];
+  const double qopb0 = statepca[3];
+  const double lamb0 = statepca[4];
+  const double phib0 = statepca[5];
+
+  const double d0 = statepca[6];
+
+  const Matrix<double, 3, 1> xyz0 = statepca.tail<3>();
+
+  const double pa0 = std::abs(1./qopa0);
+  const double qa = std::copysign(1., qopa0);
+
+  const double pax = pa0*std::cos(lama0)*std::cos(phia0);
+  const double pay = pa0*std::cos(lama0)*std::sin(phia0);
+  const double paz = pa0*std::sin(lama0);
+
+  const double pb0 = std::abs(1./qopb0);
+  const double qb = std::copysign(1., qopb0);
+
+  const double pbx = pb0*std::cos(lamb0)*std::cos(phib0);
+  const double pby = pb0*std::cos(lamb0)*std::sin(phib0);
+  const double pbz = pb0*std::sin(lamb0);
+
+  const Matrix<double, 3, 1> moma0(pax, pay, paz);
+  const Matrix<double, 3, 1> momb0(pbx, pby, pbz);
+
+  const Matrix<double, 3, 1> dvhat = moma0.cross(momb0).normalized();
+  const Matrix<double, 3, 1> dv = d0*dvhat;
+
+  const Matrix<double, 3, 1> xyza0 = xyz0 - 0.5*dv;
+  const Matrix<double, 3, 1> xyzb0 = xyz0 + 0.5*dv;
+
+  std::array<Matrix<double, 7, 1>, 2> res;
+
+  Matrix<double, 7, 1> &resa = res[0];
+  Matrix<double, 7, 1> &resb = res[1];
+
+  resa.head<3>() = xyza0;
+  resa.segment<3>(3) = moma0;
+  resa[6] = qa;
+
+  resb.head<3>() = xyzb0;
+  resb.segment<3>(3) = momb0;
+  resb[6] = qb;
+
+  return res;
+}
+
+Matrix<double, 10, 1> ResidualGlobalCorrectionMakerBase::twoTrackCart2pca(const Matrix<double, 7, 1> &state0, const Matrix<double, 7, 1> &state1) const {
+
+  const Matrix<double, 3, 1> xyza0 = state0.head<3>();
+  const Matrix<double, 3, 1> moma0 = state0.segment<3>(3);
+
+  const Matrix<double, 3, 1> xyzb0 = state1.head<3>();
+  const Matrix<double, 3, 1> momb0 = state1.segment<3>(3);
+
+  const Matrix<double, 3, 1> xyz0 = 0.5*(xyza0 + xyzb0);
+  const Matrix<double, 3, 1> dv = xyzb0 - xyza0;
+
+  const Matrix<double, 3, 1> dvhat = moma0.cross(momb0).normalized();
+
+  const double d0 = dvhat.dot(dv);
+
+  const double qa = state0[6];
+
+  const double qopa0 = qa/state0.segment<3>(3).norm();
+  const double lama0 = std::atan(state0[5]/std::sqrt(state0[3]*state0[3] + state0[4]*state0[4]));
+  const double phia0 = std::atan2(state0[4], state0[3]);
+
+  const double qb = state1[6];
+
+  const double qopb0 = qb/state1.segment<3>(3).norm();
+  const double lamb0 = std::atan(state1[5]/std::sqrt(state1[3]*state1[3] + state1[4]*state1[4]));
+  const double phib0 = std::atan2(state1[4], state1[3]);
+
+  Matrix<double, 10, 1> res;
+  res[0] = qopa0;
+  res[1] = lama0;
+  res[2] = phia0;
+  res[3] = qopb0;
+  res[4] = lamb0;
+  res[5] = phib0;
+  res[6] = d0;
+  res.tail<3>() = xyz0;
+
+  return res;
+}
+
+Matrix<double, 10, 10> ResidualGlobalCorrectionMakerBase::twoTrackPca2curvJacobianD(const Matrix<double, 7, 1> &state0, const Matrix<double, 7, 1> &state1, const MagneticField *field, double dBz0, double dBz1) const {
+
+  const GlobalPoint posa(state0[0], state0[1], state0[2]);
+  const GlobalVector &bfielda = field->inInverseGeV(posa);
+  const Matrix<double, 3, 1> Bva(bfielda.x(), bfielda.y(), double(bfielda.z()) + 2.99792458e-3*dBz0);
+
+  const GlobalPoint posb(state1[0], state1[1], state1[2]);
+  const GlobalVector &bfieldb = field->inInverseGeV(posb);
+  const Matrix<double, 3, 1> Bvb(bfieldb.x(), bfieldb.y(), double(bfieldb.z()) + 2.99792458e-3*dBz1);
+
+  const Matrix<double, 3, 1> Wa0 = state0.segment<3>(3).normalized();
+  const double Wa0x = Wa0[0];
+  const double Wa0y = Wa0[1];
+  const double Wa0z = Wa0[2];
+
+  const Matrix<double, 3, 1> Wb0 = state1.segment<3>(3).normalized();
+  const double Wb0x = Wb0[0];
+  const double Wb0y = Wb0[1];
+  const double Wb0z = Wb0[2];
+
+  const Matrix<double, 10, 1> statepca = twoTrackCart2pca(state0, state1);
+  const double qopa0 = statepca[0];
+  const double lama0 = statepca[1];
+  const double phia0 = statepca[2];
+  const double qopb0 = statepca[3];
+  const double lamb0 = statepca[4];
+  const double phib0 = statepca[5];
+  const double d0 = statepca[6];
+  const double x0 = statepca[7];
+  const double y0 = statepca[8];
+  const double z0 = statepca[9];
+
+  const double Ba = Bva.norm();
+  const Matrix<double, 3, 1> Ha = Bva.normalized();
+  const double hax = Ha[0];
+  const double hay = Ha[1];
+  const double haz = Ha[2];
+
+  const double Bb = Bvb.norm();
+  const Matrix<double, 3, 1> Hb = Bvb.normalized();
+  const double hbx = Hb[0];
+  const double hby = Hb[1];
+  const double hbz = Hb[2];
+
+  const double xf0 = std::sin(phib0);
+  const double xf1 = std::sin(lama0);
+  const double xf2 = std::cos(lamb0);
+  const double xf3 = xf1*xf2;
+  const double xf4 = xf0*xf3;
+  const double xf5 = std::sin(phia0);
+  const double xf6 = std::cos(lama0);
+  const double xf7 = std::sin(lamb0);
+  const double xf8 = xf6*xf7;
+  const double xf9 = xf5*xf8;
+  const double xf10 = xf4 - xf9;
+  const double xf11 = Ba*d0;
+  const double xf12 = xf10*xf11;
+  const double xf13 = std::pow(xf6, 2);
+  const double xf14 = std::pow(xf2, 2);
+  const double xf15 = phia0 - phib0;
+  const double xf16 = std::sin(xf15);
+  const double xf17 = std::pow(xf16, 2);
+  const double xf18 = std::cos(phib0);
+  const double xf19 = xf18*xf3;
+  const double xf20 = std::cos(phia0);
+  const double xf21 = xf20*xf8;
+  const double xf22 = xf19 - xf21;
+  const double xf23 = std::pow(xf10, 2) + xf13*xf14*xf17 + std::pow(xf22, 2);
+  const double xf24 = std::sqrt(xf23);
+  const double xf25 = 2*xf24;
+  const double xf26 = Ba*x0*xf25;
+  const double xf27 = 1.0/qopa0;
+  const double xf28 = 1.0/Ba;
+  const double xf29 = 1.0/xf24;
+  const double xf30 = (1.0/2.0)*xf29;
+  const double xf31 = xf28*xf30;
+  const double xf32 = xf27*xf31;
+  const double xf33 = xf32*(xf12 + xf26);
+  const double xf34 = qopa0*xf12 + qopa0*xf26;
+  const double xf35 = xf31/std::pow(qopa0, 2);
+  const double xf36 = xf34*xf35;
+  const double xf37 = xf20*xf6;
+  const double xf38 = xf11*xf22;
+  const double xf39 = xf32*(2*Ba*xf24*y0 - xf38);
+  const double xf40 = 2*Ba*qopa0*xf24*y0 - qopa0*xf38;
+  const double xf41 = xf35*xf40;
+  const double xf42 = xf5*xf6;
+  const double xf43 = -xf37*(xf33 - xf36) - xf42*(xf39 - xf41);
+  const double xf44 = Ba*qopa0;
+  const double xf45 = std::sqrt(xf13)*xf44*(-hax*xf5 + hay*xf20);
+  const double xf46 = xf45/xf6;
+  const double xf47 = std::pow(xf5, 2);
+  const double xf48 = xf13*xf47;
+  const double xf49 = std::pow(xf20, 2);
+  const double xf50 = xf13*xf49;
+  const double xf51 = xf48 + xf50;
+  const double xf52 = 1.0/xf51;
+  const double xf53 = xf1*xf6;
+  const double xf54 = d0*xf30;
+  const double xf55 = xf16*xf54;
+  const double xf56 = xf1*xf7;
+  const double xf57 = xf5*xf56;
+  const double xf58 = xf2*xf6;
+  const double xf59 = xf0*xf58;
+  const double xf60 = (1.0/2.0)*xf10;
+  const double xf61 = xf20*xf56;
+  const double xf62 = xf18*xf58;
+  const double xf63 = (1.0/2.0)*xf22;
+  const double xf64 = -xf1*xf14*xf17*xf6 + xf60*(2*xf57 + 2*xf59) + xf63*(2*xf61 + 2*xf62);
+  const double xf65 = (1.0/2.0)/std::pow(xf23, 3.0/2.0);
+  const double xf66 = -xf64*xf65;
+  const double xf67 = d0*xf16*xf58;
+  const double xf68 = -xf3*xf55 + xf66*xf67;
+  const double xf69 = xf57 + xf59;
+  const double xf70 = qopa0*xf11;
+  const double xf71 = 2*xf29;
+  const double xf72 = xf44*xf71;
+  const double xf73 = xf32*(x0*xf64*xf72 + xf69*xf70);
+  const double xf74 = xf27*xf28;
+  const double xf75 = xf66*xf74;
+  const double xf76 = xf34*xf75;
+  const double xf77 = xf61 + xf62;
+  const double xf78 = xf32*(2*Ba*qopa0*xf29*xf64*y0 - xf70*xf77);
+  const double xf79 = xf40*xf75;
+  const double xf80 = -xf1*xf68 - xf37*(xf73 + xf76) - xf42*(xf78 + xf79);
+  const double xf81 = std::cos(xf15);
+  const double xf82 = xf54*xf58*xf81;
+  const double xf83 = xf13*xf14*xf16*xf81;
+  const double xf84 = -xf10*xf20*xf6*xf7 + xf22*xf9 + xf83;
+  const double xf85 = -xf84;
+  const double xf86 = xf65*xf67;
+  const double xf87 = xf82 + xf85*xf86;
+  const double xf88 = xf32*(2*Ba*qopa0*x0*xf29*xf84 - xf21*xf70);
+  const double xf89 = xf65*xf74;
+  const double xf90 = xf85*xf89;
+  const double xf91 = xf34*xf90;
+  const double xf92 = xf32*(2*Ba*qopa0*xf29*xf84*y0 - xf70*xf9);
+  const double xf93 = xf40*xf90;
+  const double xf94 = -xf1*xf87 - xf37*(xf88 + xf91) - xf42*(xf92 + xf93);
+  const double xf95 = xf0*xf56;
+  const double xf96 = xf2*xf42;
+  const double xf97 = xf18*xf56;
+  const double xf98 = xf2*xf37;
+  const double xf99 = -xf13*xf17*xf2*xf7 + xf60*(-2*xf95 - 2*xf96) + xf63*(-2*xf97 - 2*xf98);
+  const double xf100 = -xf99;
+  const double xf101 = xf100*xf86 - xf55*xf8;
+  const double xf102 = xf100*xf89;
+  const double xf103 = xf102*xf34;
+  const double xf104 = -xf95 - xf96;
+  const double xf105 = xf32*(x0*xf72*xf99 + xf104*xf70);
+  const double xf106 = xf102*xf40;
+  const double xf107 = -xf97 - xf98;
+  const double xf108 = xf32*(2*Ba*qopa0*xf29*xf99*y0 - xf107*xf70);
+  const double xf109 = -xf1*xf101 - xf37*(xf103 + xf105) - xf42*(xf106 + xf108);
+  const double xf110 = -xf10*xf19 + xf22*xf4 + xf83;
+  const double xf111 = xf110*xf86 - xf82;
+  const double xf112 = -xf110;
+  const double xf113 = xf112*xf72;
+  const double xf114 = xf32*(x0*xf113 + xf19*xf70);
+  const double xf115 = xf110*xf89;
+  const double xf116 = xf115*xf34;
+  const double xf117 = xf32*(xf113*y0 + xf4*xf70);
+  const double xf118 = xf115*xf40;
+  const double xf119 = -xf1*xf111 - xf37*(xf114 + xf116) - xf42*(xf117 + xf118);
+  const double xf120 = xf16*xf30;
+  const double xf121 = xf29*xf60;
+  const double xf122 = -xf120*xf3*xf6 - xf121*xf37 + (1.0/2.0)*xf22*xf29*xf5*xf6;
+  const double xf123 = std::tan(lama0);
+  const double xf124 = xf44*(hax*xf123*xf20 + hay*xf123*xf5 - haz);
+  const double xf125 = std::pow(Wa0x, 2);
+  const double xf126 = std::pow(Wa0y, 2);
+  const double xf127 = xf125 + xf126;
+  const double xf128 = std::pow(xf127, -1.0/2.0);
+  const double xf129 = Wa0y*xf128;
+  const double xf130 = Wa0x*xf128;
+  const double xf131 = Wa0x*xf5 - Wa0y*xf20;
+  const double xf132 = xf128*xf131;
+  const double xf133 = xf132*xf6;
+  const double xf134 = xf29*xf63;
+  const double xf135 = xf13*xf132;
+  const double xf136 = Wa0z*xf130;
+  const double xf137 = Wa0z*xf129;
+  const double xf138 = -Wa0x*Wa0z*xf37 - Wa0y*Wa0z*xf42 + xf1*xf127;
+  const double xf139 = xf128*xf138;
+  const double xf140 = xf125*xf128 + xf126*xf128;
+  const double xf141 = xf120*xf58;
+  const double xf142 = -xf68;
+  const double xf143 = Bb*d0;
+  const double xf144 = qopb0*xf143;
+  const double xf145 = Bb*qopb0;
+  const double xf146 = xf145*xf71;
+  const double xf147 = 1.0/qopb0;
+  const double xf148 = 1.0/Bb;
+  const double xf149 = xf148*xf30;
+  const double xf150 = xf147*xf149;
+  const double xf151 = xf150*(xf144*xf77 + xf146*xf64*y0);
+  const double xf152 = xf143*xf22;
+  const double xf153 = Bb*xf25*y0;
+  const double xf154 = qopb0*xf152 + qopb0*xf153;
+  const double xf155 = xf147*xf148;
+  const double xf156 = xf155*xf66;
+  const double xf157 = xf154*xf156;
+  const double xf158 = xf0*xf2;
+  const double xf159 = xf150*(2*Bb*qopb0*x0*xf29*xf64 - xf144*xf69);
+  const double xf160 = xf10*xf143;
+  const double xf161 = 2*Bb*qopb0*x0*xf24 - qopb0*xf160;
+  const double xf162 = xf156*xf161;
+  const double xf163 = xf18*xf2;
+  const double xf164 = -xf142*xf7 - xf158*(xf151 + xf157) - xf163*(xf159 + xf162);
+  const double xf165 = std::sqrt(xf14)*xf145*(-hbx*xf0 + hby*xf18);
+  const double xf166 = xf165/xf2;
+  const double xf167 = -xf87;
+  const double xf168 = xf146*xf84;
+  const double xf169 = xf150*(xf144*xf9 + xf168*y0);
+  const double xf170 = xf155*xf65;
+  const double xf171 = xf170*xf85;
+  const double xf172 = xf154*xf171;
+  const double xf173 = xf150*(x0*xf168 + xf144*xf21);
+  const double xf174 = xf161*xf171;
+  const double xf175 = -xf158*(xf169 + xf172) - xf163*(xf173 + xf174) - xf167*xf7;
+  const double xf176 = xf150*(xf152 + xf153);
+  const double xf177 = xf149/std::pow(qopb0, 2);
+  const double xf178 = xf154*xf177;
+  const double xf179 = xf150*(2*Bb*x0*xf24 - xf160);
+  const double xf180 = xf161*xf177;
+  const double xf181 = -xf158*(xf176 - xf178) - xf163*(xf179 - xf180);
+  const double xf182 = std::pow(xf0, 2);
+  const double xf183 = xf14*xf182;
+  const double xf184 = std::pow(xf18, 2);
+  const double xf185 = xf14*xf184;
+  const double xf186 = xf183 + xf185;
+  const double xf187 = 1.0/xf186;
+  const double xf188 = xf2*xf7;
+  const double xf189 = -xf101;
+  const double xf190 = xf100*xf170;
+  const double xf191 = xf154*xf190;
+  const double xf192 = xf150*(xf107*xf144 + xf146*xf99*y0);
+  const double xf193 = xf161*xf190;
+  const double xf194 = xf150*(2*Bb*qopb0*x0*xf29*xf99 - xf104*xf144);
+  const double xf195 = -xf158*(xf191 + xf192) - xf163*(xf193 + xf194) - xf189*xf7;
+  const double xf196 = -xf111;
+  const double xf197 = xf150*(2*Bb*qopb0*xf112*xf29*y0 - xf144*xf4);
+  const double xf198 = xf110*xf170;
+  const double xf199 = xf154*xf198;
+  const double xf200 = xf150*(2*Bb*qopb0*x0*xf112*xf29 - xf144*xf19);
+  const double xf201 = xf161*xf198;
+  const double xf202 = -xf158*(xf197 + xf199) - xf163*(xf200 + xf201) - xf196*xf7;
+  const double xf203 = xf120*xf2*xf8 + xf121*xf163 - xf134*xf158;
+  const double xf204 = std::tan(lamb0);
+  const double xf205 = xf145*(hbx*xf18*xf204 + hby*xf0*xf204 - hbz);
+  const double xf206 = std::pow(Wb0x, 2);
+  const double xf207 = std::pow(Wb0y, 2);
+  const double xf208 = xf206 + xf207;
+  const double xf209 = std::pow(xf208, -1.0/2.0);
+  const double xf210 = Wb0x*xf209;
+  const double xf211 = Wb0y*xf209;
+  const double xf212 = xf209*(Wb0x*xf0 - Wb0y*xf18);
+  const double xf213 = xf2*xf212;
+  const double xf214 = xf14*xf212;
+  const double xf215 = Wb0z*xf211;
+  const double xf216 = Wb0z*xf210;
+  const double xf217 = xf206*xf209 + xf207*xf209;
+  const double xf218 = -Wb0x*Wb0z*xf163 - Wb0y*Wb0z*xf158 + xf208*xf7;
+  const double xf219 = xf209*xf218;
+  const double dqopadqopa0 = 1;
+  const double dqopadlama0 = 0;
+  const double dqopadphia0 = 0;
+  const double dqopadqopb0 = 0;
+  const double dqopadlamb0 = 0;
+  const double dqopadphib0 = 0;
+  const double dqopadd0 = 0;
+  const double dqopadx0 = 0;
+  const double dqopady0 = 0;
+  const double dqopadz0 = 0;
+  const double dlamadqopa0 = xf43*xf46;
+  const double dlamadlama0 = xf46*xf80 + (xf1*(xf47*xf53 + xf49*xf53)/std::pow(xf51, 3.0/2.0) + xf6/std::sqrt(xf51))/(std::pow(xf1, 2)*xf52 + 1);
+  const double dlamadphia0 = xf46*xf94;
+  const double dlamadqopb0 = 0;
+  const double dlamadlamb0 = xf109*xf46;
+  const double dlamadphib0 = xf119*xf46;
+  const double dlamadd0 = xf122*xf46;
+  const double dlamadx0 = -xf20*xf45;
+  const double dlamady0 = -xf45*xf5;
+  const double dlamadz0 = -xf1*xf46;
+  const double dphiadqopa0 = xf124*xf43;
+  const double dphiadlama0 = xf124*xf80;
+  const double dphiadphia0 = xf124*xf94 + xf48*xf52 + xf50*xf52;
+  const double dphiadqopb0 = 0;
+  const double dphiadlamb0 = xf109*xf124;
+  const double dphiadphib0 = xf119*xf124;
+  const double dphiadd0 = xf122*xf124;
+  const double dphiadx0 = -xf124*xf37;
+  const double dphiady0 = -xf124*xf42;
+  const double dphiadz0 = -xf1*xf124;
+  const double dxtadqopa0 = -xf129*xf33 + xf129*xf36 + xf130*xf39 - xf130*xf41 + xf133*xf43;
+  const double dxtadlama0 = -xf129*xf73 - xf129*xf76 + xf130*xf78 + xf130*xf79 + xf133*xf80;
+  const double dxtadphia0 = -xf129*xf88 - xf129*xf91 + xf130*xf92 + xf130*xf93 + xf133*xf94;
+  const double dxtadqopb0 = 0;
+  const double dxtadlamb0 = -xf103*xf129 - xf105*xf129 + xf106*xf130 + xf108*xf130 + xf109*xf133;
+  const double dxtadphib0 = -xf114*xf129 - xf116*xf129 + xf117*xf130 + xf118*xf130 + xf119*xf133;
+  const double dxtadd0 = -xf121*xf129 + xf122*xf128*xf131*xf6 - xf130*xf134;
+  const double dxtadx0 = -xf129 - xf135*xf20;
+  const double dxtady0 = xf130 - xf135*xf5;
+  const double dxtadz0 = -xf132*xf53;
+  const double dytadqopa0 = -xf136*xf33 + xf136*xf36 - xf137*xf39 + xf137*xf41 + xf139*xf43;
+  const double dytadlama0 = xf128*xf138*xf80 - xf136*xf73 - xf136*xf76 - xf137*xf78 - xf137*xf79 + xf140*xf68;
+  const double dytadphia0 = xf128*xf138*xf94 - xf136*xf88 - xf136*xf91 - xf137*xf92 - xf137*xf93 + xf140*xf87;
+  const double dytadqopb0 = 0;
+  const double dytadlamb0 = xf101*xf140 - xf103*xf136 - xf105*xf136 - xf106*xf137 - xf108*xf137 + xf109*xf128*xf138;
+  const double dytadphib0 = xf111*xf140 - xf114*xf136 - xf116*xf136 - xf117*xf137 - xf118*xf137 + xf119*xf128*xf138;
+  const double dytadd0 = -xf121*xf136 + xf122*xf139 + xf134*xf137 + xf140*xf141;
+  const double dytadx0 = -xf136 - xf139*xf37;
+  const double dytady0 = -xf137 - xf139*xf42;
+  const double dytadz0 = -xf1*xf139 + xf140;
+  const double dqopbdqopa0 = 0;
+  const double dqopbdlama0 = 0;
+  const double dqopbdphia0 = 0;
+  const double dqopbdqopb0 = 1;
+  const double dqopbdlamb0 = 0;
+  const double dqopbdphib0 = 0;
+  const double dqopbdd0 = 0;
+  const double dqopbdx0 = 0;
+  const double dqopbdy0 = 0;
+  const double dqopbdz0 = 0;
+  const double dlambdqopa0 = 0;
+  const double dlambdlama0 = xf164*xf166;
+  const double dlambdphia0 = xf166*xf175;
+  const double dlambdqopb0 = xf166*xf181;
+  const double dlambdlamb0 = xf166*xf195 + (xf2/std::sqrt(xf186) + xf7*(xf182*xf188 + xf184*xf188)/std::pow(xf186, 3.0/2.0))/(xf187*std::pow(xf7, 2) + 1);
+  const double dlambdphib0 = xf166*xf202;
+  const double dlambdd0 = xf166*xf203;
+  const double dlambdx0 = -xf165*xf18;
+  const double dlambdy0 = -xf0*xf165;
+  const double dlambdz0 = -xf166*xf7;
+  const double dphibdqopa0 = 0;
+  const double dphibdlama0 = xf164*xf205;
+  const double dphibdphia0 = xf175*xf205;
+  const double dphibdqopb0 = xf181*xf205;
+  const double dphibdlamb0 = xf195*xf205;
+  const double dphibdphib0 = xf183*xf187 + xf185*xf187 + xf202*xf205;
+  const double dphibdd0 = xf203*xf205;
+  const double dphibdx0 = -xf163*xf205;
+  const double dphibdy0 = -xf158*xf205;
+  const double dphibdz0 = -xf205*xf7;
+  const double dxtbdqopa0 = 0;
+  const double dxtbdlama0 = xf151*xf210 + xf157*xf210 - xf159*xf211 - xf162*xf211 + xf164*xf213;
+  const double dxtbdphia0 = xf169*xf210 + xf172*xf210 - xf173*xf211 - xf174*xf211 + xf175*xf213;
+  const double dxtbdqopb0 = xf176*xf210 - xf178*xf210 - xf179*xf211 + xf180*xf211 + xf181*xf213;
+  const double dxtbdlamb0 = xf191*xf210 + xf192*xf210 - xf193*xf211 - xf194*xf211 + xf195*xf213;
+  const double dxtbdphib0 = xf197*xf210 + xf199*xf210 - xf200*xf211 - xf201*xf211 + xf202*xf213;
+  const double dxtbdd0 = xf121*xf211 + xf134*xf210 + xf203*xf213;
+  const double dxtbdx0 = -xf18*xf214 - xf211;
+  const double dxtbdy0 = -xf0*xf214 + xf210;
+  const double dxtbdz0 = -xf188*xf212;
+  const double dytbdqopa0 = 0;
+  const double dytbdlama0 = xf142*xf217 - xf151*xf215 - xf157*xf215 - xf159*xf216 - xf162*xf216 + xf164*xf209*xf218;
+  const double dytbdphia0 = xf167*xf217 - xf169*xf215 - xf172*xf215 - xf173*xf216 - xf174*xf216 + xf175*xf209*xf218;
+  const double dytbdqopb0 = -xf176*xf215 + xf178*xf215 - xf179*xf216 + xf180*xf216 + xf181*xf219;
+  const double dytbdlamb0 = xf189*xf217 - xf191*xf215 - xf192*xf215 - xf193*xf216 - xf194*xf216 + xf195*xf209*xf218;
+  const double dytbdphib0 = xf196*xf217 - xf197*xf215 - xf199*xf215 - xf200*xf216 - xf201*xf216 + xf202*xf209*xf218;
+  const double dytbdd0 = xf121*xf216 - xf134*xf215 - xf141*xf217 + xf203*xf219;
+  const double dytbdx0 = -xf163*xf219 - xf216;
+  const double dytbdy0 = -xf158*xf219 - xf215;
+  const double dytbdz0 = xf217 - xf219*xf7;
+  Matrix<double, 10, 10> res;
+  res(0,0) = dqopadqopa0;
+  res(0,1) = dqopadlama0;
+  res(0,2) = dqopadphia0;
+  res(0,3) = dqopadqopb0;
+  res(0,4) = dqopadlamb0;
+  res(0,5) = dqopadphib0;
+  res(0,6) = dqopadd0;
+  res(0,7) = dqopadx0;
+  res(0,8) = dqopady0;
+  res(0,9) = dqopadz0;
+  res(1,0) = dlamadqopa0;
+  res(1,1) = dlamadlama0;
+  res(1,2) = dlamadphia0;
+  res(1,3) = dlamadqopb0;
+  res(1,4) = dlamadlamb0;
+  res(1,5) = dlamadphib0;
+  res(1,6) = dlamadd0;
+  res(1,7) = dlamadx0;
+  res(1,8) = dlamady0;
+  res(1,9) = dlamadz0;
+  res(2,0) = dphiadqopa0;
+  res(2,1) = dphiadlama0;
+  res(2,2) = dphiadphia0;
+  res(2,3) = dphiadqopb0;
+  res(2,4) = dphiadlamb0;
+  res(2,5) = dphiadphib0;
+  res(2,6) = dphiadd0;
+  res(2,7) = dphiadx0;
+  res(2,8) = dphiady0;
+  res(2,9) = dphiadz0;
+  res(3,0) = dxtadqopa0;
+  res(3,1) = dxtadlama0;
+  res(3,2) = dxtadphia0;
+  res(3,3) = dxtadqopb0;
+  res(3,4) = dxtadlamb0;
+  res(3,5) = dxtadphib0;
+  res(3,6) = dxtadd0;
+  res(3,7) = dxtadx0;
+  res(3,8) = dxtady0;
+  res(3,9) = dxtadz0;
+  res(4,0) = dytadqopa0;
+  res(4,1) = dytadlama0;
+  res(4,2) = dytadphia0;
+  res(4,3) = dytadqopb0;
+  res(4,4) = dytadlamb0;
+  res(4,5) = dytadphib0;
+  res(4,6) = dytadd0;
+  res(4,7) = dytadx0;
+  res(4,8) = dytady0;
+  res(4,9) = dytadz0;
+  res(5,0) = dqopbdqopa0;
+  res(5,1) = dqopbdlama0;
+  res(5,2) = dqopbdphia0;
+  res(5,3) = dqopbdqopb0;
+  res(5,4) = dqopbdlamb0;
+  res(5,5) = dqopbdphib0;
+  res(5,6) = dqopbdd0;
+  res(5,7) = dqopbdx0;
+  res(5,8) = dqopbdy0;
+  res(5,9) = dqopbdz0;
+  res(6,0) = dlambdqopa0;
+  res(6,1) = dlambdlama0;
+  res(6,2) = dlambdphia0;
+  res(6,3) = dlambdqopb0;
+  res(6,4) = dlambdlamb0;
+  res(6,5) = dlambdphib0;
+  res(6,6) = dlambdd0;
+  res(6,7) = dlambdx0;
+  res(6,8) = dlambdy0;
+  res(6,9) = dlambdz0;
+  res(7,0) = dphibdqopa0;
+  res(7,1) = dphibdlama0;
+  res(7,2) = dphibdphia0;
+  res(7,3) = dphibdqopb0;
+  res(7,4) = dphibdlamb0;
+  res(7,5) = dphibdphib0;
+  res(7,6) = dphibdd0;
+  res(7,7) = dphibdx0;
+  res(7,8) = dphibdy0;
+  res(7,9) = dphibdz0;
+  res(8,0) = dxtbdqopa0;
+  res(8,1) = dxtbdlama0;
+  res(8,2) = dxtbdphia0;
+  res(8,3) = dxtbdqopb0;
+  res(8,4) = dxtbdlamb0;
+  res(8,5) = dxtbdphib0;
+  res(8,6) = dxtbdd0;
+  res(8,7) = dxtbdx0;
+  res(8,8) = dxtbdy0;
+  res(8,9) = dxtbdz0;
+  res(9,0) = dytbdqopa0;
+  res(9,1) = dytbdlama0;
+  res(9,2) = dytbdphia0;
+  res(9,3) = dytbdqopb0;
+  res(9,4) = dytbdlamb0;
+  res(9,5) = dytbdphib0;
+  res(9,6) = dytbdd0;
+  res(9,7) = dytbdx0;
+  res(9,8) = dytbdy0;
+  res(9,9) = dytbdz0;
+
+  return res;
+}
+
 Matrix<double, 5, 5> ResidualGlobalCorrectionMakerBase::curv2localJacobianAltelossD(const Matrix<double, 7, 1> &state, const MagneticField *field, const GloballyPositioned<double> &surface, double dEdx, double mass, double dBz) const {
   
   
