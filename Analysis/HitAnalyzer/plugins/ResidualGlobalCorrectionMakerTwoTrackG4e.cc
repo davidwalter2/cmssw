@@ -1199,6 +1199,16 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               
               
               const GloballyPositioned<double> &surface = surfacemapD_.at(hit->geographicalId());
+              
+              const Point3DBase<double, GlobalTag> crosspostmp(updtsos[0], updtsos[1], updtsos[2]);
+              const Vector3DBase<double, GlobalTag> crossmomtmp(updtsos[3], updtsos[4], updtsos[5]);
+              
+              if (surface.toLocal(crosspostmp).z() * surface.toLocal(crossmomtmp).z() > 0) {
+                std::cout << "Abort: wrong propagation direction!\n";
+                valid = false;
+                break;
+              }
+              
               auto propresult = g4prop->propagateGenericWithJacobianAltD(updtsos, surface, dbetaval, dxival);
               if (!std::get<0>(propresult)) {
                 std::cout << "Abort: Propagation Failed!" << std::endl;

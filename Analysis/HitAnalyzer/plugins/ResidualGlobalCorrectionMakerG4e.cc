@@ -2275,6 +2275,16 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 //           auto propresult = g4prop->propagateGenericWithJacobian(*updtsos.freeState(), surface);
         
 //         std::cout << "propagation for iiter = " << iiter << " ihit = " << ihit << std::endl;
+        
+        const Point3DBase<double, GlobalTag> crosspostmp(updtsos[0], updtsos[1], updtsos[2]);
+        const Vector3DBase<double, GlobalTag> crossmomtmp(updtsos[3], updtsos[4], updtsos[5]);
+        
+        if (surface.toLocal(crosspostmp).z() * surface.toLocal(crossmomtmp).z() > 0) {
+          std::cout << "Abort: wrong propagation direction!\n";
+          valid = false;
+          break;
+        }
+        
         auto propresult = g4prop->propagateGenericWithJacobianAltD(updtsos, surface, dbetaval, dxival);
 
 //           propresult = fPropagator->geometricalPropagator().propagateWithPath(updtsos, *hits[ihit+1]->surface());
