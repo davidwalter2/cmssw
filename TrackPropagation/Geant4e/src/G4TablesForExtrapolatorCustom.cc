@@ -493,7 +493,7 @@ G4TablesForExtrapolatorCustom::ComputeMuonDEDX(const G4ParticleDefinition* part,
 // 	               pair->ComputeDEDX(couple,part,e,e) +
 // 	               brem->ComputeDEDX(couple,part,e,e);
 //         std::cout << "material = " << mat->GetName() << " e = " << e << " cut = " << cut << " dedxioni = " << dedxioni << " dedx = " << dedx << std::endl;
-        std::cout << "material = " << mat->GetName() << " e = " << e << " dedxratio = " << dedxratio << " moderatio = " << moderatio << " dedxioni = " << dedxioni << " dedx = " << dedx << std::endl;
+//         std::cout << "material = " << mat->GetName() << " e = " << e << " dedxratio = " << dedxratio << " moderatio = " << moderatio << " dedxioni = " << dedxioni << " dedx = " << dedx << std::endl;
 
 
 //        std::cout << "e = " << e << " dedxionicut = " << dedxionicut << " dedxioni = " << dedxioni << " dedx = " << dedx << std::endl;
