@@ -34,6 +34,7 @@
 #include "G4ErrorPropagationNavigator.hh"
 #include "G4RunManagerKernel.hh"
 #include "G4StateManager.hh"
+#include "G4PathFinder.hh"
 
 // CLHEP
 #include <CLHEP/Units/SystemOfUnits.h>
@@ -612,6 +613,15 @@ std::pair<TrajectoryStateOnSurface, double> Geant4ePropagator::propagateGeneric(
 
   theG4eManager->InitTrackPropagation();
   
+  // re-initialize navigator to avoid mismatches and/or segfaults
+//   G4TransportationManager::GetTransportationManager()->GetPropagatorInField()->GetNavigatorForPropagating()->LocateGlobalPointAndSetup(g4InitPos, &g4InitMom);
+//   theG4eManager->GetErrorPropagationNavigator()->LocateGlobalPointAndSetup(g4InitPos, &g4InitMom);
+  theG4eManager->GetErrorPropagationNavigator()->LocateGlobalPointAndSetup(g4InitPos, &g4InitMom, false, false);
+//   std::cout << "pathfinder = " << G4PathFinder::GetInstance() << std::endl;
+//   G4PathFinder::GetInstance()->Locate(g4InitPos, g4InitMom, false);
+  
+//   std::cout << "pathfinder nav0 = " << G4PathFinder::GetInstance()->GetNavigator(0) << " prop navigator = " << theG4eManager->GetErrorPropagationNavigator() << std::endl;
+  
   // initial jacobian is the identity matrix for the state components,
   // and 0 for b-field and material variations
 //   G4ErrorMatrix jac(5, 7);
@@ -642,9 +652,28 @@ std::pair<TrajectoryStateOnSurface, double> Geant4ePropagator::propagateGeneric(
 //   double masslast = 0.;
   
   Matrix<double, 5, 5> dErrorDxLast = Matrix<double, 5, 5>::Zero();
+  
+  bool firstStep = true;
 
   bool continuePropagation = true;
   while (continuePropagation) {
+//     if (iterations > 0) {
+//       G4PathFinder::GetInstance()->ReLocate(g4eTrajState.GetPosition());
+//     }
+    
+    // re-initialize navigator to avoid mismatches and/or segfaults
+    theG4eManager->GetErrorPropagationNavigator()->LocateGlobalPointWithinVolume(g4eTrajState.GetPosition());
+//     G4PathFinder::GetInstance()->ReLocate(g4eTrajState.GetPosition());
+//     const G4ThreeVector momstep = g4eTrajState.GetMomentum();
+//     theG4eManager->GetErrorPropagationNavigator()->LocateGlobalPointAndSetup(g4eTrajState.GetPosition(), &momstep, false, false);
+//     theG4eManager->GetErrorPropagationNavigator()
+//     G4PathFinder::GetInstance()->Locate(g4InitPos, g4InitMom, false);
+
+    // brute force re-initialization at every step to be safe
+//     const G4ThreeVector momstep = g4eTrajState.GetMomentum();
+//     theG4eManager->GetErrorPropagationNavigator()->LocateGlobalPointAndSetup(g4eTrajState.GetPosition(), &momstep, false, false);
+    
+    
     iterations++;
     LogDebug("Geant4e") << std::endl << "step count " << iterations << " step length " << finalPathLength;
 
