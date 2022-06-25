@@ -219,6 +219,7 @@ protected:
   edm::EDGetTokenT<std::vector<Trajectory>> inputTraj_;
 //   edm::EDGetTokenT<std::vector<reco::GenParticle>> GenParticlesToken_;
   edm::EDGetTokenT<edm::View<reco::Candidate>> GenParticlesToken_;
+  edm::EDGetTokenT<math::XYZPointF> genXyz0Token_;
   edm::EDGetTokenT<GenEventInfoProduct> genEventInfoToken_;
   edm::EDGetTokenT<std::vector<int>> genParticlesBarcodeToken_;
 //   edm::EDGetTokenT<TrajTrackAssociationCollection> inputTrack_;
@@ -446,6 +447,8 @@ protected:
   
   int Pileup_nPU = 0;
   float Pileup_nTrueInt = 0.;
+
+  float genl3d = -99.;
   
   TH2D *hetaphi = nullptr;
 

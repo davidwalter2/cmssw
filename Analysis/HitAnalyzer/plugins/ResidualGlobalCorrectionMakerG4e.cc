@@ -374,11 +374,15 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   
 //   Handle<std::vector<reco::GenParticle>> genPartCollection;
   Handle<edm::View<reco::Candidate>> genPartCollection;
+  Handle<math::XYZPointF> genXyz0;
   Handle<GenEventInfoProduct> genEventInfo;
   Handle<std::vector<int>> genPartBarcodes;
+  Handle<std::vector<PileupSummaryInfo>> pileupSummary;
   if (doGen_) {
     iEvent.getByToken(GenParticlesToken_, genPartCollection);
+    iEvent.getByToken(genXyz0Token_, genXyz0);
     iEvent.getByToken(genEventInfoToken_, genEventInfo);
+    iEvent.getByToken(pileupSummaryToken_, pileupSummary);
   }
   
 //   Handle<std::vector<PSimHit>> tecSimHits;
@@ -834,6 +838,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   genweight = 1.;
   if (doGen_) {
     genweight = genEventInfo->weight();
+
+    Pileup_nPU = pileupSummary->front().getPU_NumInteractions();
+    Pileup_nTrueInt = pileupSummary->front().getTrueNumInteractions();
   }
 
 
@@ -931,6 +938,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     genY = -99.;
     genZ = -99.;
     genParms.fill(0.);
+    genl3d = -99.;
     
     int genBarcode = -99;
     
@@ -981,7 +989,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           genX = g->vertex().x();
           genY = g->vertex().y();
           genZ = g->vertex().z();
-          
+
+          genl3d = std::sqrt((g->vertex() - *genXyz0).mag2());
+
           auto const& vtx = g->vertex();
           auto const& myBeamSpot = bsH->position(vtx.z());
           
@@ -2276,14 +2286,14 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         
 //         std::cout << "propagation for iiter = " << iiter << " ihit = " << ihit << std::endl;
         
-        const Point3DBase<double, GlobalTag> crosspostmp(updtsos[0], updtsos[1], updtsos[2]);
-        const Vector3DBase<double, GlobalTag> crossmomtmp(updtsos[3], updtsos[4], updtsos[5]);
-        
-        if (surface.toLocal(crosspostmp).z() * surface.toLocal(crossmomtmp).z() > 0) {
-          std::cout << "Abort: wrong propagation direction!\n";
-          valid = false;
-          break;
-        }
+//         const Point3DBase<double, GlobalTag> crosspostmp(updtsos[0], updtsos[1], updtsos[2]);
+//         const Vector3DBase<double, GlobalTag> crossmomtmp(updtsos[3], updtsos[4], updtsos[5]);
+//         
+//         if (surface.toLocal(crosspostmp).z() * surface.toLocal(crossmomtmp).z() > 0) {
+//           std::cout << "Abort: wrong propagation direction!\n";
+//           valid = false;
+//           break;
+//         }
         
         auto propresult = g4prop->propagateGenericWithJacobianAltD(updtsos, surface, dbetaval, dxival);
 

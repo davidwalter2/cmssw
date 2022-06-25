@@ -370,11 +370,13 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
   
 //   Handle<std::vector<reco::GenParticle>> genPartCollection;
   Handle<edm::View<reco::Candidate>> genPartCollection;
+  Handle<math::XYZPointF> genXyz0;
   Handle<GenEventInfoProduct> genEventInfo;
   Handle<std::vector<int>> genPartBarcodes;
   Handle<std::vector<PileupSummaryInfo>> pileupSummary;
   if (doGen_) {
     iEvent.getByToken(GenParticlesToken_, genPartCollection);
+    iEvent.getByToken(genXyz0Token_, genXyz0);
     iEvent.getByToken(genEventInfoToken_, genEventInfo);
     iEvent.getByToken(pileupSummaryToken_, pileupSummary);
   }
@@ -1200,14 +1202,14 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               
               const GloballyPositioned<double> &surface = surfacemapD_.at(hit->geographicalId());
               
-              const Point3DBase<double, GlobalTag> crosspostmp(updtsos[0], updtsos[1], updtsos[2]);
-              const Vector3DBase<double, GlobalTag> crossmomtmp(updtsos[3], updtsos[4], updtsos[5]);
-              
-              if (surface.toLocal(crosspostmp).z() * surface.toLocal(crossmomtmp).z() > 0) {
-                std::cout << "Abort: wrong propagation direction!\n";
-                valid = false;
-                break;
-              }
+//               const Point3DBase<double, GlobalTag> crosspostmp(updtsos[0], updtsos[1], updtsos[2]);
+//               const Vector3DBase<double, GlobalTag> crossmomtmp(updtsos[3], updtsos[4], updtsos[5]);
+//               
+//               if (surface.toLocal(crosspostmp).z() * surface.toLocal(crossmomtmp).z() > 0) {
+//                 std::cout << "Abort: wrong propagation direction!\n";
+//                 valid = false;
+//                 break;
+//               }
               
               auto propresult = g4prop->propagateGenericWithJacobianAltD(updtsos, surface, dbetaval, dxival);
               if (!std::get<0>(propresult)) {
@@ -1280,7 +1282,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                   Matrix<double, 7, 1>& oldtsos = layerStates[ihit];
                   const Matrix<double, 5, 5> Hold = curv2localJacobianAltelossD(oldtsos, field, surface, dEdxlast, mmu, dbetaval);
   //                 const Matrix<double, 5, 1> dxlocal = Hold*dxfull.segment<5>(5*(ihit+1));
-                  const Matrix<double, 5, 1> dxlocal = Hold*dxfull.segment<5>(trackstateidx + 3 + 5*ihit);
+                  const Matrix<double, 5, 1> dxlocal = Hold*dxfull.segment<5>(trackstateidx + 5*ihit);
                   
                   const Point3DBase<double, GlobalTag> pos(oldtsos[0], oldtsos[1], oldtsos[2]);
                   const Point3DBase<double, LocalTag> localpos = surface.toLocal(pos);
@@ -2627,18 +2629,21 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           
           
           MatrixXd covstate =  2.*Cinvd.solve(MatrixXd::Identity(nstateparms,nstateparms));
+
+          covrefmom  = covstate.topLeftCorner<6, 6>();
+
           
 //           Matrix<double, 6, 6> covrefmom;
-          covrefmom  = Matrix<double, 6, 6>::Zero();
-          
-          constexpr std::array<unsigned int, 2> localidxs = {{ 0, 3 }};
-          const std::array<unsigned int, 2> globalidxs = {{ trackstateidxarr[0], trackstateidxarr[1] }};
-          
-          for (unsigned int iidx = 0; iidx < localidxs.size(); ++iidx) {
-            for (unsigned int jidx = 0; jidx < localidxs.size(); ++jidx) {
-              covrefmom.block<3, 3>(localidxs[iidx], localidxs[jidx]) = covstate.block<3, 3>(globalidxs[iidx], globalidxs[jidx]);
-            } 
-          }
+//           covrefmom  = Matrix<double, 6, 6>::Zero();
+//
+//           constexpr std::array<unsigned int, 2> localidxs = {{ 0, 3 }};
+//           const std::array<unsigned int, 2> globalidxs = {{ trackstateidxarr[0], trackstateidxarr[1] }};
+//
+//           for (unsigned int iidx = 0; iidx < localidxs.size(); ++iidx) {
+//             for (unsigned int jidx = 0; jidx < localidxs.size(); ++jidx) {
+//               covrefmom.block<3, 3>(localidxs[iidx], localidxs[jidx]) = covstate.block<3, 3>(globalidxs[iidx], globalidxs[jidx]);
+//             }
+//           }
           
           if (icons == 0) {
           
@@ -2805,6 +2810,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             Jpsigen_x = muplusgen->vx();
             Jpsigen_y = muplusgen->vy();
             Jpsigen_z = muplusgen->vz();
+
+            genl3d = std::sqrt((muplusgen->vertex() - *genXyz0).mag2());
           }
           else {
             Jpsigen_pt = -99.;
@@ -2815,6 +2822,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             Jpsigen_x = -99.;
             Jpsigen_y = -99.;
             Jpsigen_z = -99.;
+
+            genl3d = -99.;
           }
 
 
@@ -2981,13 +2990,16 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           const unsigned int idxplus = muchargearr[0] > 0 ? 0 : 1;
           const unsigned int idxminus = muchargearr[0] > 0 ? 1 : 0;
 
+          const unsigned int trackstateidxplus = 3*idxplus;
+          const unsigned int trackstateidxminus = 3*idxminus;
+
           Muplus_jacRef.resize(3*nparsfinal);
-          Map<Matrix<float, 3, Dynamic, RowMajor>>(Muplus_jacRef.data(), 3, nparsfinal) = dxdparms.block(0, trackstateidxarr[idxplus], nparsfinal, 3).transpose().cast<float>();
+          Map<Matrix<float, 3, Dynamic, RowMajor>>(Muplus_jacRef.data(), 3, nparsfinal) = dxdparms.block(0, trackstateidxplus, nparsfinal, 3).transpose().cast<float>();
 
           Muminus_jacRef.resize(3*nparsfinal);
-          Map<Matrix<float, 3, Dynamic, RowMajor>>(Muminus_jacRef.data(), 3, nparsfinal) = dxdparms.block(0, trackstateidxarr[idxminus], nparsfinal, 3).transpose().cast<float>();
+          Map<Matrix<float, 3, Dynamic, RowMajor>>(Muminus_jacRef.data(), 3, nparsfinal) = dxdparms.block(0, trackstateidxminus, nparsfinal, 3).transpose().cast<float>();
         }
-      
+
       }
       
       if (!valid) {

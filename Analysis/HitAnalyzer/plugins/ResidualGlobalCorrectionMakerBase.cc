@@ -140,8 +140,9 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
 //     GenParticlesToken_ = consumes<std::vector<reco::GenParticle>>(edm::InputTag("genParticles"));
 //     GenParticlesToken_ = consumes<edm::View<reco::Candidate>>(edm::InputTag("genParticles"));
     GenParticlesToken_ = consumes<edm::View<reco::Candidate>>(iConfig.getParameter<edm::InputTag>("genParticles"));
+    genXyz0Token_ = consumes<math::XYZPointF>(edm::InputTag("genParticles","xyz0"));
     genEventInfoToken_ = consumes<GenEventInfoProduct>(edm::InputTag("generator"));
-    pileupSummaryToken_ = consumes<std::vector<PileupSummaryInfo>>(edm::InputTag("addPileupInfo"));
+    pileupSummaryToken_ = consumes<std::vector<PileupSummaryInfo>>(iConfig.getParameter<edm::InputTag>("pileupInfo"));
   }
   
   if (doSim_) {
@@ -260,6 +261,8 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
     
     tree->Branch("Pileup_nPU", &Pileup_nPU);
     tree->Branch("Pileup_nTrueInt", &Pileup_nTrueInt);
+
+    tree->Branch("genl3d", &genl3d);
     
     nParms = 0.;
 
