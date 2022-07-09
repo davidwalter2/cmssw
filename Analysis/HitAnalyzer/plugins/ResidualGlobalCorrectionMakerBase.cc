@@ -121,6 +121,7 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
 
   
   fitFromGenParms_ = iConfig.getParameter<bool>("fitFromGenParms");
+  fitFromSimParms_ = iConfig.getParameter<bool>("fitFromSimParms");
   fillTrackTree_ = iConfig.getParameter<bool>("fillTrackTree");
   fillGrads_ = iConfig.getParameter<bool>("fillGrads");
   fillJac_ = iConfig.getParameter<bool>("fillJac");
@@ -2118,6 +2119,202 @@ Matrix<double, 5, 5> ResidualGlobalCorrectionMakerBase::curv2localJacobianAltelo
   
   return res;
                                               
+}
+
+Matrix<double, 2, 8> ResidualGlobalCorrectionMakerBase::curv2localJacobianAltelossalignwedgeD(const Matrix<double, 7, 1> &state, const MagneticField *field, const GloballyPositioned<double> &surface, double rdir, double radius, double mass, double dBz) const {
+
+
+  const GlobalPoint pos(state[0], state[1], state[2]);
+  const GlobalVector &bfield = field->inInverseGeV(pos);
+  const Matrix<double, 3, 1> Bv(bfield.x(), bfield.y(), double(bfield.z()) + 2.99792458e-3*dBz);
+
+  const double q = state[6];
+
+  const double qop0 = q/state.segment<3>(3).norm();
+  const double lam0 = std::atan(state[5]/std::sqrt(state[3]*state[3] + state[4]*state[4]));
+  const double phi0 = std::atan2(state[4], state[3]);
+
+  const double M0x = state[0];
+  const double M0y = state[1];
+  const double M0z = state[2];
+
+  const Matrix<double, 3, 1> W0 = state.segment<3>(3).normalized();
+  const double W0x = W0[0];
+  const double W0y = W0[1];
+  const double W0z = W0[2];
+
+  const Vector3DBase<double, LocalTag> lx(1.,0.,0.);
+  const Vector3DBase<double, LocalTag> ly(0.,1.,0.);
+  const Vector3DBase<double, LocalTag> lz(0.,0.,1.);
+  const Point3DBase<double, LocalTag> l0(0., 0., 0.);
+
+//   const Vector3DBase<double, GlobalTag> I1 = surface.toGlobal<double>(lz);
+//   const Vector3DBase<double, GlobalTag> J1 = surface.toGlobal<double>(lx);
+//   const Vector3DBase<double, GlobalTag> K1 = surface.toGlobal<double>(ly);
+//   const Point3DBase<double, GlobalTag> r1 = surface.toGlobal<double>(l0);
+
+  const Vector3DBase<double, GlobalTag> I1 = surface.toGlobal(lz);
+  const Vector3DBase<double, GlobalTag> J1 = surface.toGlobal(lx);
+  const Vector3DBase<double, GlobalTag> K1 = surface.toGlobal(ly);
+  const Point3DBase<double, GlobalTag> r1 = surface.toGlobal(l0);
+
+//   const Vector3DBase<double, GlobalTag> I1 = toGlobal(surface, lz);
+//   const Vector3DBase<double, GlobalTag> J1 = toGlobal(surface, lx);
+//   const Vector3DBase<double, GlobalTag> K1 = toGlobal(surface, ly);
+//   const Point3DBase<double, GlobalTag> r1 = toGlobal(surface, l0);
+
+  const double Ix1 = I1.x();
+  const double Iy1 = I1.y();
+  const double Iz1 = I1.z();
+
+  const double Jx1 = J1.x();
+  const double Jy1 = J1.y();
+  const double Jz1 = J1.z();
+
+  const double Kx1 = K1.x();
+  const double Ky1 = K1.y();
+  const double Kz1 = K1.z();
+
+  const double rx1 = r1.x();
+  const double ry1 = r1.y();
+  const double rz1 = r1.z();
+
+  const double B = Bv.norm();
+  const Matrix<double, 3, 1> H = Bv.normalized();
+  const double hx = H[0];
+  const double hy = H[1];
+  const double hz = H[2];
+
+  const double x0 = std::pow(W0x, 2);
+  const double x1 = std::pow(W0y, 2);
+  const double x2 = x0 + x1;
+  const double x3 = std::sqrt(x2);
+  const double x4 = 1.0/x3;
+  const double x5 = W0y*x4;
+  const double x6 = Jx1*x5;
+  const double x7 = M0x*W0x;
+  const double x8 = M0y*W0y;
+  const double x9 = M0z*W0z + x7 + x8;
+  const double x10 = W0z*x7;
+  const double x11 = W0z*x8;
+  const double x12 = M0z*(x0*x4 + x1*x4) - x10*x4 - x11*x4;
+  const double x13 = W0z*x9 - rz1 + x12*x3;
+  const double x14 = 1.0/B;
+  const double x15 = 1.0/qop0;
+  const double x16 = B*qop0;
+  const double x17 = x16*x3*x9;
+  const double x18 = M0x*W0y;
+  const double x19 = M0y*W0x*x4 - x18*x4;
+  const double x20 = W0z*x12;
+  const double x21 = -rx1 + x14*x15*x4*(W0x*x17 - x16*(W0x*x20 + W0y*x19));
+  const double x22 = -ry1 + x14*x15*x4*(W0y*x17 + x16*(W0x*x19 - W0y*x20));
+  const double x23 = Jx1*x21 + Jy1*x22 + Jz1*x13;
+  const double x24 = Kz1*x13;
+  const double x25 = Kx1*x21;
+  const double x26 = Ky1*x22;
+  const double x27 = x24 + x25 + x26;
+  const double x28 = radius + rdir*x27;
+  const double x29 = std::pow(x23, 2) + std::pow(x28, 2);
+  const double x30 = 1.0/x29;
+  const double x31 = x28*x30;
+  const double x32 = -Kx1*x5 + Ky1*W0x*x4;
+  const double x33 = -x23;
+  const double x34 = rdir*x30;
+  const double x35 = x33*x34;
+  const double x36 = Ix1*W0y - Iy1*W0x;
+  const double x37 = std::sin(lam0);
+  const double x38 = std::cos(lam0);
+  const double x39 = x38*std::cos(phi0);
+  const double x40 = x38*std::sin(phi0);
+  const double x41 = 1.0/(Ix1*x39 + Iy1*x40 + Iz1*x37);
+  const double x42 = Jz1*x37;
+  const double x43 = Jx1*x39;
+  const double x44 = Jy1*x40;
+  const double x45 = Kx1*x39 + Ky1*x40 + Kz1*x37;
+  const double x46 = rdir*(x31*(x42 + x43 + x44) + x35*x45);
+  const double x47 = x41*x46;
+  const double x48 = x4*x47;
+  const double x49 = W0x*W0z*x4;
+  const double x50 = Jx1*x49;
+  const double x51 = W0z*x5;
+  const double x52 = Jy1*x51;
+  const double x53 = -Kx1*x49 - Ky1*x51 + Kz1*x3;
+  const double x54 = W0x*W0z;
+  const double x55 = Ix1*x54 + Iy1*W0y*W0z - Iz1*x2;
+  const double x56 = Jx1*Kx1;
+  const double x57 = Jy1*Ky1;
+  const double x58 = Jz1*Kz1;
+  const double x59 = -x56 - x57 - x58;
+  const double x60 = std::pow(Jx1, 2);
+  const double x61 = std::pow(Jy1, 2);
+  const double x62 = std::pow(Jz1, 2);
+  const double x63 = Ix1*Jx1;
+  const double x64 = Iy1*Jy1;
+  const double x65 = Iz1*Jz1;
+  const double x66 = x63 + x64 + x65;
+  const double x67 = x41*x66;
+  const double x68 = -std::pow(Kx1, 2) - std::pow(Ky1, 2) - std::pow(Kz1, 2);
+  const double x69 = Ix1*Kx1 + Iy1*Ky1 + Iz1*Kz1;
+  const double x70 = -x69;
+  const double x71 = std::pow(Ix1, 2) + std::pow(Iy1, 2) + std::pow(Iz1, 2);
+  const double x72 = Iz1*x13;
+  const double x73 = Ix1*x21;
+  const double x74 = Iy1*x22;
+  const double x75 = x72 + x73 + x74;
+  const double x76 = -M0z*x2 + x10 + x11;
+  const double x77 = W0z*x9 - rz1 - x76;
+  const double x78 = M0y*W0x - x18;
+  const double x79 = x2*x9;
+  const double x80 = -x76;
+  const double x81 = -W0x*x79 + W0y*x78 + rx1*x2 + x54*x80;
+  const double x82 = -W0x*x78 + W0y*W0z*x80 - W0y*x79 + ry1*x2;
+  const double x83 = -Kx1*x81 - Ky1*x82 + Kz1*x2*x77;
+  const double x84 = 1.0/x2;
+  const double x85 = x47*x84;
+  const double x86 = Jx1*x81 + Jy1*x82 - Jz1*x2*x77;
+  const double x87 = std::pow(x29, -1.0/2.0);
+  const double x88 = (1.0/2.0)*x23;
+  const double x89 = rdir*x28;
+  const double x90 = x87*(x45*x89 + x88*(2*x42 + 2*x43 + 2*x44));
+  const double x91 = x41*x90;
+  const double x92 = x4*x91;
+  const double x93 = x84*x91;
+  const double dphidxt0 = rdir*(x31*(Jy1*W0x*x4 - x6) + x32*x35) + x36*x48;
+  const double dphidyt0 = rdir*(x31*(Jz1*x3 - x50 - x52) + x35*x53) + x48*x55;
+  const double dphidalpha_x = rdir*(x31*(-x60 - x61 - x62) + x35*x59) + x46*x67;
+  const double dphidalpha_y = rdir*(x31*x59 + x35*x68) + x47*x69;
+  const double dphidalpha_z = rdir*(-x31*x66 + x35*x70) + x47*x71;
+  const double dphidtheta_x = std::pow(rdir, 2)*x30*x33*x75 + x83*x85;
+  const double dphidtheta_y = -rdir*x31*x75 + x85*x86;
+  const double dphidtheta_z = rdir*(x27*x31 + std::pow(x33, 2)*x34);
+  const double drhodxt0 = x36*x92 + x87*(x32*x89 + x88*(2*Jy1*W0x*x4 - 2*x6));
+  const double drhodyt0 = x55*x92 + x87*(x53*x89 + x88*(2*Jz1*x3 - 2*x50 - 2*x52));
+  const double drhodalpha_x = x67*x90 + x87*(x59*x89 + x88*(-2*x60 - 2*x61 - 2*x62));
+  const double drhodalpha_y = x69*x91 + x87*(x68*x89 + x88*(-2*x56 - 2*x57 - 2*x58));
+  const double drhodalpha_z = x71*x91 + x87*(x70*x89 + x88*(-2*x63 - 2*x64 - 2*x65));
+  const double drhodtheta_x = x75*x87*x89 + x83*x93;
+  const double drhodtheta_y = x86*x93 + x87*x88*(-2*x72 - 2*x73 - 2*x74);
+  const double drhodtheta_z = x87*(x33*x89 + x88*(2*x24 + 2*x25 + 2*x26));
+  Matrix<double, 2, 8> res;
+  res(0,0) = dphidxt0;
+  res(0,1) = dphidyt0;
+  res(0,2) = dphidalpha_x;
+  res(0,3) = dphidalpha_y;
+  res(0,4) = dphidalpha_z;
+  res(0,5) = dphidtheta_x;
+  res(0,6) = dphidtheta_y;
+  res(0,7) = dphidtheta_z;
+  res(1,0) = drhodxt0;
+  res(1,1) = drhodyt0;
+  res(1,2) = drhodalpha_x;
+  res(1,3) = drhodalpha_y;
+  res(1,4) = drhodalpha_z;
+  res(1,5) = drhodtheta_x;
+  res(1,6) = drhodtheta_y;
+  res(1,7) = drhodtheta_z;
+
+  return res;
+
 }
 
 Matrix<double, 6, 5> ResidualGlobalCorrectionMakerBase::curv2cartJacobianAltD(const Matrix<double, 7, 1> &state) const {
