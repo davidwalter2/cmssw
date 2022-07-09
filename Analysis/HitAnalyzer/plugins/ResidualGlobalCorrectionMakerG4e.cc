@@ -2190,6 +2190,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         
       }
       
+      double dEdxlast = 0.;
       
       for (unsigned int ihit = 0; ihit < hits.size(); ++ihit) {
 //         std::cout << "ihit " << ihit << std::endl;
@@ -2308,6 +2309,17 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 //           valid = false;
 //           break;
 //         }
+
+        Matrix<double, 5, 5> startjac;
+
+        if (ihit == 0) {
+          startjac = ref2curvjac;
+        }
+        else {
+          const GloballyPositioned<double> &surfacem1 = surfacemapD_.at(hits[ihit-1]->geographicalId());
+          // TODO fix dbetaval here
+          startjac = curv2localJacobianAltelossD(updtsos, field, surfacem1, dEdxlast, mmu, 0. /*dbetaval*/).inverse();
+        }
         
         auto propresult = g4prop->propagateGenericWithJacobianAltD(updtsos, surface, dbetaval, dxival);
 
@@ -2343,14 +2355,16 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         updtsos = std::get<1>(propresult);
         const Matrix<double, 5, 5> Qcurv = std::get<2>(propresult);
         const Matrix<double, 5, 7> FdFmcurv = std::get<3>(propresult);
-        const double dEdxlast = std::get<4>(propresult);
+        dEdxlast = std::get<4>(propresult);
 //         const Matrix<double, 5, 5> dQcurv = std::get<5>(propresult);
         
         Matrix<double, 5, 7> FdFm = FdFmcurv;
-        if (ihit == 0) {
-          // extra jacobian from reference state to curvilinear potentially needed
-          FdFm.leftCols<5>() = (FdFm.leftCols<5>()*ref2curvjac).eval();
-        }
+//         if (ihit == 0) {
+//           // extra jacobian from reference state to curvilinear potentially needed
+//           FdFm.leftCols<5>() = (FdFm.leftCols<5>()*ref2curvjac).eval();
+//         }
+        // extra jacobian from state to curvilinear potentially needed
+        FdFm.leftCols<5>() = FdFmcurv.leftCols<5>()*startjac;
 
 //         if (ihit == (hits.size() - 1)) {
 //           dEdxout = dEdxlast;
@@ -2612,8 +2626,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             //save current parameters
 
             Matrix<double, 7, 1>& oldtsos = layerStates[ihit];
-            const Matrix<double, 5, 5> Hold = curv2localJacobianAltelossD(oldtsos, field, surface, dEdxlast, mmu, dbetaval);
-            const Matrix<double, 5, 1> dxlocal = Hold*dxfull.segment<5>(5*(ihit+1));
+//             const Matrix<double, 5, 5> Hold = curv2localJacobianAltelossD(oldtsos, field, surface, dEdxlast, mmu, dbetaval);
+//             const Matrix<double, 5, 1> dxlocal = Hold*dxfull.segment<5>(5*(ihit+1));
+            const Matrix<double, 5, 1> dxlocal = dxfull.segment<5>(5*(ihit+1));
 
             const Point3DBase<double, GlobalTag> pos(oldtsos[0], oldtsos[1], oldtsos[2]);
             const Point3DBase<double, LocalTag> localpos = surface.toLocal(pos);
@@ -2958,7 +2973,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             Matrix<MSScalar, 5, 1> Fxi = FdFm.col(6).cast<MSScalar>();
             
             Matrix<MSScalar, 5, 5> Hmstate = Hm.cast<MSScalar>();
-            Matrix<MSScalar, 5, 5> Hpstate = Hp.cast<MSScalar>();
+//             Matrix<MSScalar, 5, 5> Hpstate = Hp.cast<MSScalar>();
             
             Matrix<MSScalar, 5, 5> Qinv = Q.inverse().cast<MSScalar>();
                                     
@@ -2985,7 +3000,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             
             Matrix<MSScalar, 5, 1> dprop;
             if (dolocalupdate) {
-              dprop = dx0.cast<MSScalar>() + Hpstate*du - Hmstate*Fstate*dum - Hmstate*Fb*dbeta - Hmstate*Fxi*dxi;
+//               dprop = dx0.cast<MSScalar>() + Hpstate*du - Hmstate*Fstate*dum - Hmstate*Fb*dbeta - Hmstate*Fxi*dxi;
+              dprop = dx0.cast<MSScalar>() + du - Hmstate*Fstate*dum - Hmstate*Fb*dbeta - Hmstate*Fxi*dxi;
             }
             else {
               dprop = du - Fstate*dum - Fb*dbeta - Fxi*dxi;
@@ -3191,7 +3207,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             const bool hit1d = preciseHit->dimension() == 1;
             
 
-            Matrix<AlignScalar, 2, 2> Hu = Hp.bottomRightCorner<2,2>().cast<AlignScalar>();
+//             Matrix<AlignScalar, 2, 2> Hu = Hp.bottomRightCorner<2,2>().cast<AlignScalar>();
 
             Matrix<AlignScalar, 2, 1> dy0;
             Matrix<AlignScalar, 2, 2> Vinv;
@@ -3831,7 +3847,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             }
 
 //             Matrix<AlignScalar, 2, 1> dh = dy0 - Hu*dx - A*dalpha;
-            Matrix<AlignScalar, 2, 1> dh = dy0 - Ralign*Hu*dx - Ralign*A*dalpha;
+//             Matrix<AlignScalar, 2, 1> dh = dy0 - Ralign*Hu*dx - Ralign*A*dalpha;
+            Matrix<AlignScalar, 2, 1> dh = dy0 - Ralign*dx - Ralign*A*dalpha;
 //             Matrix<AlignScalar, 2, 1> dh = -Ralign*Hu*dx - Ralign*A*dalpha;
 
 
