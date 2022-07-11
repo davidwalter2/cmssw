@@ -2190,8 +2190,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 //             const MScalar dmsq0 = MScalar(1./massval/massval - massconstraintval);
             
             
-//             const MScalar dmsq0 = MScalar(massval - massconstraintval - dmassconv);
-            const MScalar dmsq0 = MScalar(massval - massconstraintval);
+            const MScalar dmsq0 = MScalar(massval - massconstraintval - dmassconv);
+//             const MScalar dmsq0 = MScalar(massval - massconstraintval);
             
 //             const double sigmalnm = massConstraintWidth_/massconstraintval;
 //             const MScalar invSigmaMsq(1./sigmalnm/sigmalnm);
