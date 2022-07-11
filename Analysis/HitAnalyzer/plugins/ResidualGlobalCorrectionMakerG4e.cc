@@ -273,8 +273,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   
   const bool dogen = fitFromGenParms_;
   
-  const bool dolocalupdate = true;
-//   const bool dolocalupdate = false;
+//   const bool dolocalupdate = true;
+  const bool dolocalupdate = false;
 
 
 
@@ -1524,6 +1524,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     VectorXd grad;
     MatrixXd hess;
     LDLT<MatrixXd> Cinvd;
+//     FullPivLU<MatrixXd> Cinvd;
 //     ColPivHouseholderQR<MatrixXd> Cinvd;
     MatrixXd covfull = MatrixXd::Zero(nstateparms, nstateparms);
     
@@ -2308,7 +2309,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 //           valid = false;
 //           break;
 //         }
-        
+
+        const Matrix<double, 7, 1> prevtsos = updtsos;
+
         auto propresult = g4prop->propagateGenericWithJacobianAltD(updtsos, surface, dbetaval, dxival);
 
 //           propresult = fPropagator->geometricalPropagator().propagateWithPath(updtsos, *hits[ihit+1]->surface());
@@ -2344,6 +2347,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         const Matrix<double, 5, 5> Qcurv = std::get<2>(propresult);
         const Matrix<double, 5, 7> FdFmcurv = std::get<3>(propresult);
         const double dEdxlast = std::get<4>(propresult);
+//         const double dEdxlast = 0.;
+
 //         const Matrix<double, 5, 5> dQcurv = std::get<5>(propresult);
         
         Matrix<double, 5, 7> FdFm = FdFmcurv;
@@ -2473,6 +2478,208 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         localparmsprop[2] = localmom.y()/localmom.z();
         localparmsprop[3] = localpos.x();
         localparmsprop[4] = localpos.y();
+
+//         const double signpzprop = std::copysign(1., localmom.z());
+
+
+        if (false) {
+          std::cout << "genEta = " << genEta << " genPt = " << genPt << " ihit = " << ihit << "\nlocalparmsprop:\n" << localparmsprop << std::endl;
+        }
+
+
+        if (false) {
+
+          for (unsigned int istate = 0; istate < 5; ++istate) {
+            double qop = prevtsos[6]/prevtsos.segment<3>(3).norm();
+            double lam = std::atan(prevtsos[5]/std::sqrt(prevtsos[3]*prevtsos[3] + prevtsos[4]*prevtsos[4]));
+            double phi = std::atan2(prevtsos[4], prevtsos[3]);
+            Matrix<double, 3, 1> pos = prevtsos.head<3>();
+
+            const Matrix<double, 6, 5> curv2cart = curv2cartJacobianAltD(prevtsos);
+
+            Matrix<double, 5, 1> dstate = Matrix<double, 5, 1>::Zero();
+
+            if (istate == 0) {
+              const double dqop = 1e-3*qop;
+              qop += dqop;
+              dstate[0] = dqop;
+            }
+            else if (istate == 1) {
+              const double dlam = 1e-4;
+              lam += dlam;
+              dstate[1] = dlam;
+            }
+            else if (istate == 2) {
+              const double dphi = 1e-4;
+              phi += dphi;
+              dstate[2] = dphi;
+            }
+            else if (istate == 3 || istate == 4) {
+              const double dx = 1e-4;
+              dstate[istate] = dx;
+
+              const Matrix<double, 6, 1> dcart = curv2cart*dstate;
+              pos += dcart.head<3>();
+            }
+
+            Matrix<double, 7, 1> proptsos;
+
+            const double charge = std::copysign(1.0, qop);
+            const double p = std::abs(1./qop);
+
+            proptsos.head<3>() = pos;
+            proptsos[3] = p*std::cos(lam)*std::cos(phi);
+            proptsos[4] = p*std::cos(lam)*std::sin(phi);
+            proptsos[5] = p*std::sin(lam);
+            proptsos[6] = charge;
+
+            auto propresultalt = g4prop->propagateGenericWithJacobianAltD(proptsos, surface, dbetaval, dxival);
+
+            if (!std::get<0>(propresultalt)) {
+              std::cout << "Abort: Propagation Failed!" << std::endl;
+              valid = false;
+              break;
+            }
+
+            const Matrix<double, 7, 1> updtsosalt = std::get<1>(propresultalt);
+
+            Matrix<double, 5, 1> localparmspropalt;
+            const Point3DBase<double, GlobalTag> posprop(updtsosalt[0], updtsosalt[1], updtsosalt[2]);
+            const Vector3DBase<double, GlobalTag> momprop(updtsosalt[3], updtsosalt[4], updtsosalt[5]);
+
+            const Point3DBase<double, LocalTag> localpos = surface.toLocal(posprop);
+            const Vector3DBase<double, LocalTag> localmom = surface.toLocal(momprop);
+
+    //         std::cout << "iiter = " << iiter << " ihit  = " << ihit << " localpos:\n" << localpos << std::endl;
+
+    //         const Point3DBase<double, LocalTag> localpos = toLocal(surface, posprop);
+    //         const Vector3DBase<double, LocalTag> localmom = toLocal(surface, momprop);
+
+            localparmspropalt[0] = updtsosalt[6]/updtsosalt.segment<3>(3).norm();
+            localparmspropalt[1] = localmom.x()/localmom.z();
+            localparmspropalt[2] = localmom.y()/localmom.z();
+            localparmspropalt[3] = localpos.x();
+            localparmspropalt[4] = localpos.y();
+
+            const Matrix<double, 5, 5> Hmalt = curv2localJacobianAltelossD(updtsos, field, surface, 0., mmu, dbetaval);
+
+
+            const Matrix<double, 5, 1> stategradfinite = (localparmspropalt - localparmsprop)/dstate[istate];
+
+            const Matrix<double, 5, 1> stategrad = (Hm*FdFmcurv).col(istate);
+            const Matrix<double, 5, 1> stategradalt = (Hmalt*FdFmcurv).col(istate);
+            const Matrix<double, 5, 1> stategradprop = FdFmcurv.col(istate);
+
+            std::cout << "genEta = " << genEta << " genPt = " << genPt << " ihit = " << ihit << " charge = " << prevtsos[6] << " istate = " << istate << "\nstategrad\n" << stategrad << "\nstategradfinite\n" << stategradfinite << "\nstategradalt\n" << stategradalt << "\nstategradprop\n" << stategradprop << std::endl;
+
+          }
+        }
+
+        if (false) {
+
+          for (unsigned int istate = 0; istate < 5; ++istate) {
+            double qop = updtsos[6]/updtsos.segment<3>(3).norm();
+            double lam = std::atan(updtsos[5]/std::sqrt(updtsos[3]*updtsos[3] + updtsos[4]*updtsos[4]));
+            double phi = std::atan2(updtsos[4], updtsos[3]);
+            Matrix<double, 3, 1> pos = updtsos.head<3>();
+
+            const Matrix<double, 6, 5> curv2cart = curv2cartJacobianAltD(updtsos);
+
+            Matrix<double, 5, 1> dstate = Matrix<double, 5, 1>::Zero();
+
+            if (istate == 0) {
+              const double dqop = 1e-3*qop;
+              qop += dqop;
+              dstate[0] = dqop;
+            }
+            else if (istate == 1) {
+              const double dlam = 1e-4;
+              lam += dlam;
+              dstate[1] = dlam;
+            }
+            else if (istate == 2) {
+              const double dphi = 1e-4;
+              phi += dphi;
+              dstate[2] = dphi;
+            }
+            else if (istate == 3 || istate == 4) {
+              const double dx = 1e-4;
+              dstate[istate] = dx;
+
+              const Matrix<double, 6, 1> dcart = curv2cart*dstate;
+              Matrix<double, 3, 1> dpos = dcart.head<3>();
+
+              const Vector3DBase<double, LocalTag> lz(0.,0.,1.);
+              const Vector3DBase<double, GlobalTag> lzglob = surface.toGlobal(lz);
+
+              const Matrix<double, 3, 1> lzglobeig(lzglob.x(), lzglob.y(), lzglob.z());
+
+              if (dpos.dot(lzglobeig) > 0.) {
+                dstate = -dstate;
+                dpos = -dpos;
+              }
+
+              pos += dpos;
+            }
+
+            Matrix<double, 7, 1> proptsos;
+
+            const double charge = std::copysign(1.0, qop);
+            const double p = std::abs(1./qop);
+
+            proptsos.head<3>() = pos;
+            proptsos[3] = p*std::cos(lam)*std::cos(phi);
+            proptsos[4] = p*std::cos(lam)*std::sin(phi);
+            proptsos[5] = p*std::sin(lam);
+            proptsos[6] = charge;
+
+            Matrix<double, 7, 1> updtsosalt = proptsos;
+
+            if (istate > 2) {
+
+              auto propresultalt = g4prop->propagateGenericWithJacobianAltD(proptsos, surface, dbetaval, dxival);
+
+              if (!std::get<0>(propresultalt)) {
+                std::cout << "Abort: Propagation Failed for jacobian test!" << std::endl;
+                valid = false;
+                break;
+              }
+
+              updtsosalt = std::get<1>(propresultalt);
+
+            }
+
+            Matrix<double, 5, 1> localparmspropalt;
+            const Point3DBase<double, GlobalTag> posprop(updtsosalt[0], updtsosalt[1], updtsosalt[2]);
+            const Vector3DBase<double, GlobalTag> momprop(updtsosalt[3], updtsosalt[4], updtsosalt[5]);
+
+            const Point3DBase<double, LocalTag> localpos = surface.toLocal(posprop);
+            const Vector3DBase<double, LocalTag> localmom = surface.toLocal(momprop);
+
+    //         std::cout << "iiter = " << iiter << " ihit  = " << ihit << " localpos:\n" << localpos << std::endl;
+
+    //         const Point3DBase<double, LocalTag> localpos = toLocal(surface, posprop);
+    //         const Vector3DBase<double, LocalTag> localmom = toLocal(surface, momprop);
+
+            localparmspropalt[0] = updtsosalt[6]/updtsosalt.segment<3>(3).norm();
+            localparmspropalt[1] = localmom.x()/localmom.z();
+            localparmspropalt[2] = localmom.y()/localmom.z();
+            localparmspropalt[3] = localpos.x();
+            localparmspropalt[4] = localpos.y();
+
+            const Matrix<double, 5, 5> Hmalt = curv2localJacobianAltelossD(updtsos, field, surface, 0., mmu, dbetaval);
+
+
+            const Matrix<double, 5, 1> stategradfinite = (localparmspropalt - localparmsprop)/dstate[istate];
+
+            const Matrix<double, 5, 1> stategrad = Hm.col(istate);
+            const Matrix<double, 5, 1> stategradalt = Hmalt.col(istate);
+
+            std::cout << "genEta = " << genEta << " genPt = " << genPt << " ihit = " << ihit << " charge = " << prevtsos[6] << " istate = " << istate << "\nstategrad\n" << stategrad << "\nstategradfinite\n" << stategradfinite << "\nstategradalt\n" << stategradalt << std::endl;
+
+          }
+        }
+
 
         Matrix<double, 5, 1> localparms = localparmsprop;
         
@@ -3281,6 +3488,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
 //               dy0[0] = gRandom->Gaus(0., std::sqrt(preciseHit->localPositionError().xx()));
               dy0[0] = hitx - lxcor;
+//               dy0[0] = 0.;
 
 //               dy0[1] = 0. - lycor;
               dy0[1] = 0.;
@@ -3352,6 +3560,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
                 dy0[0] = hitx - lxcor;
                 dy0[1] = hity - lycor;
+
+//                 dy0[0] = 0.;
+//                 dy0[1] = 0.;
 
 //                 dy0[0] = AlignScalar(hitx - lxcor);
 //                 dy0[1] = AlignScalar(hity - lycor);
@@ -3626,6 +3837,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
 //                     dy0[0] = gRandom->Gaus(0., std::sqrt(phierr2));
                     dy0[0] = phihit - phistate;
+//                     dy0[0] = 0.;
 
   //                   dy0[1] = hity - lycor;
                     dy0[1] = 0.;
