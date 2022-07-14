@@ -121,6 +121,7 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
 
   
   fitFromGenParms_ = iConfig.getParameter<bool>("fitFromGenParms");
+  fitFromSimParms_ = iConfig.getParameter<bool>("fitFromSimParms");
   fillTrackTree_ = iConfig.getParameter<bool>("fillTrackTree");
   fillGrads_ = iConfig.getParameter<bool>("fillGrads");
   fillJac_ = iConfig.getParameter<bool>("fillJac");
@@ -839,6 +840,37 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
 
 
 GloballyPositioned<double> ResidualGlobalCorrectionMakerBase::surfaceToDouble(const Surface &surface) const {
+  Point3DBase<double, GlobalTag> pos = surface.position();
+  //re-orthogonalize
+  Matrix<double, 3, 3> rot;
+  rot << surface.rotation().xx(), surface.rotation().xy(), surface.rotation().xz(),
+          surface.rotation().yx(), surface.rotation().yy(), surface.rotation().yz(),
+          surface.rotation().zx(), surface.rotation().zy(), surface.rotation().zz();
+          
+//       std::cout << "rot check pre:" << std::endl;
+//       std::cout << rot.transpose()*rot << std::endl;
+        
+  for (unsigned int i = 0; i < 3; ++i) {
+    for (unsigned int j = 0; j < i; ++j) {
+      rot.row(i) = (rot.row(i) - (rot.row(i)*rot.row(j).transpose())[0]/rot.row(j).squaredNorm()*rot.row(j)).eval();
+    }
+  }
+  for (unsigned int i = 0; i < 3; ++i) {
+      rot.row(i) = (rot.row(i)/rot.row(i).norm()).eval();
+  }
+  
+//       std::cout << "rot check post:" << std::endl;
+//       std::cout << rot.transpose()*rot << std::endl;
+  
+  const TkRotation<double> tkrot(rot(0,0), rot(0,1), rot(0,2),
+                                  rot(1,0), rot(1,1), rot(1,2),
+                                  rot(2,0), rot(2,1), rot(2,2));
+  
+  
+  return GloballyPositioned<double>(pos, tkrot);
+}
+
+GloballyPositioned<double> ResidualGlobalCorrectionMakerBase::surfaceToDouble(const GloballyPositioned<float> &surface) const {
   Point3DBase<double, GlobalTag> pos = surface.position();
   //re-orthogonalize
   Matrix<double, 3, 3> rot;
