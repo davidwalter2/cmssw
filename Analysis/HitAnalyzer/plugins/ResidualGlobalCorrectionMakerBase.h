@@ -174,8 +174,6 @@ protected:
   virtual void beginRun(edm::Run const&, edm::EventSetup const&) override;
 
   GloballyPositioned<double> surfaceToDouble(const Surface &surface) const;
-  
-  GloballyPositioned<double> surfaceToDouble(const GloballyPositioned<float> &surface) const;
 
   Matrix<double, 5, 5> curv2localJacobianAltelossD(const Matrix<double, 7, 1> &state, const MagneticField *field, const GloballyPositioned<double> &surface, double dEdx, double mass, double dBz = 0.) const;
   
@@ -387,7 +385,6 @@ protected:
   std::unordered_map<std::pair<unsigned int, unsigned int>, double> hessaggsparse;
   
   bool fitFromGenParms_;
-  bool fitFromSimParms_;
   bool fillTrackTree_;
   bool fillGrads_;
   bool fillJac_;
