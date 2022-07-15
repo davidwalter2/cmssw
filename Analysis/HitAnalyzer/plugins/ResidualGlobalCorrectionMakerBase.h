@@ -385,6 +385,7 @@ protected:
   std::unordered_map<std::pair<unsigned int, unsigned int>, double> hessaggsparse;
   
   bool fitFromGenParms_;
+  bool fitFromSimParms_;
   bool fillTrackTree_;
   bool fillGrads_;
   bool fillJac_;

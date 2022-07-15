@@ -121,6 +121,7 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
 
   
   fitFromGenParms_ = iConfig.getParameter<bool>("fitFromGenParms");
+  fitFromSimParms_ = iConfig.getParameter<bool>("fitFromSimParms");
   fillTrackTree_ = iConfig.getParameter<bool>("fillTrackTree");
   fillGrads_ = iConfig.getParameter<bool>("fillGrads");
   fillJac_ = iConfig.getParameter<bool>("fillJac");

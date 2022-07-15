@@ -273,8 +273,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   
   const bool dogen = fitFromGenParms_;
   
-//   const bool dolocalupdate = true;
-  const bool dolocalupdate = false;
+  const bool dolocalupdate = true;
+//   const bool dolocalupdate = false;
 
 
 
@@ -1737,7 +1737,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
 //     constexpr unsigned int niters = 1;
 //     constexpr unsigned int niters = 10;
-    const unsigned int niters = (dogen && !dolocalupdate) ? 1 : 10;
+//     const unsigned int niters = (dogen && !dolocalupdate) ? 1 : 10;
+    
+    const unsigned int niters = (dogen && !dolocalupdate) || (dogen && fitFromSimParms_) ? 1 : 10;
     
     for (unsigned int iiter=0; iiter<niters; ++iiter) {
       if (debugprintout_) {
@@ -2464,6 +2466,58 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         //momentum kink residual
 //         AlgebraicVector5 idx0(0., 0., 0., 0., 0.);
         Matrix<double, 5, 1> idx0 = Matrix<double, 5, 1>::Zero();
+        
+        if (iiter == 0 && fitFromSimParms_) {
+          if (simhit == nullptr) {
+            valid = false;
+            break;
+          }
+
+          // alternate version with propagation from entry state
+
+          const Point3DBase<double, LocalTag> simlocalpos = simhit->entryPoint();
+          const Vector3DBase<double, LocalTag> simlocalmom = simhit->momentumAtEntry();
+
+//           std::cout << "simlocalpos" << simlocalpos << std::endl;
+
+          const Point3DBase<double, GlobalTag> simglobalpos = surface.toGlobal(simlocalpos);
+          const Vector3DBase<double, GlobalTag> simglobalmom = surface.toGlobal(simlocalmom);
+
+          updtsos[0] = simglobalpos.x();
+          updtsos[1] = simglobalpos.y();
+          updtsos[2] = simglobalpos.z();
+          updtsos[3] = simglobalmom.x();
+          updtsos[4] = simglobalmom.y();
+          updtsos[5] = simglobalmom.z();
+          updtsos[6] = genpart->charge();
+
+          auto propresultsim = g4prop->propagateGenericWithJacobianAltD(updtsos, surface, dbetaval, dxival);
+
+          if (!std::get<0>(propresultsim)) {
+            std::cout << "Abort: Sim state Propagation Failed!" << std::endl;
+            valid = false;
+            break;
+          }
+
+          updtsos = std::get<1>(propresultsim);
+
+          const Point3DBase<double, GlobalTag> simglobalposprop(updtsos[0], updtsos[1], updtsos[2]);
+          const Vector3DBase<double, GlobalTag> simglobalmomprop(updtsos[3], updtsos[4], updtsos[5]);
+
+          const Point3DBase<double, LocalTag> simlocalposprop = surface.toLocal(simglobalposprop);
+          const Vector3DBase<double, LocalTag> simlocalmomprop = surface.toLocal(simglobalmomprop);
+
+          localparms[0] = updtsos[6]/updtsos.segment<3>(3).norm();
+          localparms[1] = simlocalmomprop.x()/simlocalmomprop.z();
+          localparms[2] = simlocalmomprop.y()/simlocalmomprop.z();
+          localparms[3] = simlocalposprop.x();
+          localparms[4] = simlocalposprop.y();
+
+          idx0 = localparms - localparmsprop;
+
+        }
+        
+        
         if (dolocalupdate) {
           if (iiter==0) {
   //         if (true) {
@@ -3701,16 +3755,27 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       assert(parmidx == (nparsBfield + nparsEloss));
       assert(alignmentparmidx == nparsAlignment);
       
+
+      auto freezeparm = [&](unsigned int idx) {
+        gradfull[idx] = 0.;
+        hessfull.row(idx) *= 0.;
+        hessfull.col(idx) *= 0.;
+        hessfull(idx,idx) = 1e6;
+      };
+
       //fake constraint on reference point parameters
       if (dogen) {
-//       if (false) {
         for (unsigned int i=0; i<5; ++i) {
-          gradfull[i] = 0.;
-          hessfull.row(i) *= 0.;
-          hessfull.col(i) *= 0.;
-          hessfull(i,i) = 1e6;
+          freezeparm(i);
         }
       }
+
+      if (fitFromSimParms_) {
+        for (unsigned int i = 5; i < nstateparms; ++i) {
+          freezeparm(i);
+        }
+      }
+      
 
 //       // brute force constraint on reference point parameters
 //       if (dogen) {
@@ -3804,6 +3869,14 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       
       if (bsConstraint_) {
         ndof += 2;
+      }
+      
+      if (dogen) {
+        ndof += 5;
+      }
+      
+      if (fitFromSimParms_) {
+        ndof += nstateparms - 5;
       }
       
       covfull = 2.*Cinvd.solve(MatrixXd::Identity(nstateparms,nstateparms));

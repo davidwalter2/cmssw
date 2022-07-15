@@ -340,8 +340,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
   
   const bool dogen = fitFromGenParms_;
  
-//   const bool dolocalupdate = true;
-  const bool dolocalupdate = false;
+  const bool dolocalupdate = true;
+//   const bool dolocalupdate = false;
 
   
   using namespace edm;
