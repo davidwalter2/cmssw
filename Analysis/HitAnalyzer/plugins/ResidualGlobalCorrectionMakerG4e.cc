@@ -273,8 +273,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   
   const bool dogen = fitFromGenParms_;
   
-  const bool dolocalupdate = true;
-//   const bool dolocalupdate = false;
+//   const bool dolocalupdate = true;
+  const bool dolocalupdate = false;
 
 
 
@@ -1478,6 +1478,14 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     VectorXd gradfull;
     MatrixXd hessfull;
     
+//     VectorXd hesseigvals;
+//     MatrixXd hesseigvecs;
+    
+//     VectorXd hesseigvals = VectorXd::Ones(nstateparms);
+//     MatrixXd hesseigvecs = MatrixXd::Identity(nstateparms, nstateparms);
+
+    MatrixXd hessdiag = MatrixXd::Identity(nstateparms, nstateparms);
+    
     VectorXd gradfullalign;
     MatrixXd hessfullalign;
     
@@ -1747,7 +1755,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 //     constexpr unsigned int niters = 10;
 //     const unsigned int niters = (dogen && !dolocalupdate) ? 1 : 10;
     
-    const unsigned int niters = (dogen && !dolocalupdate) || (dogen && fitFromSimParms_) ? 1 : 10;
+//     const unsigned int niters = (dogen && !dolocalupdate) || (dogen && fitFromSimParms_) ? 1 : 10;
+    const unsigned int niters = (dogen && !dolocalupdate) || (dogen && fitFromSimParms_) ? 2 : 10;
+
     
     for (unsigned int iiter=0; iiter<niters; ++iiter) {
       if (debugprintout_) {
@@ -1898,6 +1908,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       jacstate = MatrixXd::Zero(nstateparms, nstateparms);
       jacstaterev = MatrixXd::Zero(nstateparms, nstateparms);
       
+//       hesseigvals = VectorXd::Ones(nstateparms);
+//       hesseigvecs = MatrixXd::Identity(nstateparms, nstateparms);
+      
       gradfullalign = VectorXd::Zero(nparmsfull);
       hessfullalign = MatrixXd::Zero(nparmsfull, nparmsfull);
       
@@ -1958,7 +1971,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 //         const AlgebraicMatrix65& jac = curv2cart.jacobian();
 //         const AlgebraicVector6 glob = refFts.parameters().vector();
         
-        auto const& dxlocal = dxfull.head<5>();
+//         auto const& dxlocal = dxfull.head<5>();
+        auto const& dxlocal = dxfulllocal.head<5>();
 //         const Matrix<double, 6, 1> globupd = Map<const Matrix<double, 6, 1>>(glob.Array()) + Map<const Matrix<double, 6, 5, RowMajor>>(jac.Array())*dxlocal;
 //         const Matrix<double, 6, 1> globupd = Map<const Matrix<double, 6, 1>>(glob.Array()) + jac*dxlocal;
 
@@ -2449,7 +2463,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         //get the process noise matrix
 //         AlgebraicMatrix55 const Qmat = updtsos.localError().matrix();
 //         const Map<const Matrix<double, 5, 5, RowMajor>>Q(Qmat.Array());
-        const Matrix<double, 5, 5> Q = dolocalupdate ? Hm*Qcurv*Hm.transpose() : Qcurv;
+        const Matrix<double, 5, 5> Q = true || dolocalupdate ? Hm*Qcurv*Hm.transpose() : Qcurv;
         
 //         const Matrix<double, 5, 5> dQ = Hm*dQcurv*Hm.transpose();
         
@@ -3032,7 +3046,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           
           if (true) {
 
-            constexpr unsigned int nlocalstate = 5;
+            const bool freezestart = dogen && ihit == 0;
+
+            constexpr unsigned int nlocalstate = 10;
             constexpr unsigned int nlocalbfield = 1;
             constexpr unsigned int nlocaleloss = 1;
             constexpr unsigned int nlocalparms = nlocalbfield + nlocaleloss;
@@ -3045,11 +3061,11 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
             constexpr unsigned int localparmidx = localstateidx + nlocalstate;
             
-            const unsigned int fullstateidx = 5*(ihit + 1);
+            const unsigned int fullstateidx = 5*ihit;
             const unsigned int fullparmidx = nstateparms + parmidx;
             
             
-//             Matrix<MSScalar, 5, 5> Fstate = FdFm.leftCols<5>().cast<MSScalar>();
+            Matrix<MSScalar, 5, 5> Fstate = FdFm.leftCols<5>().cast<MSScalar>();
             Matrix<MSScalar, 5, 1> Fb = FdFm.col(5).cast<MSScalar>();
             Matrix<MSScalar, 5, 1> Fxi = FdFm.col(6).cast<MSScalar>();
             
@@ -3059,9 +3075,16 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             Matrix<MSScalar, 5, 5> Qinv = Q.inverse().cast<MSScalar>();
                                     
             // initialize active scalars for state parameters
+            Matrix<MSScalar, 5, 1> dum = Matrix<MSScalar, 5, 1>::Zero();
+            if (!freezestart) {
+              for (unsigned int j=0; j<dum.size(); ++j) {
+                init_twice_active_var(dum[j], nlocal, localstateidx + j);
+              }
+            }
+            
             Matrix<MSScalar, 5, 1> du = Matrix<MSScalar, 5, 1>::Zero();
             for (unsigned int j=0; j<du.size(); ++j) {
-              init_twice_active_var(du[j], nlocal, localstateidx + j);
+              init_twice_active_var(du[j], nlocal, localstateidx + 5 + j);
             }
             
             MSScalar dbeta(0.);
@@ -3074,12 +3097,13 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 //             const Matrix<MSScalar, 5, 1> dprop = dx0.cast<MSScalar>() + du - Fstate*dum - Fb*dbeta;
             
             Matrix<MSScalar, 5, 1> dprop;
-            if (dolocalupdate) {
+            if (true || dolocalupdate) {
 //               dprop = dx0.cast<MSScalar>() + Hpstate*du - Hmstate*Fstate*dum - Hmstate*Fb*dbeta - Hmstate*Fxi*dxi;
-              dprop = dx0.cast<MSScalar>() + du - Hmstate*Fb*dbeta - Hmstate*Fxi*dxi;
+//               dprop = dx0.cast<MSScalar>() + du - Hmstate*Fb*dbeta - Hmstate*Fxi*dxi;
+              dprop = dx0.cast<MSScalar>() + du - Hmstate*Fstate*dum - Hmstate*Fb*dbeta - Hmstate*Fxi*dxi;
             }
             else {
-//               dprop = du - Fstate*dum - Fb*dbeta - Fxi*dxi;
+              dprop = du - Fstate*dum - Fb*dbeta - Fxi*dxi;
             }
             
             
@@ -3193,6 +3217,10 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               gradlocal[localparmidx + 1] += 5.*fact;
               hesslocal(localparmidx + 1, localparmidx + 1) += 5.*fact*fact;
             }
+
+            if (freezestart) {
+              hesslocal.topLeftCorner<5, 5>() += 1e6*Matrix<double, 5, 5>::Identity();
+            }
             
 //             std::cout << "material: ihit = " << ihit << std::endl;
 //             std::cout << "dx0" << std::endl;
@@ -3207,15 +3235,34 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 //             std::cout << "hesslocal" << std::endl;
 //             std::cout << hesslocal << std::endl;
             
-            //fill global gradient
-            gradfull.segment<nlocalstate>(fullstateidx) += gradlocal.head<nlocalstate>();
+//             //fill global gradient
+//             gradfull.segment<nlocalstate>(fullstateidx) += gradlocal.head<nlocalstate>();
+//             gradfull.segment<nlocalparms>(fullparmidx) += gradlocal.segment<nlocalparms>(localparmidx);
+// 
+//             //fill global hessian (upper triangular blocks only)
+//             hessfull.block<nlocalstate,nlocalstate>(fullstateidx, fullstateidx) += hesslocal.topLeftCorner<nlocalstate,nlocalstate>();
+//             hessfull.block<nlocalstate,nlocalparms>(fullstateidx, fullparmidx) += hesslocal.topRightCorner<nlocalstate, nlocalparms>();
+//             hessfull.block<nlocalparms, nlocalparms>(fullparmidx, fullparmidx) += hesslocal.bottomRightCorner<nlocalparms, nlocalparms>();
+            
+//             auto const &eigjac = (hesseigvecs*hesseigvals.cwiseSqrt().cwiseInverse().asDiagonal()).middleRows<nlocalstate>(fullstateidx);
+//             auto const &eigjac = (hesseigvals.cwiseSqrt().asDiagonal()*hesseigvecs).middleRows<nlocalstate>(fullstateidx);
+//             auto const &eigjac = hesseigvecs.middleRows<nlocalstate>(fullstateidx);
+            auto const &eigjac = hessdiag.middleRows<nlocalstate>(fullstateidx);
+//             auto const &eigjac = hesseigvecs.transpose().middleRows<nlocalstate>(localstateidx);
+//             
+//             //fill global gradient
+            gradfull.head(nstateparms) += eigjac.transpose()*gradlocal.head<nlocalstate>();
             gradfull.segment<nlocalparms>(fullparmidx) += gradlocal.segment<nlocalparms>(localparmidx);
-
-            //fill global hessian (upper triangular blocks only)
-            hessfull.block<nlocalstate,nlocalstate>(fullstateidx, fullstateidx) += hesslocal.topLeftCorner<nlocalstate,nlocalstate>();
-            hessfull.block<nlocalstate,nlocalparms>(fullstateidx, fullparmidx) += hesslocal.topRightCorner<nlocalstate, nlocalparms>();
+//             
+// 
+//             //fill global hessian (upper triangular blocks only)
+            hessfull.topLeftCorner(nstateparms, nstateparms) += eigjac.transpose()*hesslocal.topLeftCorner<nlocalstate,nlocalstate>()*eigjac;
+            hessfull.block(0, fullparmidx, nstateparms, nlocalparms) += eigjac.transpose()*hesslocal.topRightCorner<nlocalstate, nlocalparms>();
             hessfull.block<nlocalparms, nlocalparms>(fullparmidx, fullparmidx) += hesslocal.bottomRightCorner<nlocalparms, nlocalparms>();
             
+//             if (iiter == 0) {
+//               std::cout << "ihit = " << ihit << " hessfull\n" << hessfull.block<nlocalstate, nlocalstate>(fullstateidx, fullstateidx) << std::endl;
+//             }
 
           }
           
@@ -3720,7 +3767,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 //             std::cout << "gradfull.size(): " << gradfull.size() << " nlocalstate: " << nlocalstate << " fullstateidx: " << fullstateidx << " nlocalparms: " << nlocalparms << " fullparmidx: " << fullparmidx << std::endl;
             
             // FIXME the templated block functions don't work here for some reason
-            //fill global gradient
+// //             fill global gradient
 //             gradfull.segment<nlocalstate>(fullstateidx) += gradlocal.head(nlocalstate);
 //             gradfull.segment<nlocalparms>(fullparmidx) += gradlocal.segment(localparmidx, nlocalparms);
 // 
@@ -3729,14 +3776,32 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 //             hessfull.block<nlocalstate,nlocalparms>(fullstateidx, fullparmidx) += hesslocal.topRightCorner(nlocalstate, nlocalparms);
 //             hessfull.block<nlocalparms, nlocalparms>(fullparmidx, fullparmidx) += hesslocal.bottomRightCorner(nlocalparms, nlocalparms);
 
+//             //fill global gradient
+//             gradfullalign.segment<nlocalstate>(fullstateidx) += gradlocal.head(nlocalstate);
+//             gradfullalign.segment<nlocalparms>(fullparmidx) += gradlocal.segment(localparmidx, nlocalparms);
+// 
+//             //fill global hessian (upper triangular blocks only)
+//             hessfullalign.block<nlocalstate,nlocalstate>(fullstateidx, fullstateidx) += hesslocal.topLeftCorner(nlocalstate,nlocalstate);
+//             hessfullalign.block<nlocalstate,nlocalparms>(fullstateidx, fullparmidx) += hesslocal.topRightCorner(nlocalstate, nlocalparms);
+//             hessfullalign.block<nlocalparms, nlocalparms>(fullparmidx, fullparmidx) += hesslocal.bottomRightCorner(nlocalparms, nlocalparms);
+
+
+//             auto const &eigjac = (hesseigvecs*hesseigvals.cwiseSqrt().cwiseInverse().asDiagonal()).middleRows<nlocalstate>(fullstateidx);
+//             auto const &eigjac = (hesseigvals.cwiseSqrt().asDiagonal()*hesseigvecs).middleRows<nlocalstate>(fullstateidx);
+
+//             auto const &eigjac = hesseigvecs.middleRows<nlocalstate>(fullstateidx);
+//             auto const &eigjac = hesseigvecs.transpose().middleRows<nlocalstate>(localstateidx);
+            auto const &eigjac = hessdiag.middleRows<nlocalstate>(fullstateidx);
+            
             //fill global gradient
-            gradfullalign.segment<nlocalstate>(fullstateidx) += gradlocal.head(nlocalstate);
-            gradfullalign.segment<nlocalparms>(fullparmidx) += gradlocal.segment(localparmidx, nlocalparms);
+            gradfull.head(nstateparms) += eigjac.transpose()*gradlocal.head(nlocalstate);
+            gradfull.segment<nlocalparms>(fullparmidx) += gradlocal.segment(localparmidx, nlocalparms);
+            
 
             //fill global hessian (upper triangular blocks only)
-            hessfullalign.block<nlocalstate,nlocalstate>(fullstateidx, fullstateidx) += hesslocal.topLeftCorner(nlocalstate,nlocalstate);
-            hessfullalign.block<nlocalstate,nlocalparms>(fullstateidx, fullparmidx) += hesslocal.topRightCorner(nlocalstate, nlocalparms);
-            hessfullalign.block<nlocalparms, nlocalparms>(fullparmidx, fullparmidx) += hesslocal.bottomRightCorner(nlocalparms, nlocalparms);
+            hessfull.topLeftCorner(nstateparms, nstateparms) += eigjac.transpose()*hesslocal.topLeftCorner(nlocalstate,nlocalstate)*eigjac;
+            hessfull.block(0, fullparmidx, nstateparms, nlocalparms) += eigjac.transpose()*hesslocal.topRightCorner(nlocalstate, nlocalparms);
+            hessfull.block<nlocalparms, nlocalparms>(fullparmidx, fullparmidx) += hesslocal.bottomRightCorner(nlocalparms, nlocalparms);
             
             for (unsigned int idim=0; idim<nlocalalignment; ++idim) {
               const unsigned int xglobalidx = detidparms.at(std::make_pair(alphaidxs[idim], preciseHit->geographicalId()));
@@ -4020,30 +4085,30 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       
       
       //now do the expensive calculations and fill outputs
-      auto dchisqdx = gradfull.head(nstateparms);
-      auto dchisqdparms = gradfull.tail(npars);
+      auto const& dchisqdx = gradfull.head(nstateparms);
+      auto const& dchisqdparms = gradfull.tail(npars);
       
-      auto d2chisqdx2 = hessfull.topLeftCorner(nstateparms, nstateparms);
-      auto d2chisqdxdparms = hessfull.topRightCorner(nstateparms, npars);
-      auto d2chisqdparms2 = hessfull.bottomRightCorner(npars, npars);
+      auto const& d2chisqdx2 = hessfull.topLeftCorner(nstateparms, nstateparms);
+      auto const& d2chisqdxdparms = hessfull.topRightCorner(nstateparms, npars);
+      auto const& d2chisqdparms2 = hessfull.bottomRightCorner(npars, npars);
       
-      auto const& dchisqdxalign = gradfullalign.head(nstateparms);
-      auto const& dchisqdparmsalign = gradfullalign.tail(npars);
-      
-      auto const& d2chisqdx2align = hessfullalign.topLeftCorner(nstateparms, nstateparms);
-      auto const& d2chisqdxdparmsalign = hessfullalign.topRightCorner(nstateparms, npars);
-      auto const& d2chisqdparms2align = hessfullalign.bottomRightCorner(npars, npars);
-      
-      
-//       std::cout << "d2chisqdx2 pre topLeft\n" << d2chisqdx2.topLeftCorner<5,5>() << std::endl;
-//       std::cout << "d2chisqdx2align topLeft\n" << d2chisqdx2align.topLeftCorner<5,5>() << std::endl;
-   
-      dchisqdx += jacstaterev.transpose()*dchisqdxalign;
-      dchisqdparms += dchisqdparmsalign;
-      
-      d2chisqdx2 += jacstaterev.transpose()*d2chisqdx2align*jacstaterev;
-      d2chisqdxdparms += jacstaterev.transpose()*d2chisqdxdparmsalign;
-      d2chisqdparms2 += d2chisqdparms2align;
+//       auto const& dchisqdxalign = gradfullalign.head(nstateparms);
+//       auto const& dchisqdparmsalign = gradfullalign.tail(npars);
+//       
+//       auto const& d2chisqdx2align = hessfullalign.topLeftCorner(nstateparms, nstateparms);
+//       auto const& d2chisqdxdparmsalign = hessfullalign.topRightCorner(nstateparms, npars);
+//       auto const& d2chisqdparms2align = hessfullalign.bottomRightCorner(npars, npars);
+//       
+//       
+// //       std::cout << "d2chisqdx2 pre topLeft\n" << d2chisqdx2.topLeftCorner<5,5>() << std::endl;
+// //       std::cout << "d2chisqdx2align topLeft\n" << d2chisqdx2align.topLeftCorner<5,5>() << std::endl;
+//    
+//       dchisqdx += jacstaterev.transpose()*dchisqdxalign;
+//       dchisqdparms += dchisqdparmsalign;
+//       
+//       d2chisqdx2 += jacstaterev.transpose()*d2chisqdx2align*jacstaterev;
+//       d2chisqdxdparms += jacstaterev.transpose()*d2chisqdxdparmsalign;
+//       d2chisqdparms2 += d2chisqdparms2align;
       
 //       statejacd.compute(jacstate);
       
@@ -4060,27 +4125,27 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 //       std::cout << "d2chisqdx2 post topLeft\n" << d2chisqdx2.topLeftCorner<5,5>() << std::endl;
       
       
-      auto freezeparm = [&](unsigned int idx) {
-        gradfull[idx] = 0.;
-        hessfull.row(idx) *= 0.;
-        hessfull.col(idx) *= 0.;
-        hessfull(idx,idx) = 1e6;
-      };
-
-      //fake constraint on reference point parameters
-      if (dogen) {
-        for (unsigned int i=0; i<5; ++i) {
-          freezeparm(i);
-        }
-      }
-
-      if (fitFromSimParms_) {
-        for (unsigned int i = 5; i < nstateparms; ++i) {
-          if (false) {
-            freezeparm(i);
-          }
-        }
-      }
+//       auto freezeparm = [&](unsigned int idx) {
+//         gradfull[idx] = 0.;
+//         hessfull.row(idx) *= 0.;
+//         hessfull.col(idx) *= 0.;
+//         hessfull(idx,idx) = 1e6;
+//       };
+// 
+//       //fake constraint on reference point parameters
+//       if (dogen) {
+//         for (unsigned int i=0; i<5; ++i) {
+//           freezeparm(i);
+//         }
+//       }
+// 
+//       if (fitFromSimParms_) {
+//         for (unsigned int i = 5; i < nstateparms; ++i) {
+//           if (false) {
+//             freezeparm(i);
+//           }
+//         }
+//       }
       
       
       Cinvd.compute(d2chisqdx2);
@@ -4088,7 +4153,37 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
       
       dxfull = -Cinvd.solve(dchisqdx);
-      dxfulllocal = jacstaterev*dxfull;
+      
+      
+//       dxfulllocal = 0.*dxfull;
+      dxfulllocal = hessdiag*dxfull;
+//       dxfulllocal = dxfull;
+//       dxfulllocal = (hesseigvecs*hesseigvals.cwiseSqrt().cwiseInverse().asDiagonal())*dxfull;
+//       dxfulllocal = hesseigvecs*dxfull;
+      
+//       std::cout << "
+      
+      
+      
+      if (true) {
+        SelfAdjointEigenSolver<MatrixXd> eigtest(d2chisqdx2);
+//         hesseigvals = eigtest.eigenvalues();
+//         hesseigvecs = eigtest.eigenvectors();
+//         hessdiag = (hessdiag*eigtest.eigenvectors()*eigtest.eigenvalues().cwiseSqrt().cwiseInverse().asDiagonal()).eval();
+
+        hessdiag = (hessdiag*eigtest.eigenvectors()*(eigtest.eigenvalues().cwiseSqrt().cwiseInverse().asDiagonal())).eval();
+
+//         MatrixXd diag = hessdiag.transpose()*d2chisqdx2*hessdiag;
+// //
+//         const double mineig = eigtest.eigenvalues()(0);
+//         const double maxeig = eigtest.eigenvalues()(nstateparms-1);
+//         const double condition = maxeig/mineig;
+//
+//         std::cout << "iiter = " << iiter << " mineig  = " << mineig << " maxeig = " << maxeig << " condition = " << condition << std::endl;
+//
+//         std::cout << "diag diagonal\n" << diag.diagonal() << std::endl;
+//         std::cout << "diag row 0\n" << diag.row(0) << std::endl;
+      }
       
 //       std::cout << " iiter = " << iiter << " dxfull\n" << dxfull << std::endl;
       
@@ -4111,7 +4206,15 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         
         const double condition = maxeig/mineig;
         
-//         std::cout << "iiter = " << iiter << " mineig  = " << mineig << " maxeig = " << maxeig << " condition = " << condition << std::endl;
+        std::cout << "iiter = " << iiter << " mineig  = " << mineig << " maxeig = " << maxeig << " condition = " << condition << std::endl;
+//         for (unsigned int ieig = 0; ieig < nstateparms; ++ieig) {
+//           std::cout << ieig << ": " << eigtest.eigenvectors().col(ieig).cwiseAbs().maxCoeff() << std::endl;
+//         }
+//         std::cout << "hess diagonal\n" << d2chisqdx2.diagonal() << std::endl;
+//         std::cout << "hess row 0\n" << d2chisqdx2.row(0) << std::endl;
+//         std::cout << "eigenvector diagonals:\n" << eigtest.eigenvectors().diagonal() << std::endl;
+//         std::cout << "dxfull\n" << dxfull << std::endl;
+//         std::cout << "dxfulllocal\n" << dxfulllocal << std::endl;
       
       }
 //       
@@ -4196,7 +4299,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 //       std::cout << "errsq" << std::endl;
 //       std::cout << Cinvd.solve(MatrixXd::Identity(nstateparms,nstateparms)).diagonal() << std::endl;
       
-      const Vector5d dxRef = dxfull.head<5>();
+      const Vector5d dxRef = dxfulllocal.head<5>();
 //       const Matrix5d Cinner = 2.*(Cinvd.solve(MatrixXd::Identity(nstateparms,nstateparms))).topLeftCorner<5,5>();
       const Matrix5d Cinner = covfull.topLeftCorner<5,5>();
       
