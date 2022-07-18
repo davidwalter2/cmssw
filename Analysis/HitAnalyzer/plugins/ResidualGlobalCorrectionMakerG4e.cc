@@ -1687,6 +1687,13 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     bool valid = true;
 
     
+    std::vector<double> lxv;
+    std::vector<double> lyv;
+//     std::vector<double> phierrv(nhits, 0.);
+    
+    lxv.reserve(nhits);
+    lyv.reserve(nhits);
+    
 //     //do propagation and prepare states
 //     auto propresult = fPropagator->propagateWithPath(refFts, *hits.front()->surface());
 //     if (!propresult.first.isValid()) {
@@ -1735,11 +1742,11 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 //     constexpr unsigned int niters = 10;
 //     constexpr unsigned int niters = 20;
 
-//     constexpr unsigned int niters = 1;
+    constexpr unsigned int niters = 1;
 //     constexpr unsigned int niters = 10;
 //     const unsigned int niters = (dogen && !dolocalupdate) ? 1 : 10;
     
-    const unsigned int niters = (dogen && !dolocalupdate) || (dogen && fitFromSimParms_) ? 1 : 10;
+//     const unsigned int niters = (dogen && !dolocalupdate) || (dogen && fitFromSimParms_) ? 1 : 10;
     
     for (unsigned int iiter=0; iiter<niters; ++iiter) {
       if (debugprintout_) {
@@ -2467,6 +2474,41 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 //         AlgebraicVector5 idx0(0., 0., 0., 0., 0.);
         Matrix<double, 5, 1> idx0 = Matrix<double, 5, 1>::Zero();
         
+        if (iiter == 0) {
+          SelfAdjointEigenSolver<Matrix<double, 5, 5>> eigensolverQ(Q);
+
+          for (unsigned int ieig = 0; ieig < 5; ++ieig) {
+            const double isig = std::sqrt(eigensolverQ.eigenvalues()[ieig]);
+            idx0 += gRandom->Gaus(0., isig)*eigensolverQ.eigenvectors().col(ieig);
+          }
+
+          localparms = localparmsprop + idx0;
+
+          const Point3DBase<double, LocalTag> localposupd(localparms[3], localparms[4], 0.);
+          const Point3DBase<double, GlobalTag> posupd = surface.toGlobal(localposupd);
+
+          const double qopupd = localparms[0];
+          const double dxdzupd = localparms[1];
+          const double dydzupd = localparms[2];
+
+          const double pupd = std::abs(1./localparms[0]);
+          const double charge = std::copysign(1., qopupd);
+
+          const double signpz = std::copysign(1., localmom.z());
+          const double localmomfact = signpz/std::sqrt(1. + dxdzupd*dxdzupd + dydzupd*dydzupd);
+          const Vector3DBase<double, LocalTag> localmomupd(pupd*dxdzupd*localmomfact, pupd*dydzupd*localmomfact, pupd*localmomfact);
+          const Vector3DBase<double, GlobalTag> momupd = surface.toGlobal(localmomupd);
+
+          updtsos[0] = posupd.x();
+          updtsos[1] = posupd.y();
+          updtsos[2] = posupd.z();
+          updtsos[3] = momupd.x();
+          updtsos[4] = momupd.y();
+          updtsos[5] = momupd.z();
+          updtsos[6] = charge;
+
+        } 
+        
         if (iiter == 0 && fitFromSimParms_) {
           if (simhit == nullptr) {
             valid = false;
@@ -3128,9 +3170,17 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
             auto const defcorr = topology.localPosition(mpnull, pred) - topology.localPosition(mpnull);
 
-            const double hitx = preciseHit->localPosition().x() - defcorr.x();
-            const double hity = preciseHit->localPosition().y() - defcorr.y();
+            const double hitxorig = preciseHit->localPosition().x() - defcorr.x();
+            const double hityorig = preciseHit->localPosition().y() - defcorr.y();
+            
+            double hitx = hitxorig;
+            double hity = hityorig;
 
+            if (iiter > 0) {
+              hitx = lxv[ivalidhit];
+              hity = lyv[ivalidhit];
+            }
+            
             double lyoffset = 0.;
             double hitphival = -99.;
             double localphival = -99.;
@@ -3143,9 +3193,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               
 //               dy0[0] = AlignScalar(preciseHit->localPosition().x() - localparms[3]);
 //               dy0[0] = AlignScalar(preciseHit->localPosition().x() - lxcor);
-              dy0[0] = AlignScalar(hitx - lxcor);
+//               dy0[0] = AlignScalar(hitx - lxcor);
 //               dy0[0] = AlignScalar(preciseHit->localPosition().x() - localparms[3] + localconv[0]);
-              dy0[1] = AlignScalar(0.);
+//               dy0[1] = AlignScalar(0.);
               
 //               bool simvalid = false;
 //               for (auto const& simhith : simHits) {
@@ -3165,6 +3215,19 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               
               Vinv = Matrix<AlignScalar, 2, 2>::Zero();
               Vinv(0,0) = 1./preciseHit->localPositionError().xx();
+              
+              if (iiter == 0) {
+                hitx = gRandom->Gaus(lxcor, std::sqrt(preciseHit->localPositionError().xx()));
+//                 hitx = lxcor;
+                hity = 0.;
+                
+                lxv.push_back(hitx);
+                lyv.push_back(hity);
+              }
+              
+              dy0[0] = AlignScalar(hitx - lxcor);
+              //               dy0[0] = AlignScalar(preciseHit->localPosition().x() - localparms[3] + localconv[0]);
+              dy0[1] = AlignScalar(0.);
               
 //               R = Matrix<AlignScalar, 2, 2>::Identity();
               R = Matrix2d::Identity();
@@ -3191,14 +3254,37 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 //                 dy0[0] = AlignScalar(preciseHit->localPosition().x() - lxcor);
 //                 dy0[1] = AlignScalar(preciseHit->localPosition().y() - lycor);
 
-                dy0[0] = AlignScalar(hitx - lxcor);
-                dy0[1] = AlignScalar(hity - lycor);
+
                 
 //                 dy0[0] = AlignScalar(preciseHit->localPosition().x() - localparms[3] + localconv[0]);
 //                 dy0[1] = AlignScalar(preciseHit->localPosition().y() - localparms[4] + localconv[1]);
               
                 Vinv = iV.inverse().cast<AlignScalar>();
                 //FIXME various temporary hacks;
+                
+                
+                if (iiter == 0) {
+                  SelfAdjointEigenSolver<Matrix2d> eigensolver(iV);
+
+                  Matrix<double, 2, 1> dy0rnd = Matrix<double, 2, 1>::Zero();
+                  dy0rnd[0] = lxcor;
+                  dy0rnd[1] = lycor;
+
+                  for (unsigned int ieig = 0; ieig < 2; ++ieig) {
+                    const double isig = std::sqrt(eigensolver.eigenvalues()[ieig]);
+                    dy0rnd += gRandom->Gaus(0., isig)*eigensolver.eigenvectors().col(ieig);
+                  }
+                  
+                  hitx = dy0rnd[0];
+                  hity = dy0rnd[1];
+                  
+                  lxv.push_back(hitx);
+                  lyv.push_back(hity);
+                }
+                
+                
+                dy0[0] = AlignScalar(hitx - lxcor);
+                dy0[1] = AlignScalar(hity - lycor);
                 
 //                 dy0[1] = AlignScalar(0.);
 //                 Vinv = Matrix<AlignScalar, 2, 2>::Zero();
@@ -3270,24 +3356,43 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                   const double rdir = radialtopology->yAxisOrientation();
                   const double radius = radialtopology->originToIntersection();
 
-                  const double phihit = rdir*std::atan2(hitx, rdir*hity + radius);
+                  const double phihitorig = rdir*std::atan2(hitxorig, rdir*hityorig + radius);
 
                   // invert original calculation of covariance matrix to extract variance on polar angle
                   const double detHeight = radialtopology->detHeight();
                   const double radsigma = detHeight*detHeight/12.;
 
-                  const double t1 = std::tan(phihit);
+                  const double t1 = std::tan(phihitorig);
                   const double t2 = t1*t1;
 
                   const double tt = preciseHit->localPositionError().xx() - t2*radsigma;
 
                   const double phierr2 = tt / std::pow(radialtopology->centreToIntersection(), 2);
 
-                  // TODO apply (inverse) corrections for module deformations here? (take into account for jacobian?)
-                  const double phistate = rdir*std::atan2(lxcor, rdir*lycor + radius);
-
                   Vinv = Matrix<AlignScalar, 2, 2>::Zero();
                   Vinv(0, 0) = 1./phierr2;
+                  
+                  const double phistate = rdir*std::atan2(lxcor, rdir*lycor + radius);
+
+                  
+                  if (iiter == 0) {
+                    const double phihitrnd = gRandom->Gaus(phistate, std::sqrt(phierr2));
+                    
+//                     const double phihitrnd = phistate;
+                    
+                    hitx = radius*std::tan(rdir*phihitrnd);
+                    hity = 0.;
+                    
+                    lxv.push_back(hitx);
+                    lyv.push_back(hity);
+                  }
+                  
+                  
+                  const double phihit = rdir*std::atan2(hitx, rdir*hity + radius);
+                  
+                  // TODO apply (inverse) corrections for module deformations here? (take into account for jacobian?)
+
+
 
                   // jacobian from localx-localy to localphi-localy (module bounds are also rectangular in this coordinate system)
                   R = Matrix2d::Zero();
