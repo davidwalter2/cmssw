@@ -19,7 +19,7 @@ process.load("DQMServices.Components.DQMEnvironment_cfi")
 process.load('DQMOffline.Configuration.DQMOffline_cff')
 
 process.MessageLogger.cerr.FwkReport.reportEvery = 1000
-process.GlobalTag.globaltag = '123X_dataRun3_HLT_v14' 
+process.GlobalTag.globaltag = '123X_dataRun3_Prompt_v12' 
 
 
 
@@ -34,7 +34,8 @@ from CondCore.CondDB.CondDB_cfi import *
 process.maxEvents = cms.untracked.PSet( input = cms.untracked.int32(1000) )
 process.source = cms.Source("PoolSource",
     fileNames = cms.untracked.vstring(
-        'file:/eos/cms/store/data/Run2018C/SingleMuon/AOD/12Nov2019_UL2018-v3/240001/AFEC3E96-9E21-9A43-89E4-A8F03C2F4EC0.root' 
+        # 'file:/eos/cms/store/data/Run2018C/SingleMuon/AOD/12Nov2019_UL2018-v3/240001/AFEC3E96-9E21-9A43-89E4-A8F03C2F4EC0.root'
+        'file:/eos/cms/tier0/store/data/Run2022B/SingleMuon/AOD/PromptReco-v1/000/355/680/00000/469e6457-60af-4f1b-aee7-361fdd7d232f.root'
     )
 )
 
