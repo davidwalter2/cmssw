@@ -46,7 +46,6 @@ G4ErrorEnergyLossCustom::G4ErrorEnergyLossCustom(const G4String& processName,
   theELossForExtrapolator = new G4EnergyLossForExtrapolatorCustom;
 
   theStepLimit = 1.;
-//   theStepLimit = 1e-5;
   
   std::cout << "G4ErrorEnergyLossCustom constructor" << std::endl;
 }
@@ -185,6 +184,5 @@ G4double G4ErrorEnergyLossCustom::GetContinuousStepLimit(const G4Track& aTrack,
   }
   
   return Step;
-//   return std::min(Step, 1.0);
 
 }
