@@ -714,10 +714,17 @@ std::pair<TrajectoryStateOnSurface, double> Geant4ePropagator::propagateGeneric(
 //       masslast = mass;
     }
     
-//     std::cout << "thisPathLength = " << thisPathLength << std::endl;
+//     std::cout << "iterations = " << iterations << " thisPathLength = " << thisPathLength <<  " dEdX = " << dEdx << " finalPathLength = " << finalPathLength << std::endl;
 //     const Matrix<double, 5, 7> transportJac = transportJacobian(statepre, thisPathLength, dEdx, mass);
-    const Matrix<double, 5, 7> transportJac = transportJacobianBzD(statepre, thisPathLength, dEdx, mass, dBz);
+
+
+//     const Matrix<double, 5, 7> transportJac = transportJacobianBzD(statepre, thisPathLength, dEdx, mass, dBz);
     
+    const Matrix<double, 5, 7> transportJac = transportJacobianNoFieldD(statepre, thisPathLength, dEdx, mass, dBz);
+    
+//     std::cout << "transportJac:\n" << transportJac << std::endl;
+
+
 //     const Matrix<double, 5, 7> transportJacAlt = transportJacobianD(statepre, thisPathLength, dEdx, mass);
     
 //     const double dh = 1e-4;
@@ -735,6 +742,13 @@ std::pair<TrajectoryStateOnSurface, double> Geant4ePropagator::propagateGeneric(
 //     statepost[4] = g4eTrajState.GetMomentum().y()/GeV;
 //     statepost[5] = g4eTrajState.GetMomentum().z()/GeV;
 //     statepost[6] = charge;
+//
+//     const Matrix<double, 7, 1> statepostanalytic = transportResultD(statepre, thisPathLength, dEdx, mass, dBz);
+//
+//     const Matrix<double, 7, 1> dstate = statepostanalytic - statepost;
+//     std::cout << "statepre:\n" << statepre << std::endl;
+//     std::cout << "dstate:\n" << dstate << std::endl;
+
 //     
 //     const Matrix<double, 3, 1> Wpost = statepost.segment<3>(3).normalized();
 //     const Matrix<double, 3, 1> khat(0., 0., 1.);
@@ -967,6 +981,8 @@ std::pair<TrajectoryStateOnSurface, double> Geant4ePropagator::propagateGeneric(
   
   cmsField->SetOffset(0., 0., 0.);
   cmsField->SetMaterialOffset(0.);
+
+//   std::cout << "finalPathLength = " << finalPathLength << std::endl;
   
   return std::tuple<bool, Matrix<double, 7, 1>, Matrix<double, 5, 5>, Matrix<double, 5, 7>, double, Matrix<double, 5, 5>>(true, ftsEnd, g4errorEnd, jac, dEdxlast, dQ);
   
@@ -1734,4 +1750,178 @@ Eigen::Matrix<double, 5, 7> Geant4ePropagator::transportJacobianBzD(const Eigen:
   return res;
 
   
+}
+
+Eigen::Matrix<double, 5, 7> Geant4ePropagator::transportJacobianNoFieldD(const Eigen::Matrix<double, 7, 1> &start, double s, double dEdx, double mass, double dBz) const {
+  
+  if (s==0.) {
+    Eigen::Matrix<double, 5, 7> res;
+    res.leftCols<5>() = Eigen::Matrix<double, 5, 5>::Identity();
+    res.rightCols<2>() = Eigen::Matrix<double, 5, 2>::Zero();
+    return res;
+  }
+  
+  const GlobalPoint pos(start[0], start[1], start[2]);  
+  const GlobalVector &bfield = theField->inInverseGeV(pos);
+  
+  const double Bx = bfield.x();
+  const double By = bfield.y();
+  const double Bz = bfield.z() + 2.99792458e-3*dBz;
+  
+  const double M0x = start[0];
+  const double M0y = start[1];
+  const double M0z = start[2];
+  
+  const Eigen::Matrix<double, 3, 1> W0 = start.segment<3>(3).normalized();
+  const double W0x = W0[0];
+  const double W0y = W0[1];
+  const double W0z = W0[2];
+  
+  const double q = start[6];
+  const double qop0 = q/start.segment<3>(3).norm();
+
+  const double x0 = std::fabs(qop0);
+  const double x1 = std::pow(qop0, 2);
+  const double x2 = std::pow(mass, 2)*x1;
+  const double x3 = std::sqrt(std::pow(q, 2) + x2);
+  const double x4 = dEdx*s;
+  const double x5 = x0*x4 + x3;
+  const double x6 = x5/std::pow(-x2 + std::pow(x5, 2), 3.0/2.0);
+  const double x7 = std::pow(W0x, 2) + std::pow(W0y, 2);
+  const double x8 = std::pow(W0z, 2) + x7;
+  const double x9 = std::sqrt(x8/x7);
+  const double x10 = std::sqrt(x7/x8);
+  const double x11 = x10*x9;
+  const double dqopdqop0 = std::pow(q, 3)*x0*x6/(qop0*x3);
+  const double dqopdlam0 = 0;
+  const double dqopdphi0 = 0;
+  const double dqopdxt0 = 0;
+  const double dqopdyt0 = 0;
+  const double dqopdBz = 0;
+  const double dqopdxi = -q*x1*x4*x6;
+  const double dlamdqop0 = 0;
+  const double dlamdlam0 = x11;
+  const double dlamdphi0 = 0;
+  const double dlamdxt0 = 0;
+  const double dlamdyt0 = 0;
+  const double dlamdBz = 0;
+  const double dlamdxi = 0;
+  const double dphidqop0 = 0;
+  const double dphidlam0 = 0;
+  const double dphidphi0 = 1;
+  const double dphidxt0 = 0;
+  const double dphidyt0 = 0;
+  const double dphidBz = 0;
+  const double dphidxi = 0;
+  const double dxtdqop0 = 0;
+  const double dxtdlam0 = 0;
+  const double dxtdphi0 = s*x10;
+  const double dxtdxt0 = 1/(x10*x9);
+  const double dxtdyt0 = 0;
+  const double dxtdBz = 0;
+  const double dxtdxi = 0;
+  const double dytdqop0 = 0;
+  const double dytdlam0 = s*x11;
+  const double dytdphi0 = 0;
+  const double dytdxt0 = 0;
+  const double dytdyt0 = x10*x8/std::sqrt(x7);
+  const double dytdBz = 0;
+  const double dytdxi = 0;
+  Eigen::Matrix<double, 5, 7> res;
+  res(0,0) = dqopdqop0;
+  res(0,1) = dqopdlam0;
+  res(0,2) = dqopdphi0;
+  res(0,3) = dqopdxt0;
+  res(0,4) = dqopdyt0;
+  res(0,5) = dqopdBz;
+  res(0,6) = dqopdxi;
+  res(1,0) = dlamdqop0;
+  res(1,1) = dlamdlam0;
+  res(1,2) = dlamdphi0;
+  res(1,3) = dlamdxt0;
+  res(1,4) = dlamdyt0;
+  res(1,5) = dlamdBz;
+  res(1,6) = dlamdxi;
+  res(2,0) = dphidqop0;
+  res(2,1) = dphidlam0;
+  res(2,2) = dphidphi0;
+  res(2,3) = dphidxt0;
+  res(2,4) = dphidyt0;
+  res(2,5) = dphidBz;
+  res(2,6) = dphidxi;
+  res(3,0) = dxtdqop0;
+  res(3,1) = dxtdlam0;
+  res(3,2) = dxtdphi0;
+  res(3,3) = dxtdxt0;
+  res(3,4) = dxtdyt0;
+  res(3,5) = dxtdBz;
+  res(3,6) = dxtdxi;
+  res(4,0) = dytdqop0;
+  res(4,1) = dytdlam0;
+  res(4,2) = dytdphi0;
+  res(4,3) = dytdxt0;
+  res(4,4) = dytdyt0;
+  res(4,5) = dytdBz;
+  res(4,6) = dytdxi;
+
+
+  res.col(5) *= 2.99792458e-3;
+  
+  return res;
+
+  
+}
+
+Eigen::Matrix<double, 7, 1> Geant4ePropagator::transportResultD(const Eigen::Matrix<double, 7, 1> &start, double s, double dEdx, double mass, double dBz) const {
+
+  using Eigen::Matrix;
+
+  if (s==0.) {
+    return start;
+  }
+
+  const GlobalPoint pos(start[0], start[1], start[2]);
+  const GlobalVector &bfield = theField->inInverseGeV(pos);
+
+  const double Bx = bfield.x();
+  const double By = bfield.y();
+  const double Bz = bfield.z() + 2.99792458e-3*dBz;
+
+  const Eigen::Matrix<double, 3, 1> M0 = start.head<3>();
+  const Eigen::Matrix<double, 3, 1> T0 = start.segment<3>(3).normalized();
+
+  const double q = start[6];
+  const double p0 = start.segment<3>(3).norm();
+  const double qop0 = q/p0;
+
+  const double energy0 = std::sqrt(p0*p0 + mass*mass);
+  const double energy = energy0 + dEdx*s;
+  const double p  = std::sqrt(energy*energy - mass*mass);
+
+  const Matrix<double, 3, 1> Bv(Bx, By, Bz);
+  const Matrix<double, 3, 1> H = Bv.normalized();
+  const double B = Bv.norm();
+
+  const Matrix<double, 3, 1> HcrossT0 = H.cross(T0);
+  const double alpha = HcrossT0.norm();
+  const Matrix<double, 3, 1> N = HcrossT0.normalized();
+  const double gamma = H.dot(T0);
+
+  const double Q = -B*qop0;
+
+  const double theta = Q*s;
+
+  const double sintheta = std::sin(theta);
+  const double costheta = std::cos(theta);
+
+  const Matrix<double, 3, 1> M = M0 + gamma*(theta - sintheta)*H/Q + sintheta*T0/Q + alpha*(1. - costheta)*N/Q;
+
+  const Matrix<double, 3, 1> T = gamma*(1. - costheta)*H + costheta*T0 + alpha*sintheta*N;
+
+  Matrix<double, 7, 1> res;
+  res.head<3>() = M;
+  res.segment<3>(3) = p*T;
+  res[6] = q;
+
+  return res;
 }

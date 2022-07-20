@@ -1015,6 +1015,11 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     
 //     std::cout << "genPt = " << genPt << " genEta = " << genEta << " genPhi = " << genPhi << " genCharge = " << genCharge << " genX = " << genX << " genY = " << genY << " genZ = " << genZ << std::endl;
     
+    if (genPt < 3.5) {
+      continue;
+    }
+    
+    
     int simtrackid = -99;
     if (genpart != nullptr && doSim_) {
       for (auto const& simTrack : *simTracks) {
@@ -2338,7 +2343,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         updtsos = std::get<1>(propresult);
         const Matrix<double, 5, 5> Qcurv = std::get<2>(propresult);
         const Matrix<double, 5, 7> FdFmcurv = std::get<3>(propresult);
-        const double dEdxlast = std::get<4>(propresult);
+//         const double dEdxlast = std::get<4>(propresult);
+        const double dEdxlast = 0.;
 //         const Matrix<double, 5, 5> dQcurv = std::get<5>(propresult);
         
         Matrix<double, 5, 7> FdFm = FdFmcurv;
@@ -2354,7 +2360,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         Qtot += Qcurv;
 
 
-
+//         std::cout << "genEta = " << genEta << " genPt = " << genPt << " ihit = " << ihit << " FdFmcurv:\n" << FdFmcurv << std::endl;
 
 
 
@@ -2415,8 +2421,11 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 //         const AlgebraicMatrix55& curv2localjacm = curv2localm.jacobian();
 //         const Matrix<double, 5, 5> Hm = Map<const Matrix<double, 5, 5, RowMajor>>(curv2localjacm.Array()); 
 //         const Matrix<double, 5, 5> Hm = curv2localJacobianAlt(updtsos);
-        const Matrix<double, 5, 5> Hm = curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, mmu, dbetaval);
+        
+//         const Matrix<double, 5, 5> Hm = curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, mmu, dbetaval);
+        const Matrix<double, 5, 5> Hm = curv2localJacobianSimpleD(updtsos, field, surface, dEdxlast, mmu, dbetaval);
 
+        
         // compute convolution correction in local coordinates (BEFORE material effects are applied)
 //         const Matrix<double, 2, 1> dxlocalconv = localPositionConvolution(updtsos);
 
@@ -2573,7 +2582,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             //save current parameters
 
             Matrix<double, 7, 1>& oldtsos = layerStates[ihit];
-            const Matrix<double, 5, 5> Hold = curv2localJacobianAltelossD(oldtsos, field, surface, dEdxlast, mmu, dbetaval);
+//             const Matrix<double, 5, 5> Hold = curv2localJacobianAltelossD(oldtsos, field, surface, dEdxlast, mmu, dbetaval);
+            const Matrix<double, 5, 5> Hold = curv2localJacobianSimpleD(oldtsos, field, surface, dEdxlast, mmu, dbetaval);
             const Matrix<double, 5, 1> dxlocal = Hold*dxfull.segment<5>(5*(ihit+1));
 
             const Point3DBase<double, GlobalTag> pos(oldtsos[0], oldtsos[1], oldtsos[2]);
@@ -2839,7 +2849,10 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 //         const AlgebraicMatrix55& curv2localjacp = curv2localp.jacobian();
 //         const Matrix<double, 5, 5> Hp = Map<const Matrix<double, 5, 5, RowMajor>>(curv2localjacp.Array()); 
 //         const Matrix<double, 5, 5> Hp = curv2localJacobianAlt(updtsos);
-        const Matrix<double, 5, 5> Hp = curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, mmu, dbetaval);
+        
+//         const Matrix<double, 5, 5> Hp = curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, mmu, dbetaval);
+        const Matrix<double, 5, 5> Hp = curv2localJacobianSimpleD(updtsos, field, surface, dEdxlast, mmu, dbetaval);
+        
         
 //         const Matrix<double, 2, 8> Hpalign = curv2localJacobianAltelossDalign(updtsos, field, surface, dEdxlast, mmu, dbetaval);
 
@@ -3046,23 +3059,48 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               
             }
             
-            chisq0val += chisq.value().value();
+//             chisq0val += chisq.value().value();
             
 //             std::cout << "ihit = " << ihit << " MS chisq = " << chisq.value().value() << std::endl;
             
 //             auto const& gradlocal = chisq.value().derivatives();
-            Matrix<double, nlocal, 1> gradlocal = chisq.value().derivatives();
-            //fill local hessian
-            Matrix<double, nlocal, nlocal> hesslocal;
-            for (unsigned int j=0; j<nlocal; ++j) {
-              hesslocal.row(j) = chisq.derivatives()[j].derivatives();
-            }
+//             Matrix<double, nlocal, 1> gradlocal = chisq.value().derivatives();
+//             //fill local hessian
+//             Matrix<double, nlocal, nlocal> hesslocal;
+//             for (unsigned int j=0; j<nlocal; ++j) {
+//               hesslocal.row(j) = chisq.derivatives()[j].derivatives();
+//             }
+
+//             Matrix<double, nlocal, 1> gradlocal = Matrix<double, nlocal, 1>::Zero();
+//             Matrix<double, nlocal, nlocal> hesslocal = Matrix<double, nlocal, nlocal>::Zero();
+
+            Matrix<double, 5, nlocal> Fbig = Matrix<double, 5, nlocal>::Zero();
+
+            Fbig.leftCols<5>() = -Hm*FdFm.leftCols<5>();
+            Fbig.middleCols<5>(5) = Hp;
+            Fbig.col(10) = -Hm*FdFm.col(5);
+            Fbig.col(11) = -Hm*FdFm.col(6);
+
+//                           dprop = dx0.cast<MSScalar>() + Hpstate*du - Hmstate*Fstate*dum - Hmstate*Fb*dbeta - Hmstate*Fxi*dxi;
+
+//                           chisq = dprop.transpose()*Qinv*dprop;
+
+            const Matrix<double, 5, 5> Qinvval = Q.inverse();
+
+            chisq0val += dx0.transpose()*Qinvval*dx0;
+
+            const Matrix<double, nlocal, 1> gradlocal = 2.*Fbig.transpose()*Qinvval*dx0;
+            const Matrix<double, nlocal, nlocal> hesslocal = 2.*Fbig.transpose()*Qinvval*Fbig;
+
+//             gradlocal.head<nlocalstate>() = 2.*Fstatebig.transpose()*Qinvval*dx0;
+//             hesslocal.topRightCorner<nlocalstate, nlocalstate>() = 2.*Fstatebig.transpose()*Qinvval*Fstatebig;
+
             
-            if (islikelihood) {
-              const double fact = 1./(1. - dxi.value().value());
-              gradlocal[localparmidx + 1] += 5.*fact;
-              hesslocal(localparmidx + 1, localparmidx + 1) += 5.*fact*fact;
-            }
+//             if (islikelihood) {
+//               const double fact = 1./(1. - dxi.value().value());
+//               gradlocal[localparmidx + 1] += 5.*fact;
+//               hesslocal(localparmidx + 1, localparmidx + 1) += 5.*fact*fact;
+//             }
             
 //             std::cout << "material: ihit = " << ihit << std::endl;
 //             std::cout << "dx0" << std::endl;
@@ -3124,6 +3162,10 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             const unsigned int fullparmidx = nstateparms + nparsBfield + nparsEloss + alignmentparmidx;
 
             const bool ispixel = GeomDetEnumerators::isTrackerPixel(preciseHit->det()->subDetector());
+
+            const bool stereo = trackerTopology->isStereo(preciseHit->geographicalId());
+//             bool wedge = false;
+//             bool farwedge = false;
 
             //TODO add hit validation stuff
             //TODO add simhit stuff
@@ -3226,6 +3268,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               }
               
               dy0[0] = AlignScalar(hitx - lxcor);
+//               dy0[0] = AlignScalar(0);
               //               dy0[0] = AlignScalar(preciseHit->localPosition().x() - localparms[3] + localconv[0]);
               dy0[1] = AlignScalar(0.);
               
@@ -3240,6 +3283,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               iV << preciseHit->localPositionError().xx(), preciseHit->localPositionError().xy(),
                     preciseHit->localPositionError().xy(), preciseHit->localPositionError().yy();
               if (ispixel) {
+
+//                 std::cout << "pixel\n" << std::endl;
+
 //               if (true) {
 //                 std::cout << "2d pixel hit, subdet = " << preciseHit->det()->subDetector() << " track eta = " << trackEta << std::endl;
 //                 std::cout << iV << std::endl;
@@ -3285,6 +3331,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                 
                 dy0[0] = AlignScalar(hitx - lxcor);
                 dy0[1] = AlignScalar(hity - lycor);
+                
+//                 dy0[0] = AlignScalar(0.);
+//                 dy0[1] = AlignScalar(0.);
                 
 //                 dy0[1] = AlignScalar(0.);
 //                 Vinv = Matrix<AlignScalar, 2, 2>::Zero();
@@ -3337,6 +3386,13 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                   // transform to polar coordinates to end the madness
                   //TODO handle the module deformations consistently here (currently equivalent to dropping/undoing deformation correction)
 
+//                   std::cout << "wedge\n" << std::endl;
+
+//                   wedge = true;
+//                   if (std::fabs(surface.position().z()) > 265.) {
+//                     farwedge = true;
+//                   }
+
                   const ProxyStripTopology *proxytopology = dynamic_cast<const ProxyStripTopology*>(&(preciseHit->det()->topology()));
 
 //                   // undo deformation correction
@@ -3356,6 +3412,12 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                   const double rdir = radialtopology->yAxisOrientation();
                   const double radius = radialtopology->originToIntersection();
 
+//                   const Point3DBase<double, LocalTag> radialorigin(0., -rdir*radius, 0.);
+//                   const Point3DBase<double, GlobalTag> radialoriginglob = surface.toGlobal(radialorigin);
+
+//                   std::cout << "ihit = " << ihit << " wedge position:\n" << surface.position() << std::endl;
+//                   std::cout << "radialoriginglob:\n" << radialoriginglob << std::endl;
+
                   const double phihitorig = rdir*std::atan2(hitxorig, rdir*hityorig + radius);
 
                   // invert original calculation of covariance matrix to extract variance on polar angle
@@ -3368,12 +3430,22 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                   const double tt = preciseHit->localPositionError().xx() - t2*radsigma;
 
                   const double phierr2 = tt / std::pow(radialtopology->centreToIntersection(), 2);
+//                   double phierr2 = tt / std::pow(radialtopology->centreToIntersection(), 2);
+
+//                   radius = 10e3;
+//                   radius += 5.;
+//                   phierr2 = 50e-4*50e-4/radius/radius;
+
+//                   phierr2 = 1e-4*1e-4;
 
                   Vinv = Matrix<AlignScalar, 2, 2>::Zero();
                   Vinv(0, 0) = 1./phierr2;
                   
+
                   const double phistate = rdir*std::atan2(lxcor, rdir*lycor + radius);
 
+//                   const double ypstate = lycor + rdir*radius;
+//                   const double phistate = std::atan(lxcor/ypstate);
                   
                   if (iiter == 0) {
                     const double phihitrnd = gRandom->Gaus(phistate, std::sqrt(phierr2));
@@ -3381,6 +3453,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 //                     const double phihitrnd = phistate;
                     
                     hitx = radius*std::tan(rdir*phihitrnd);
+//                     hitx = rdir*radius*std::tan(phihitrnd);
                     hity = 0.;
                     
                     lxv.push_back(hitx);
@@ -3389,6 +3462,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                   
                   
                   const double phihit = rdir*std::atan2(hitx, rdir*hity + radius);
+
+//                   const double yphit = hity + rdir*radius;
+//                   const double phihit = std::atan(hitx/yphit);
                   
                   // TODO apply (inverse) corrections for module deformations here? (take into account for jacobian?)
 
@@ -3404,11 +3480,19 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                   R(0, 0) = rdir*yp*invden;
                   // dphi / dy
                   R(0, 1) = -lxcor*invden;
+
+//                   R(0, 0) = ypstate/(lxcor*lxcor + ypstate*ypstate);
+//                   R(0, 1) = -lxcor/(lxcor*lxcor + ypstate*ypstate);
+
+//                   R = Matrix2d::Identity();
+//                   Vinv(0, 0) = 1./50e-4/50e-4;
+
 //                   //dy / dy
 //                   R(1, 1) = 1.;
 
 
                   dy0[0] = phihit - phistate;
+//                   dy0[0] = 0.;
 //                   dy0[1] = hity - lycor;
                   dy0[1] = 0.;
 
@@ -3493,7 +3577,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             }
             
             // alignment jacobian
-            Matrix<AlignScalar, 2, 6> A = Matrix<AlignScalar, 2, 6>::Zero();
+            Matrix<double, 2, 6> Aval = Matrix<double, 2, 6>::Zero();
 
             const double localqopval = localparms[0];
             const double localdxdzval = localparms[1];
@@ -3508,28 +3592,52 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             //standard case
 
             // dx/dx
-            A(0,0) = 1.;
+            Aval(0,0) = 1.;
             // dy/dy
-            A(1,1) = 1.;
+            Aval(1,1) = 1.;
             // dx/dz
-            A(0,2) = localdxdzval;
+            Aval(0,2) = localdxdzval;
             // dy/dz
-            A(1,2) = localdydzval;
+            Aval(1,2) = localdydzval;
             // dx/dtheta_x
-            A(0,3) = -localyval*localdxdzval;
+            Aval(0,3) = -localyval*localdxdzval;
             // dy/dtheta_x
-            A(1,3) = -localyval*localdydzval;
+            Aval(1,3) = -localyval*localdydzval;
             // dx/dtheta_y
-            A(0,4) = -localxval*localdxdzval;
+            Aval(0,4) = -localxval*localdxdzval;
             // dy/dtheta_y
-            A(1,4) = -localxval*localdydzval;
+            Aval(1,4) = -localxval*localdydzval;
             // dx/dtheta_z
-            A(0,5) = -localyval;
+            Aval(0,5) = -localyval;
             // dy/dtheta_z
-            A(1,5) = localxval;
+            Aval(1,5) = localxval;
+            
+//             if (wedge && !stereo) {
+//               Aval.col(2) *= 0.;
+//               Aval.col(3) *= 0.;
+//               Aval.col(4) *= 0.;
+//             }
 
-            
-            
+            const Matrix<AlignScalar, 2, 6> A = Aval.cast<AlignScalar>();
+
+
+            if (false) {
+              const Matrix<double, 2, 6> Apolar = R*Aval;
+              std::cout << "genEta = " << genEta << " genPt = " << genPt << " ihit = " << ihit << " Apolar:\n" << Apolar << std::endl;
+              std::cout << "Vinv(0,0) = " << Vinv(0, 0).value().value() << std::endl;
+
+              const double Vinv00 = Vinv(0,0).value().value();
+
+              Matrix<double, 2, 2> Vinvalt = Matrix<double, 2, 2>::Zero();
+              Vinvalt(0,0) = Vinv00;
+
+              const Matrix<double, 6, 6> hesslocalalt = 2.*Apolar.transpose()*Vinvalt*Apolar;
+              const Matrix<double, 6, 6> hesslocalalt2 = 2.*Vinv00*Apolar.row(0).transpose()*Apolar.row(0);
+
+              std::cout << "hesslocalalt:\n" << hesslocalalt << std::endl;
+              std::cout << "hesslocalalt2:\n" << hesslocalalt2 << std::endl;
+            }
+
 //             Matrix<double, 2, 6> Atest = Matrix<double, 2, 6>::Zero();
 //             // dx/dx
 //             Atest(0,0) = 1.;
@@ -3618,6 +3726,11 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             for (unsigned int j=0; j<nlocal; ++j) {
               hesslocal.row(j) = chisq.derivatives()[j].derivatives();
             }
+
+//             if (wedge) {
+//               std::cout << "gradlocal:\n" << gradlocal << std::endl;
+//               std::cout << "hesslocal:\n" << hesslocal << std::endl;
+//             }
             
 //             std::cout << "hit: ihit = " << ihit << " dy0 = " << dy0[0].value().value() << " " << dy0[1].value().value() << std::endl;
 //             std::cout << "gradlocal" << std::endl;
@@ -4282,6 +4395,12 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 //     grad = dchisqdparmsfinal + dxdparms*dchisqdx; 
     grad = dchisqdparmsfinal + d2chisqdxdparmsfinal.transpose()*dxfull;
     hess = d2chisqdparms2final + dxdparms*d2chisqdxdparmsfinal;
+
+//     if (std::fabs(genEta)>2.2) {
+//       std::cout << "genEta = " << genEta << " genPt = " << genPt << std::endl;
+//       std::cout << "grad.tail<6>():\n" << grad.tail<6>() << std::endl;
+//       std::cout << "hess.bottomRightCorner<6, 6>():\n" << hess.bottomRightCorner<6, 6>() << std::endl;
+//     }
 
 
 //     std::cout <<"dchisqdparmsfinal:\n" << dchisqdparmsfinal << std::endl;

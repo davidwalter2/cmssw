@@ -157,6 +157,10 @@ private:
   double computeErrorIoni(const G4Track* aTrack, double pforced = -1.) const;
     
   Eigen::Matrix<double, 5, 7> transportJacobianBzD(const Eigen::Matrix<double, 7, 1> &start, double s, double dEdx, double mass, double dBz) const;
+  
+  Eigen::Matrix<double, 5, 7> transportJacobianNoFieldD(const Eigen::Matrix<double, 7, 1> &start, double s, double dEdx, double mass, double dBz) const;
+
+  Eigen::Matrix<double, 7, 1> transportResultD(const Eigen::Matrix<double, 7, 1> &start, double s, double dEdx, double mass, double dBz = 0.) const;
 
   G4UniversalFluctuationForExtrapolator *fluct = nullptr;
   
