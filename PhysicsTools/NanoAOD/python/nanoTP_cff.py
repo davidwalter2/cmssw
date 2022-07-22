@@ -59,6 +59,9 @@ def customizeNANOTP(process):
     finalMuons.src = "slimmedMuonsUpdated"
     finalLooseMuons.src = "slimmedMuonsUpdated"
 
+    # disable rekeying of track extra references since this breaks matching between standalone muon tracks and muon objects
+    process.slimmedMuons.trackExtraAssocs = cms.VInputTag()
+
     muonTable.src = "linkedMuons"
     muonTable.variables = cms.PSet(muonTable.variables,
             standaloneExtraIdx = Var('? standAloneMuon().isNonnull() ? standAloneMuon().extra().key() : -99', 'int', precision=-1, doc='Index of the innerTrack TrackExtra in the original collection'),
