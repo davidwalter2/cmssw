@@ -273,8 +273,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   
   const bool dogen = fitFromGenParms_;
   
-  const bool dolocalupdate = true;
-//   const bool dolocalupdate = false;
+//   const bool dolocalupdate = true;
+  const bool dolocalupdate = false;
 
 
 
@@ -2810,6 +2810,24 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 //         const TrajectoryStateOnSurface tsostmp(glob, surface);
         const TrajectoryStateOnSurface tsostmp(glob, *hit->surface());
 
+//         const Point3DBase<double, GlobalTag> postmpglobal(updtsos[0], updtsos[1], updtsos[2]);
+//         const Vector3DBase<double, GlobalTag> momtmpglobal(updtsos[3], updtsos[4], updtsos[5]);
+//
+//         const Point3DBase<double, LocalTag> postmplocal = surface.toLocal(postmpglobal);
+//         const Vector3DBase<double, LocalTag> momtmplocal = surface.toLocal(momtmpglobal);
+//
+//         Matrix<double, 5, 1> localparmstmp;
+//         localparmstmp[0] = updtsos[6]/updtsos.segment<3>(3).norm();
+//         localparmstmp[1] = momtmplocal.x()/momtmplocal.z();
+//         localparmstmp[2] = momtmplocal.y()/momtmplocal.z();
+//         localparmstmp[3] = postmplocal.x();
+//         localparmstmp[4] = postmplocal.y();
+//
+//         std::cout << "iiter = " << iiter << std::endl;
+//         std::cout << "tsostmp.localParameters():\n" << tsostmp.localParameters().vector() << std::endl;
+//         std::cout << "localparmstmp:\n" << localparmstmp << std::endl;
+//         std::cout << "localparms:\n" << localparms << std::endl;
+
         auto const& preciseHit = hit->isValid() ? cloner.makeShared(hit, tsostmp) : hit;
         if (hit->isValid() && !preciseHit->isValid()) {
           std::cout << "Abort: Failed updating hit" << std::endl;
@@ -3225,7 +3243,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               
               Vinv = Matrix<AlignScalar, 2, 2>::Zero();
               Vinv(0,0) = 1./preciseHit->localPositionError().xx();
-              Vinv(1,1) = 1./yerr2;
+//               Vinv(1,1) = 1./yerr2;
               
 //               R = Matrix<AlignScalar, 2, 2>::Identity();
               R = Matrix2d::Identity();
@@ -3370,7 +3388,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                   Vinv = Matrix<AlignScalar, 2, 2>::Zero();
                   Vinv(0, 0) = 1./phierr2;
 //                   Vinv(1, 1) = 1./rhoerr2;
-                  Vinv(1, 1) = 1./rhoerr2lin;
+//                   Vinv(1, 1) = 1./rhoerr2lin;
 
                   // jacobian from localx-localy to localphi-localy (module bounds are also rectangular in this coordinate system)
                   R = Matrix2d::Zero();
@@ -3977,8 +3995,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       chisqvalold = chisq0val + deltachisq[0];
         
 //       ndof = 5*nhits + nvalid + nvalidalign2d - nstateparms;
-//       ndof = 5*nhits + nvalid + nvalidpixel - nstateparms;
-      ndof = 5*nhits + 2.*nvalid - nstateparms;
+      ndof = 5*nhits + nvalid + nvalidpixel - nstateparms;
+//       ndof = 5*nhits + 2.*nvalid - nstateparms;
       
       if (bsConstraint_) {
         ndof += 2;

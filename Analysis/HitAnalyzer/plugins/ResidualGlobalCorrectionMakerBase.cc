@@ -365,7 +365,8 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
 //       const DetId parmdetid = isglued ? DetId(gluedid) : det->geographicalId();
       
 //       const bool align2d = ispixel || isendcap;
-      const bool align2d = true;
+      const bool align2d = ispixel || isendcap || isglued;
+//       const bool align2d = true;
 //       const bool align2d = ispixel;
 //       const bool align2d = false;
 //       const bool align2d = isendcap && !ispixel;
@@ -429,6 +430,7 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
     int subdet;
     int layer;
     int stereo;
+    int glued;
     double x;
     double y;
     double z;
@@ -471,6 +473,7 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       runtree->Branch("subdet", &subdet);
       runtree->Branch("layer", &layer);
       runtree->Branch("stereo", &stereo);
+      runtree->Branch("glued", &glued);
       runtree->Branch("x", &x);
       runtree->Branch("y", &y);
       runtree->Branch("z", &z);
@@ -513,6 +516,10 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       
         const DetId& detid = key.second;
         const GeomDet* det = globalGeometry->idToDet(detid);
+
+//         const uint32_t gluedid = trackerTopology->glued(det->geographicalId());
+//         const uint32_t upperid = trackerTopology->upper(det->geographicalId());
+        glued = !det->isLeaf();
         
         const Surface &surface = det->surface();
         
@@ -812,7 +819,7 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
 //       
 //       GloballyPositioned<double> surfaceD(pos, tkrot);
       
-      GloballyPositioned<double> surfaceD = surfaceToDouble(surface);
+      const GloballyPositioned<double> surfaceD = surfaceToDouble(surface);
       
       
       ReferenceCountingPointer<Plane> plane = Plane::build(det->surface());
@@ -822,8 +829,8 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       plane->move(plane->toGlobal(LocalVector(dx, dy, 0.)));
       plane->rotate(Surface::RotationType(Surface::RotationType::BasicVector(plane->toGlobal(LocalVector(0.,0.,1.))), dtheta));
       
-      surfaceD.move(surfaceD.toGlobal(Vector3DBase<double, LocalTag>(dx, dy, 0.)));
-      surfaceD.rotate(TkRotation<double>(TkRotation<double>::BasicVector(surfaceD.toGlobal(Vector3DBase<double, LocalTag>(0.,0.,1.))), dtheta));
+//       surfaceD.move(surfaceD.toGlobal(Vector3DBase<double, LocalTag>(dx, dy, 0.)));
+//       surfaceD.rotate(TkRotation<double>(TkRotation<double>::BasicVector(surfaceD.toGlobal(Vector3DBase<double, LocalTag>(0.,0.,1.))), dtheta));
       
 //       Matrix<double, 3, 3> rot2;
 //       rot2 << surfaceD.rotation().xx(), surfaceD.rotation().xy(), surfaceD.rotation().xz(),
@@ -898,10 +905,10 @@ GloballyPositioned<double> ResidualGlobalCorrectionMakerBase::surfaceToDouble(co
   rot << surface.rotation().xx(), surface.rotation().xy(), surface.rotation().xz(),
           surface.rotation().yx(), surface.rotation().yy(), surface.rotation().yz(),
           surface.rotation().zx(), surface.rotation().zy(), surface.rotation().zz();
-          
+
 //       std::cout << "rot check pre:" << std::endl;
 //       std::cout << rot.transpose()*rot << std::endl;
-        
+
   for (unsigned int i = 0; i < 3; ++i) {
     for (unsigned int j = 0; j < i; ++j) {
       rot.row(i) = (rot.row(i) - (rot.row(i)*rot.row(j).transpose())[0]/rot.row(j).squaredNorm()*rot.row(j)).eval();
@@ -910,17 +917,59 @@ GloballyPositioned<double> ResidualGlobalCorrectionMakerBase::surfaceToDouble(co
   for (unsigned int i = 0; i < 3; ++i) {
       rot.row(i) = (rot.row(i)/rot.row(i).norm()).eval();
   }
-  
+
 //       std::cout << "rot check post:" << std::endl;
 //       std::cout << rot.transpose()*rot << std::endl;
-  
+
   const TkRotation<double> tkrot(rot(0,0), rot(0,1), rot(0,2),
                                   rot(1,0), rot(1,1), rot(1,2),
                                   rot(2,0), rot(2,1), rot(2,2));
-  
-  
+
+
   return GloballyPositioned<double>(pos, tkrot);
 }
+
+// GloballyPositioned<double> ResidualGlobalCorrectionMakerBase::surfaceToDouble(const Surface &surface) const {
+//   const Point3DBase<double, GlobalTag> pos = surface.position();
+//
+//   // reconstruct orthonormal basis
+//
+// //   const Vector3DBase<double, LocalTag> lx(1., 0., 0.);
+//   const Vector3DBase<double, LocalTag> ly(0., 1., 0.);
+//   const Vector3DBase<double, LocalTag> lz(0., 0., 1.);
+//
+// //   const Vector3DBase<double, GlobalTag> gx = surface.toGlobal(lx);
+//   const Vector3DBase<double, GlobalTag> gy = surface.toGlobal(ly);
+//   const Vector3DBase<double, GlobalTag> gz = surface.toGlobal(lz);
+//
+//   const Matrix<double, 3, 1> vy(gy.x(), gy.y(), gy.z());
+//   const Matrix<double, 3, 1> vz(gz.x(), gz.y(), gz.z());
+//
+//   const Matrix<double, 3, 1> uz = vz.normalized();
+//   const Matrix<double, 3, 1> ux = vy.cross(vz).normalized();
+//   const Matrix<double, 3, 1> uy = uz.cross(ux);
+//
+//   const TkRotation<double> tkrot(ux[0], ux[1], ux[2],
+//                                  uy[0], uy[1], uy[2],
+//                                  uz[0], uz[1], uz[2]);
+//
+//   const GloballyPositioned<double> res(pos, tkrot);
+//
+// //   const Vector3DBase<double, GlobalTag> gxpost = res.toGlobal(lx);
+// //   const Vector3DBase<double, GlobalTag> gypost = res.toGlobal(ly);
+// //   const Vector3DBase<double, GlobalTag> gzpost = res.toGlobal(lz);
+// //
+// //   std::cout << "gx:\n" << gx << std::endl;
+// //   std::cout << "gy:\n" << gy << std::endl;
+// //   std::cout << "gz:\n" << gz << std::endl;
+// //   std::cout << "gxpost:\n" << gxpost << std::endl;
+// //   std::cout << "gypost:\n" << gypost << std::endl;
+// //   std::cout << "gzpost:\n" << gzpost << std::endl;
+//
+//   return res;
+//
+// //   return GloballyPositioned<double>(pos, tkrot);
+// }
 
 // ------------ method fills 'descriptions' with the allowed parameters for the module  ------------
 void ResidualGlobalCorrectionMakerBase::fillDescriptions(edm::ConfigurationDescriptions &descriptions)
