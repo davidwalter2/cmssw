@@ -177,10 +177,6 @@ protected:
 
   Matrix<double, 5, 5> curv2localJacobianAltelossD(const Matrix<double, 7, 1> &state, const MagneticField *field, const GloballyPositioned<double> &surface, double dEdx, double mass, double dBz = 0.) const;
   
-  Matrix<double, 5, 5> curv2localhybridJacobianAltelossD(const Matrix<double, 7, 1> &state, const MagneticField *field, const GloballyPositioned<double> &surface, double dEdx, double mass, double dBz = 0.) const;
-
-  Matrix<double, 5, 11> curv2localJacobianAlignmentD(const Matrix<double, 7, 1> &state, const MagneticField *field, const GloballyPositioned<double> &surface, double dEdx, double mass, double dBz = 0.) const;
-
   Matrix<double, 6, 5> curv2cartJacobianAltD(const Matrix<double, 7, 1> &state) const;
   
   Matrix<double, 5, 6> hybrid2curvJacobianD(const Matrix<double, 7, 1> &state, const MagneticField *field, double dBz = 0.) const;
@@ -378,7 +374,6 @@ protected:
   
   std::map<DetId, ReferenceCountingPointer<Plane>> surfacemap_;
   std::map<DetId, GloballyPositioned<double>> surfacemapD_;
-  std::map<DetId, Eigen::Matrix<double, 2, 2>> rgluemap_;
   std::vector<float> corparms_;
   
   unsigned int run;
