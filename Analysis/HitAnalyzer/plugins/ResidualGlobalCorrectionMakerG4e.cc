@@ -273,8 +273,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   
   const bool dogen = fitFromGenParms_;
   
-//   const bool dolocalupdate = true;
-  const bool dolocalupdate = false;
+  const bool dolocalupdate = true;
+//   const bool dolocalupdate = false;
 
 
 
@@ -1127,6 +1127,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       const GeomDet* detectorG = globalGeometry->idToDet((*it)->geographicalId());
       const GluedGeomDet* detglued = dynamic_cast<const GluedGeomDet*>(detectorG);
       
+      const uint32_t gluedid = trackerTopology->glued((*it)->geographicalId());
+      const bool isglued = gluedid != 0;
+
 //       if (track.seedDirection() == oppositeToMomentum) {
 //         std::cout << "position mag = " << detectorG->surface().position().mag() << std::endl;
 //       }
@@ -1212,7 +1215,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 //             }
             
 //             hitquality = !isOnEdge;
-            hitquality = true;
+//             hitquality = true;
+            hitquality = !isglued;
             
 //             const bool isstereo = trackerTopology->isStereo(detectorG->geographicalId());
 //             hitquality = !isstereo;
