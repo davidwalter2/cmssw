@@ -870,28 +870,6 @@ GloballyPositioned<double> ResidualGlobalCorrectionMakerBase::surfaceToDouble(co
   return GloballyPositioned<double>(pos, tkrot);
 }
 
-Matrix<double, 6, 1> ResidualGlobalCorrectionMakerBase::globalToLocal(const Matrix<double, 7, 1> &state, const GloballyPositioned<double> &surface) const {
-
-  const Point3DBase<double, GlobalTag> posprop(state[0], state[1], state[2]);
-  const Vector3DBase<double, GlobalTag> momprop(state[3], state[4], state[5]);
-
-  const Point3DBase<double, LocalTag> localpos = surface.toLocal(posprop);
-  const Vector3DBase<double, LocalTag> localmom = surface.toLocal(momprop);
-
-  const double signpz = std::copysign(1., localmom.z());
-
-  Matrix<double, 6, 1> localparms;
-  localparms[0] = state[6]/state.segment<3>(3).norm();
-  localparms[1] = localmom.x()/localmom.z();
-  localparms[2] = localmom.y()/localmom.z();
-  localparms[3] = localpos.x();
-  localparms[4] = localpos.y();
-  localparms[5] = signpz;
-
-  return localparms;
-
-}
-
 // ------------ method fills 'descriptions' with the allowed parameters for the module  ------------
 void ResidualGlobalCorrectionMakerBase::fillDescriptions(edm::ConfigurationDescriptions &descriptions)
 {
