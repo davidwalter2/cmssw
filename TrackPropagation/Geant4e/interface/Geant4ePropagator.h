@@ -62,7 +62,7 @@ public:
 
   const MagneticField *magneticField() const override { return theField; }
                                                                
-  std::tuple<bool, Eigen::Matrix<double, 7, 1>, Eigen::Matrix<double, 5, 5>, Eigen::Matrix<double, 5, 7>, double, Eigen::Matrix<double, 5, 5>, std::vector<Eigen::Matrix<double, 7, 1>>> propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 7, 1> &ftsStart,
+  std::tuple<bool, Eigen::Matrix<double, 7, 1>, Eigen::Matrix<double, 5, 5>, Eigen::Matrix<double, 5, 7>, double, Eigen::Matrix<double, 5, 5>> propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 7, 1> &ftsStart,
                                                                                 const GloballyPositioned<double> &pDest, double dBz = 0., double dxi = 0., double pforced = -1.) const;
 
   static void CalculateEffectiveZandA(const G4Material* mate, G4double& effZ, G4double& effA);
@@ -157,9 +157,6 @@ private:
   double computeErrorIoni(const G4Track* aTrack, double pforced = -1.) const;
     
   Eigen::Matrix<double, 5, 7> transportJacobianBzD(const Eigen::Matrix<double, 7, 1> &start, double s, double dEdx, double mass, double dBz) const;
-  
-  Eigen::Matrix<double, 5, 7> transportJacobianBzMidpointD(const Eigen::Matrix<double, 7, 1> &start, const Eigen::Matrix<double, 7, 1> &end, double s, double dEdx, double mass, double dBz) const;
-  
 
   G4UniversalFluctuationForExtrapolator *fluct = nullptr;
   

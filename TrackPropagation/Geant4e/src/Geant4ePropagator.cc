@@ -484,7 +484,7 @@ std::pair<TrajectoryStateOnSurface, double> Geant4ePropagator::propagateGeneric(
   return TsosPP(TrajectoryStateOnSurface(tParsDest, curvError, pDest, side), finalPathLength);
 }
 
- std::tuple<bool, Eigen::Matrix<double, 7, 1>, Eigen::Matrix<double, 5, 5>, Eigen::Matrix<double, 5, 7>, double, Eigen::Matrix<double, 5, 5>, std::vector<Eigen::Matrix<double, 7, 1>>> Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 7, 1> &ftsStart,
+ std::tuple<bool, Eigen::Matrix<double, 7, 1>, Eigen::Matrix<double, 5, 5>, Eigen::Matrix<double, 5, 7>, double, Eigen::Matrix<double, 5, 5>> Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 7, 1> &ftsStart,
                                                                                 const GloballyPositioned<double> &pDest, double dBz, double dxi, double pforced) const {
                           
   using namespace Eigen;
@@ -503,7 +503,7 @@ std::pair<TrajectoryStateOnSurface, double> Geant4ePropagator::propagateGeneric(
     cmsField->SetOffset(0., 0., 0.);
     cmsField->SetMaterialOffset(0.);
 //     return std::tuple<TrajectoryStateOnSurface, AlgebraicMatrix57, AlgebraicMatrix55, double>();
-    return std::tuple<bool, Matrix<double, 7, 1>, Matrix<double, 5, 5>, Matrix<double, 5, 7>, double, Matrix<double, 5, 5>, std::vector<Eigen::Matrix<double, 7, 1>>>(false, Matrix<double, 7, 1>::Zero(), Matrix<double, 5, 5>::Zero(), Matrix<double, 5, 7>::Zero(), 0., Matrix<double, 5, 5>::Zero(), std::vector<Eigen::Matrix<double, 7, 1>>());
+    return std::tuple<bool, Matrix<double, 7, 1>, Matrix<double, 5, 5>, Matrix<double, 5, 7>, double, Matrix<double, 5, 5>>(false, Matrix<double, 7, 1>::Zero(), Matrix<double, 5, 5>::Zero(), Matrix<double, 5, 7>::Zero(), 0., Matrix<double, 5, 5>::Zero());
   };
   
 
@@ -547,7 +547,6 @@ std::pair<TrajectoryStateOnSurface, double> Geant4ePropagator::propagateGeneric(
   if (mode == G4ErrorMode_PropBackwards && !flipped) {
     cmsInitMom = -cmsInitMom;
     g4InitMom = -g4InitMom; 
-    flipped = true;
   }
 
   
@@ -656,10 +655,6 @@ std::pair<TrajectoryStateOnSurface, double> Geant4ePropagator::propagateGeneric(
   
   bool firstStep = true;
 
-  std::vector<Eigen::Matrix<double, 7, 1>> states;
-
-//   states.push_back(ftsStart);
-
   bool continuePropagation = true;
   while (continuePropagation) {
 //     if (iterations > 0) {
@@ -721,8 +716,7 @@ std::pair<TrajectoryStateOnSurface, double> Geant4ePropagator::propagateGeneric(
     
 //     std::cout << "thisPathLength = " << thisPathLength << std::endl;
 //     const Matrix<double, 5, 7> transportJac = transportJacobian(statepre, thisPathLength, dEdx, mass);
-
-//     const Matrix<double, 5, 7> transportJac = transportJacobianBzD(statepre, thisPathLength, dEdx, mass, dBz);
+    const Matrix<double, 5, 7> transportJac = transportJacobianBzD(statepre, thisPathLength, dEdx, mass, dBz);
     
 //     const Matrix<double, 5, 7> transportJacAlt = transportJacobianD(statepre, thisPathLength, dEdx, mass);
     
@@ -733,17 +727,14 @@ std::pair<TrajectoryStateOnSurface, double> Geant4ePropagator::propagateGeneric(
     
 //     const Matrix<double, 6, 1> ddest = (destalt-dest)/dh;
 //     
-    Matrix<double, 7, 1> statepost;
-    statepost[0] = g4eTrajState.GetPosition().x()/cm;
-    statepost[1] = g4eTrajState.GetPosition().y()/cm;
-    statepost[2] = g4eTrajState.GetPosition().z()/cm;
-    statepost[3] = g4eTrajState.GetMomentum().x()/GeV;
-    statepost[4] = g4eTrajState.GetMomentum().y()/GeV;
-    statepost[5] = g4eTrajState.GetMomentum().z()/GeV;
-    statepost[6] = charge;
-    
-    const Matrix<double, 5, 7> transportJac = transportJacobianBzMidpointD(statepre, statepost, thisPathLength, dEdx, mass, dBz);
-    
+//     Matrix<double, 7, 1> statepost;
+//     statepost[0] = g4eTrajState.GetPosition().x()/cm;
+//     statepost[1] = g4eTrajState.GetPosition().y()/cm;
+//     statepost[2] = g4eTrajState.GetPosition().z()/cm;
+//     statepost[3] = g4eTrajState.GetMomentum().x()/GeV;
+//     statepost[4] = g4eTrajState.GetMomentum().y()/GeV;
+//     statepost[5] = g4eTrajState.GetMomentum().z()/GeV;
+//     statepost[6] = charge;
 //     
 //     const Matrix<double, 3, 1> Wpost = statepost.segment<3>(3).normalized();
 //     const Matrix<double, 3, 1> khat(0., 0., 1.);
@@ -819,10 +810,6 @@ std::pair<TrajectoryStateOnSurface, double> Geant4ePropagator::propagateGeneric(
 //         errMSIout(i, j) += w*errMSI(i+1, j+1);
 //       }
 //     }
-
-    const G4Material* mate = g4eTrajState.GetG4Track()->GetVolume()->GetLogicalVolume()->GetMaterial();
-
-
     
     Matrix<double, 5, 5> errMSIout = PropagateErrorMSC(g4eTrajState.GetG4Track(), pforced);
     errMSIout(0, 0) = computeErrorIoni(g4eTrajState.GetG4Track(), pforced);
@@ -942,39 +929,6 @@ std::pair<TrajectoryStateOnSurface, double> Geant4ePropagator::propagateGeneric(
       theG4eManager->GetPropagator()->InvokePostUserTrackingAction(g4eTrajState.GetG4Track());
       continuePropagation = false;
     }
-
-    const Point3DBase<double, GlobalTag> pospost(statepost[0], statepost[1], statepost[2]);
-    const Point3DBase<double, LocalTag> pospostlocal = pDest.toLocal(pospost);
-
-    //FIXME track down why this is needed
-    if (std::fabs(pospostlocal.z()) < 1e-10) {
-      continuePropagation = false;
-    }
-
-
-//     std::cout << "intermediate state with errMSI(0, 0) = " << errMSIout(0, 0) << " thisPathLength = " << thisPathLength << " finalPathLength = " << finalPathLength << " material = " << mate->GetName() << " density = " << mate->GetDensity() << " localz = " << pospostlocal.z() << " statepost:\n" << statepost << std::endl;
-
-    //TODO some protections against very short steps
-
-    const bool addstate = continuePropagation && std::fabs(thisPathLength) > 0. && mate->GetDensity() > 1000. && iterations % 2 == 0;
-
-//     if (continuePropagation && errMSIout(0, 0) > 0. && iterations%8 == 0) {
-    //FIXME more robust check for step not being in vacuum
-    if (addstate) {
-//       std::cout << "adding\n";
-      states.push_back(statepost);
-    }
-
-//     //protection for the case where the LAST step is in vacuum or too short (in which case it needs to be kept but merged with the previous ones)
-//     if (!continuePropagation && !addstate) {
-//       if (states.size() > 0) {
-//         states.back() = statepost;
-//       }
-//       else {
-//         // pathological case
-//         return retDefault();
-//       }
-//     }
   }
 
 //   std::cout << "propgationDirection = " << propagationDirection() << " finalPathLength = " << finalPathLength << std::endl;
@@ -983,8 +937,8 @@ std::pair<TrajectoryStateOnSurface, double> Geant4ePropagator::propagateGeneric(
 //   }
   
   // CMSSW Tracking convention, backward propagations have negative path length
-//   if (propagationDirection() == oppositeToMomentum)
-//     finalPathLength = -finalPathLength;
+  if (propagationDirection() == oppositeToMomentum)
+    finalPathLength = -finalPathLength;
 
 //   std::cout << "finalPathLength = " << finalPathLength << std::endl;
   
@@ -1010,28 +964,11 @@ std::pair<TrajectoryStateOnSurface, double> Geant4ePropagator::propagateGeneric(
   ftsEnd[4] = g4eTrajState.GetMomentum().y()/GeV;
   ftsEnd[5] = g4eTrajState.GetMomentum().z()/GeV;
   ftsEnd[6] = charge;
-
-  if (flipped) {
-    finalPathLength = -finalPathLength;
-    ftsEnd.segment<3>(3) *= -1.;
-    
-    g4errorEnd.row(1) *= -1.;
-    g4errorEnd.row(2) *= -1.;
-    g4errorEnd.col(1) *= -1.;
-    g4errorEnd.col(2) *= -1.;
-    
-    jac.row(1) *= -1.;
-    jac.row(2) *= -1.;
-    jac.col(1) *= -1.;
-    jac.col(2) *= -1.;
-  }
-  
-//   states.push_back(ftsEnd);
   
   cmsField->SetOffset(0., 0., 0.);
   cmsField->SetMaterialOffset(0.);
   
-  return std::tuple<bool, Matrix<double, 7, 1>, Matrix<double, 5, 5>, Matrix<double, 5, 7>, double, Matrix<double, 5, 5>, std::vector<Eigen::Matrix<double, 7, 1>>>(true, ftsEnd, g4errorEnd, jac, dEdxlast, dQ, states);
+  return std::tuple<bool, Matrix<double, 7, 1>, Matrix<double, 5, 5>, Matrix<double, 5, 7>, double, Matrix<double, 5, 5>>(true, ftsEnd, g4errorEnd, jac, dEdxlast, dQ);
   
 //   return std::tuple<TrajectoryStateOnSurface, AlgebraicMatrix57, AlgebraicMatrix55, double>(TrajectoryStateOnSurface(localparms, localerr, pDest, theField, side), jacfinal, dQfinal, dEdxlast);
 }
@@ -1755,543 +1692,6 @@ Eigen::Matrix<double, 5, 7> Geant4ePropagator::transportJacobianBzD(const Eigen:
   const double dytdyt0 = x117*x280 + x122*x279 + x138*x276 + x21*x275;
   const double dytdBz = -x142*x275 + x160*x275*x62 - x174*x273 - x178*x274 + x179*x276 + x268*x281*x80 + x269*x281*x99;
   const double dytdxi = 0;
-  Eigen::Matrix<double, 5, 7> res;
-  res(0,0) = dqopdqop0;
-  res(0,1) = dqopdlam0;
-  res(0,2) = dqopdphi0;
-  res(0,3) = dqopdxt0;
-  res(0,4) = dqopdyt0;
-  res(0,5) = dqopdBz;
-  res(0,6) = dqopdxi;
-  res(1,0) = dlamdqop0;
-  res(1,1) = dlamdlam0;
-  res(1,2) = dlamdphi0;
-  res(1,3) = dlamdxt0;
-  res(1,4) = dlamdyt0;
-  res(1,5) = dlamdBz;
-  res(1,6) = dlamdxi;
-  res(2,0) = dphidqop0;
-  res(2,1) = dphidlam0;
-  res(2,2) = dphidphi0;
-  res(2,3) = dphidxt0;
-  res(2,4) = dphidyt0;
-  res(2,5) = dphidBz;
-  res(2,6) = dphidxi;
-  res(3,0) = dxtdqop0;
-  res(3,1) = dxtdlam0;
-  res(3,2) = dxtdphi0;
-  res(3,3) = dxtdxt0;
-  res(3,4) = dxtdyt0;
-  res(3,5) = dxtdBz;
-  res(3,6) = dxtdxi;
-  res(4,0) = dytdqop0;
-  res(4,1) = dytdlam0;
-  res(4,2) = dytdphi0;
-  res(4,3) = dytdxt0;
-  res(4,4) = dytdyt0;
-  res(4,5) = dytdBz;
-  res(4,6) = dytdxi;
-
-  res.col(5) *= 2.99792458e-3;
-  
-  return res;
-
-  
-}
-
-Eigen::Matrix<double, 5, 7> Geant4ePropagator::transportJacobianBzMidpointD(const Eigen::Matrix<double, 7, 1> &start, const Eigen::Matrix<double, 7, 1> &end, double s, double dEdx, double mass, double dBz) const {
-  
-  if (s==0.) {
-    Eigen::Matrix<double, 5, 7> res;
-    res.leftCols<5>() = Eigen::Matrix<double, 5, 5>::Identity();
-    res.rightCols<2>() = Eigen::Matrix<double, 5, 2>::Zero();
-    return res;
-  }
-  
-  const GlobalPoint pos(start[0], start[1], start[2]);  
-  const GlobalVector &bfield = theField->inInverseGeV(pos);
-  
-  const GlobalPoint posend(end[0], end[1], end[2]);  
-  const GlobalVector &bfieldend = theField->inInverseGeV(posend);
-  
-  const double Bxstart = bfield.x();
-  const double Bystart = bfield.y();
-  const double Bzstart = bfield.z();
-  
-  const double Bxend = bfieldend.x();
-  const double Byend = bfieldend.y();
-  const double Bzend = bfieldend.z();
-  
-  const double Bx = 0.5*(Bxstart + Bxend);
-  const double By = 0.5*(Bystart + Byend);
-  const double Bz = 0.5*(Bzstart + Bzend) + 2.99792458e-3*dBz;
-  
-  const double M0x = start[0];
-  const double M0y = start[1];
-  const double M0z = start[2];
-  
-  const Eigen::Matrix<double, 3, 1> W0 = start.segment<3>(3).normalized();
-  const double W0x = W0[0];
-  const double W0y = W0[1];
-  const double W0z = W0[2];
-  
-  const double q = start[6];
-  const double qop0 = q/start.segment<3>(3).norm();
-
-  const double x0 = std::pow(mass, 2);
-  const double x1 = std::pow(q, 2);
-  const double x2 = std::pow(qop0, 2);
-  const double x3 = std::sqrt(x0 + x1/x2);
-  const double x4 = dEdx*s;
-  const double x5 = x3 + x4;
-  const double x6 = std::pow(-x0 + std::pow(x5, 2), -3.0/2.0);
-  const double x7 = std::pow(W0x, 2);
-  const double x8 = std::pow(W0y, 2);
-  const double x9 = x7 + x8;
-  const double x10 = std::sqrt(x9);
-  const double x11 = 1.0/x10;
-  const double x12 = W0z*x11;
-  const double x13 = x0*x2;
-  const double x14 = std::fabs(qop0);
-  const double x15 = x14*x4;
-  const double x16 = std::sqrt(x1 + x13);
-  const double x17 = x15 + x16;
-  const double x18 = std::sqrt(-x13 + std::pow(x17, 2));
-  const double x19 = std::pow(Bx, 2);
-  const double x20 = std::pow(By, 2);
-  const double x21 = std::pow(Bz, 2);
-  const double x22 = x19 + x20 + x21;
-  const double x23 = std::sqrt(x22);
-  const double x24 = s*x23;
-  const double x25 = std::pow(s, 2);
-  const double x26 = std::pow(dEdx, 2)*x25;
-  const double x27 = x2*x26;
-  const double x28 = x15*x16;
-  const double x29 = x1 + x27 + 2*x28;
-  const double x30 = std::pow(x29, -1.0/2.0);
-  const double x31 = q*x14;
-  const double x32 = qop0 + x30*x31;
-  const double x33 = (1.0/2.0)*x32;
-  const double x34 = x24*x33;
-  const double x35 = std::sin(x34);
-  const double x36 = 2*x35;
-  const double x37 = x18*x36;
-  const double x38 = std::pow(W0z, 2);
-  const double x39 = 1.0/x9;
-  const double x40 = std::pow(x38*x39 + 1, -1.0/2.0);
-  const double x41 = std::pow(x22, 5.0/2.0);
-  const double x42 = x40*x41;
-  const double x43 = x37*x42;
-  const double x44 = qop0*x18 + x31;
-  const double x45 = std::pow(x22, 3);
-  const double x46 = M0x*W0x;
-  const double x47 = M0y*W0y;
-  const double x48 = M0z*W0z + x46 + x47;
-  const double x49 = M0z*(x11*x7 + x11*x8) - x12*x46 - x12*x47;
-  const double x50 = W0z*x48 + x10*x49;
-  const double x51 = x45*x50;
-  const double x52 = W0y*x11;
-  const double x53 = Bx*x52;
-  const double x54 = W0x*x11;
-  const double x55 = By*x54;
-  const double x56 = x53 - x55;
-  const double x57 = x18*x56;
-  const double x58 = std::pow(x22, 2);
-  const double x59 = std::cos(x34);
-  const double x60 = x59 - 1;
-  const double x61 = 2*x58*x60;
-  const double x62 = x40*x61;
-  const double x63 = x57*x62;
-  const double x64 = s*x23*x44 - x37;
-  const double x65 = std::pow(x22, 3.0/2.0);
-  const double x66 = Bz*x40;
-  const double x67 = x12*x66;
-  const double x68 = Bx*x40;
-  const double x69 = x54*x68;
-  const double x70 = By*x40;
-  const double x71 = x52*x70;
-  const double x72 = x69 + x71;
-  const double x73 = x67 + x72;
-  const double x74 = x65*x73;
-  const double x75 = x64*x74;
-  const double x76 = Bz*x75 + x12*x43 + x44*x51 + x63;
-  const double x77 = 1.0/x45;
-  const double x78 = std::pow(x44, -2);
-  const double x79 = (((qop0) > 0) - ((qop0) < 0));
-  const double x80 = q*x79;
-  const double x81 = 1.0/x18;
-  const double x82 = qop0*x0;
-  const double x83 = x4*x79;
-  const double x84 = x82/x16;
-  const double x85 = x81*((1.0/2.0)*x17*(2*x83 + 2*x84) - x82);
-  const double x86 = qop0*x85 + x18 + x80;
-  const double x87 = -x86;
-  const double x88 = x78*x87;
-  const double x89 = x77*x88;
-  const double x90 = x36*x85;
-  const double x91 = x42*x90;
-  const double x92 = x56*x62;
-  const double x93 = x40*x59;
-  const double x94 = x18*x93;
-  const double x95 = std::pow(x29, -3.0/2.0);
-  const double x96 = x31*x95;
-  const double x97 = x30*x80 + x96*(-qop0*x26 - x15*x84 - x16*x83) + 1;
-  const double x98 = s*x97;
-  const double x99 = x94*x98;
-  const double x100 = x12*x45;
-  const double x101 = x42*x57;
-  const double x102 = x35*x98;
-  const double x103 = x18*x59;
-  const double x104 = x103*x24;
-  const double x105 = s*x23*x86 - x104*x97 - x90;
-  const double x106 = Bz*x74;
-  const double x107 = x100*x99 - x101*x102 + x105*x106 + x12*x91 + x51*x86 + x85*x92;
-  const double x108 = 1.0/x44;
-  const double x109 = x108*x77;
-  const double x110 = 1.0/x22;
-  const double x111 = Bx*x54;
-  const double x112 = x111*x66;
-  const double x113 = By*x52;
-  const double x114 = x113*x66;
-  const double x115 = x21*x40;
-  const double x116 = x19*x93;
-  const double x117 = x20*x93;
-  const double x118 = x23*x35;
-  const double x119 = x52*x68;
-  const double x120 = -x112*x59 + x112 - x114*x59 + x114 + x115*x12 + x116*x12 + x117*x12 - x118*x119 + x118*x54*x70;
-  const double x121 = x110*x120;
-  const double x122 = W0y*x45;
-  const double x123 = x10*x48;
-  const double x124 = x122*x123;
-  const double x125 = W0y*x43;
-  const double x126 = -M0x*x52 + M0y*W0x*x11;
-  const double x127 = W0z*x49;
-  const double x128 = W0x*x126 - W0y*x127;
-  const double x129 = x128*x45;
-  const double x130 = x12*x68;
-  const double x131 = x54*x66;
-  const double x132 = x130 - x131;
-  const double x133 = x10*x18;
-  const double x134 = x133*x61;
-  const double x135 = By*x10;
-  const double x136 = x124*x44 + x125 + x129*x44 - x132*x134 + x135*x75;
-  const double x137 = x11*x89;
-  const double x138 = x10*x61;
-  const double x139 = x138*x85;
-  const double x140 = x132*x133;
-  const double x141 = x102*x41;
-  const double x142 = x105*x74;
-  const double x143 = W0y*x91 + x122*x99 + x124*x86 + x129*x86 - x132*x139 + x135*x142 + x140*x141;
-  const double x144 = x109*x11;
-  const double x145 = W0y*x20;
-  const double x146 = x11*x40;
-  const double x147 = x111*x70;
-  const double x148 = By*x66;
-  const double x149 = x12*x148;
-  const double x150 = x147*x59;
-  const double x151 = W0z*x59;
-  const double x152 = x11*x151;
-  const double x153 = x148*x152;
-  const double x154 = x115*x59;
-  const double x155 = x154*x52;
-  const double x156 = -x118*x131 + x155;
-  const double x157 = x116*x52 + x118*x130 + x145*x146 + x147 + x149 - x150 - x153 + x156;
-  const double x158 = x110*x157;
-  const double x159 = W0x*x45;
-  const double x160 = x123*x159;
-  const double x161 = W0x*x43;
-  const double x162 = W0x*x127 + W0y*x126;
-  const double x163 = x162*x45;
-  const double x164 = x12*x70;
-  const double x165 = x52*x66;
-  const double x166 = x164 - x165;
-  const double x167 = Bx*x10;
-  const double x168 = x134*x166 + x160*x44 + x161 - x163*x44 + x167*x75;
-  const double x169 = x133*x166;
-  const double x170 = W0x*x91 + x139*x166 - x141*x169 + x142*x167 + x159*x99 + x160*x86 - x163*x86;
-  const double x171 = W0x*x19;
-  const double x172 = x53*x70;
-  const double x173 = Bx*x66;
-  const double x174 = x12*x173;
-  const double x175 = x172*x59;
-  const double x176 = x154*x54;
-  const double x177 = x118*x165 + x176;
-  const double x178 = x117*x54 - x118*x164 + x146*x171 - x152*x173 + x172 + x174 - x175 + x177;
-  const double x179 = x110*x178;
-  const double x180 = -x121*(x107*x109 + x76*x89) - x158*(x136*x137 + x143*x144) - x179*(x137*x168 + x144*x170);
-  const double x181 = q*x5*x6;
-  const double x182 = dEdx*x181;
-  const double x183 = W0z*x39;
-  const double x184 = W0x*x183;
-  const double x185 = W0y*x183;
-  const double x186 = Bz*x40 - x184*x68 - x185*x70;
-  const double x187 = x64*x65;
-  const double x188 = Bz*x187;
-  const double x189 = -x12*x63 + x186*x188 + x43;
-  const double x190 = std::pow(x22, -4);
-  const double x191 = x108*x190;
-  const double x192 = x120*x191;
-  const double x193 = x40*x54;
-  const double x194 = W0z*x37*x41;
-  const double x195 = x185*x66;
-  const double x196 = x134*(x195 + x70) + x167*x186*x187 - x193*x194;
-  const double x197 = x11*x191;
-  const double x198 = x178*x197;
-  const double x199 = x40*x52;
-  const double x200 = By*x10*x186*x64*x65 - x134*(x184*x66 + x68) - x194*x199;
-  const double x201 = x157*x197;
-  const double x202 = -x189*x192 - x196*x198 - x200*x201;
-  const double x203 = x18*x62;
-  const double x204 = By*W0x*x11*x40 - x119;
-  const double x205 = x188*x204 + x203*(x111 + x113);
-  const double x206 = x18*x66;
-  const double x207 = x206*x61;
-  const double x208 = Bx*x10*x204*x64*x65 - W0x*x207 - x125;
-  const double x209 = -W0y*x207 + x135*x187*x204 + x161;
-  const double x210 = -x192*x205 - x198*x208 - x201*x209;
-  const double x211 = W0y*x11*x110*x178 - x158*x54;
-  const double x212 = W0z*x54;
-  const double x213 = W0z*x52;
-  const double x214 = -x10*x121 + x158*x213 + x179*x212;
-  const double x215 = 6*Bz;
-  const double x216 = x191*x215*x76;
-  const double x217 = 10*x35*x65;
-  const double x218 = 6*x58;
-  const double x219 = Bz*x218*x44;
-  const double x220 = x57*x66;
-  const double x221 = 8*x22*x60;
-  const double x222 = s*x32;
-  const double x223 = x206*x222*x58;
-  const double x224 = x32*x35;
-  const double x225 = s*x224*x65;
-  const double x226 = 3*x23*x64*x73;
-  const double x227 = 1.0/x23;
-  const double x228 = s*x227;
-  const double x229 = x103*x32;
-  const double x230 = Bz*s*x227*x44 - Bz*x228*x229;
-  const double x231 = x106*x230 + x152*x223 + x18*x217*x67 + x187*x67 + x21*x226 + x219*x50 + x220*x221 - x220*x225 + x75;
-  const double x232 = x197*x215;
-  const double x233 = Bz*W0x;
-  const double x234 = x123*x218*x44;
-  const double x235 = x206*x217;
-  const double x236 = W0x*x59;
-  const double x237 = Bz*x221;
-  const double x238 = W0z*x187;
-  const double x239 = Bz*x225;
-  const double x240 = Bx*Bz;
-  const double x241 = x10*x226;
-  const double x242 = x230*x74;
-  const double x243 = W0x*x235 - W0y*x203 - x162*x219 + x167*x242 + x169*x237 - x169*x239 + x223*x236 + x233*x234 + x238*x68 + x240*x241;
-  const double x244 = Bz*W0y;
-  const double x245 = W0y*x59;
-  const double x246 = By*Bz;
-  const double x247 = W0x*x203 + W0y*x235 + x128*x219 + x135*x242 - x140*x237 + x140*x239 + x223*x245 + x234*x244 + x238*x70 + x241*x246;
-  const double x248 = -x121*(x108*x231*x77 - x216) - x158*(x108*x11*x247*x77 - x136*x232) - x179*(x108*x11*x243*x77 - x168*x232);
-  const double x249 = x15*x17*x81;
-  const double x250 = qop0*x249;
-  const double x251 = x250*x78;
-  const double x252 = x251*x77;
-  const double x253 = x252*x76;
-  const double x254 = x249*x36;
-  const double x255 = x254*x42;
-  const double x256 = -x27 - x28;
-  const double x257 = x256*x96;
-  const double x258 = s*x257;
-  const double x259 = x258*x94;
-  const double x260 = x258*x35;
-  const double x261 = dEdx*qop0*x14*x17*x23*x25*x81 - x104*x257 - x254;
-  const double x262 = x100*x259 - x101*x260 + x106*x261 + x12*x255 + x249*x92 + x250*x51;
-  const double x263 = x11*x252;
-  const double x264 = x138*x249;
-  const double x265 = x260*x41;
-  const double x266 = x261*x74;
-  const double x267 = W0y*x255 + x122*x259 + x124*x250 + x129*x250 - x132*x264 + x135*x266 + x140*x265;
-  const double x268 = W0x*x255 + x159*x259 + x160*x250 - x163*x250 + x166*x264 + x167*x266 - x169*x265;
-  const double x269 = -x121*(x108*x262*x77 - x253) - x158*(x108*x11*x267*x77 - x136*x263) - x179*(x108*x11*x268*x77 - x168*x263);
-  const double x270 = 1.0/x58;
-  const double x271 = std::pow(x178, 2);
-  const double x272 = std::pow(x157, 2);
-  const double x273 = x270*x271 + x270*x272;
-  const double x274 = 1.0/x273;
-  const double x275 = x270*x274;
-  const double x276 = 1.0/(std::pow(x120, 2)*x275 + 1);
-  const double x277 = x22*x98;
-  const double x278 = x277*x59;
-  const double x279 = x12*x40;
-  const double x280 = x19*x279;
-  const double x281 = x24*x35;
-  const double x282 = x281*x97;
-  const double x283 = (1.0/2.0)*x282;
-  const double x284 = x20*x279;
-  const double x285 = std::pow(x273, -1.0/2.0);
-  const double x286 = x110*x285;
-  const double x287 = x131*x278;
-  const double x288 = x19*x199;
-  const double x289 = x282*x288;
-  const double x290 = x115*x52;
-  const double x291 = x282*x290;
-  const double x292 = (1.0/2.0)*x270;
-  const double x293 = x157*x292;
-  const double x294 = x165*x278;
-  const double x295 = x152*x70;
-  const double x296 = x277*x295;
-  const double x297 = x193*x20;
-  const double x298 = x282*x297;
-  const double x299 = x115*x54;
-  const double x300 = x282*x299;
-  const double x301 = x178*x292;
-  const double x302 = x121/std::pow(x273, 3.0/2.0);
-  const double x303 = x22*x33;
-  const double x304 = x303*x59;
-  const double x305 = x118*x33;
-  const double x306 = x22*x32;
-  const double x307 = x306*x59;
-  const double x308 = x118*x32;
-  const double x309 = x118*x70;
-  const double x310 = x276*(x286*((1.0/2.0)*Bx*Bz*W0x*x11*x23*x32*x35*x40 + (1.0/2.0)*By*Bz*W0y*x11*x23*x32*x35*x40 + (1.0/2.0)*By*W0x*x11*x22*x32*x40*x59 - x119*x304 - x280*x305 - x284*x305) + x302*(-x293*(Bx*By*W0x*x11*x23*x32*x35*x40 + Bx*W0z*x11*x22*x32*x40*x59 + By*Bz*W0z*x11*x23*x32*x35*x40 - x131*x307 - x288*x308 - x290*x308) - x301*(x165*x307 + x174*x308 - x295*x306 - x297*x308 - x299*x308 + x309*x32*x53)));
-  const double x311 = Bx*W0y;
-  const double x312 = x183*x311*x70;
-  const double x313 = x183*x40;
-  const double x314 = x171*x313;
-  const double x315 = x23*x36;
-  const double x316 = x117*x184;
-  const double x317 = x115*x183;
-  const double x318 = x236*x317;
-  const double x319 = Bx*x184*x70;
-  const double x320 = x145*x313;
-  const double x321 = x116*x185;
-  const double x322 = x245*x317;
-  const double x323 = x53*x66;
-  const double x324 = x55*x66;
-  const double x325 = x324*x59;
-  const double x326 = x11*x93;
-  const double x327 = x145*x326;
-  const double x328 = x171*x326;
-  const double x329 = 2*Bz;
-  const double x330 = x270*x329;
-  const double x331 = x227*x35;
-  const double x332 = s*x33;
-  const double x333 = x228*x33*x35;
-  const double x334 = x21*x333;
-  const double x335 = x333*x67;
-  const double x336 = x329*x77;
-  const double x337 = x152*x68;
-  const double x338 = x227*x36;
-  const double x339 = x224*x228;
-  const double x340 = x148*x53;
-  const double x341 = std::pow(Bz, 3);
-  const double x342 = x339*x341;
-  const double x343 = W0z*x21;
-  const double x344 = x11*x343;
-  const double x345 = x131*x20;
-  const double x346 = x165*x19;
-  const double x347 = x22*x258;
-  const double x348 = x347*x59;
-  const double x349 = x257*x281;
-  const double x350 = (1.0/2.0)*x349;
-  const double x351 = x131*x348;
-  const double x352 = x288*x349;
-  const double x353 = x290*x349;
-  const double x354 = x165*x348;
-  const double x355 = x295*x347;
-  const double x356 = x297*x349;
-  const double x357 = x299*x349;
-  const double x358 = x178*x275;
-  const double x359 = x157*x275;
-  const double x360 = x358*((1.0/2.0)*Bx*By*W0x*x11*x23*x32*x35*x40 + (1.0/2.0)*Bx*W0z*x11*x22*x32*x40*x59 + (1.0/2.0)*By*Bz*W0z*x11*x23*x32*x35*x40 - x131*x304 - x288*x305 - x290*x305) - x359*(x165*x304 + x174*x305 - x295*x303 - x297*x305 - x299*x305 + x309*x33*x53);
-  const double x361 = W0y*x39;
-  const double x362 = W0z*x118;
-  const double x363 = x333*x341;
-  const double x364 = x136*x88;
-  const double x365 = Bx*By;
-  const double x366 = W0y*x365;
-  const double x367 = Bz*W0z;
-  const double x368 = Bx*x367;
-  const double x369 = -By*x362 + x118*x244 + x171 + x20*x236 + x21*x236 - x366*x59 + x366 - x368*x59 + x368;
-  const double x370 = x38 + x9;
-  const double x371 = 1.0/x370;
-  const double x372 = x270*x371;
-  const double x373 = std::pow(x369, 2)*x372;
-  const double x374 = By*x367;
-  const double x375 = Bx*x362 + W0x*x365 - x118*x233 + x145 + x19*x245 + x21*x245 - x236*x365 - x374*x59 + x374;
-  const double x376 = x372*std::pow(x375, 2);
-  const double x377 = std::pow(x373 + x376, -1.0/2.0);
-  const double x378 = x369*x377;
-  const double x379 = std::pow(x370*x39, -1.0/2.0);
-  const double x380 = x379*x39;
-  const double x381 = x190*x380;
-  const double x382 = x378*x381;
-  const double x383 = x375*x377;
-  const double x384 = x168*x383;
-  const double x385 = x381*x384;
-  const double x386 = x191*x380;
-  const double x387 = x378*x386;
-  const double x388 = x383*x386;
-  const double x389 = x32*x94;
-  const double x390 = x224*x41;
-  const double x391 = -x229*x23 + x23*x44;
-  const double x392 = x391*x74;
-  const double x393 = x159*x389 + x167*x392 - x169*x390;
-  const double x394 = x122*x389 + x135*x392 + x140*x390;
-  const double x395 = x108*x190*x369*x377*x379*x39*x394 - x388*x393;
-  const double x396 = x110*x379;
-  const double x397 = x378*x396;
-  const double x398 = x383*x396;
-  const double x399 = std::pow(x22, -5);
-  const double x400 = x108*x399;
-  const double x401 = x215*x380;
-  const double x402 = x378*x400;
-  const double x403 = x136*x251;
-  const double x404 = Bx*x233 + By*W0x*x118 + By*x244 - x118*x311 + x151*x19 + x151*x20 - x236*x240 - x245*x246 + x343;
-  const double x405 = x11*x371*x404;
-  const double x406 = x168*x378*x405;
-  const double x407 = x399*x406;
-  const double x408 = x383*x405;
-  const double x409 = x399*x408;
-  const double x410 = x373*x377 + x376*x377;
-  const double x411 = x400*x408;
-  const double x412 = x402*x405;
-  const double x413 = x108*x410*x77*(x100*x389 - x101*x224 + x106*x391) - x393*x412 - x394*x411;
-  const double x414 = x109*x410;
-  const double x415 = x372*x404;
-  const double x416 = x378*x415;
-  const double x417 = x383*x415;
-  const double x418 = x108*x215/std::pow(x22, 6);
-  const double dqopdqop0 = std::pow(q, 3)*x5*x6/(std::pow(qop0, 3)*x3) - x180*x182;
-  const double dqopdlam0 = -x182*x202;
-  const double dqopdphi0 = -x182*x210;
-  const double dqopdxt0 = -x182*x211;
-  const double dqopdyt0 = -x182*x214;
-  const double dqopdBz = -x182*x248;
-  const double dqopdxi = -x181*x4 - x182*x269;
-  const double dlamdqop0 = x180*x310 + x276*(x286*((1.0/2.0)*Bx*Bz*W0x*s*x11*x23*x35*x40*x97 + (1.0/2.0)*By*Bz*W0y*s*x11*x23*x35*x40*x97 + (1.0/2.0)*By*W0x*s*x11*x22*x40*x59*x97 - 1.0/2.0*x119*x278 - x280*x283 - x283*x284) + x302*(-x293*(Bx*By*W0x*s*x11*x23*x35*x40*x97 + Bx*W0z*s*x11*x22*x40*x59*x97 + By*Bz*W0z*s*x11*x23*x35*x40*x97 - x287 - x289 - x291) - x301*(x172*x282 + x174*x282 + x294 - x296 - x298 - x300)));
-  const double dlamdlam0 = x202*x310 + x276*(x286*(x115 + x116 + x117 + x118*x185*x68 + x148*x183*x245 - x148*x185 + x173*x183*x236 - x173*x184 - x184*x309) + x302*(-x293*(2*Bx*By*W0x*W0z*x39*x40*x59 + 2*Bx*x23*x35*x40 + 2*By*Bz*x40 + 2*Bz*W0x*W0z*x23*x35*x39*x40 - 2*x148*x59 - 2*x319 - 2*x320 - 2*x321 - 2*x322) - x301*(2*Bx*By*W0y*W0z*x39*x40*x59 + 2*Bx*Bz*x40 - 2*x173*x59 - x195*x315 - 2*x312 - 2*x314 - x315*x70 - 2*x316 - 2*x318)));
-  const double dlamdphi0 = x210*x310 + x276*(x286*(Bx*Bz*W0y*x11*x40*x59 + By*Bz*W0x*x11*x40 - x118*x69 - x118*x71 - x323 - x325) + x302*(-x293*(x165*x315 - 2*x172 + 2*x175 + 2*x176 + 2*x297 + 2*x328) - x301*(2*Bx*By*W0x*x11*x40 + 2*Bz*W0x*x11*x23*x35*x40 - 2*x150 - 2*x155 - 2*x288 - 2*x327)));
-  const double dlamdxt0 = x211*x310;
-  const double dlamdyt0 = x214*x310;
-  const double dlamdBz = x248*x310 + x276*(-x120*x285*x330 + x286*(-x19*x335 - x20*x335 - x323*x331 - x323*x332*x59 + x324*x331 + x325*x332 + x334*x69 + x334*x71 - x59*x69 - x59*x71 + 2*x67 + x72) + x302*(x271*x336 + x272*x336 - x293*(Bx*By*Bz*W0x*s*x11*x227*x32*x35*x40 + Bx*Bz*W0z*s*x11*x32*x40*x59 + 2*Bx*Bz*W0z*x11*x227*x35*x40 + By*W0z*s*x11*x21*x227*x32*x35*x40 + 2*By*W0z*x11*x40 + 4*Bz*W0y*x11*x40*x59 - x176*x222 - x193*x315 - x199*x342 - 2*x295 - x299*x338 - x339*x346) - x301*(2*x130 + 4*x131*x59 - x149*x338 - x153*x222 + x155*x222 - x193*x342 + x199*x315 + x290*x338 - 2*x337 + x339*x340 + x339*x344*x68 - x339*x345)));
-  const double dlamdxi = x269*x310 + x276*(x286*((1.0/2.0)*Bx*Bz*W0x*q*s*x11*x14*x23*x256*x35*x40*x95 + (1.0/2.0)*By*Bz*W0y*q*s*x11*x14*x23*x256*x35*x40*x95 + (1.0/2.0)*By*W0x*q*s*x11*x14*x22*x256*x40*x59*x95 - 1.0/2.0*x119*x348 - x280*x350 - x284*x350) + x302*(-x293*(Bx*By*W0x*q*s*x11*x14*x23*x256*x35*x40*x95 + Bx*W0z*q*s*x11*x14*x22*x256*x40*x59*x95 + By*Bz*W0z*q*s*x11*x14*x23*x256*x35*x40*x95 - x351 - x352 - x353) - x301*(x172*x349 + x174*x349 + x354 - x355 - x356 - x357)));
-  const double dphidqop0 = x180*x360 + x358*((1.0/2.0)*Bx*By*W0x*s*x11*x23*x35*x40*x97 + (1.0/2.0)*Bx*W0z*s*x11*x22*x40*x59*x97 + (1.0/2.0)*By*Bz*W0z*s*x11*x23*x35*x40*x97 - 1.0/2.0*x287 - 1.0/2.0*x289 - 1.0/2.0*x291) - x359*(x172*x283 + x174*x283 + (1.0/2.0)*x294 - 1.0/2.0*x296 - 1.0/2.0*x298 - 1.0/2.0*x300);
-  const double dphidlam0 = x202*x360 + x358*(Bx*By*W0x*W0z*x39*x40*x59 + Bx*x23*x35*x40 + By*Bz*x40 + Bz*W0x*W0z*x23*x35*x39*x40 - x148*x59 - x319 - x320 - x321 - x322) - x359*(Bx*By*W0y*W0z*x39*x40*x59 + Bx*Bz*x40 - x173*x59 - x309 - x312 - x314 - x316 - x318 - x361*x362*x66);
-  const double dphidphi0 = x210*x360 + x358*(-x172 + x175 + x177 + x297 + x328) - x359*(Bx*By*W0x*x11*x40 - x150 - x156 - x288 - x327);
-  const double dphidxt0 = x211*x360;
-  const double dphidyt0 = x214*x360;
-  const double dphidBz = -x158*x274*(x110*(x118*x199 + x130 + 2*x131*x59 - x149*x331 - x153*x332 + x155*x332 - x193*x363 + x290*x331 + x333*x340 + x333*x344*x68 - x333*x345 - x337) - x178*x330) + x179*x274*(x110*((1.0/2.0)*Bx*By*Bz*W0x*s*x11*x227*x32*x35*x40 + (1.0/2.0)*Bx*Bz*W0z*s*x11*x32*x40*x59 + Bx*Bz*W0z*x11*x227*x35*x40 + (1.0/2.0)*By*W0z*s*x11*x21*x227*x32*x35*x40 + By*W0z*x11*x40 + 2*Bz*W0y*x11*x40*x59 - x118*x193 - x176*x332 - x199*x363 - x295 - x299*x331 - x333*x346) - x157*x330) + x248*x360;
-  const double dphidxi = x269*x360 + x358*((1.0/2.0)*Bx*By*W0x*q*s*x11*x14*x23*x256*x35*x40*x95 + (1.0/2.0)*Bx*W0z*q*s*x11*x14*x22*x256*x40*x59*x95 + (1.0/2.0)*By*Bz*W0z*q*s*x11*x14*x23*x256*x35*x40*x95 - 1.0/2.0*x351 - 1.0/2.0*x352 - 1.0/2.0*x353) - x359*(x172*x350 + x174*x350 + (1.0/2.0)*x354 - 1.0/2.0*x355 - 1.0/2.0*x356 - 1.0/2.0*x357);
-  const double dxtdqop0 = x143*x387 - x170*x388 + x180*x395 + x364*x382 - x385*x88;
-  const double dxtdlam0 = -x196*x388 + x200*x387 + x202*x395;
-  const double dxtdphi0 = -x208*x388 + x209*x387 + x210*x395;
-  const double dxtdxt0 = W0x*x39*x397 + x211*x395 + x361*x398;
-  const double dxtdyt0 = x184*x398 - x185*x397 + x214*x395;
-  const double dxtdBz = -x136*x401*x402 - x243*x388 + x247*x387 + x248*x395 + x384*x400*x401;
-  const double dxtdxi = x251*x385 + x267*x387 - x268*x388 + x269*x395 - x382*x403;
-  const double dytdqop0 = x107*x108*x410*x77 - x143*x411 - x170*x412 + x180*x413 - x364*x409 - x407*x88 + x410*x76*x77*x78*x87;
-  const double dytdlam0 = x189*x414 - x196*x412 - x200*x411 + x202*x413;
-  const double dytdphi0 = x205*x414 - x208*x412 - x209*x411 + x210*x413;
-  const double dytdxt0 = x211*x413 + x416*x52 - x417*x54;
-  const double dytdyt0 = x10*x410 + x212*x416 + x213*x417 + x214*x413;
-  const double dytdBz = x109*x231*x410 + x136*x408*x418 - x216*x410 - x243*x412 - x247*x411 + x248*x413 + x406*x418;
-  const double dytdxi = x109*x262*x410 + x251*x407 - x253*x410 - x267*x411 - x268*x412 + x269*x413 + x403*x409;
   Eigen::Matrix<double, 5, 7> res;
   res(0,0) = dqopdqop0;
   res(0,1) = dqopdlam0;

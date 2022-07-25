@@ -10,10 +10,3 @@ Geant4ePropagator = cms.ESProducer("GeantPropagatorESProducer",
                                    ParticleName=cms.string("mu"),
                                    PropagationPtotLimit = cms.double(0.5) ## GeV/c
                                    )
-
-Geant4ePropagatorRev = cms.ESProducer("GeantPropagatorESProducer",
-                                   ComponentName = cms.string("Geant4ePropagatorRev"),
-                                   PropagationDirection=cms.string("oppositeToMomentum"),
-                                   ParticleName=cms.string("mu"),
-                                   PropagationPtotLimit = cms.double(0.5) ## GeV/c
-                                   )
