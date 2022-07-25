@@ -870,6 +870,50 @@ GloballyPositioned<double> ResidualGlobalCorrectionMakerBase::surfaceToDouble(co
   return GloballyPositioned<double>(pos, tkrot);
 }
 
+GloballyPositioned<double> ResidualGlobalCorrectionMakerBase::stateToSurface(const Matrix<double, 7, 1> &state) const {
+
+
+  const Point3DBase<double, GlobalTag> pos(state[0], state[1], state[2]);
+
+  const Matrix<double, 3, 1> khat(0., 0., 1.);
+
+  const Matrix<double, 3, 1> W0 = state.segment<3>(3).normalized();
+  const Matrix<double, 3, 1> U0 = khat.cross(W0).normalized();
+  const Matrix<double, 3, 1> V0 = W0.cross(U0);
+
+//   const Vector3DBase<double, GlobalTag> ax(U0[0], U0[1], U0[2]);
+//   const Vector3DBase<double, GlobalTag> ay(V0[0], V0[1], V0[2]);
+//   const Vector3DBase<double, GlobalTag> az(W0[0], W0[1], W0[2]);
+
+  const TkRotation<double> rot(U0[0], U0[1], U0[2],
+                                   V0[0], V0[1], V0[2],
+                                   W0[0], W0[1], W0[2]);
+
+
+
+  return GloballyPositioned<double>(pos, rot);
+
+}
+
+Matrix<double, 5, 1> ResidualGlobalCorrectionMakerBase::globalToLocal(const Matrix<double, 7, 1> &state, const GloballyPositioned<double> &surface) const {
+
+  const Point3DBase<double, GlobalTag> posprop(state[0], state[1], state[2]);
+  const Vector3DBase<double, GlobalTag> momprop(state[3], state[4], state[5]);
+
+  const Point3DBase<double, LocalTag> localpos = surface.toLocal(posprop);
+  const Vector3DBase<double, LocalTag> localmom = surface.toLocal(momprop);
+
+  Matrix<double, 5, 1> localparms;
+  localparms[0] = state[6]/state.segment<3>(3).norm();
+  localparms[1] = localmom.x()/localmom.z();
+  localparms[2] = localmom.y()/localmom.z();
+  localparms[3] = localpos.x();
+  localparms[4] = localpos.y();
+
+  return localparms;
+
+}
+
 // ------------ method fills 'descriptions' with the allowed parameters for the module  ------------
 void ResidualGlobalCorrectionMakerBase::fillDescriptions(edm::ConfigurationDescriptions &descriptions)
 {

@@ -175,6 +175,10 @@ protected:
 
   GloballyPositioned<double> surfaceToDouble(const Surface &surface) const;
 
+  GloballyPositioned<double> stateToSurface(const Matrix<double, 7, 1> &state) const;
+
+  Matrix<double, 5, 1> globalToLocal(const Matrix<double, 7, 1> &state, const GloballyPositioned<double> &surface) const;
+
   Matrix<double, 5, 5> curv2localJacobianAltelossD(const Matrix<double, 7, 1> &state, const MagneticField *field, const GloballyPositioned<double> &surface, double dEdx, double mass, double dBz = 0.) const;
   
   Matrix<double, 6, 5> curv2cartJacobianAltD(const Matrix<double, 7, 1> &state) const;
