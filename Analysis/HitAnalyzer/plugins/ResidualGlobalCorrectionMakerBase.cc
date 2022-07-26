@@ -364,25 +364,38 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
 // //       const bool align2d = ispixel || isglued || isendcap;      
 //       const DetId parmdetid = isglued ? DetId(gluedid) : det->geographicalId();
       
-      const bool align2d = ispixel || isendcap;
-//       const bool align2d = true;
+//       const bool align2d = ispixel || isendcap;
+      const bool align2d = true;
 //       const bool align2d = ispixel;
 //       const bool align2d = false;
 //       const bool align2d = isendcap && !ispixel;
 
       
       //always have parameters for local x alignment, in-plane rotation, bfield, and e-loss
-      parmset.emplace(0, det->geographicalId());
-//       parmset.emplace(1, det->geographicalId());
-      parmset.emplace(2, det->geographicalId());
-      parmset.emplace(3, det->geographicalId());
-      parmset.emplace(4, det->geographicalId());
-      parmset.emplace(5, det->geographicalId());
-      
+//       parmset.emplace(0, det->geographicalId());
+// //       parmset.emplace(1, det->geographicalId());
+//       parmset.emplace(2, det->geographicalId());
+//       parmset.emplace(3, det->geographicalId());
+//       parmset.emplace(4, det->geographicalId());
+//       parmset.emplace(5, det->geographicalId());
+//
+//       if (align2d) {
+//         //local y alignment parameters only for pixels and wedge modules
+//         parmset.emplace(1, det->geographicalId());
+//       }
+
+      parmset.emplace(0, parmdetid);
+//       parmset.emplace(1, parmdetid);
+      parmset.emplace(2, parmdetid);
+      parmset.emplace(3, parmdetid);
+      parmset.emplace(4, parmdetid);
+      parmset.emplace(5, parmdetid);
+
       if (align2d) {
         //local y alignment parameters only for pixels and wedge modules
-        parmset.emplace(1, det->geographicalId());
+        parmset.emplace(1, parmdetid);
       }
+
       // bfield and material parameters are associated to glued detids where applicable
       parmset.emplace(6, parmdetid);
       parmset.emplace(7, parmdetid);
@@ -717,6 +730,7 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
   
   surfacemap_.clear();
   surfacemapD_.clear();
+  rgluemap_.clear();
   // fill map of modified surfaces with results of previous iteration if applicable
   for (const GeomDet* det : globalGeometry->detUnits()) {
 //   for (const GeomDet* det : globalGeometryIdeal->detUnits()) {
@@ -738,13 +752,18 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
 //       const bool align2d = ispixel;
 //       const bool align2d = false;
 
-      const bool align2d = detidparms.count(std::make_pair(1, det->geographicalId()));
+//       const bool align2d = detidparms.count(std::make_pair(1, det->geographicalId()));
+      const bool align2d = detidparms.count(std::make_pair(1, parmdetid));
 
       
 
       
-      const unsigned int dxidx = detidparms.at(std::make_pair(0, det->geographicalId()));
-      const unsigned int dthetaidx = detidparms.at(std::make_pair(5, det->geographicalId()));
+//       const unsigned int dxidx = detidparms.at(std::make_pair(0, det->geographicalId()));
+//       const unsigned int dthetaidx = detidparms.at(std::make_pair(5, det->geographicalId()));
+
+      const unsigned int dxidx = detidparms.at(std::make_pair(0, parmdetid));
+      const unsigned int dthetaidx = detidparms.at(std::make_pair(5, parmdetid));
+
 //       const unsigned int dbidx = detidparms.at(std::make_pair(6, parmdetid));
       const unsigned int dxiidx = detidparms.at(std::make_pair(7, parmdetid));
       
@@ -757,7 +776,8 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       
       float dy = 0.;
       if (align2d) {
-        const unsigned int dyidx = detidparms.at(std::make_pair(1, det->geographicalId())); 
+//         const unsigned int dyidx = detidparms.at(std::make_pair(1, det->geographicalId()));
+        const unsigned int dyidx = detidparms.at(std::make_pair(1, parmdetid));
         dy = -corparms_[dyidx];
       }
       
@@ -829,6 +849,38 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
 //       surfacemap_[det->geographicalId()] = plane;
       
       surfacemapD_[det->geographicalId()] = surfaceD;
+
+      Matrix<double, 2, 2> Rglued = Matrix<double, 2, 2>::Identity();
+
+      if (isglued) {
+        const GloballyPositioned<double> surfaceGlued = surfaceToDouble(parmDet->surface());
+
+        surfacemapD_[parmdetid] = surfaceGlued;
+
+        const Vector3DBase<double, LocalTag> lx(1., 0., 0.);
+        const Vector3DBase<double, LocalTag> ly(0., 1., 0.);
+
+        const Vector3DBase<double, LocalTag> lxalt = surface.toLocal(surfaceGlued.toGlobal(lx));
+        const Vector3DBase<double, LocalTag> lyalt = surface.toLocal(surfaceGlued.toGlobal(ly));
+
+        Rglued(0, 0) = lxalt.x();
+        Rglued(0, 1) = lyalt.x();
+        Rglued(1, 0) = lxalt.y();
+        Rglued(1, 1) = lyalt.y();
+
+//         const Vector3DBase<double, LocalTag> ltest(1., 1., 0.);
+//         const Vector3DBase<double, LocalTag> ltestalt = surface.toLocal(surfaceGlued.toGlobal(ltest));
+//
+//         Matrix<double, 2, 1> vtest;
+//         vtest[0] = 1.;
+//         vtest[1] = 1.;
+//
+//         const Matrix<double, 2, 1> vtestalt = Rglued*vtest;
+
+
+
+      }
+      rgluemap_[det->geographicalId()] = Rglued;
       
 
     }
@@ -2119,6 +2171,424 @@ Matrix<double, 5, 5> ResidualGlobalCorrectionMakerBase::curv2localJacobianAltelo
   
   return res;
                                               
+}
+
+Matrix<double, 5, 5> ResidualGlobalCorrectionMakerBase::curv2localhybridJacobianAltelossD(const Matrix<double, 7, 1> &state, const MagneticField *field, const GloballyPositioned<double> &surface, double dEdx, double mass, double dBz) const {
+
+
+  const GlobalPoint pos(state[0], state[1], state[2]);
+  const GlobalVector &bfield = field->inInverseGeV(pos);
+  const Matrix<double, 3, 1> Bv(bfield.x(), bfield.y(), double(bfield.z()) + 2.99792458e-3*dBz);
+
+  const double q = state[6];
+
+  const double qop0 = q/state.segment<3>(3).norm();
+  const double lam0 = std::atan(state[5]/std::sqrt(state[3]*state[3] + state[4]*state[4]));
+  const double phi0 = std::atan2(state[4], state[3]);
+
+  const Matrix<double, 3, 1> W0 = state.segment<3>(3).normalized();
+  const double W0x = W0[0];
+  const double W0y = W0[1];
+  const double W0z = W0[2];
+
+  const Vector3DBase<double, LocalTag> lx(1.,0.,0.);
+  const Vector3DBase<double, LocalTag> ly(0.,1.,0.);
+  const Vector3DBase<double, LocalTag> lz(0.,0.,1.);
+  const Point3DBase<double, LocalTag> l0(0., 0., 0.);
+
+//   const Vector3DBase<double, GlobalTag> I1 = surface.toGlobal<double>(lz);
+//   const Vector3DBase<double, GlobalTag> J1 = surface.toGlobal<double>(lx);
+//   const Vector3DBase<double, GlobalTag> K1 = surface.toGlobal<double>(ly);
+//   const Point3DBase<double, GlobalTag> r1 = surface.toGlobal<double>(l0);
+
+  const Vector3DBase<double, GlobalTag> I1 = surface.toGlobal(lz);
+  const Vector3DBase<double, GlobalTag> J1 = surface.toGlobal(lx);
+  const Vector3DBase<double, GlobalTag> K1 = surface.toGlobal(ly);
+  const Point3DBase<double, GlobalTag> r1 = surface.toGlobal(l0);
+
+//   const Vector3DBase<double, GlobalTag> I1 = toGlobal(surface, lz);
+//   const Vector3DBase<double, GlobalTag> J1 = toGlobal(surface, lx);
+//   const Vector3DBase<double, GlobalTag> K1 = toGlobal(surface, ly);
+//   const Point3DBase<double, GlobalTag> r1 = toGlobal(surface, l0);
+
+  const double Ix1 = I1.x();
+  const double Iy1 = I1.y();
+  const double Iz1 = I1.z();
+
+  const double Jx1 = J1.x();
+  const double Jy1 = J1.y();
+  const double Jz1 = J1.z();
+
+  const double Kx1 = K1.x();
+  const double Ky1 = K1.y();
+  const double Kz1 = K1.z();
+
+  const double rx1 = r1.x();
+  const double ry1 = r1.y();
+  const double rz1 = r1.z();
+
+  const double B = Bv.norm();
+  const Matrix<double, 3, 1> H = Bv.normalized();
+  const double hx = H[0];
+  const double hy = H[1];
+  const double hz = H[2];
+
+  const double x0 = std::pow(q, 2);
+  const double x1 = std::pow(x0, 3.0/2.0);
+  const double x2 = Ix1*W0y;
+  const double x3 = -Iy1*W0x + x2;
+  const double x4 = std::pow(qop0, 2);
+  const double x5 = std::pow(W0x, 2) + std::pow(W0y, 2);
+  const double x6 = std::sin(lam0);
+  const double x7 = std::cos(phi0);
+  const double x8 = std::cos(lam0);
+  const double x9 = x7*x8;
+  const double x10 = std::sin(phi0);
+  const double x11 = x10*x8;
+  const double x12 = Ix1*x9 + Iy1*x11 + Iz1*x6;
+  const double x13 = 1/(x12*std::sqrt(x5));
+  const double x14 = dEdx*q*x13*x4*std::sqrt(std::pow(mass, 2)*x4 + x0)/x1;
+  const double x15 = Ix1*W0x*W0z + Iy1*W0y*W0z - Iz1*x5;
+  const double x16 = 1.0/x8;
+  const double x17 = x16*std::sqrt(std::pow(x8, 2));
+  const double x18 = hx*x10;
+  const double x19 = hy*x7;
+  const double x20 = B*qop0*x13;
+  const double x21 = x17*x20;
+  const double x22 = x16*x20*(hx*x6*x7 + hy*x10*x6 - hz*x8);
+  const double x23 = Jx1*x9 + Jy1*x11 + Jz1*x6;
+  const double x24 = x12*x5;
+  const double x25 = W0z*x12;
+  const double x26 = Kx1*x9 + Ky1*x11 + Kz1*x6;
+  const double dqopdqop0 = x1*std::fabs(qop0)/(std::pow(q, 3)*qop0);
+  const double dqopdlam0 = 0;
+  const double dqopdphi0 = 0;
+  const double dqopdxt0 = -x14*x3;
+  const double dqopdyt0 = -x14*x15;
+  const double dlamdqop0 = 0;
+  const double dlamdlam0 = x17;
+  const double dlamdphi0 = 0;
+  const double dlamdxt0 = x21*(Ix1*W0y*hy*x7 + Iy1*W0x*hx*x10 - Iy1*W0x*x19 - x18*x2);
+  const double dlamdyt0 = -x15*x21*(x18 - x19);
+  const double dphidqop0 = 0;
+  const double dphidlam0 = 0;
+  const double dphidphi0 = 1;
+  const double dphidxt0 = x22*x3;
+  const double dphidyt0 = x15*x22;
+  const double dxdqop0 = 0;
+  const double dxdlam0 = 0;
+  const double dxdphi0 = 0;
+  const double dxdxt0 = x13*(x12*(-Jx1*W0y + Jy1*W0x) + x23*x3);
+  const double dxdyt0 = x13*(Jz1*x24 + x15*x23 - x25*(Jx1*W0x + Jy1*W0y));
+  const double dydqop0 = 0;
+  const double dydlam0 = 0;
+  const double dydphi0 = 0;
+  const double dydxt0 = x13*(x12*(-Kx1*W0y + Ky1*W0x) + x26*x3);
+  const double dydyt0 = x13*(Kz1*x24 + x15*x26 - x25*(Kx1*W0x + Ky1*W0y));
+  Matrix<double, 5, 5> res;
+  res(0,0) = dqopdqop0;
+  res(0,1) = dqopdlam0;
+  res(0,2) = dqopdphi0;
+  res(0,3) = dqopdxt0;
+  res(0,4) = dqopdyt0;
+  res(1,0) = dlamdqop0;
+  res(1,1) = dlamdlam0;
+  res(1,2) = dlamdphi0;
+  res(1,3) = dlamdxt0;
+  res(1,4) = dlamdyt0;
+  res(2,0) = dphidqop0;
+  res(2,1) = dphidlam0;
+  res(2,2) = dphidphi0;
+  res(2,3) = dphidxt0;
+  res(2,4) = dphidyt0;
+  res(3,0) = dxdqop0;
+  res(3,1) = dxdlam0;
+  res(3,2) = dxdphi0;
+  res(3,3) = dxdxt0;
+  res(3,4) = dxdyt0;
+  res(4,0) = dydqop0;
+  res(4,1) = dydlam0;
+  res(4,2) = dydphi0;
+  res(4,3) = dydxt0;
+  res(4,4) = dydyt0;
+
+
+  return res;
+
+}
+
+Matrix<double, 5, 11> ResidualGlobalCorrectionMakerBase::curv2localJacobianAlignmentD(const Matrix<double, 7, 1> &state, const MagneticField *field, const GloballyPositioned<double> &surface, double dEdx, double mass, double dBz) const {
+
+
+  const GlobalPoint pos(state[0], state[1], state[2]);
+  const GlobalVector &bfield = field->inInverseGeV(pos);
+  const Matrix<double, 3, 1> Bv(bfield.x(), bfield.y(), double(bfield.z()) + 2.99792458e-3*dBz);
+
+  const double q = state[6];
+
+  const double qop0 = q/state.segment<3>(3).norm();
+  const double lam0 = std::atan(state[5]/std::sqrt(state[3]*state[3] + state[4]*state[4]));
+  const double phi0 = std::atan2(state[4], state[3]);
+
+  const double M0x = state[0];
+  const double M0y = state[1];
+  const double M0z = state[2];
+
+  const Matrix<double, 3, 1> W0 = state.segment<3>(3).normalized();
+  const double W0x = W0[0];
+  const double W0y = W0[1];
+  const double W0z = W0[2];
+
+  const Vector3DBase<double, LocalTag> lx(1.,0.,0.);
+  const Vector3DBase<double, LocalTag> ly(0.,1.,0.);
+  const Vector3DBase<double, LocalTag> lz(0.,0.,1.);
+  const Point3DBase<double, LocalTag> l0(0., 0., 0.);
+
+//   const Vector3DBase<double, GlobalTag> I1 = surface.toGlobal<double>(lz);
+//   const Vector3DBase<double, GlobalTag> J1 = surface.toGlobal<double>(lx);
+//   const Vector3DBase<double, GlobalTag> K1 = surface.toGlobal<double>(ly);
+//   const Point3DBase<double, GlobalTag> r1 = surface.toGlobal<double>(l0);
+
+  const Vector3DBase<double, GlobalTag> I1 = surface.toGlobal(lz);
+  const Vector3DBase<double, GlobalTag> J1 = surface.toGlobal(lx);
+  const Vector3DBase<double, GlobalTag> K1 = surface.toGlobal(ly);
+  const Point3DBase<double, GlobalTag> r1 = surface.toGlobal(l0);
+
+//   const Vector3DBase<double, GlobalTag> I1 = toGlobal(surface, lz);
+//   const Vector3DBase<double, GlobalTag> J1 = toGlobal(surface, lx);
+//   const Vector3DBase<double, GlobalTag> K1 = toGlobal(surface, ly);
+//   const Point3DBase<double, GlobalTag> r1 = toGlobal(surface, l0);
+
+  const double Ix1 = I1.x();
+  const double Iy1 = I1.y();
+  const double Iz1 = I1.z();
+
+  const double Jx1 = J1.x();
+  const double Jy1 = J1.y();
+  const double Jz1 = J1.z();
+
+  const double Kx1 = K1.x();
+  const double Ky1 = K1.y();
+  const double Kz1 = K1.z();
+
+  const double rx1 = r1.x();
+  const double ry1 = r1.y();
+  const double rz1 = r1.z();
+
+  const double B = Bv.norm();
+  const Matrix<double, 3, 1> H = Bv.normalized();
+  const double hx = H[0];
+  const double hy = H[1];
+  const double hz = H[2];
+
+  const double x0 = 1.0/qop0;
+  const double x1 = std::pow(q, 2);
+  const double x2 = std::fabs(qop0)/std::pow(x1, 3.0/2.0);
+  const double x3 = Ix1*W0y - Iy1*W0x;
+  const double x4 = std::pow(W0x, 2);
+  const double x5 = std::pow(W0y, 2);
+  const double x6 = x4 + x5;
+  const double x7 = std::sqrt(x6);
+  const double x8 = 1.0/x7;
+  const double x9 = std::sin(lam0);
+  const double x10 = std::cos(lam0);
+  const double x11 = std::cos(phi0);
+  const double x12 = x10*x11;
+  const double x13 = std::sin(phi0);
+  const double x14 = x10*x13;
+  const double x15 = Ix1*x12 + Iy1*x14 + Iz1*x9;
+  const double x16 = 1.0/x15;
+  const double x17 = std::pow(qop0, 2);
+  const double x18 = 1.0/x17;
+  const double x19 = dEdx*q*x16*x17*x2*std::sqrt(std::pow(mass, 2) + x1*x18);
+  const double x20 = x19*x8;
+  const double x21 = W0x*W0z;
+  const double x22 = W0y*W0z;
+  const double x23 = Ix1*x21 + Iy1*x22 - Iz1*x6;
+  const double x24 = Ix1*Jx1 + Iy1*Jy1 + Iz1*Jz1;
+  const double x25 = Ix1*Kx1 + Iy1*Ky1 + Iz1*Kz1;
+  const double x26 = std::pow(Ix1, 2) + std::pow(Iy1, 2) + std::pow(Iz1, 2);
+  const double x27 = M0x*W0x;
+  const double x28 = M0y*W0y;
+  const double x29 = M0z*W0z + x27 + x28;
+  const double x30 = W0z*x27;
+  const double x31 = W0z*x28;
+  const double x32 = -M0z*x6 + x30 + x31;
+  const double x33 = W0z*x29 - rz1 - x32;
+  const double x34 = M0x*W0y;
+  const double x35 = M0y*W0x - x34;
+  const double x36 = x29*x6;
+  const double x37 = -x32;
+  const double x38 = -W0x*x36 + W0y*x35 + rx1*x6 + x21*x37;
+  const double x39 = -W0x*x35 + W0y*W0z*x37 - W0y*x36 + ry1*x6;
+  const double x40 = -Kx1*x38 - Ky1*x39 + Kz1*x33*x6;
+  const double x41 = 1.0/x6;
+  const double x42 = x19*x41;
+  const double x43 = Jx1*x38 + Jy1*x39 - Jz1*x33*x6;
+  const double x44 = x11*x9;
+  const double x45 = x13*x9;
+  const double x46 = Iz1*x10;
+  const double x47 = Ix1*x44 + Iy1*x45 - x46;
+  const double x48 = std::pow(x15, -2);
+  const double x49 = Jx1*x12 + Jy1*x14 + Jz1*x9;
+  const double x50 = x48*x49;
+  const double x51 = Ix1*x14 - Iy1*x12;
+  const double x52 = B*qop0;
+  const double x53 = x52*(-hy*x9 + hz*x10*x13);
+  const double x54 = x52*(hx*x9 - hz*x12);
+  const double x55 = x52*(-hx*x13 + hy*x11);
+  const double x56 = -Ix1*x53 - Iy1*x54 - x46*x55;
+  const double x57 = x16*(x16*(Jx1*x53 + Jy1*x54 + Jz1*x10*x55) + x50*x56);
+  const double x58 = x57*x8;
+  const double x59 = Kx1*x12 + Ky1*x14 + Kz1*x9;
+  const double x60 = x41*x57;
+  const double x61 = -x49;
+  const double x62 = x16*x59;
+  const double x63 = x48*x59;
+  const double x64 = x16*(x16*(Kx1*x53 + Ky1*x54 + Kz1*x10*x55) + x56*x63);
+  const double x65 = x64*x8;
+  const double x66 = x41*x64;
+  const double x67 = x29*x7;
+  const double x68 = B*x67;
+  const double x69 = M0y*W0x*x8 - x34*x8;
+  const double x70 = M0z*(x4*x8 + x5*x8) - x30*x8 - x31*x8;
+  const double x71 = B*(W0y*x69 + x21*x70);
+  const double x72 = 1.0/B;
+  const double x73 = x72*x8;
+  const double x74 = x0*x73;
+  const double x75 = x52*x67;
+  const double x76 = W0x*x75 - qop0*x71;
+  const double x77 = x18*x73;
+  const double x78 = x74*(W0x*x68 - x71) - x76*x77;
+  const double x79 = B*(W0x*x69 - x22*x70);
+  const double x80 = W0y*x75 + qop0*x79;
+  const double x81 = x74*(W0y*x68 + x79) - x77*x80;
+  const double x82 = W0x*x8;
+  const double x83 = W0y*x8;
+  const double x84 = x16*x49;
+  const double x85 = x21*x8;
+  const double x86 = x22*x8;
+  const double x87 = Jx1*Kx1 + Jy1*Ky1 + Jz1*Kz1;
+  const double x88 = -rx1 + x0*x72*x76*x8;
+  const double x89 = -ry1 + x0*x72*x8*x80;
+  const double x90 = W0z*x29 - rz1 + x7*x70;
+  const double x91 = Ix1*x88 + Iy1*x89 + Iz1*x90;
+  const double x92 = x41*x62;
+  const double dqopdqop0 = std::pow(q, 3)*x0*x2;
+  const double dqopdlam0 = 0;
+  const double dqopdphi0 = 0;
+  const double dqopdxt0 = -x20*x3;
+  const double dqopdyt0 = -x20*x23;
+  const double dqopdalpha_x = -x19*x24;
+  const double dqopdalpha_y = -x19*x25;
+  const double dqopdalpha_z = -x19*x26;
+  const double dqopdtheta_x = -x40*x42;
+  const double dqopdtheta_y = -x42*x43;
+  const double dqopdtheta_z = 0;
+  const double ddxdzdqop0 = 0;
+  const double ddxdzdlam0 = x16*(-Jx1*x44 - Jy1*x45 + Jz1*x10) + x47*x50;
+  const double ddxdzdphi0 = x16*(-Jx1*x14 + Jy1*x10*x11) + x50*x51;
+  const double ddxdzdxt0 = x3*x58;
+  const double ddxdzdyt0 = x23*x58;
+  const double ddxdzdalpha_x = x24*x57;
+  const double ddxdzdalpha_y = x25*x57;
+  const double ddxdzdalpha_z = x26*x57;
+  const double ddxdzdtheta_x = x40*x60 + x50*x59;
+  const double ddxdzdtheta_y = -x15*x16 + x43*x60 + x50*x61;
+  const double ddxdzdtheta_z = x62;
+  const double ddydzdqop0 = 0;
+  const double ddydzdlam0 = x16*(-Kx1*x44 - Ky1*x45 + Kz1*x10) + x47*x63;
+  const double ddydzdphi0 = x16*(-Kx1*x14 + Ky1*x10*x11) + x51*x63;
+  const double ddydzdxt0 = x3*x65;
+  const double ddydzdyt0 = x23*x65;
+  const double ddydzdalpha_x = x24*x64;
+  const double ddydzdalpha_y = x25*x64;
+  const double ddydzdalpha_z = x26*x64;
+  const double ddydzdtheta_x = x40*x66 + x48*std::pow(x59, 2) + 1;
+  const double ddydzdtheta_y = x43*x66 + x61*x63;
+  const double ddydzdtheta_z = x16*x61;
+  const double dxdqop0 = Jx1*x78 + Jy1*x81;
+  const double dxdlam0 = 0;
+  const double dxdphi0 = 0;
+  const double dxdxt0 = -Jx1*x83 + Jy1*x82 + x3*x8*x84;
+  const double dxdyt0 = -Jx1*x85 - Jy1*x86 + Jz1*x7 + x16*x23*x49*x8;
+  const double dxdalpha_x = -std::pow(Jx1, 2) - std::pow(Jy1, 2) - std::pow(Jz1, 2) + x16*x24*x49;
+  const double dxdalpha_y = x16*x25*x49 - x87;
+  const double dxdalpha_z = x16*x26*x49 - x24;
+  const double dxdtheta_x = x40*x41*x84;
+  const double dxdtheta_y = x16*x41*x43*x49 - x91;
+  const double dxdtheta_z = Kx1*x88 + Ky1*x89 + Kz1*x90;
+  const double dydqop0 = Kx1*x78 + Ky1*x81;
+  const double dydlam0 = 0;
+  const double dydphi0 = 0;
+  const double dydxt0 = -Kx1*x83 + Ky1*x82 + x3*x62*x8;
+  const double dydyt0 = -Kx1*x85 - Ky1*x86 + Kz1*x7 + x16*x23*x59*x8;
+  const double dydalpha_x = x16*x24*x59 - x87;
+  const double dydalpha_y = -std::pow(Kx1, 2) - std::pow(Ky1, 2) - std::pow(Kz1, 2) + x16*x25*x59;
+  const double dydalpha_z = x16*x26*x59 - x25;
+  const double dydtheta_x = x40*x92 + x91;
+  const double dydtheta_y = x43*x92;
+  const double dydtheta_z = -Jx1*x88 - Jy1*x89 - Jz1*x90;
+  Matrix<double, 5, 11> res;
+  res(0,0) = dqopdqop0;
+  res(0,1) = dqopdlam0;
+  res(0,2) = dqopdphi0;
+  res(0,3) = dqopdxt0;
+  res(0,4) = dqopdyt0;
+  res(0,5) = dqopdalpha_x;
+  res(0,6) = dqopdalpha_y;
+  res(0,7) = dqopdalpha_z;
+  res(0,8) = dqopdtheta_x;
+  res(0,9) = dqopdtheta_y;
+  res(0,10) = dqopdtheta_z;
+  res(1,0) = ddxdzdqop0;
+  res(1,1) = ddxdzdlam0;
+  res(1,2) = ddxdzdphi0;
+  res(1,3) = ddxdzdxt0;
+  res(1,4) = ddxdzdyt0;
+  res(1,5) = ddxdzdalpha_x;
+  res(1,6) = ddxdzdalpha_y;
+  res(1,7) = ddxdzdalpha_z;
+  res(1,8) = ddxdzdtheta_x;
+  res(1,9) = ddxdzdtheta_y;
+  res(1,10) = ddxdzdtheta_z;
+  res(2,0) = ddydzdqop0;
+  res(2,1) = ddydzdlam0;
+  res(2,2) = ddydzdphi0;
+  res(2,3) = ddydzdxt0;
+  res(2,4) = ddydzdyt0;
+  res(2,5) = ddydzdalpha_x;
+  res(2,6) = ddydzdalpha_y;
+  res(2,7) = ddydzdalpha_z;
+  res(2,8) = ddydzdtheta_x;
+  res(2,9) = ddydzdtheta_y;
+  res(2,10) = ddydzdtheta_z;
+  res(3,0) = dxdqop0;
+  res(3,1) = dxdlam0;
+  res(3,2) = dxdphi0;
+  res(3,3) = dxdxt0;
+  res(3,4) = dxdyt0;
+  res(3,5) = dxdalpha_x;
+  res(3,6) = dxdalpha_y;
+  res(3,7) = dxdalpha_z;
+  res(3,8) = dxdtheta_x;
+  res(3,9) = dxdtheta_y;
+  res(3,10) = dxdtheta_z;
+  res(4,0) = dydqop0;
+  res(4,1) = dydlam0;
+  res(4,2) = dydphi0;
+  res(4,3) = dydxt0;
+  res(4,4) = dydyt0;
+  res(4,5) = dydalpha_x;
+  res(4,6) = dydalpha_y;
+  res(4,7) = dydalpha_z;
+  res(4,8) = dydtheta_x;
+  res(4,9) = dydtheta_y;
+  res(4,10) = dydtheta_z;
+
+
+  return res;
+
 }
 
 Matrix<double, 6, 5> ResidualGlobalCorrectionMakerBase::curv2cartJacobianAltD(const Matrix<double, 7, 1> &state) const {
