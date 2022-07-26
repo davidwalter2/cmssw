@@ -3065,7 +3065,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         if (preciseHit->isValid()) {
 
           auto fillAlignGrads = [&](auto Nalign) {
-            constexpr unsigned int nlocalstate = 2;
+            constexpr unsigned int nlocalstate = 5;
             constexpr unsigned int localstateidx = 0;
             constexpr unsigned int localalignmentidx = nlocalstate;
             constexpr unsigned int localparmidx = localalignmentidx;
@@ -3078,7 +3078,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
             using AlignScalar = AANT<double, nlocal>;
             
-            const unsigned int fullstateidx = 5*(ihit+1) + 3;
+            const unsigned int fullstateidx = 5*(ihit+1);
             const unsigned int fullparmidx = nstateparms + nparsBfield + nparsEloss + alignmentparmidx;
 
             const bool ispixel = GeomDetEnumerators::isTrackerPixel(preciseHit->det()->subDetector());
@@ -3105,7 +3105,10 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             const bool hit1d = preciseHit->dimension() == 1;
             
             
-            Matrix<AlignScalar, 2, 2> Hu = Hp.bottomRightCorner<2,2>().cast<AlignScalar>();
+//             Matrix<AlignScalar, 2, 2> Hu = Hp.bottomRightCorner<2,2>().cast<AlignScalar>();
+            
+            Matrix<AlignScalar, 5, 5> Hu = Hp.cast<AlignScalar>();
+            Matrix<AlignScalar, 2, 5> Hustate = Hp.bottomRows<2>().cast<AlignScalar>();
 
             Matrix<AlignScalar, 2, 1> dy0;
             Matrix<AlignScalar, 2, 2> Vinv;
@@ -3374,7 +3377,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             
             const Matrix<AlignScalar, 2, 2> Ralign = R.cast<AlignScalar>();
             
-            Matrix<AlignScalar, 2, 1> dx = Matrix<AlignScalar, 2, 1>::Zero();
+            Matrix<AlignScalar, 5, 1> dx = Matrix<AlignScalar, 5, 1>::Zero();
             for (unsigned int j=0; j<dx.size(); ++j) {
               init_twice_active_var(dx[j], nlocal, localstateidx + j);
             }
@@ -3388,7 +3391,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             }
             
             // alignment jacobian
-            Matrix<AlignScalar, 2, 6> A = Matrix<AlignScalar, 2, 6>::Zero();
+//             Matrix<AlignScalar, 2, 6> A = Matrix<AlignScalar, 2, 6>::Zero();
+            Matrix<double, 2, 6> Aval = Matrix<double, 2, 6>::Zero();
 
             const double localqopval = localparms[0];
             const double localdxdzval = localparms[1];
@@ -3403,26 +3407,70 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             //standard case
 
             // dx/dx
-            A(0,0) = 1.;
+            Aval(0,0) = 1.;
             // dy/dy
-            A(1,1) = 1.;
+            Aval(1,1) = 1.;
             // dx/dz
-            A(0,2) = localdxdzval;
+            Aval(0,2) = localdxdzval;
             // dy/dz
-            A(1,2) = localdydzval;
+            Aval(1,2) = localdydzval;
             // dx/dtheta_x
-            A(0,3) = -localyval*localdxdzval;
+            Aval(0,3) = -localyval*localdxdzval;
             // dy/dtheta_x
-            A(1,3) = -localyval*localdydzval;
+            Aval(1,3) = -localyval*localdydzval;
             // dx/dtheta_y
-            A(0,4) = -localxval*localdxdzval;
+            Aval(0,4) = -localxval*localdxdzval;
             // dy/dtheta_y
-            A(1,4) = -localxval*localdydzval;
+            Aval(1,4) = -localxval*localdydzval;
             // dx/dtheta_z
-            A(0,5) = -localyval;
+            Aval(0,5) = -localyval;
             // dy/dtheta_z
-            A(1,5) = localxval;
+            Aval(1,5) = localxval;
 
+            
+            Matrix<AlignScalar, 2, 6> A = Aval.cast<AlignScalar>();
+
+            
+            Matrix<double, 2, 6> dAvaldx = Matrix<double, 2, 6>::Zero();
+            // dx/dtheta_y
+            dAvaldx(0,4) = -localdxdzval;
+            // dy/dtheta_y
+            dAvaldx(1,4) = -localdydzval;
+            // dy/dtheta_z
+            dAvaldx(1,5) = 1.;
+            
+            Matrix<AlignScalar, 2, 6> dAdx = dAvaldx.cast<AlignScalar>();
+
+            
+            Matrix<double, 2, 6> dAvaldy = Matrix<double, 2, 6>::Zero();
+            // dx/dtheta_y
+            dAvaldy(0,3) = -localdxdzval;
+            // dy/dtheta_y
+            dAvaldy(1,3) = -localdydzval;
+            // dy/dtheta_z
+            dAvaldy(0,5) = -1.;
+            
+            Matrix<AlignScalar, 2, 6> dAdy = dAvaldy.cast<AlignScalar>();
+            
+            Matrix<double, 2, 6> dAvaldxdz = Matrix<double, 2, 6>::Zero();
+            // dx/dz
+            dAvaldxdz(0,2) = 1.;
+            // dx/dtheta_x
+            dAvaldxdz(0,3) = -localyval;            
+            // dx/dtheta_y
+            dAvaldxdz(0,4) = -localdxdzval;
+            
+            Matrix<AlignScalar, 2, 6> dAdxdz = dAvaldxdz.cast<AlignScalar>();
+            
+            Matrix<double, 2, 6> dAvaldydz = Matrix<double, 2, 6>::Zero();
+            // dy/dz
+            dAvaldydz(1,2) = 1.;
+            // dy/dtheta_x
+            dAvaldydz(1,3) = -localyval;
+            // dy/dtheta_y
+            dAvaldydz(1,4) = -localxval;
+            
+            Matrix<AlignScalar, 2, 6> dAdydz = dAvaldydz.cast<AlignScalar>();
             
             
 //             Matrix<double, 2, 6> Atest = Matrix<double, 2, 6>::Zero();
@@ -3498,7 +3546,11 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               Vinv = Matrix<AlignScalar, 2, 2>::Zero();
             }
 
-            Matrix<AlignScalar, 2, 1> dh = dy0 - Ralign*Hu*dx - Ralign*A*dalpha;
+//             Matrix<AlignScalar, 2, 1> dh = dy0 - Ralign*Hustate*dx - Ralign*A*dalpha;
+            
+            Matrix<AlignScalar, 2, 1> dh = dy0 - Ralign*Hustate*dx - Ralign*(A + dAdxdz*((Hu*dx)[1]) + dAdydz*((Hu*dx)[2]) + dAdx*((Hu*dx)[3]) + dAdy*((Hu*dx)[4]))*dalpha;
+            
+//             Matrix<AlignScalar, 2, 1> dh = dy0 - Ralign*Hu*dx - Ralign*A*dalpha;
 //             Matrix<AlignScalar, 2, 1> dh = dy0 - Ralign*dx - Ralign*A*dalpha;
             AlignScalar chisq = dh.transpose()*Vinv*dh;
             
