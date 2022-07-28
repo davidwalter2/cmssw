@@ -252,6 +252,7 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
     tree->Branch("event", &event);
     
     tree->Branch("edmval", &edmval);
+    tree->Branch("edmvalref", &edmvalref);
     tree->Branch("deltachisqval", &deltachisqval);
     tree->Branch("niter", &niter);
     
@@ -365,7 +366,8 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
 //       const DetId parmdetid = isglued ? DetId(gluedid) : det->geographicalId();
       
 //       const bool align2d = ispixel || isendcap;
-      const bool align2d = true;
+      const bool align2d = ispixel || isendcap || isglued;
+//       const bool align2d = true;
 //       const bool align2d = ispixel;
 //       const bool align2d = false;
 //       const bool align2d = isendcap && !ispixel;
@@ -429,6 +431,7 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
     int subdet;
     int layer;
     int stereo;
+    int glued;
     double x;
     double y;
     double z;
@@ -471,6 +474,7 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       runtree->Branch("subdet", &subdet);
       runtree->Branch("layer", &layer);
       runtree->Branch("stereo", &stereo);
+      runtree->Branch("glued", &glued);
       runtree->Branch("x", &x);
       runtree->Branch("y", &y);
       runtree->Branch("z", &z);
@@ -542,6 +546,8 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
         
         layer = 0;
         stereo = 0;
+        glued = !det->isLeaf();
+        
     //     int subdet = det->subDetector();
     //     float eta = det->surface().position().eta();
 
@@ -761,27 +767,31 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
 //       const unsigned int dxidx = detidparms.at(std::make_pair(0, det->geographicalId()));
 //       const unsigned int dthetaidx = detidparms.at(std::make_pair(5, det->geographicalId()));
 
-      const unsigned int dxidx = detidparms.at(std::make_pair(0, parmdetid));
-      const unsigned int dthetaidx = detidparms.at(std::make_pair(5, parmdetid));
-
-//       const unsigned int dbidx = detidparms.at(std::make_pair(6, parmdetid));
-      const unsigned int dxiidx = detidparms.at(std::make_pair(7, parmdetid));
+//       const unsigned int dxidx = detidparms.at(std::make_pair(0, parmdetid));
+//       const unsigned int dthetaidx = detidparms.at(std::make_pair(5, parmdetid));
+// 
+// //       const unsigned int dbidx = detidparms.at(std::make_pair(6, parmdetid));
+//       const unsigned int dxiidx = detidparms.at(std::make_pair(7, parmdetid));
       
-      // n.b. sign is flipped for alignment terms
-      const float dx = -corparms_[dxidx];
-//       const float dy = corparms_[dyidx];
-      const float dtheta = -corparms_[dthetaidx];
-//       const float db = corparms_[dbdx];
-      const float dxi = corparms_[dxiidx];
-      
-      float dy = 0.;
-      if (align2d) {
-//         const unsigned int dyidx = detidparms.at(std::make_pair(1, det->geographicalId()));
-        const unsigned int dyidx = detidparms.at(std::make_pair(1, parmdetid));
-        dy = -corparms_[dyidx];
-      }
+//       // n.b. sign is flipped for alignment terms
+//       const float dx = -corparms_[dxidx];
+// //       const float dy = corparms_[dyidx];
+//       const float dtheta = -corparms_[dthetaidx];
+// //       const float db = corparms_[dbdx];
+//       const float dxi = corparms_[dxiidx];
+//       
+//       float dy = 0.;
+//       if (align2d) {
+// //         const unsigned int dyidx = detidparms.at(std::make_pair(1, det->geographicalId()));
+//         const unsigned int dyidx = detidparms.at(std::make_pair(1, parmdetid));
+//         dy = -corparms_[dyidx];
+//       }
       
       const Surface &surface = det->surface();
+      
+      
+
+      
 //       Point3DBase<double, GlobalTag> pos = surface.position();
 //       
 //       //re-orthogonalize
@@ -815,15 +825,47 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       GloballyPositioned<double> surfaceD = surfaceToDouble(surface);
       
       
-      ReferenceCountingPointer<Plane> plane = Plane::build(det->surface());
+      const ProxyStripTopology *proxytopology = dynamic_cast<const ProxyStripTopology*>(&(det->topology()));
+      
+      if (false && proxytopology) {
+        const TkRadialStripTopology *radialtopology = dynamic_cast<const TkRadialStripTopology*>(&proxytopology->specificTopology());
+        
+//         const double lx = surfaceD.position().x();
+//         const double lx = surfaceD.position().x();
+        
+
+        
+        if (radialtopology) {
+          const double rho = std::sqrt(surfaceD.position().x()*surfaceD.position().x() + surfaceD.position().y()*surfaceD.position().y());
+          const double phi = surfaceD.position().phi();
+          
+          
+          const double rdir = radialtopology->yAxisOrientation();
+          const double radius = radialtopology->originToIntersection();
+          
+          const Point3DBase<double, LocalTag> xpointlocal(0., -rdir*radius, 0.);
+          
+          const Point3DBase<double, GlobalTag> xpointglobal = surfaceD.toGlobal(xpointlocal);
+          
+          auto const& lp = radialtopology->localPosition(0.);
+          
+          
+          std::cout << "radial module " << " detHeight = " << radialtopology->detHeight() << " rdir = " << rdir << " radius = " << radius << " rho = " << rho << " phi = " << phi << " position:\n" << surfaceD.position() << "\nxpointglobal:\n" << xpointglobal << "\nlp:\n" << lp << std::endl;
+          
+        }
+      
+      }
+      
+      
+//       ReferenceCountingPointer<Plane> plane = Plane::build(det->surface());
 //       std::shared_ptr<Plane> plane = std::make_shared<Plane>(det->surface());
       
       //move, rotate and modify material
-      plane->move(plane->toGlobal(LocalVector(dx, dy, 0.)));
-      plane->rotate(Surface::RotationType(Surface::RotationType::BasicVector(plane->toGlobal(LocalVector(0.,0.,1.))), dtheta));
+//       plane->move(plane->toGlobal(LocalVector(dx, dy, 0.)));
+//       plane->rotate(Surface::RotationType(Surface::RotationType::BasicVector(plane->toGlobal(LocalVector(0.,0.,1.))), dtheta));
       
-      surfaceD.move(surfaceD.toGlobal(Vector3DBase<double, LocalTag>(dx, dy, 0.)));
-      surfaceD.rotate(TkRotation<double>(TkRotation<double>::BasicVector(surfaceD.toGlobal(Vector3DBase<double, LocalTag>(0.,0.,1.))), dtheta));
+//       surfaceD.move(surfaceD.toGlobal(Vector3DBase<double, LocalTag>(dx, dy, 0.)));
+//       surfaceD.rotate(TkRotation<double>(TkRotation<double>::BasicVector(surfaceD.toGlobal(Vector3DBase<double, LocalTag>(0.,0.,1.))), dtheta));
       
 //       Matrix<double, 3, 3> rot2;
 //       rot2 << surfaceD.rotation().xx(), surfaceD.rotation().xy(), surfaceD.rotation().xz(),
@@ -837,10 +879,10 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
 //         std::cout << "xi value clipped!" << std::endl;
 //       }
       
-      const float radLen = plane->mediumProperties().radLen();
-      const float xi = std::max(plane->mediumProperties().xi() + xifraction*dxi, 0.05*plane->mediumProperties().xi());
+//       const float radLen = plane->mediumProperties().radLen();
+//       const float xi = std::max(plane->mediumProperties().xi() + xifraction*dxi, 0.05*plane->mediumProperties().xi());
 //       const float xi = 0.05*plane->mediumProperties().xi();
-      const MediumProperties mp(radLen, xi);
+//       const MediumProperties mp(radLen, xi);
 //       plane->setMediumProperties(mp);
       
 //       printf("in beginRun, detid = %u, parmdetid = %u, oldp = %p, newp = %p\n", det->geographicalId().rawId(), parmdetid.rawId(), &det->surface(), &(*plane));
@@ -848,25 +890,74 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       
 //       surfacemap_[det->geographicalId()] = plane;
       
-      surfacemapD_[det->geographicalId()] = surfaceD;
 
       Matrix<double, 2, 2> Rglued = Matrix<double, 2, 2>::Identity();
 
       if (isglued) {
         const GloballyPositioned<double> surfaceGlued = surfaceToDouble(parmDet->surface());
 
+        auto const dpos = surfaceD.position() - surfaceGlued.position();
+
+        const double gluedot = surfaceD.rotation().z()*surfaceGlued.rotation().z();
+        const double gluecross = surfaceD.rotation().z().cross(surfaceGlued.rotation().z()).mag();
+
+        if (false) {
+          std::cout << "surface pos:\n" << surfaceD.position() << std::endl;
+          std::cout << "surfaceglued pos:\n" << surfaceGlued.position() << std::endl;
+          std::cout << "gluedot = " << gluedot <<" gluecross = " << gluecross << " dpos:\n" << dpos << std::endl;
+        }
+
         surfacemapD_[parmdetid] = surfaceGlued;
 
-        const Vector3DBase<double, LocalTag> lx(1., 0., 0.);
-        const Vector3DBase<double, LocalTag> ly(0., 1., 0.);
+//         const Vector3DBase<double, LocalTag> lx(1., 0., 0.);
+//         const Vector3DBase<double, LocalTag> ly(0., 1., 0.);
 
-        const Vector3DBase<double, LocalTag> lxalt = surface.toLocal(surfaceGlued.toGlobal(lx));
-        const Vector3DBase<double, LocalTag> lyalt = surface.toLocal(surfaceGlued.toGlobal(ly));
+//         const Vector3DBase<double, LocalTag> lxalt = surface.toLocal(surfaceGlued.toGlobal(lx));
+//         const Vector3DBase<double, LocalTag> lyalt = surface.toLocal(surfaceGlued.toGlobal(ly));
+//
+//         // rotation matrix (jacobian dlocal/dglued)
+//         Rglued(0, 0) = lxalt.x();
+//         Rglued(0, 1) = lyalt.x();
+//         Rglued(1, 0) = lxalt.y();
+//         Rglued(1, 1) = lyalt.y();
 
+        // recreate plane using relative position and orientation from ideal geometry, enforcing that the plane is parallel to the glued one
+        const GloballyPositioned<double> surfaceGluedIdeal = surfaceToDouble(globalGeometryIdeal->idToDet(parmDet->geographicalId())->surface());
+        const GloballyPositioned<double> surfaceIdeal = surfaceToDouble(globalGeometryIdeal->idToDet(det->geographicalId())->surface(), surfaceGluedIdeal.rotation().z());
+
+
+        const Vector3DBase<double, GlobalTag> uxpre(surfaceIdeal.rotation().x());
+        const Vector3DBase<double, GlobalTag> uypre(surfaceIdeal.rotation().y());
+
+        const Point3DBase<double, LocalTag> poslocal = surfaceGluedIdeal.toLocal(surfaceIdeal.position());
+
+        const Vector3DBase<double, LocalTag> uxlocal = surfaceGluedIdeal.toLocal(uxpre);
+        const Vector3DBase<double, LocalTag> uylocal = surfaceGluedIdeal.toLocal(uypre);
+
+        const Point3DBase<double, GlobalTag> posglobal = surfaceGlued.toGlobal(poslocal);
+        const Vector3DBase<double, GlobalTag> uxglobal = surfaceGlued.toGlobal(uxlocal);
+        const Vector3DBase<double, GlobalTag> uyglobal = surfaceGlued.toGlobal(uylocal);
+        auto const &uzglobal = surfaceGlued.rotation().z();
+
+        const TkRotation<double> tkrot(uxglobal.x(), uxglobal.y(), uxglobal.z(),
+                                       uyglobal.x(), uyglobal.y(), uyglobal.z(),
+                                       uzglobal.x(), uzglobal.y(), uzglobal.z());
+
+        surfaceD = GloballyPositioned<double>(posglobal, tkrot);
+
+        const Vector3DBase<double, GlobalTag> uxglued(surfaceGlued.rotation().x());
+        const Vector3DBase<double, GlobalTag> uyglued(surfaceGlued.rotation().y());
+
+        const Vector3DBase<double, LocalTag> lxalt = surfaceD.toLocal(uxglued);
+        const Vector3DBase<double, LocalTag> lyalt = surfaceD.toLocal(uyglued);
+
+        // rotation matrix (jacobian dlocal/dglued)
         Rglued(0, 0) = lxalt.x();
         Rglued(0, 1) = lyalt.x();
         Rglued(1, 0) = lxalt.y();
         Rglued(1, 1) = lyalt.y();
+
+
 
 //         const Vector3DBase<double, LocalTag> ltest(1., 1., 0.);
 //         const Vector3DBase<double, LocalTag> ltestalt = surface.toLocal(surfaceGlued.toGlobal(ltest));
@@ -880,6 +971,7 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
 
 
       }
+      surfacemapD_[det->geographicalId()] = surfaceD;
       rgluemap_[det->geographicalId()] = Rglued;
       
 
@@ -891,35 +983,85 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
 }
 
 
+// GloballyPositioned<double> ResidualGlobalCorrectionMakerBase::surfaceToDouble(const Surface &surface) const {
+//   Point3DBase<double, GlobalTag> pos = surface.position();
+//   //re-orthogonalize
+//   Matrix<double, 3, 3> rot;
+//   rot << surface.rotation().xx(), surface.rotation().xy(), surface.rotation().xz(),
+//           surface.rotation().yx(), surface.rotation().yy(), surface.rotation().yz(),
+//           surface.rotation().zx(), surface.rotation().zy(), surface.rotation().zz();
+//           
+// //       std::cout << "rot check pre:" << std::endl;
+// //       std::cout << rot.transpose()*rot << std::endl;
+//         
+//   for (unsigned int i = 0; i < 3; ++i) {
+//     for (unsigned int j = 0; j < i; ++j) {
+//       rot.row(i) = (rot.row(i) - (rot.row(i)*rot.row(j).transpose())[0]/rot.row(j).squaredNorm()*rot.row(j)).eval();
+//     }
+//   }
+//   for (unsigned int i = 0; i < 3; ++i) {
+//       rot.row(i) = (rot.row(i)/rot.row(i).norm()).eval();
+//   }
+//   
+// //       std::cout << "rot check post:" << std::endl;
+// //       std::cout << rot.transpose()*rot << std::endl;
+//   
+//   const TkRotation<double> tkrot(rot(0,0), rot(0,1), rot(0,2),
+//                                   rot(1,0), rot(1,1), rot(1,2),
+//                                   rot(2,0), rot(2,1), rot(2,2));
+//   
+//   
+//   return GloballyPositioned<double>(pos, tkrot);
+// }
+
+
 GloballyPositioned<double> ResidualGlobalCorrectionMakerBase::surfaceToDouble(const Surface &surface) const {
-  Point3DBase<double, GlobalTag> pos = surface.position();
-  //re-orthogonalize
-  Matrix<double, 3, 3> rot;
-  rot << surface.rotation().xx(), surface.rotation().xy(), surface.rotation().xz(),
-          surface.rotation().yx(), surface.rotation().yy(), surface.rotation().yz(),
-          surface.rotation().zx(), surface.rotation().zy(), surface.rotation().zz();
-          
-//       std::cout << "rot check pre:" << std::endl;
-//       std::cout << rot.transpose()*rot << std::endl;
-        
-  for (unsigned int i = 0; i < 3; ++i) {
-    for (unsigned int j = 0; j < i; ++j) {
-      rot.row(i) = (rot.row(i) - (rot.row(i)*rot.row(j).transpose())[0]/rot.row(j).squaredNorm()*rot.row(j)).eval();
-    }
-  }
-  for (unsigned int i = 0; i < 3; ++i) {
-      rot.row(i) = (rot.row(i)/rot.row(i).norm()).eval();
-  }
+  const Point3DBase<double, GlobalTag> pos = surface.position();
+
+  // reconstruct orthonormal basis
+
+  auto const &gy = surface.rotation().y();
+  auto const &gz = surface.rotation().z();
+
+  const Matrix<double, 3, 1> vy(gy.x(), gy.y(), gy.z());
+  const Matrix<double, 3, 1> vz(gz.x(), gz.y(), gz.z());
+
+  const Matrix<double, 3, 1> uz = vz.normalized();
+  const Matrix<double, 3, 1> ux = vy.cross(vz).normalized();
+  const Matrix<double, 3, 1> uy = uz.cross(ux);
   
-//       std::cout << "rot check post:" << std::endl;
-//       std::cout << rot.transpose()*rot << std::endl;
-  
-  const TkRotation<double> tkrot(rot(0,0), rot(0,1), rot(0,2),
-                                  rot(1,0), rot(1,1), rot(1,2),
-                                  rot(2,0), rot(2,1), rot(2,2));
-  
-  
-  return GloballyPositioned<double>(pos, tkrot);
+  const TkRotation<double> tkrot(ux[0], ux[1], ux[2],
+                                 uy[0], uy[1], uy[2],
+                                 uz[0], uz[1], uz[2]);
+
+  const GloballyPositioned<double> res(pos, tkrot);
+
+  return res;
+
+}
+
+GloballyPositioned<double> ResidualGlobalCorrectionMakerBase::surfaceToDouble(const Surface &surface, const Basic3DVector<double> &gz) const {
+  const Point3DBase<double, GlobalTag> pos = surface.position();
+
+  // reconstruct orthonormal basis using user-provided z axis (assumed already normalized)
+
+  auto const &gy = surface.rotation().y();
+
+  const Matrix<double, 3, 1> vy(gy.x(), gy.y(), gy.z());
+  const Matrix<double, 3, 1> vz(gz.x(), gz.y(), gz.z());
+
+  const Matrix<double, 3, 1> &uz = vz;
+  const Matrix<double, 3, 1> ux = vy.cross(vz).normalized();
+  const Matrix<double, 3, 1> uy = uz.cross(ux);
+
+  const TkRotation<double> tkrot(ux[0], ux[1], ux[2],
+                                 uy[0], uy[1], uy[2],
+                                 uz[0], uz[1], uz[2]);
+
+  const GloballyPositioned<double> res(pos, tkrot);
+
+  return res;
+
 }
 
 // ------------ method fills 'descriptions' with the allowed parameters for the module  ------------

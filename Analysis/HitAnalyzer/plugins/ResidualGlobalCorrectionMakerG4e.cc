@@ -273,8 +273,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   
   const bool dogen = fitFromGenParms_;
   
-  const bool dolocalupdate = true;
-//   const bool dolocalupdate = false;
+//   const bool dolocalupdate = true;
+  const bool dolocalupdate = false;
 
 
 
@@ -3225,7 +3225,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               
               Vinv = Matrix<AlignScalar, 2, 2>::Zero();
               Vinv(0,0) = 1./preciseHit->localPositionError().xx();
-              Vinv(1,1) = 1./yerr2;
+//               Vinv(1,1) = 1./yerr2;
               
 //               R = Matrix<AlignScalar, 2, 2>::Identity();
               R = Matrix2d::Identity();
@@ -3370,7 +3370,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                   Vinv = Matrix<AlignScalar, 2, 2>::Zero();
                   Vinv(0, 0) = 1./phierr2;
 //                   Vinv(1, 1) = 1./rhoerr2;
-                  Vinv(1, 1) = 1./rhoerr2lin;
+//                   Vinv(1, 1) = 1./rhoerr2lin;
 
                   // jacobian from localx-localy to localphi-localy (module bounds are also rectangular in this coordinate system)
                   R = Matrix2d::Zero();
@@ -3977,8 +3977,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       chisqvalold = chisq0val + deltachisq[0];
         
 //       ndof = 5*nhits + nvalid + nvalidalign2d - nstateparms;
-//       ndof = 5*nhits + nvalid + nvalidpixel - nstateparms;
-      ndof = 5*nhits + 2.*nvalid - nstateparms;
+      ndof = 5*nhits + nvalid + nvalidpixel - nstateparms;
+//       ndof = 5*nhits + 2.*nvalid - nstateparms;
       
       if (bsConstraint_) {
         ndof += 2;
@@ -3993,6 +3993,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       }
       
       covfull = 2.*Cinvd.solve(MatrixXd::Identity(nstateparms,nstateparms));
+      
+
       
 //       std::cout << "iiter = " << iiter << ", deltachisq = " << deltachisq[0] << std::endl;
       
@@ -4020,6 +4022,13 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         std::cout<< "dxRef" << std::endl;
         std::cout<< dxRef << std::endl;
       }
+      
+      const Matrix<double, 5, 5> hessref = Cinner.inverse();
+      
+      const double deltachisqref = -0.5*dxRef.transpose()*hessref*dxRef;
+      
+      edmvalref = -deltachisqref;
+      
       
       //fill output with corrected state and covariance at reference point
       refParms.fill(0.);
@@ -4136,6 +4145,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 //       std::cout << "iiter = " << iiter << " edmval = " << edmval << " chisqval = " << chisqval << std::endl;
 
 //       std::cout << "iiter = " << iiter << " edmval = " << edmval << " deltachisqval = " << deltachisqval << " chisqval = " << chisqval << std::endl;
+      
+//       std::cout << "iiter = " << iiter << " edmval = " << edmval << " edmvalref " << edmvalref << " deltachisqval = " << deltachisqval << " chisqval = " << chisqval << std::endl;
 
       if (anomDebug) {
         std::cout << "anomDebug: iiter = " << iiter << " edmval = " << edmval << " deltachisqval = " << deltachisqval << " chisqval = " << chisqval << std::endl;
@@ -4160,7 +4171,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       if (iiter > 0 && dolocalupdate && edmval < 1e-5) {
         break;
       }
-      else if (iiter > 0 && !dolocalupdate && std::fabs(deltachisqval)<1e-5) {
+//       else if (iiter > 0 && !dolocalupdate && std::fabs(deltachisqval)<1e-5) {
+      else if (iiter > 0 && !dolocalupdate && edmvalref < 1e-5) {
         break;
       }
 //       else if (iiter==2) {
