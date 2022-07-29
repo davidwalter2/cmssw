@@ -921,10 +921,15 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
 //         Rglued(1, 0) = lxalt.y();
 //         Rglued(1, 1) = lyalt.y();
 
-        // recreate plane using relative position and orientation from ideal geometry, enforcing that the plane is parallel to the glued one
-        const GloballyPositioned<double> surfaceGluedIdeal = surfaceToDouble(globalGeometryIdeal->idToDet(parmDet->geographicalId())->surface());
-        const GloballyPositioned<double> surfaceIdeal = surfaceToDouble(globalGeometryIdeal->idToDet(det->geographicalId())->surface(), surfaceGluedIdeal.rotation().z());
+        // recreate plane using relative position and orientation from ideal geometry, enforcing that the plane is parallel to the glued one (but preserving the relative orientation of the local z axis in case they are flipped)
+        const Surface &surfaceGluedIdealPre = globalGeometryIdeal->idToDet(parmDet->geographicalId())->surface();
+        const Surface &surfaceIdealPre = globalGeometryIdeal->idToDet(det->geographicalId())->surface();
 
+        const double zdot = surfaceGluedIdealPre.rotation().z()*surfaceIdealPre.rotation().z();
+        const double zsign = std::copysign(1.0, zdot);
+
+        const GloballyPositioned<double> surfaceGluedIdeal = surfaceToDouble(surfaceGluedIdealPre);
+        const GloballyPositioned<double> surfaceIdeal = surfaceToDouble(surfaceIdealPre, zsign*surfaceGluedIdeal.rotation().z());
 
         const Vector3DBase<double, GlobalTag> uxpre(surfaceIdeal.rotation().x());
         const Vector3DBase<double, GlobalTag> uypre(surfaceIdeal.rotation().y());
@@ -944,6 +949,12 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
                                        uzglobal.x(), uzglobal.y(), uzglobal.z());
 
         surfaceD = GloballyPositioned<double>(posglobal, tkrot);
+
+//         const GloballyPositioned<double> surfacemod(posglobal, tkrot);
+//
+//         std::cout << "surfaceD position:\n" << surfaceD.position() << "\nrotation:\n" << surfaceD.rotation() << std::endl;
+//
+//         std::cout << "surfacemod position:\n" << surfacemod.position() << "\nrotation:\n" << surfacemod.rotation() << std::endl;
 
         const Vector3DBase<double, GlobalTag> uxglued(surfaceGlued.rotation().x());
         const Vector3DBase<double, GlobalTag> uyglued(surfaceGlued.rotation().y());
