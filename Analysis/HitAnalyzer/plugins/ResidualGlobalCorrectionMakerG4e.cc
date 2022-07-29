@@ -272,76 +272,28 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 {
   
   const bool dogen = fitFromGenParms_;
-  
-//   const bool dolocalupdate = true;
-  const bool dolocalupdate = false;
 
-
+  constexpr bool dolocalupdate = false;
 
   using namespace edm;
 
   Handle<reco::TrackCollection> trackOrigH;
   iEvent.getByToken(inputTrackOrig_, trackOrigH);
-  
-  
-//   bool foundmodule = false;
-//   for (const reco::Track &track : *trackOrigH) {
-//     if (track.innerDetId() == 302055944) {
-//       foundmodule = true;
-//       break;
-//     }
-// //     for (auto it = track.recHitsBegin(); it != track.recHitsEnd(); ++it) {
-// //       if ((*it)->geographicalId().rawId() == 302055944) {
-// //         foundmodule = true;
-// //         break;
-// //       }
-// //     }
-// //     if (foundmodule) {
-// //       break;
-// //     }
-//   }
-//   if (!foundmodule) {
-// //     printf("not found, returning\n");
-//     return;
-//   }
-  
-
-
-  // loop over gen particles
 
   edm::ESHandle<GlobalTrackingGeometry> globalGeometry;
   iSetup.get<GlobalTrackingGeometryRecord>().get(globalGeometry);
-  
-//   edm::ESHandle<TrackerGeometry> globalGeometry;
-//   iSetup.get<TrackerDigiGeometryRecord>().get("idealForDigi", globalGeometry);
-  
+
   edm::ESHandle<TrackerTopology> trackerTopology;
   iSetup.get<TrackerTopologyRcd>().get(trackerTopology);
-  
-//   ESHandle<MagneticField> magfield;
-//   iSetup.get<IdealMagneticFieldRecord>().get(magfield);
-//   auto field = magfield.product();
   
   edm::ESHandle<TransientTrackingRecHitBuilder> ttrh;
   iSetup.get<TransientRecHitRecord>().get("WithAngleAndTemplate",ttrh);
   
   ESHandle<Propagator> thePropagator;
-//   iSetup.get<TrackingComponentsRecord>().get("RungeKuttaTrackerPropagator", thePropagator);
-//   iSetup.get<TrackingComponentsRecord>().get("PropagatorWithMaterial", thePropagator);
-//   iSetup.get<TrackingComponentsRecord>().get("PropagatorWithMaterialParabolicMf", thePropagator);
   iSetup.get<TrackingComponentsRecord>().get("Geant4ePropagator", thePropagator);
   
   const Geant4ePropagator *g4prop = dynamic_cast<const Geant4ePropagator*>(thePropagator.product());
   const MagneticField* field = thePropagator->magneticField();
-  
-//   edm::ESHandle<TrajectoryFitter> fit;
-//   iSetup.get<TrajectoryFitter::Record>().get("G4eFitterSmoother", fit);
-//   const KFTrajectoryFitter *kffit = dynamic_cast<const KFTrajectoryFitter*>(fit.product());
-//   const Propagator *thePropagator = kffit->propagator();
-  
-  
-//   ESHandle<Propagator> theAnalyticPropagator;
-//   iSetup.get<TrackingComponentsRecord>().get("PropagatorWithMaterial", theAnalyticPropagator);
   
   ESHandle<MagneticField> fieldh;
   iSetup.get<IdealMagneticFieldRecord>().get("", fieldh);
@@ -349,30 +301,12 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   
   std::unique_ptr<PropagatorWithMaterial> fPropagator = std::make_unique<PropagatorWithMaterial>(alongMomentum, 0.105, fieldOffset.get(), 1.6, true,  -1., true);
   
-//   const MagneticField* field = fPropagator->magneticField();
-  
   constexpr double mmu = 0.1056583745;
-  
-//   Handle<TrajTrackAssociationCollection> trackH;
-//   Handle<reco::TrackCollection> trackH;
-//   iEvent.getByToken(inputTrack_, trackH);
-  
 
-  
-//   Handle<std::vector<int> > indicesH;
-//   iEvent.getByToken(inputIndices_, indicesH);
-  
-//   Handle<std::vector<Trajectory> > trajH;
-//   iEvent.getByToken(inputTraj_, trajH);
-  
-  
-
-  
   Handle<reco::BeamSpot> bsH;
   iEvent.getByToken(inputBs_, bsH);
 
   
-//   Handle<std::vector<reco::GenParticle>> genPartCollection;
   Handle<edm::View<reco::Candidate>> genPartCollection;
   Handle<math::XYZPointF> genXyz0;
   Handle<GenEventInfoProduct> genEventInfo;
@@ -385,7 +319,6 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     iEvent.getByToken(pileupSummaryToken_, pileupSummary);
   }
   
-//   Handle<std::vector<PSimHit>> tecSimHits;
   std::vector<Handle<std::vector<PSimHit>>> simHits(inputSimHits_.size());
   edm::Handle<std::vector<SimTrack>> simTracks;
   if (doSim_) {
@@ -396,7 +329,6 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     iEvent.getByToken(inputSimTracks_, simTracks);
   }
   
-//   Handle<reco::MuonCollection> muons;
   Handle<edm::View<reco::Muon> > muons;
   if (doMuons_) {
     iEvent.getByToken(inputMuons_, muons);
@@ -406,431 +338,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   if (doMuonAssoc_) {
     iEvent.getByToken(inputMuonAssoc_, muonAssoc);
   }
-
-//   Handle<edm::Association<reco::TrackExtraCollection>> assoc;
-//   if (doMuons_) {
-//     iEvent.getByToken(inputAssoc_, assoc);
-//   }
   
-//   if (doSim_) {
-//     iEvent.getByToken(inputSimHits_, tecSimHits);
-//   }
-  
-//   const float mass = 0.105;
-//   const float maxDPhi = 1.6;
-//   PropagatorWithMaterial rPropagator(oppositeToMomentum, mass, field, maxDPhi, true, -1., false);
-//   PropagatorWithMaterial fPropagator(alongMomentum, mass, field, maxDPhi, true, -1., false);
-  
-//   std::unique_ptr<PropagatorWithMaterial> fPropagator(static_cast<PropagatorWithMaterial*>(thePropagator->clone()));
-//   fPropagator->setPropagationDirection(alongMomentum);
-//   
-//   std::unique_ptr<PropagatorWithMaterial> fAnalyticPropagator(static_cast<PropagatorWithMaterial*>(theAnalyticPropagator->clone()));
-//   fAnalyticPropagator->setPropagationDirection(alongMomentum);
-  
-  KFUpdator updator;
   TkClonerImpl const& cloner = static_cast<TkTransientTrackingRecHitBuilder const *>(ttrh.product())->cloner();
 
-  
-//   siStripClusterInfo_.initEvent(iSetup);
-  
-//   edm::ESHandle<Alignments> globalPositionRcd;
-//   iSetup.get<GlobalPositionRcd>().get(globalPositionRcd);
-//   
-//   printf("globalPositionRcd translation = %e, %e, %e\n", globalPositionRcd->m_align.front().translation().x(),
-//                                                         globalPositionRcd->m_align.front().translation().y(),
-//                                                         globalPositionRcd->m_align.front().translation().z());
-//   std::cout << "globalPositionRcd rotation" << globalPositionRcd->m_align.front().rotation() << std::endl;
-  
-  // set up cylindrical surface for beam pipe
-//   const double ABe = 9.0121831;
-//   const double ZBe = 4.;
-//   const double K =  0.307075*1e-3;
-//   const double dr = 0.08;
-// //   const double xibeampipe = 0.5*K*dr*ZBe/ABe;
-//   const double xibeampipe = 0.*0.5*K*dr*ZBe/ABe;
-  
-  
-  
-  
-//   auto beampipe = Cylinder::build(Surface::PositionType(0.,0.,0.), Surface::RotationType(), 2.94);
-//   beampipe->setMediumProperties(MediumProperties(0., xibeampipe));
-  
-//   std::cout << "xi beampipe: " << xibeampipe << std::endl;
-  
-//   const GeomDet *testdet = nullptr;
-//   //debugging
-//   for (const GeomDet* det : globalGeometry->detUnits()) {
-//     if (!det) {
-//       continue;
-//     }
-//     
-//     if (det->subDetector() == GeomDetEnumerators::TEC) {
-//       const DetId& detid = det->geographicalId();
-// //       TECDetId detid(det->geographicalId());
-// //       layer = -1 * (detid.side() == 1) * detid.wheel() + (detid.side() == 2) * detid.wheel();
-//       unsigned int side = trackerTopology->tecSide(detid);
-//       unsigned int wheel = trackerTopology->tecWheel(detid);
-//       int layer = -1 * (side == 1) * wheel + (side == 2) * wheel;
-//       bool stereo = trackerTopology->isStereo(det->geographicalId());
-//       
-//       if (layer == -9) {
-//         testdet = det;
-//         break;
-//         
-//       }
-//     }
-//     
-//     
-//     
-//   }
-//   
-//   if (testdet) {
-//     const GlobalPoint center = testdet->surface().toGlobal(LocalPoint(1.,0.));
-//     
-//     const GlobalVector centerv(center.x(), center.y(), center.z());
-//     const GlobalVector dir = centerv/centerv.mag();
-//     const double sintheta = dir.perp();
-//     const GlobalVector mom = (100000./sintheta)*dir;
-//     const GlobalPoint pos(0.,0.,0.);
-//     
-//     FreeTrajectoryState ftsplus(pos, mom, 1., field);
-//     FreeTrajectoryState ftsminus(pos, mom, -1., field);
-//     
-//     const TrajectoryStateOnSurface tsosplus = fPropagator->propagate(ftsplus, testdet->surface());
-//     const TrajectoryStateOnSurface tsosminus = fPropagator->propagate(ftsminus, testdet->surface());
-//     
-//     std::cout << "global target" << std::endl;
-//     std::cout << center << std::endl;
-//     
-//     std::cout << "momentum" << std::endl;
-//     std::cout << mom << std::endl;
-//     
-//     std::cout << "tsosplus local:" << std::endl;
-//     std::cout << tsosplus.localPosition() << std::endl;
-//     std::cout << "tsosminus local:" << std::endl;
-//     std::cout << tsosminus.localPosition() << std::endl;
-//     
-//     std::cout << "delta local" << std::endl;
-//     std::cout << tsosplus.localPosition() - tsosminus.localPosition() << std::endl;
-//     
-//   }
-  
-  
-  simtestz = -99.;
-  simtestvz = -99.;
-  simtestrho = -99.;
-  simtestzlocalref = -99.;
-  simtestdx = -99.;
-  simtestdxrec = -99.;
-  simtestdy = -99.;
-  simtestdyrec = -99.;
-  simtestdxprop = -99.;
-  simtestdyprop = -99.;
-  simtestdetid = 0;
-  
-  if (false) {
-    
-    //sim hit debugging
-    const reco::Candidate* genmuon = nullptr;
-    for (const reco::Candidate& genPart : *genPartCollection) {
-      if (genPart.status()==1 && std::abs(genPart.pdgId()) == 13) {
-        genmuon = &genPart;
-        break;
-      }
-    }
-    
-    if (genmuon) {
-      genPt = genmuon->pt();
-      genCharge = genmuon->charge();
-      genEta = genmuon->eta();
-      genPhi = genmuon->phi();
-      
-      simtestvz = genmuon->vertex().z();
-      
-      auto const& refpoint = genmuon->vertex();
-      auto const& trackmom = genmuon->momentum();
-      const GlobalPoint refpos(refpoint.x(), refpoint.y(), refpoint.z());
-      const GlobalVector refmom(trackmom.x(), trackmom.y(), trackmom.z()); 
-  //     const GlobalTrajectoryParameters refglobal(refpos, refmom, genmuon->charge(), field);
-      
-  //       std::cout << "gen ref state" << std::endl;
-  //       std::cout << refpos << std::endl;
-  //       std::cout << refmom << std::endl;
-  //       std::cout << genpart->charge() << std::endl;
-      
-      //zero uncertainty on generated parameters
-  //       AlgebraicSymMatrix55 nullerr;
-  //       const CurvilinearTrajectoryError referr(nullerr);
-      
-      const FreeTrajectoryState fts = FreeTrajectoryState(refpos, refmom, genmuon->charge(), field);
-      
-      std::cout << "gen muon charge: " << genmuon->charge() << std::endl;
-      
-      TrajectoryStateOnSurface tsos;
-
-      std::vector<const PSimHit*> simhitsflat;
-      for (auto const& simhith : simHits) {
-        for (const PSimHit& simHit : *simhith) {
-          simhitsflat.push_back(&simHit);
-        }
-      }
-      
-      auto simhitcompare = [&](const PSimHit *hit0, const PSimHit *hit1) {
-        return globalGeometry->idToDet(hit0->detUnitId())->surface().toGlobal(hit0->localPosition()).mag() < globalGeometry->idToDet(hit1->detUnitId())->surface().toGlobal(hit1->localPosition()).mag();
-      };
-      
-      std::sort(simhitsflat.begin(), simhitsflat.end(), simhitcompare);
-      
-      unsigned int ihit = 0;
-      for (auto const& simHitp : simhitsflat) {
-          auto const &simHit = *simHitp;
-          if (std::abs(simHit.particleType()) != 13) {
-            continue;
-          }
-          
-//           if (std::abs(simHit.localPosition().z()) > 1e-9) {
-//             continue;
-//           }
-          
-//       for (auto const& simhith : simHits) {
-//         for (const PSimHit& simHit : *simhith) {
-          
-          const GeomDet *detectorG = globalGeometry->idToDet(simHit.detUnitId());
-          
-          bool isbarrel = detectorG->subDetector() == GeomDetEnumerators::PixelBarrel || detectorG->subDetector() == GeomDetEnumerators::TIB || detectorG->subDetector() == GeomDetEnumerators::TOB;
-          
-          float absz = std::abs(detectorG->surface().toGlobal(LocalVector(0.,0.,1.)).z());
-          
-          bool idealdisk = absz == 1.;
-          bool idealbarrel = absz<1e-9;
-          
-  //         idealdisk = false;
-  //         idealbarrel = false;
-          
-          bool isstereo = trackerTopology->isStereo(simHit.detUnitId());
-
-          std::cout << "isbarrel: " << isbarrel << " idealbarrel: " << idealbarrel << " idealdisk: " << idealdisk << "stereo: " << isstereo << " globalpos: " << detectorG->surface().position() << std::endl;
-          
-          LocalPoint proplocal(0.,0.,0.);
-          
-//           auto const propresult = fPropagator->geometricalPropagator().propagateWithPath(fts, detectorG->surface());
-//           if (propresult.first.isValid()) {
-//             proplocal = propresult.first.localPosition();
-//           }
-          
-          if (!tsos.isValid()) {
-            tsos = fPropagator->geometricalPropagator().propagate(fts, detectorG->surface());
-          }
-          else {
-            tsos = fPropagator->geometricalPropagator().propagate(tsos, detectorG->surface());
-          }
-          
-          if (tsos.isValid()) {
-            proplocal = tsos.localPosition();
-          }
-          
-          
-          
-          
-  //         Vector3d refprop;
-          
-  //         LocalTrajectoryParameters
-          Point3DBase<double, LocalTag> reflocal(0, 0., 0.);
-
-          simtestz = detectorG->surface().position().z();
-          simtestrho = detectorG->surface().position().perp();
-          
-
-          GlobalPoint refglobal;
-          
-          auto const simhitglobal = detectorG->surface().toGlobal(Point3DBase<double, LocalTag>(simHit.localPosition().x(),
-                                                                                                simHit.localPosition().y(),
-                                                                                                simHit.localPosition().z()));
-          
-          const Vector3d Msim(simhitglobal.x(), simhitglobal.y(), simhitglobal.z());
-          
-          auto const propglobal = detectorG->surface().toGlobal(Point3DBase<double, LocalTag>(proplocal.x(),
-                                                                                                proplocal.y(),
-                                                                                                proplocal.z()));
-          
-          
-          const Vector3d Mprop(propglobal.x(), propglobal.y(), propglobal.z());
-          
-          Vector3d M(genmuon->vertex().x(),
-                                  genmuon->vertex().y(),
-                                  genmuon->vertex().z());
-          
-          Vector3d P(genmuon->momentum().x(),
-                                  genmuon->momentum().y(),
-                                  genmuon->momentum().z());
-          
-          
-          
-          
-  //         if (true) {
-          for (unsigned int iref=0; iref<1; ++iref) {
-            const double zs = detectorG->surface().position().z();
-            
-            const Vector3d T0 = P.normalized();
-            
-  //           const Vector3d T0 = P.normalized();
-            
-            const Vector3d H(0.,0.,1.);
-            
-            const double rho = fts.transverseCurvature();
-            
-            double s;
-            
-            if (idealdisk) {
-              s = (zs - M[2])/T0[2];
-            }
-            else if (idealbarrel) {
-              HelixBarrelPlaneCrossingByCircle crossing(GlobalPoint(M[0],M[1],M[2]), GlobalVector(P[0],P[1],P[2]), rho);
-              s = crossing.pathLength(detectorG->surface()).second;
-            }
-            else {
-              HelixArbitraryPlaneCrossing crossing(Basic3DVector<float>(M[0],M[1],M[2]), Basic3DVector<float>(P[0],P[1],P[2]), rho);
-              s = crossing.pathLength(detectorG->surface()).second;
-  //             s = propresult.second;
-            }
-            
-            const Vector3d HcrossT = H.cross(T0);
-            const double alpha = HcrossT.norm();
-            const Vector3d N0 = HcrossT.normalized();
-            
-            const double gamma = T0[2];
-            const double q = genmuon->charge();
-            const double Q = -3.8*2.99792458e-3*q/P.norm();
-            const double theta = Q*s;
-            
-            const Vector3d dM = gamma*(theta-std::sin(theta))/Q*H + std::sin(theta)/Q*T0 + alpha*(1.-std::cos(theta))/Q*N0;
-            M = M + dM;
-            const Vector3d dT = gamma*(1.-std::cos(theta))*H + std::cos(theta)*T0 + alpha*std::sin(theta)*N0;
-            const Vector3d T = T0 + dT;
-            const double pmag = P.norm();
-            P = pmag*T;
-            
-            refglobal = GlobalPoint(M[0], M[1], M[2]);
-            reflocal = detectorG->surface().toLocal(Point3DBase<double, GlobalTag>(M[0], M[1], M[2]));
-            simtestzlocalref = reflocal.z();
-            
-            const Vector3d xhat = Vector3d(0.,0.,1.).cross(M).normalized();
-            
-//             const LocalVector localxhat = LocalVector(1.,0.,0.);
-//             const GlobalVector globalxhat = detectorG->surface().toGlobal(localxhat);
-//             const Vector3d xhat(globalxhat.x(), globalxhat.y(), globalxhat.z());
-            
-            const double dx = xhat.dot(Msim-M);
-            const double dxrec = xhat.dot(Mprop - Msim);
-            
-            const Vector3d yhat = Vector3d(0.,0.,1.).cross(xhat).normalized();
-            
-            const double dy = yhat.dot(Msim-M);
-            const double dyrec = yhat.dot(Mprop - Msim);
-            
-            simtestdx = dx;
-//             simtestdxrec = dxrec;
-            simtestdxrec = proplocal.x() - simHit.localPosition().x();
-            simtestdxprop = xhat.dot(Mprop-M);
-            
-            simtestdy = dy;
-//             simtestdyrec = dyrec;
-            simtestdyrec = proplocal.y() - simHit.localPosition().y();
-            simtestdyprop = yhat.dot(Mprop-M);
-            
-            simtestdetid = detectorG->geographicalId().rawId();
-            
-            if (idealdisk) {
-              break;
-            }
-            
-  //           refprop = M;
-            
-  //           const Vector3d Mprop(updtsosnomat.globalPosition().x(),
-  //                                 updtsosnomat.globalPosition().y(),
-  //                                 updtsosnomat.globalPosition().z()); 
-          }
-          
-          tree->Fill();
-  //         else {
-  //           const TrajectoryStateOnSurface propresult = fAnalyticPropagator->geometricalPropagator().propagate(fts, detectorG->surface());
-  //           if (propresult.isValid()) {
-  //             reflocal = propresult.localPosition();
-  // //             refprop << propresult.globalPosition().x(), propresult.globalPosition().y(), propresult.globalPosition().z();
-  //           }
-  // //           else {
-  // //             refprop << 0., 0., 0.;
-  // //           }
-  //         }
-          
-          
-  //         const LocalPoint reflocal = detectorG->surface().toLocal(GlobalPoint(refprop[0], refprop[1], refprop[2]));
-          
-
-          
-          const LocalPoint simlocal = simHit.localPosition();
-          
-//           std::cout << "isbarrel: " << isbarrel << " idealbarrel: " << idealbarrel << " idealdisk: " << idealdisk << "stereo: " << isstereo << " globalpos: " << detectorG->surface().position() << std::endl;
-          std::cout << "detid: " << simHit.detUnitId() << std::endl;
-          std::cout << "local z to global: " << detectorG->surface().toGlobal(LocalVector(0.,0.,1.)) << std::endl;
-          std::cout << "ref      : " << reflocal << std::endl;
-          std::cout << "proplocal: " << proplocal << std::endl;
-          std::cout << "simlocal: " << simlocal << std::endl;
-          std::cout << "sim entry point: " << simHit.entryPoint() << std::endl;
-          std::cout << "sim exit point: " << simHit.exitPoint() << std::endl;
-          std::cout << "refglobal: " << refglobal << std::endl;
-          std::cout << "propglobal: " << propglobal << std::endl;
-          std::cout << "simglobal: " << simhitglobal << std::endl;
-          std::cout << "sim-ref : " << simlocal - reflocal << std::endl;
-          std::cout << "sim-ref (global): " << simhitglobal - refglobal << std::endl;
-          std::cout << "prop-ref: " << proplocal - reflocal << std::endl;
-          std::cout << "sim-prop: " << simlocal - proplocal << std::endl;
-          std::cout << "sim-prop (global): " << simhitglobal - propglobal << std::endl;
-          
-          
-          std::cout << "simtestdx: " << simtestdx << std::endl;
-          std::cout << "simtestdy: " << simtestdy << std::endl;
-          
-          std::cout << "simtestdxrec: " << simtestdxrec << std::endl;
-          std::cout << "simtestdyrec: " << simtestdyrec << std::endl;
-          
-          std::cout << "simtestdxprop: " << simtestdxprop << std::endl;
-          std::cout << "simtestdyprop: " << simtestdyprop << std::endl;
-          
-//           assert(std::abs(simtestdy)<0.1e-4);
-          
-//           assert(simHit.entryPoint().z()*simHit.exitPoint().z() < 0.);
-          
-//           assert(std::abs(simlocal.z())<1e-4);
-          
-//           assert(std::abs(simtestdxrec) < 40e-4);
-//           assert(simtestdxprop > -950e-4);
-          
-          ++ihit;
-          
-  //         if (simHit.detUnitId() == preciseHit->geographicalId()) {                      
-  //           dxsimgen.push_back(simHit.localPosition().x() - updtsos.localPosition().x());
-  //           dysimgen.push_back(simHit.localPosition().y() - updtsos.localPosition().y());
-  //           
-  //           dxrecsim.push_back(preciseHit->localPosition().x() - simHit.localPosition().x());
-  //           dyrecsim.push_back(-99.);
-  //           
-  //           simvalid = true;
-  //           break;
-  //         }
-//         }
-      }
-      
-      
-    }
-    return;
-    
-  }
-  
-//   TkClonerImpl hitCloner;
-//   TKCloner const* cloner = static_cast<TkTransientTrackingRecHitBuilder const *>(builder)->cloner()
-//   TrajectoryStateCombiner combiner;
-  
   run = iEvent.run();
   lumi = iEvent.luminosityBlock();
   event = iEvent.id().event();
@@ -842,8 +352,6 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     Pileup_nPU = pileupSummary->front().getPU_NumInteractions();
     Pileup_nTrueInt = pileupSummary->front().getTrueNumInteractions();
   }
-
-
 
   std::vector<float> corPtV;
   std::vector<float> corEtaV;
@@ -878,31 +386,10 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     const bool iscosmic = track.algo() == reco::TrackBase::ctf || track.algo() == reco::TrackBase::cosmics;
     
     const bool dopca = !dogen && !iscosmic;
-//     const bool dopca = false;
-
-
-//     const Trajectory& traj = (*trajH)[itraj];
-    
-//     const edm::Ref<std::vector<Trajectory> > trajref(trajH, j);
-//     const reco::Track& track = *(*trackH)[trajref];
-//     const reco::Track& track = (*trackH)[itraj];
-//     const reco::Track& trackOrig = (*trackOrigH)[(*indicesH)[j]];
-
-//     std::cout << "j " << j << " (*indicesH)[j] " << (*indicesH)[j] <<std::endl;
     
     if (track.isLooper()) {
       continue;
     }
-
-    
-    
-//     if (track.eta() < 2.2) {
-//       continue;
-//     }
-//     
-//     if (track.pt() > 5.0) {
-//       continue;
-//     }
     
     trackPt = track.pt();
     trackEta = track.eta();
@@ -910,13 +397,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     trackCharge = track.charge();
     trackPtErr = track.ptError();
     
-    
-    
     normalizedChi2 = track.normalizedChi2();
-    
-//     std::cout << "track pt: " << trackPt << " track eta: " << trackEta << " track phi: " << trackPhi << " trackCharge: " << trackCharge << " qop: " << track.parameters()[0] << std::endl;
-//     std::cout << "track vertex rho-phi-z: " << track.vertex().rho() << " " << track.vertex().phi() << " " << track.vertex().z() << std::endl;
-//     std::cout << "track algo " << track.algo() << std::endl;
     
     auto const& tkparms = track.parameters();
     auto const& tkcov = track.covariance();
@@ -944,14 +425,6 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     
     
     if (doGen_) {
-//       bool isjpsi = false;
-//       for (std::vector<reco::GenParticle>::const_iterator g = genPartCollection->begin(); g != genPartCollection->end(); ++g)
-//       {
-//         if (std::abs(g->pdgId()) == 443) {
-//           isjpsi = true;
-//           break;
-//         }
-//       }
       
       float drmin = 0.1;
       
@@ -964,11 +437,6 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           continue;
         }
         
-//         if (isjpsi && g->charge() != track.charge()) {
-//           continue;
-//         }
-        
-//         float dR = deltaR(g->phi(), trackPhi, g->eta(), trackEta);
         float dR = deltaR(*g, track);
         
         if (dR < drmin)
@@ -1050,28 +518,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             matchedmuon = &muon;
           }
         }
-
-
-//         if (muon.innerTrack() == trackref) {
-//           muonPt = muon.pt();
-//           muonLoose = muon.passed(reco::Muon::CutBasedIdLoose);
-//           muonMedium = muon.passed(reco::Muon::CutBasedIdMedium);
-//           muonTight = muon.passed(reco::Muon::CutBasedIdTight);
-//           muonIsPF = muon.isPFMuon();
-//           muonIsTracker = muon.isTrackerMuon();
-//           muonIsGlobal = muon.isGlobalMuon();
-//           muonIsStandalone = muon.isStandAloneMuon();
-//           if (muon.muonBestTrack() == trackref) {
-//             muonInnerTrackBest = true;
-//           }
-//         }
       }
-//       if (assoc->contains(track.extra().id())) {
-//         const reco::TrackExtraRef &trackextraref = (*assoc)[track.extra()];
-//         if (trackextraref.isNonnull()) {
-//           trackExtraAssoc = true;
-//         }
-//       }
     }
 
     if (matchedmuon != nullptr) {
@@ -1086,23 +533,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       muonInnerTrackBest = matchedmuon->muonBestTrackType() == reco::Muon::InnerTrack;
     }
     
-    
-
-//     PropagationDirection rpropdir = traj.direction();
-//     PropagationDirection fpropdir = rpropdir == alongMomentum ? oppositeToMomentum : alongMomentum;
-    
-    //TODO properly handle the outside-in case (maybe ok now)
-//     assert(track.seedDirection() == alongMomentum);
-    
     //prepare hits
     TransientTrackingRecHit::RecHitContainer hits;
     hits.reserve(track.recHitsSize());
-//     hits.reserve(track.recHitsSize()+1);
-//     hits.push_back(RecHitPointer(InvalidTrackingRecHit());
-    
-//     printf("building hits\n");
-    
-    std::set<std::array<int, 3>> hitlayers;
 
 //     std::cout << "track: algo = " << track.algo() << " originalAlgo = " << track.originalAlgo() << std::endl;
 //
@@ -1144,24 +577,13 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         
         bool order = (stereoposv - monoposv).dot(trackmomv) > 0.;
         
-//         if (track.seedDirection() == oppositeToMomentum) {
-//           order = !order;
-//         }
+
         const GeomDetUnit* detinner = order ? detglued->monoDet() : detglued->stereoDet();
         const GeomDetUnit* detouter = order ? detglued->stereoDet() : detglued->monoDet();
         
         hits.push_back(TrackingRecHit::RecHitPointer(new InvalidTrackingRecHit(*detinner, (*it)->type())));
         hits.push_back(TrackingRecHit::RecHitPointer(new InvalidTrackingRecHit(*detouter, (*it)->type())));
         
-//         auto const& layerinner = detidlayermap.at(detinner->geographicalId());
-//         auto const& layerouter = detidlayermap.at(detouter->geographicalId());
-        
-//         if (!hitlayers.count(layerinner))
-//           hits.push_back(TrackingRecHit::RecHitPointer(new InvalidTrackingRecHit(*detinner, (*it)->type())));
-//         hitlayers.insert(layerinner);
-//         if (!hitlayers.count(layerouter))
-//           hits.push_back(TrackingRecHit::RecHitPointer(new InvalidTrackingRecHit(*detouter, (*it)->type())));
-//         hitlayers.insert(layerouter);
       }
       else {
         // apply hit quality criteria
@@ -1176,26 +598,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             const SiPixelRecHit *pixhit = dynamic_cast<const SiPixelRecHit*>(tkhit);
             const SiPixelCluster& cluster = *tkhit->cluster_pixel();
             assert(pixhit != nullptr);
-
-//             std::cout << "split cluster error: " << cluster.getSplitClusterErrorX() << " " << cluster.getSplitClusterErrorY() << std::endl;
-
-//             std::cout << "qbin = " << pixhit->qBin() << " probQ = " << pixhit->probabilityQ() << " hasFilledProb = " << pixhit->hasFilledProb() << std::endl;
             
-//             hitquality = false;
             hitquality = !pixhit->isOnEdge() && cluster.sizeX() > 1;
-//             hitquality = !pixhit->isOnEdge() && cluster.sizeX() > 1 && pixhit->qBin() < 2;
-//             hitquality = !pixhit->isOnEdge() && cluster.sizeX() > 1 && cluster.sizeY() > 1;
-            
-            
-//             hitquality = !pixhit->isOnEdge();
-//             hitquality = cluster.sizeX() > 1;
-            
-//             hitquality = pixhit->hasFilledProb() && pixhit->clusterProbability(0) > 0.000125 && pixhit->qBin()>0 && pixhit->qBin()<4;
-            
-//             if (pixhit->hasFilledProb() && pixhit->clusterProbability(0) > 0.000125 && pixhit->qBin()>0 && pixhit->qBin()<4) {
-//             if (pixhit->hasFilledProb() && pixhit->clusterProbability(0) > 0.000125 && pixhit->qBin()>0 && pixhit->qBin()<3) {
-//               hitquality = true;
-//             }
           }
           else {
             assert(tkhit->cluster_strip().isNonnull());
@@ -1207,24 +611,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             const uint16_t lastStrip = cluster.firstStrip() + cluster.amplitudes().size() - 1;
             const bool isOnEdge = firstStrip == 0 || lastStrip == (striptopology->nstrips() - 1);
             
-//             if (isOnEdge) {
-//               std::cout << "strip hit isOnEdge" << std::endl;
-//             }
-            
-//             hitquality = !isOnEdge;
             hitquality = true;
-            
-//             const bool isstereo = trackerTopology->isStereo(detectorG->geographicalId());
-//             hitquality = !isstereo;
-            
-            
-            
-            
-//             SiStripClusterInfo clusterInfo = SiStripClusterInfo(cluster, iSetup, (*it)->geographicalId().rawId());
-//             if (clusterInfo.signalOverNoise() > 12.) {
-//               hitquality = true;
-//             }
-//             hitquality = true;
           }
           
         }
@@ -1232,71 +619,15 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           hitquality = true;
         }
         
-//         std::cout << "detid: " << (*it)->geographicalId().rawId() << std::endl;
-        
-//         bool foundsim = false;
-//         for (auto const& simhith : simHits) {
-//           for (const PSimHit& simHit : *simhith) {
-//             if (std::abs(simHit.particleType()) == 13 && simHit.detUnitId() == (*it)->geographicalId()) {
-//               foundsim = true;
-//               break;
-//             }
-//           }
-//           if (foundsim) {
-//             break;
-//           }
-//         }
-//         
-//         if (!foundsim) {
-//           hitquality = false;
-//         }
-        
-//         for (auto const& simhith : simHits) {
-//           for (const PSimHit& simHit : *simhith) {
-//             if (simHit.detUnitId() == (*it)->geographicalId()) {
-// //               std::cout << "particle type: " << simHit.particleType() << std::endl;
-// //               std::cout << "track id: " << simHit.trackId() << std::endl;
-// //               std::cout << "entry point: " << simHit.entryPoint() << std::endl;
-// //               std::cout << "exit point: " << simHit.exitPoint() << std::endl;
-// //               std::cout << "local position: " << simHit.localPosition() << std::endl;
-//               if (std::abs(simHit.particleType()) == 13 && std::abs(simHit.localPosition().z()) > 1e-4) {
-//                 std::cout << "anomalous simhit!" << std::endl;
-//                 hitquality = false;
-//               }
-//             }
-//           }
-//         }
-
-
         if (hitquality) {
           hits.push_back((*it)->cloneForFit(*detectorG));
         }
         else {
           hits.push_back(TrackingRecHit::RecHitPointer(new InvalidTrackingRecHit(*detectorG, TrackingRecHit::inactive)));
         }
-
-        
-//         auto const &layer = detidlayermap.at((*it)->geographicalId());
-//         
-//         if (!hitlayers.count(layer)) {
-//           if (hitquality) {
-//             hits.push_back((*it)->cloneForFit(*detectorG));
-//           }
-//           else {
-//             hits.push_back(TrackingRecHit::RecHitPointer(new InvalidTrackingRecHit(*detectorG, TrackingRecHit::inactive)));
-//           }
-//         }
-//         hitlayers.insert(layer);
       }
     }
 
-//     if (track.seedDirection() == oppositeToMomentum) {
-//       std::reverse(hits.begin(), hits.end());
-//     }
-    
-//     printf("done building hits\n");
-    
-//     const unsigned int nhits = track.recHitsSize();
     const unsigned int nhits = hits.size();
 
     if (nhits == 0) {
@@ -1304,22 +635,14 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     }
 
     nHits = nhits;
-//     unsigned int npixhits = 0;
 
     unsigned int nvalid = 0;
     unsigned int nvalidpixel = 0;
     unsigned int nvalidalign2d = 0;
     
-//     std::set<std::array<int, 3>> hitlayers;
     
     // count valid hits since this is needed to size the arrays
     for (auto const& hit : hits) {
-//       auto const &layers = detidlayermap.at(hit->geographicalId());
-//       if (hitlayers.count(layers)) {
-//         std::cout << "WARNING: multiple hits on the same layer!!!" << std::endl;
-//         std::cout << layers[0] << " " << layers[1] << " " << layers[2] << std::endl;
-//       }
-//       hitlayers.insert(layers);
       
       assert(hit->dimension()<=2);
       if (hit->isValid()) {
@@ -1328,8 +651,6 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         const uint32_t gluedid = trackerTopology->glued(hit->geographicalId());
         const bool isglued = gluedid != 0;
         const DetId parmdetid = isglued ? DetId(gluedid) : hit->geographicalId();
-//         const bool align2d = detidparms.count(std::make_pair(1, parmdetid));
-//         const bool align2d = detidparms.count(std::make_pair(2, hit->geographicalId()));
         
 //         const bool align2d = detidparms.count(std::make_pair(1, hit->geographicalId()));
         const bool align2d = detidparms.count(std::make_pair(1, parmdetid));
@@ -1342,21 +663,6 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         }
       }
     }
-    
-//     //count valid hits since this is needed to size the arrays
-//     auto const& hitsbegin = track.recHitsBegin();
-//     for (unsigned int ihit = 0; ihit < track.recHitsSize(); ++ihit) {
-//       auto const& hit = *(hitsbegin + ihit);
-//       if (hit->isValid() && hit->dimension()<=2) {
-//         nvalid += 1;
-//         
-//         const GeomDet *detectorG = globalGeometry->idToDet(hit->geographicalId());
-//         if (hit->dimension()==2 && GeomDetEnumerators::isTrackerPixel(detectorG->subDetector())) {
-// //         if (hit->dimension()==2) {
-//           nvalidpixel += 1;
-//         }
-//       }
-//     }
 
     if (nvalid == 0) {
       continue;
@@ -1368,113 +674,13 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     nValidHitsFinal = 0;
     nValidPixelHitsFinal = 0;
     
-//     const unsigned int nstriphits = nhits-npixhits;
-//     const unsigned int nparsAlignment = nstriphits + 2*npixhits;
-//     const unsigned int nvalidstrip = nvalid - nvalidpixel;
-//     const unsigned int nparsAlignment = nvalidstrip + 2*nvalidpixel;
-//     const unsigned int nparsAlignment = 2*nvalid + nvalidalign2d;
-//     const unsigned int nparsAlignment = 6*nvalid;
     const unsigned int nparsAlignment = 5*nvalid + nvalidalign2d;
     const unsigned int nparsBfield = nhits;
     const unsigned int nparsEloss = nhits;
-//     const unsigned int nparsEloss = nhits + 1;
     const unsigned int npars = nparsAlignment + nparsBfield + nparsEloss;
     
     const unsigned int nstateparms = 5*(nhits+1);
-//     const unsigned int nstateparms = 3*(nhits+1) - 1;
-//     const unsigned int nstateparms = 3*nhits - 1;
     const unsigned int nparmsfull = nstateparms + npars;
-    
-    
-    const unsigned int nstateparmspost = 5*(nhits+1);
-    
-//     std::cout << "nhits " << nhits << std::endl;
-//     std::cout << "nstateparms " << nstateparms << std::endl;
-//     std::cout << "nparmsfull " << nparmsfull << std::endl;
-//     std::cout << "nparmsfull " << nparmsfull << std::endl;
-//     std::cout << "nparmsfull " << nparmsfull << std::endl;
-//     std::cout << "nparmsfull " << nparmsfull << std::endl;
-//     std::cout << "nparmsfull " << nparmsfull << std::endl;
-    
-//     const unsigned int npropparms = 5*(nhits-1);
-//     const unsigned int nhitparms = 2*nhits;
-//     const unsigned int nmomparms = 3*(nhits-1);
-//     const unsigned int nposparms = 2*(nhits-1);
-//     constexpr unsigned int nrefparms = 5;
-    
-
-    
-    //active double for autodiff gradients
-//     using Adouble = AutoDiffScalar<VectorXd>;
-//     using AVectorXd = Matrix<Adouble, Dynamic, 1>;
-//     //double double for autodiff hessians
-//     using AAdouble = AutoDiffScalar<AVectorXd>;
-    
-
-    
-//     using AAXd = AANT<double, Dynamic>;
-//     using AAdouble = AAXd;
-//     
-//     using AA2d = AANT<double, 2>;
-//     using AA3d = AANT<double, 3>;
-//     using AA4d = AANT<double, 4>;
-//     using AA12d = AANT<double, 12>;
-//     
-//     using ScalarConst = AANT<double, 0>;
-    
-//     using AConstd = AutoDiffScalar<VectorXd>;
-//     using AConstd = AutoDiffScalar<Matrix<double, 0, 0>>;
-    
-    
-//     using VectorXAd = Matrix<AScalar, Dynamic, 1>;
-//     using MatrixXAd = Matrix<AScalar, Dynamic, Dynamic>;
-    
-    //two position parameters and and one alignment parameter
-    using StripHitScalar = AANT<double, 3>;;
-    
-    using StripHit1DJacobian = Matrix<StripHitScalar, 1, 2>;
-    
-    using StripHitVector = Matrix<StripHitScalar, 2, 1>;
-    using StripHit2DCovariance = Matrix<StripHitScalar, 2, 2>;
-    using StripHit2DJacobian = Matrix<StripHitScalar, 2, 2>;
-
-    
-    
-    //two hit dimensions and two alignment parameters
-    using PixelHit2DScalar = AANT<double, 4>;
-    using PixelHit2DVector = Matrix<PixelHit2DScalar, 2, 1>;
-    using PixelHit2DCovariance = Matrix<PixelHit2DScalar, 2, 2>;
-    using PixelHit2DJacobian = Matrix<PixelHit2DScalar, 2, 2>;
-    
-    
-    //2x5 state parameters, one bfield parameter, and one material parameter
-//     using MSScalar = AANT<double, 11>;;
-//     using MSScalar = AANT<double, 13>;
-//     using MSVector = Matrix<MSScalar, 5, 1>;
-//     using MSProjection = Matrix<MSScalar, 5, 5>;
-//     using MSJacobian = Matrix<MSScalar, 5, 5>;
-//     using MSCovariance = Matrix<MSScalar, 5, 5>;
-
-    using BSScalar = AANT<double, 2>;
-    
-//     using HitProjection = Matrix<AAdouble, 2, 5>;
-//     using HitCovariance = Matrix<AAdouble, 2, 2>;
-//     using HitVector = Matrix<AAdouble, 2, 1>;
-    
-//     evector<HitCovarianceMatrix> Vinv(nhits, HitCovarianceMatrix::Zero());
-//     evector<HitProjection> Hh(nhits, HitProjection::Zero());
-//     evector<HitVector> dy0(nhits, HitVector::Zero());
-//     evector<StateVector> dx(nhits, StateVector::Zero());
-//     //initialize backpropagation indexing
-//     for (unsigned int i=0; i<nhits; ++i) {
-// //       StateVector& dxi = dx[i];
-// //       dxi.derivatives().resize(nstateparms);
-//       for (unsigned int j=0; j<5; ++j) {
-// //         dx[i][j].derivatives() = VectorXd::Unit(nstateparms, 5*i + j);
-//         init_twice_active_var(dx[i][j], nstateparms, 5*i +j);
-//       }
-//     }
-    
     
     VectorXd gradfull;
     MatrixXd hessfull;
@@ -1488,31 +694,14 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     Matrix<float, Dynamic, 2> rxfull(nvalid, 2); 
     Matrix<float, Dynamic, 2> ryfull(nvalid, 2);
     
-//     VectorXd gradfull = chisq.value().derivatives();
-//     MatrixXd hessfull = MatrixXd::Zero(nparmsfull, nparmsfull);
-//     for (unsigned int i=0; i<nstateparms; ++i) {
-//       hessfull.row(i) = chisq.derivatives()[i].derivatives();
-//     }
-    
-    
     globalidxv.clear();
     globalidxv.resize(npars, 0);
-    
-//     nParms = npars;
-//     if (fillTrackTree_) {
-//       tree->SetBranchAddress("globalidxv", globalidxv.data());
-//     }
-    
-//     TrajectoryStateOnSurface currtsos;
-    
-    
     
     VectorXd dxfull;
     MatrixXd dxdparms;
     VectorXd grad;
     MatrixXd hess;
     LDLT<MatrixXd> Cinvd;
-//     ColPivHouseholderQR<MatrixXd> Cinvd;
     MatrixXd covfull = MatrixXd::Zero(nstateparms, nstateparms);
     
     if (dogen && genpart==nullptr) {
@@ -1520,75 +709,15 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       continue;
     }
     
-//     if (dogen && genpart->eta()>-2.3) {
-//       continue;
-//     }
 
-//     if (genpart==nullptr) {
-//       continue;
-//     }
-//     if (genpart->pt()>10.) {
-//       continue;
-//     }
-//     if (genpart->pt()<100.) {
-//       continue;
-//     }
-//     if (genpart->eta()>-2.3) {
-//       continue;
-//     }
-    
     if (debugprintout_) {
       std::cout << "initial reference point parameters:" << std::endl;
       std::cout << track.parameters() << std::endl;
     }
 
-//     //prepare hits
-//     TransientTrackingRecHit::RecHitContainer hits;
-//     hits.reserve(track.recHitsSize());
-//     for (auto it = track.recHitsBegin(); it != track.recHitsEnd(); ++it) {
-//       const GeomDet *detectorG = globalGeometry->idToDet((*it)->geographicalId());
-//       hits.push_back((*it)->cloneForFit(*detectorG));
-//     }
-    
-//     // fix mixed up clusters?
-//     for (unsigned int ihit=0; ihit<(hits.size()-1); ++ihit) {
-//       TrackerSingleRecHit* hit = const_cast<TrackerSingleRecHit*>(dynamic_cast<const TrackerSingleRecHit*>(hits[ihit].get()));
-//       TrackerSingleRecHit* nexthit = const_cast<TrackerSingleRecHit*>(dynamic_cast<const TrackerSingleRecHit*>(hits[ihit+1].get()));
-//       
-// //      const TrackingRecHitSingle* nexthit = hits[ihit+1];
-//       
-//       if (!hit || !nexthit) {
-//         continue;
-//       }
-//       
-//       const DetId partnerid = trackerTopology->partnerDetId(hit->geographicalId());
-// //       
-//       if (partnerid == nexthit->geographicalId()) {
-// //         std::cout << "swapping clusters" << std::endl;
-//         const OmniClusterRef::ClusterStripRef cluster = hit->cluster_strip();
-//         const OmniClusterRef::ClusterStripRef nextcluster = nexthit->cluster_strip();
-//         
-//         hit->setClusterStripRef(nextcluster);
-//         nexthit->setClusterStripRef(cluster);
-//       }
-// 
-//     }
-
-//     if (genpart==nullptr) {
-//       continue;
-//     }
-//     
-//     if (genpart->eta()<-2.4 || genpart->eta()>-2.3) {
-//       continue;
-//     }
-    
-    
-//     FreeTrajectoryState refFts;
     Matrix<double, 7, 1> refFts;
     
     if (dogen) {
-//     if (true) {
-      
       if (genpart==nullptr) {
         continue;
       }
@@ -1605,24 +734,6 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       refFts[5] = trackmom.z();
       
       refFts[6] = genpart->charge();
-      
-      
-//       const GlobalPoint refpos(refpoint.x(), refpoint.y(), refpoint.z());
-//       const GlobalVector refmom(trackmom.x(), trackmom.y(), trackmom.z()); 
-//       const GlobalTrajectoryParameters refglobal(refpos, refmom, genpart->charge(), field);
-      
-//       std::cout << "gen ref state" << std::endl;
-//       std::cout << refpos << std::endl;
-//       std::cout << refmom << std::endl;
-//       std::cout << genpart->charge() << std::endl;
-      
-      //zero uncertainty on generated parameters
-//       AlgebraicSymMatrix55 nullerr;
-//       const CurvilinearTrajectoryError referr(nullerr);
-//       const CurvilinearTrajectoryError referr;
-      
-//       refFts = FreeTrajectoryState(refpos, refmom, genpart->charge(), field);
-//       refFts = FreeTrajectoryState(refglobal, referr);
     }
     else {
       //init from track state
@@ -1642,12 +753,10 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       // special case for cosmics, start from "inner" state with straight line extrapolation back 1cm to preserve the propagation logic
       // (the reference point is instead the PCA to the beamline and is therefore in the middle of the trajectory and not compatible
       // with the fitter/propagation logic
+      // TODO change this so that cosmics directly use a local parameterization on the first hit?
       if (iscosmic) {
         auto const& startpoint = track.extra()->innerPosition();
         auto const& startmom = track.extra()->innerMomentum();
-
-//         std::cout << "startpoint: " << startpoint << std::endl;
-//         std::cout << "startmom: " << startmom << std::endl;
         
         const Eigen::Vector3d startpointv(startpoint.x(), startpoint.y(), startpoint.z());
         const Eigen::Vector3d startmomv(startmom.x(), startmom.y(), startmom.z());
@@ -1656,18 +765,6 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         refFts.segment<3>(3) = startmomv;
 
       }
-//       const GlobalPoint refpos(refpoint.x(), refpoint.y(), refpoint.z());
-//       const GlobalVector refmom(trackmom.x(), trackmom.y(), trackmom.z()); 
-//       const GlobalTrajectoryParameters refglobal(refpos, refmom, track.charge(), field);
-//       const CurvilinearTrajectoryError referr(track.covariance());
-//       const CurvilinearTrajectoryError referr;
-      
-      //null uncertainty (tracking process noise sum only)
-//       AlgebraicSymMatrix55 nullerr;
-//       const CurvilinearTrajectoryError referr(nullerr);
-      
-//       refFts = FreeTrajectoryState(refpos, refmom, track.charge(), field);
-//       refFts = FreeTrajectoryState(refglobal, referr);
     }
 
     if (dopca) {
@@ -1676,69 +773,21 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       refFts = pca2cart(statepca, *bsH);
     }
 
-
-//     std::vector<std::pair<TrajectoryStateOnSurface, double>> layerStates;
-//     std::vector<TrajectoryStateOnSurface> layerStates;
     std::vector<Matrix<double, 7, 1>> layerStates;
-//     std::vector<Matrix<double, 7, 1>> layerStatesStart;
-    
     layerStates.reserve(nhits);
-//     layerStatesStart.reserve(nhits);
     
     bool valid = true;
 
-    
-//     //do propagation and prepare states
-//     auto propresult = fPropagator->propagateWithPath(refFts, *hits.front()->surface());
-//     if (!propresult.first.isValid()) {
-//       std::cout << "Abort: Propagation from reference point failed" << std::endl;
-//       continue;
-//     }
-//     layerStates.push_back(propresult);
-//     
-//     for (auto const& hit : hits) {
-//       propresult = fPropagator->propagateWithPath(layerStates.back().first, *hit->surface());
-//       if (!propresult.first.isValid()) {
-//         std::cout << "Abort: Propagation failed" << std::endl;
-//         valid = false;
-//         break;
-//       }
-//       layerStates.push_back(propresult);
-//     }
-//     
-//     if (!valid) {
-//       continue;
-//     }
-    
-
-//     const bool islikelihood = true;
     const bool islikelihood = false;
 
     
-    //inflate errors
-//     refFts.rescaleError(100.);
 
     std::vector<double> localxsmearedsim(hits.size(), 0.);
     
     
-//     unsigned int ntotalhitdim = 0;
-//     unsigned int alignmentidx = 0;
-//     unsigned int bfieldidx = 0;
-//     unsigned int elossidx = 0;
-    
     double chisqvalold = std::numeric_limits<double>::max();
     
-    bool anomDebug = false;
-
-//     constexpr unsigned int niters = 1;
-//     constexpr unsigned int niters = 3;
-//     constexpr unsigned int niters = 5;
-//     constexpr unsigned int niters = 10;
-//     constexpr unsigned int niters = 20;
-
-//     constexpr unsigned int niters = 1;
-//     constexpr unsigned int niters = 10;
-//     const unsigned int niters = (dogen && !dolocalupdate) ? 1 : 10;
+    const bool anomDebug = false;
     
     const unsigned int niters = (dogen && !dolocalupdate) || (dogen && fitFromSimParms_) ? 1 : 10;
     
@@ -1895,11 +944,6 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       
       validdxeigjac = MatrixXd::Zero(2*nvalid, nstateparms);
       
-//       evector<std::array<Matrix<double, 8, 8>, 11> > dhessv;
-//       std::vector<Matrix<double, 10, 10>> dhessv;
-//       if (islikelihood) {
-//         dhessv.resize(nhits);
-//       }
       
       double chisq0val = 0.;
       
@@ -1921,14 +965,6 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       simlocalyref = -99.;
       
       
-      
-//       const uint32_t gluedid0 = trackerTopology->glued(hits[0]->det()->geographicalId());
-//       const bool isglued0 = gluedid0 != 0;
-//       const DetId parmdetid0 = isglued0 ? DetId(gluedid0) : hits[0]->geographicalId();
-//       const unsigned int bfieldidx = detidparms.at(std::make_pair(6, parmdetid0));
-//       fieldOffset->setOffset(corparms_[bfieldidx]);
-      
-//       dhessv.reserve(nhits-1);
       
       unsigned int parmidx = 0;
       unsigned int alignmentparmidx = 0;
@@ -1983,109 +1019,12 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           refFts[5] = pzupd;
           refFts[6] = charge;
         }
-        
-//         const GlobalVector mom(pxupd, pyupd, pzupd);
-        
-//         const GlobalTrajectoryParameters refglobal(pos, mom, charge, field);
-//         const CurvilinearTrajectoryError referr;
-        
-//         std::cout << "before update: reffts:" << std::endl;
-//         std::cout << refFts.parameters().vector() << std::endl;
-//         std::cout << "charge " << refFts.charge() << std::endl;
-//         refFts = FreeTrajectoryState(pos, mom, charge, field);
-//         refFts = FreeTrajectoryState(refglobal, referr);
-//         std::cout << "after update: reffts:" << std::endl;
-//         std::cout << refFts.parameters().vector() << std::endl;
-//         std::cout << "charge " << refFts.charge() << std::endl;
-//         currentFts = refFts;
       }
-      
-//       Matrix5d Hlm = Matrix5d::Identity();
-//       currentFts = refFts;
-//       TrajectoryStateOnSurface currentTsos;
-
-//       ;
-      
-//       std::cout << "reffts p = " << refFts.momentum().mag() << " pt = " << refFts.momentum().perp() << " eta = " << refFts.momentum().eta() << std::endl;
-      
-      const ROOT::Math::PxPyPzMVector momtmp(refFts[3], refFts[4], refFts[5], mmu);
-
-      
-//       if (!iscosmic && std::abs(momtmp.eta()) > 4.0) {
-//         std::cout << "WARNING:  Invalid reference state!!!" << std::endl;
-//         valid = false;
-//         break;
-//       }
-      
-//       const Matrix<double, 5, 1> Felossadhoc = elossAdHocJacobianD(refFts, mmu);
-//       const unsigned int etaphiidx = hetaphi->FindFixBin(momtmp.eta(), momtmp.phi());
-
-      
-//       std::cout << "beamline p = " << refFts.momentum().mag() << std::endl;
-      
-//       auto const &surface0 = *hits[0]->surface();
-//       const Plane &surface0 = *hits[0]->surface();
-//       auto const &surface0 = *surfacemap_.at(hits[0]->geographicalId());
-//       printf("detid = %u, parmdetid = %u, old = %p, new  = %p\n", hits[0]->geographicalId().rawId(), parmdetid0.rawId(), &surface0orig, &surface0);
-//       std::cout << "old xi = " << surface0orig.mediumProperties().xi() << " new xi = " << surface0.mediumProperties().xi() << " dxi = " << surface0.mediumProperties().xi() - surface0orig.mediumProperties().xi() << std::endl;
-//       auto propresultref = thePropagator->propagateWithPath(refFts, surface0);
-//       auto const propresultref = g4prop->propagateGenericWithJacobian(refFts, surface0);
-//       auto const propresultref = g4prop->propagateGenericWithJacobianAlt(refFts, surface0);
-//       auto propresult = fPropagator->geometricalPropagator().propagateWithPath(refFts, *hits[0]->surface());
-//       auto propresult = fPropagator->geometricalPropagator().propagateWithPath(refFts, *beampipe);
-//       if (!std::get<0>(propresultref).isValid()) {
-//         std::cout << "Abort: Propagation of reference state Failed!" << std::endl;
-//         valid = false;
-//         break;
-//       }
-      
-//       auto propresultreforig = g4prop->propagateGenericWithJacobian(refFts, surface0);
-// //           
-//       std::cout << "jacref" << std::endl;
-//       std::cout << std::get<1>(propresultref) << std::endl;
-//       std::cout << "jacorig" << std::endl;
-//       std::cout << std::get<1>(propresultreforig) << std::endl;
-//       
-//       std::cout << "errref" << std::endl;
-//       std::cout << std::get<0>(propresultref).localError().matrix() << std::endl;
-//       std::cout << "errorig" << std::endl;
-//       std::cout << std::get<0>(propresultreforig).localError().matrix() << std::endl;
-      
-//       assert(std::get<0>(propresultref).globalMomentum().mag() <= refFts.momentum().mag());
-      
-//       TrajectoryStateOnSurface updtsos = std::get<0>(propresultref);
-      
-//       Matrix<double, 5, 7> FdFm = Map<const Matrix<double, 5, 7, RowMajor>>(std::get<1>(propresultref).Array());
-      
-//       Matrix<double, 5, 5> dQ = Map<const Matrix<double, 5, 5, RowMajor>>(std::get<2>(propresultref).Array());
-      
-//       double dEdxlast = std::get<3>(propresultref);
       
       Matrix<double, 5, 5> ref2curvjac = dopca ? pca2curvJacobianD(refFts, field, *bsH) : Matrix<double, 5, 5>::Identity();
 
       Matrix<double, 7, 1> updtsos = refFts;
-      
-//       double dEdxout = 0.;
-      
-      
-//       double dqop = propresult.first.signedInverseMomentum() - refFts.signedInverseMomentum();
-      
-//       std::cout << "position on beampipe " << propresult.first.globalParameters().position() << std::endl;
-      
-//       const Matrix<double, 5, 6> FdFp = curv2curvTransportJacobian(refFts, propresult, false);
-//       Matrix<double, 5, 6> FdFm = curv2curvTransportJacobian(refFts, propresult, false);
-//       Matrix<double, 5, 6> FdFm = curv2localTransportJacobian(refFts, propresultref, false);
-//       
-//       const Matrix<double, 5, 6> Fcurv = curv2curvTransportJacobian(refFts, propresultref, false);
-//       
-//       auto const propresultjac = g4prop->propagateGenericWithJacobian(refFts, surface0);
-// //       
-//       std::cout << "Fcurv" << std::endl;
-//       std::cout << Fcurv << std::endl;
-// //       
-//       std::cout << "Fcurv g4e" << std::endl;
-//       std::cout << propresultjac.second << std::endl;
-      
+
       Matrix<double, 5, 5> Qtot = Matrix<double, 5, 5>::Zero();
       
       float e = genpart == nullptr ? -99. : std::sqrt(genpart->momentum().mag2() + mmu*mmu);
