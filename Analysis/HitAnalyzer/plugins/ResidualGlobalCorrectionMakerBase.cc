@@ -360,13 +360,15 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       const bool isglued = gluedid != 0;
       const DetId parmdetid = isglued ? DetId(gluedid) : det->geographicalId();
       
+      const DetId aligndetid = alignGlued_ ? parmdetid : det->geographicalId();
+
 //       const uint32_t gluedid = trackerTopology->glued(det->geographicalId());
 //       const bool isglued = gluedid != 0;
 // //       const bool align2d = ispixel || isglued || isendcap;      
 //       const DetId parmdetid = isglued ? DetId(gluedid) : det->geographicalId();
       
 //       const bool align2d = ispixel || isendcap;
-      const bool align2d = ispixel || isendcap || isglued;
+      const bool align2d = ispixel || isendcap || (alignGlued_ && isglued);
 //       const bool align2d = true;
 //       const bool align2d = ispixel;
 //       const bool align2d = false;
@@ -386,16 +388,15 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
 //         parmset.emplace(1, det->geographicalId());
 //       }
 
-      parmset.emplace(0, parmdetid);
-//       parmset.emplace(1, parmdetid);
-      parmset.emplace(2, parmdetid);
-      parmset.emplace(3, parmdetid);
-      parmset.emplace(4, parmdetid);
-      parmset.emplace(5, parmdetid);
+      parmset.emplace(0, aligndetid);
+      parmset.emplace(2, aligndetid);
+      parmset.emplace(3, aligndetid);
+      parmset.emplace(4, aligndetid);
+      parmset.emplace(5, aligndetid);
 
       if (align2d) {
         //local y alignment parameters only for pixels and wedge modules
-        parmset.emplace(1, parmdetid);
+        parmset.emplace(1, aligndetid);
       }
 
       // bfield and material parameters are associated to glued detids where applicable
@@ -753,144 +754,14 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       const DetId parmdetid = isglued ? DetId(gluedid) : det->geographicalId();
       const GeomDet* parmDet = isglued ? globalGeometry->idToDet(parmdetid) : det;
       
-      const double xifraction = isglued ? det->surface().mediumProperties().xi()/parmDet->surface().mediumProperties().xi() : 1.;
-      
-//       const bool align2d = ispixel;
-//       const bool align2d = false;
+      const DetId aligndetid = alignGlued_ ? parmdetid : det->geographicalId();
 
-//       const bool align2d = detidparms.count(std::make_pair(1, det->geographicalId()));
-      const bool align2d = detidparms.count(std::make_pair(1, parmdetid));
-
-      
-
-      
-//       const unsigned int dxidx = detidparms.at(std::make_pair(0, det->geographicalId()));
-//       const unsigned int dthetaidx = detidparms.at(std::make_pair(5, det->geographicalId()));
-
-//       const unsigned int dxidx = detidparms.at(std::make_pair(0, parmdetid));
-//       const unsigned int dthetaidx = detidparms.at(std::make_pair(5, parmdetid));
-// 
-// //       const unsigned int dbidx = detidparms.at(std::make_pair(6, parmdetid));
-//       const unsigned int dxiidx = detidparms.at(std::make_pair(7, parmdetid));
-      
-//       // n.b. sign is flipped for alignment terms
-//       const float dx = -corparms_[dxidx];
-// //       const float dy = corparms_[dyidx];
-//       const float dtheta = -corparms_[dthetaidx];
-// //       const float db = corparms_[dbdx];
-//       const float dxi = corparms_[dxiidx];
-//       
-//       float dy = 0.;
-//       if (align2d) {
-// //         const unsigned int dyidx = detidparms.at(std::make_pair(1, det->geographicalId()));
-//         const unsigned int dyidx = detidparms.at(std::make_pair(1, parmdetid));
-//         dy = -corparms_[dyidx];
-//       }
+      const bool align2d = detidparms.count(std::make_pair(1, aligndetid));
       
       const Surface &surface = det->surface();
       
-      
-
-      
-//       Point3DBase<double, GlobalTag> pos = surface.position();
-//       
-//       //re-orthogonalize
-//       Matrix<double, 3, 3> rot;
-//       rot << surface.rotation().xx(), surface.rotation().xy(), surface.rotation().xz(),
-//               surface.rotation().yx(), surface.rotation().yy(), surface.rotation().yz(),
-//               surface.rotation().zx(), surface.rotation().zy(), surface.rotation().zz();
-//               
-// //       std::cout << "rot check pre:" << std::endl;
-// //       std::cout << rot.transpose()*rot << std::endl;
-//             
-//       for (unsigned int i = 0; i < 3; ++i) {
-//         for (unsigned int j = 0; j < i; ++j) {
-//           rot.row(i) = (rot.row(i) - (rot.row(i)*rot.row(j).transpose())[0]/rot.row(j).squaredNorm()*rot.row(j)).eval();
-//         }
-//       }
-//       for (unsigned int i = 0; i < 3; ++i) {
-//           rot.row(i) = (rot.row(i)/rot.row(i).norm()).eval();
-//       }
-//       
-// //       std::cout << "rot check post:" << std::endl;
-// //       std::cout << rot.transpose()*rot << std::endl;
-//       
-//       const TkRotation<double> tkrot(rot(0,0), rot(0,1), rot(0,2),
-//                                      rot(1,0), rot(1,1), rot(1,2),
-//                                      rot(2,0), rot(2,1), rot(2,2));
-//       
-//       
-//       GloballyPositioned<double> surfaceD(pos, tkrot);
-      
       GloballyPositioned<double> surfaceD = surfaceToDouble(surface);
       
-      
-      const ProxyStripTopology *proxytopology = dynamic_cast<const ProxyStripTopology*>(&(det->topology()));
-      
-      if (false && proxytopology) {
-        const TkRadialStripTopology *radialtopology = dynamic_cast<const TkRadialStripTopology*>(&proxytopology->specificTopology());
-        
-//         const double lx = surfaceD.position().x();
-//         const double lx = surfaceD.position().x();
-        
-
-        
-        if (radialtopology) {
-          const double rho = std::sqrt(surfaceD.position().x()*surfaceD.position().x() + surfaceD.position().y()*surfaceD.position().y());
-          const double phi = surfaceD.position().phi();
-          
-          
-          const double rdir = radialtopology->yAxisOrientation();
-          const double radius = radialtopology->originToIntersection();
-          
-          const Point3DBase<double, LocalTag> xpointlocal(0., -rdir*radius, 0.);
-          
-          const Point3DBase<double, GlobalTag> xpointglobal = surfaceD.toGlobal(xpointlocal);
-          
-          auto const& lp = radialtopology->localPosition(0.);
-          
-          
-          std::cout << "radial module " << " detHeight = " << radialtopology->detHeight() << " rdir = " << rdir << " radius = " << radius << " rho = " << rho << " phi = " << phi << " position:\n" << surfaceD.position() << "\nxpointglobal:\n" << xpointglobal << "\nlp:\n" << lp << std::endl;
-          
-        }
-      
-      }
-      
-      
-//       ReferenceCountingPointer<Plane> plane = Plane::build(det->surface());
-//       std::shared_ptr<Plane> plane = std::make_shared<Plane>(det->surface());
-      
-      //move, rotate and modify material
-//       plane->move(plane->toGlobal(LocalVector(dx, dy, 0.)));
-//       plane->rotate(Surface::RotationType(Surface::RotationType::BasicVector(plane->toGlobal(LocalVector(0.,0.,1.))), dtheta));
-      
-//       surfaceD.move(surfaceD.toGlobal(Vector3DBase<double, LocalTag>(dx, dy, 0.)));
-//       surfaceD.rotate(TkRotation<double>(TkRotation<double>::BasicVector(surfaceD.toGlobal(Vector3DBase<double, LocalTag>(0.,0.,1.))), dtheta));
-      
-//       Matrix<double, 3, 3> rot2;
-//       rot2 << surfaceD.rotation().xx(), surfaceD.rotation().xy(), surfaceD.rotation().xz(),
-//               surfaceD.rotation().yx(), surfaceD.rotation().yy(), surfaceD.rotation().yz(),
-//               surfaceD.rotation().zx(), surfaceD.rotation().zy(), surfaceD.rotation().zz();
-//       
-//       std::cout << "rot2 check:" << std::endl;
-//       std::cout << rot2.transpose()*rot2 << std::endl;
-              
-//       if (plane->mediumProperties().xi() + xifraction*dxi < 0.05*plane->mediumProperties().xi()) {
-//         std::cout << "xi value clipped!" << std::endl;
-//       }
-      
-//       const float radLen = plane->mediumProperties().radLen();
-//       const float xi = std::max(plane->mediumProperties().xi() + xifraction*dxi, 0.05*plane->mediumProperties().xi());
-//       const float xi = 0.05*plane->mediumProperties().xi();
-//       const MediumProperties mp(radLen, xi);
-//       plane->setMediumProperties(mp);
-      
-//       printf("in beginRun, detid = %u, parmdetid = %u, oldp = %p, newp = %p\n", det->geographicalId().rawId(), parmdetid.rawId(), &det->surface(), &(*plane));
-//       std::cout << "oldxi = " << det->surface().mediumProperties().xi() << " newxi = " << plane->mediumProperties().xi() << " dxi = " << dxi << " xifraction = " << xifraction << std::endl;
-      
-//       surfacemap_[det->geographicalId()] = plane;
-      
-
       Matrix<double, 2, 2> Rglued = Matrix<double, 2, 2>::Identity();
 
       if (isglued) {
@@ -908,18 +779,6 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
         }
 
         surfacemapD_[parmdetid] = surfaceGlued;
-
-//         const Vector3DBase<double, LocalTag> lx(1., 0., 0.);
-//         const Vector3DBase<double, LocalTag> ly(0., 1., 0.);
-
-//         const Vector3DBase<double, LocalTag> lxalt = surface.toLocal(surfaceGlued.toGlobal(lx));
-//         const Vector3DBase<double, LocalTag> lyalt = surface.toLocal(surfaceGlued.toGlobal(ly));
-//
-//         // rotation matrix (jacobian dlocal/dglued)
-//         Rglued(0, 0) = lxalt.x();
-//         Rglued(0, 1) = lyalt.x();
-//         Rglued(1, 0) = lxalt.y();
-//         Rglued(1, 1) = lyalt.y();
 
         // recreate plane using relative position and orientation from ideal geometry, enforcing that the plane is parallel to the glued one (but preserving the relative orientation of the local z axis in case they are flipped)
         const Surface &surfaceGluedIdealPre = globalGeometryIdeal->idToDet(parmDet->geographicalId())->surface();
@@ -942,7 +801,7 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
         const Point3DBase<double, GlobalTag> posglobal = surfaceGlued.toGlobal(poslocal);
         const Vector3DBase<double, GlobalTag> uxglobal = surfaceGlued.toGlobal(uxlocal);
         const Vector3DBase<double, GlobalTag> uyglobal = surfaceGlued.toGlobal(uylocal);
-        auto const &uzglobal = surfaceGlued.rotation().z();
+        auto const &uzglobal = zsign*surfaceGlued.rotation().z();
 
         const TkRotation<double> tkrot(uxglobal.x(), uxglobal.y(), uxglobal.z(),
                                        uyglobal.x(), uyglobal.y(), uyglobal.z(),
@@ -951,9 +810,9 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
         surfaceD = GloballyPositioned<double>(posglobal, tkrot);
 
 //         const GloballyPositioned<double> surfacemod(posglobal, tkrot);
-//
+// //
 //         std::cout << "surfaceD position:\n" << surfaceD.position() << "\nrotation:\n" << surfaceD.rotation() << std::endl;
-//
+// //
 //         std::cout << "surfacemod position:\n" << surfacemod.position() << "\nrotation:\n" << surfacemod.rotation() << std::endl;
 
         const Vector3DBase<double, GlobalTag> uxglued(surfaceGlued.rotation().x());
@@ -967,20 +826,6 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
         Rglued(0, 1) = lyalt.x();
         Rglued(1, 0) = lxalt.y();
         Rglued(1, 1) = lyalt.y();
-
-
-
-//         const Vector3DBase<double, LocalTag> ltest(1., 1., 0.);
-//         const Vector3DBase<double, LocalTag> ltestalt = surface.toLocal(surfaceGlued.toGlobal(ltest));
-//
-//         Matrix<double, 2, 1> vtest;
-//         vtest[0] = 1.;
-//         vtest[1] = 1.;
-//
-//         const Matrix<double, 2, 1> vtestalt = Rglued*vtest;
-
-
-
       }
       surfacemapD_[det->geographicalId()] = surfaceD;
       rgluemap_[det->geographicalId()] = Rglued;
@@ -1072,6 +917,61 @@ GloballyPositioned<double> ResidualGlobalCorrectionMakerBase::surfaceToDouble(co
   const GloballyPositioned<double> res(pos, tkrot);
 
   return res;
+
+}
+
+Matrix<double, 6, 1> ResidualGlobalCorrectionMakerBase::globalToLocal(const Matrix<double, 7, 1> &state, const GloballyPositioned<double> &surface) const {
+
+  const Point3DBase<double, GlobalTag> posprop(state[0], state[1], state[2]);
+  const Vector3DBase<double, GlobalTag> momprop(state[3], state[4], state[5]);
+
+  const Point3DBase<double, LocalTag> localpos = surface.toLocal(posprop);
+  const Vector3DBase<double, LocalTag> localmom = surface.toLocal(momprop);
+
+  const double signpz = std::copysign(1., localmom.z());
+
+  Matrix<double, 6, 1> localparms;
+  localparms[0] = state[6]/state.segment<3>(3).norm();
+  localparms[1] = localmom.x()/localmom.z();
+  localparms[2] = localmom.y()/localmom.z();
+  localparms[3] = localpos.x();
+  localparms[4] = localpos.y();
+  localparms[5] = signpz;
+
+  return localparms;
+
+}
+
+
+Matrix<double, 7, 1> ResidualGlobalCorrectionMakerBase::localToGlobal(const Matrix<double, 6, 1> &localstate, const GloballyPositioned<double> &surface) const {
+
+  const double qop = localstate[0];
+  const double dxdz = localstate[1];
+  const double dydz = localstate[2];
+  const double lx = localstate[3];
+  const double ly = localstate[4];
+  const double signpz = localstate[5];
+
+  const double p = std::abs(1./qop);
+  const double charge = std::copysign(1.0, qop);
+  const double localmomfact = signpz/std::sqrt(1. + dxdz*dxdz + dydz*dydz);
+
+  const Point3DBase<double, LocalTag> localpos(lx, ly, 0.);
+  const Vector3DBase<double, LocalTag> localmom(p*dxdz*localmomfact, p*dydz*localmomfact, p*localmomfact);
+
+  const Point3DBase<double, GlobalTag> globalpos = surface.toGlobal(localpos);
+  const Vector3DBase<double, GlobalTag> globalmom = surface.toGlobal(localmom);
+
+  Matrix<double, 7, 1> globalstate;
+  globalstate[0] = globalpos.x();
+  globalstate[1] = globalpos.y();
+  globalstate[2] = globalpos.z();
+  globalstate[3] = globalmom.x();
+  globalstate[4] = globalmom.y();
+  globalstate[5] = globalmom.z();
+  globalstate[6] = charge;
+
+  return globalstate;
 
 }
 

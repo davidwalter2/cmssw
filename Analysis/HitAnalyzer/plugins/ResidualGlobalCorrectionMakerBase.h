@@ -177,6 +177,10 @@ protected:
 
   GloballyPositioned<double> surfaceToDouble(const Surface &surface, const Basic3DVector<double> &gz) const;
 
+  Matrix<double, 6, 1> globalToLocal(const Matrix<double, 7, 1> &state, const GloballyPositioned<double> &surface) const;
+
+  Matrix<double, 7, 1> localToGlobal(const Matrix<double, 6, 1> &localstate, const GloballyPositioned<double> &surface) const;
+
   Matrix<double, 5, 5> curv2localJacobianAltelossD(const Matrix<double, 7, 1> &state, const MagneticField *field, const GloballyPositioned<double> &surface, double dEdx, double mass, double dBz = 0.) const;
   
   Matrix<double, 5, 5> curv2localhybridJacobianAltelossD(const Matrix<double, 7, 1> &state, const MagneticField *field, const GloballyPositioned<double> &surface, double dEdx, double mass, double dBz = 0.) const;
@@ -357,19 +361,37 @@ protected:
   std::vector<float> simlocalx;
   std::vector<float> simlocaly;
   
+  std::vector<float> simlocalqopprop;
+  std::vector<float> simlocaldxdzprop;
+  std::vector<float> simlocaldydzprop;
+  std::vector<float> simlocalxprop;
+  std::vector<float> simlocalyprop;
+  
   std::vector<float> localqop;
   std::vector<float> localdxdz;
   std::vector<float> localdydz;
   std::vector<float> localx;
   std::vector<float> localy;
   
+  std::vector<float> localqoperr;
+  std::vector<float> localdxdzerr;
+  std::vector<float> localdydzerr;
+  std::vector<float> localxerr;
+  std::vector<float> localyerr;
+  
+  std::vector<float> hitlocalx;
+  std::vector<float> hitlocaly;
+  
   std::vector<float> localqop_iter;
   std::vector<float> localdxdz_iter;
   std::vector<float> localdydz_iter;
   std::vector<float> localx_iter;
   std::vector<float> localy_iter;
+
+  std::vector<float> dxrecgen_iter;
+  std::vector<float> dyrecgen_iter;
   
-  std::vector<float> localqoperr;
+  std::vector<float> localqoperralt;
 
   std::vector<float> localphi;
   std::vector<float> hitphi;
@@ -397,6 +419,7 @@ protected:
   bool fillGrads_;
   bool fillJac_;
   bool fillRunTree_;
+  bool alignGlued_ = true;
   
   bool debugprintout_;
   
