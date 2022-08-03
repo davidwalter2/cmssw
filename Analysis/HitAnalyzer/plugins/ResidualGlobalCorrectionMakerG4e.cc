@@ -32,6 +32,8 @@ private:
 
   edm::EDGetTokenT<edm::Association<reco::TrackExtraCollection>> inputAssoc_;
   
+  bool trackHighPurity = false;
+
   float muonPt;
   bool muonLoose;
   bool muonMedium;
@@ -108,6 +110,8 @@ void ResidualGlobalCorrectionMakerG4e::beginStream(edm::StreamID streamid)
     tree->Branch("trackParms", trackParms.data(), "trackParms[5]/F", basketSize);
     tree->Branch("trackCov", trackCov.data(), "trackCov[25]/F", basketSize);
     
+    tree->Branch("trackHighPurity", &trackHighPurity);
+
     tree->Branch("refParms_iter0", refParms_iter0.data(), "refParms_iter0[5]/F", basketSize);
     tree->Branch("refCov_iter0", refCov_iter0.data(), "refCov_iter0[25]/F", basketSize);
   //   tree->Branch("refParms_iter2", refParms_iter2.data(), "refParms_iter2[5]/F", basketSize);
@@ -393,6 +397,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     trackPhi = track.phi();
     trackCharge = track.charge();
     trackPtErr = track.ptError();
+
+    trackHighPurity = track.quality(reco::TrackBase::highPurity);
     
     normalizedChi2 = track.normalizedChi2();
     
@@ -1063,17 +1069,10 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         // TODO add residual corrections for beamspot parameters?
         
         constexpr unsigned int nlocalstate = 5;
-        
         constexpr unsigned int nlocal = nlocalstate;
-        
         constexpr unsigned int localstateidx = 0;
-        
         constexpr unsigned int fullstateidx = 0;
-
-        using BSScalar = AANT<double, nlocal>;
         
-//         JacobianCurvilinearToCartesian curv2cart(refFts.parameters());
-//         const AlgebraicMatrix65& jac = curv2cart.jacobian();
         const Matrix<double, 6, 5> jac = dopca ? pca2cartJacobianD(refFts, *bsH) : curv2cartJacobianAltD(refFts);
         
         const double sigb1 = bsH->BeamWidthX();
@@ -1088,6 +1087,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         
         // covariance matrix of luminous region in global coordinates
         // taken from https://github.com/cms-sw/cmssw/blob/abc1f17b230effd629c9565fb5d95e527abcb294/RecoVertex/BeamSpotProducer/src/FcnBeamSpotFitPV.cc#L63-L90
+
+        // TODO check consistency of this parameterization
 
         // FIXME xy correlation is not stored and assumed to be zero
         const double corrb12 = 0.;
@@ -1104,45 +1105,26 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         covBS(2,0) = covBS(0,2) = dxdz*(varb3-varb1)-dydz*covBS(1,0);
         covBS(2,1) = covBS(1,2) = dydz*(varb3-varb2)-dxdz*covBS(1,0);
         covBS(2,2) = varb3;
+        
+        Matrix<double, 3, 1> dbs0;
+        dbs0[0] = refFts[0] - x0;
+        dbs0[1] = refFts[1] - y0;
+        dbs0[2] = refFts[2] - z0;
+        
+        const Matrix<double, 3, nlocal> Fbs = jac.topRows<3>();
+        const Matrix<double, 3, 3> covBSinv = covBS.inverse();
+        
+        const double bschisq = dbs0.transpose()*covBSinv*dbs0;
+        const Matrix<double, nlocal, 1> gradlocal = 2.*Fbs.transpose()*covBSinv*dbs0;
+        const Matrix<double, nlocal, nlocal> hesslocal = 2.*Fbs.transpose()*covBSinv*Fbs;
 
-//         std::cout << "covBS:" << std::endl;
-//         std::cout << covBS << std::endl;
-        
-        Matrix<BSScalar, 5, 1> du = Matrix<BSScalar, 5, 1>::Zero();
-        for (unsigned int j=0; j<du.size(); ++j) {
-          init_twice_active_var(du[j], nlocal, localstateidx + j);
-        }
-        
-        Matrix<BSScalar, 3, 1> dbs0;
-        dbs0[0] = BSScalar(refFts[0] - x0);
-        dbs0[1] = BSScalar(refFts[1] - y0);
-        dbs0[2] = BSScalar(refFts[2] - z0);
-        
-//         std::cout << "dposition / d(qop, lambda, phi) (should be 0?):" << std::endl;
-//         std::cout << Map<const Matrix<double, 6, 5, RowMajor>>(jac.Array()).topLeftCorner<3,3>() << std::endl;
-        
-//         const Matrix<BSScalar, 3, 2> jacpos = Map<const Matrix<double, 6, 5, RowMajor>>(jac.Array()).topRightCorner<3,2>().cast<BSScalar>();
-        const Matrix<BSScalar, 3, 5> jacpos = jac.topRows<3>().cast<BSScalar>();
-        const Matrix<BSScalar, 3, 3> covBSinv = covBS.inverse().cast<BSScalar>();
-        
-        const Matrix<BSScalar, 3, 1> dbs = dbs0 + jacpos*du;
-        const BSScalar chisq = dbs.transpose()*covBSinv*dbs;
+        chisq0val += bschisq;
 
-        chisq0val += chisq.value().value();
-        
-        auto const& gradlocal = chisq.value().derivatives();
-        //fill local hessian
-        Matrix<double, nlocal, nlocal> hesslocal;
-        for (unsigned int j=0; j<nlocal; ++j) {
-          hesslocal.row(j) = chisq.derivatives()[j].derivatives();
-        }
-        
         //fill global gradient
         gradfull.segment<nlocalstate>(fullstateidx) += gradlocal.head<nlocalstate>();
 
         //fill global hessian (upper triangular blocks only)
-        hessfull.block<nlocalstate,nlocalstate>(fullstateidx, fullstateidx) += hesslocal.topLeftCorner<nlocalstate,nlocalstate>();        
-        
+        hessfull.block<nlocalstate,nlocalstate>(fullstateidx, fullstateidx) += hesslocal.topLeftCorner<nlocalstate,nlocalstate>();
       }
       
       
@@ -1151,43 +1133,41 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
         auto const& hit = hits[ihit];
         
+        auto const &surface = surfacemapD_.at(hit->geographicalId());
+
         // check propagation direction to choose correct bfield and material parameters
         // when propagating inside-out the parameters correspond to the target module
         // when propagating outside-in (e.g. for cosmics) they correspond to the source module
         // For the first hit always use the target module
+        // (only relevant for cosmics)
 
         bool sourceParms = false;
-//         if (ihit > 0) {
-        if (false) {
-          auto const& lasthit = hits[ihit - 1];
-          const GloballyPositioned<double> &lastsurface = surfacemapD_.at(lasthit->geographicalId());
+        if (iscosmic && ihit > 0) {
+          auto const &lzhat = surface.rotation().z();
+          auto const &pos = surface.position();
 
-          const Vector3DBase<double, LocalTag> localmomz(0., 0., 1.);
-          const Vector3DBase<double, GlobalTag> globalmomz = lastsurface.toGlobal(localmomz);
+          const double zdotpos = lzhat.x()*pos.x() + lzhat.y()*pos.y() + lzhat.z()*pos.z();
 
-          const Vector3DBase<double, GlobalTag> globalmomtmp(updtsos[3], updtsos[4], updtsos[5]);
-          const Vector3DBase<double, LocalTag> localmomtmp = lastsurface.toLocal(globalmomtmp);
+          const Point3DBase<double, GlobalTag> globalpos(updtsos[0], updtsos[1], updtsos[2]);
+          const Point3DBase<double, LocalTag> localpos = surface.toLocal(globalpos);
 
-          // is local z dir facing out or in
-          const double localzoutin = std::copysign(1.0, lastsurface.position().x()*globalmomz.x() + lastsurface.position().y()*globalmomz.y() + lastsurface.position().z()*globalmomz.z());
-          const double localzdir = std::copysign(1.0, localmomtmp.z());
-
-          sourceParms = localzoutin*localzdir < 0.;
+          sourceParms = zdotpos*localpos.z() > 0.;
         }
 
 //         std::cout << "ihit = " << ihit << " sourceParms = " << sourceParms << std::endl;
 
-        //TODO consistent treatment for glued alignment parameters for sourceParms == true case
         auto const& prophit = sourceParms ? hits[ihit - 1] : hit;
-        const uint32_t gluedid = trackerTopology->glued(prophit->det()->geographicalId());
-        const bool isglued = gluedid != 0;
-        const DetId parmdetid = isglued ? DetId(gluedid) : prophit->geographicalId();
-        const GeomDet* parmDet = isglued ? globalGeometry->idToDet(parmdetid) : prophit->det();
+        const uint32_t gluedidprop = trackerTopology->glued(prophit->geographicalId());
+        const bool isgluedprop = gluedidprop != 0;
+        const DetId propdetid = isgluedprop ? DetId(gluedidprop) : prophit->geographicalId();
 
+        const uint32_t gluedid = trackerTopology->glued(hit->geographicalId());
+        const bool isglued = gluedid != 0;
+        const DetId parmdetid = isglued ? DetId(gluedid) : hit->geographicalId();
         const DetId aligndetid = alignGlued_ ? parmdetid : hit->geographicalId();
         
-        const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(6, parmdetid));                
-        const unsigned int elossglobalidx = detidparms.at(std::make_pair(7, parmdetid));
+        const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(6, propdetid));
+        const unsigned int elossglobalidx = detidparms.at(std::make_pair(7, propdetid));
         
         const double dbetaval = corparms_[bfieldglobalidx];
         const double dxival = corparms_[elossglobalidx];
@@ -1208,8 +1188,6 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           }
         }
         
-        const GloballyPositioned<double> &surface = surfacemapD_.at(hit->geographicalId());
-
         auto const &propresult = g4prop->propagateGenericWithJacobianAltD(updtsos, surface, dbetaval, dxival);
 
         if (!std::get<0>(propresult)) {
@@ -1319,12 +1297,12 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           }
         }
 
-        const Matrix<double, 5, 5> Hp = curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, mmu, dbetaval);
+        const Matrix<double, 5, 5> &Hp = dolocalupdate ? curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, mmu, dbetaval) : Hm;
+
+        const Matrix<double, 5, 5> &Q = dolocalupdate ? Hm*Qcurv*Hm.transpose() : Qcurv;
+        const Matrix<double, 5, 5> Qinv = Q.inverse();
 
         {
-          const Matrix<double, 5, 5> &Q = dolocalupdate ? Hm*Qcurv*Hm.transpose() : Qcurv;
-          const Matrix<double, 5, 5> Qinv = Q.inverse();
-
           constexpr unsigned int nlocalstate = 10;
           constexpr unsigned int nlocalbfield = 1;
           constexpr unsigned int nlocaleloss = 1;
@@ -1338,6 +1316,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           const unsigned int fullstateidx = 5*ihit;
           const unsigned int fullparmidx = nstateparms + parmidx;
 
+          //TODO reduce use of magic numbers
           Matrix<double, 5, nlocal> Fprop;
           if (dolocalupdate) {
             Fprop.leftCols<5>() = -Hm*FdFm.leftCols<5>();
@@ -1385,7 +1364,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                                             localparms[5]);
           const TrajectoryStateOnSurface tsostmp(locparm, *hit->surface(), field);
 
-          auto const& preciseHit = hit->isValid() ? cloner.makeShared(hit, tsostmp) : hit;
+          auto const& preciseHit = cloner.makeShared(hit, tsostmp);
           if (!preciseHit->isValid()) {
             std::cout << "Abort: Failed updating hit" << std::endl;
             valid = false;
@@ -1631,7 +1610,6 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             }
             
             for (unsigned int idim=0; idim<nlocalalignment; ++idim) {
-//               const unsigned int xglobalidx = detidparms.at(std::make_pair(alphaidxs[idim], preciseHit->geographicalId()));
               const unsigned int xglobalidx = detidparms.at(std::make_pair(alphaidxs[idim], aligndetid));
               globalidxv[nparsBfield + nparsEloss + alignmentparmidx] = xglobalidx;
               alignmentparmidx++;
