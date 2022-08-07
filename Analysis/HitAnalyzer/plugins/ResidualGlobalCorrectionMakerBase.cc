@@ -402,6 +402,7 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       // bfield and material parameters are associated to glued detids where applicable
       parmset.emplace(6, parmdetid);
       parmset.emplace(7, parmdetid);
+      parmset.emplace(8, det->geographicalId());
     }
   }
   
@@ -514,7 +515,7 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       iidx = globalidx;
       parmtype = key.first;
       
-      if (parmtype < 8) {
+      if (true) {
       
         const DetId& detid = key.second;
         const GeomDet* det = globalGeometry->idToDet(detid);
