@@ -275,6 +275,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   
   const bool dogen = fitFromGenParms_;
   const bool dolocalupdate = fitFromSimParms_;
+//   const bool dolocalupdate = true;
 
   using namespace edm;
 
@@ -807,7 +808,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     const bool anomDebug = false;
     
 //     const unsigned int niters = (dogen && !dolocalupdate) || (dogen && fitFromSimParms_) ? 1 : 10;
-    const unsigned int niters = dogen && fitFromSimParms_ ? 1 : 10;
+    
+//     const unsigned int niters = dogen && fitFromSimParms_ ? 1 : 10;
+    const unsigned int niters = 10;
     
 
     std::vector<Matrix<double, 2, 2>> Vinvvec;
@@ -1353,12 +1356,27 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           }
         }
 
-        const Matrix<double, 5, 5> &Hp = dolocalupdate ? curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, mmu, dbetaval) : Hm;
+        //ternary operator is error-prone with eigen stuff
+//         const Matrix<double, 5, 5> &Hp = dolocalupdate ? curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, mmu, dbetaval) : Hm;
+// 
+//         const Matrix<double, 5, 5> &Q = dolocalupdate ? Hm*Qcurv*Hm.transpose() : Qcurv;
+//         const Matrix<double, 5, 5> Qinv = Q.inverse();
+// 
+//         const Matrix<double, 5, 5> &dQ = dolocalupdate ? Hm*dQcurv*Hm.transpose() : dQcurv;
 
-        const Matrix<double, 5, 5> &Q = dolocalupdate ? Hm*Qcurv*Hm.transpose() : Qcurv;
+        const Matrix<double, 5, 5> Hp = curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, mmu, dbetaval);
+
+        Matrix<double, 5, 5> Q = Qcurv;
+        if (dolocalupdate) {
+          Q = Hm*Qcurv*Hm.transpose();
+        }
+        
         const Matrix<double, 5, 5> Qinv = Q.inverse();
 
-        const Matrix<double, 5, 5> &dQ = dolocalupdate ? Hm*dQcurv*Hm.transpose() : dQcurv;
+        Matrix<double, 5, 5> dQ = dQcurv;
+        if (dolocalupdate) {
+          dQ = Hm*dQcurv*Hm.transpose();
+        }
 
 
         {
@@ -1390,8 +1408,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             Fprop.rightCols<2>() = -FdFm.rightCols<2>();
           }
 
-          // zero material gradients
-          Fprop.rightCols<1>() *= 0.;
+//           // zero material gradients
+//           Fprop.rightCols<1>() *= 0.;
           
           Matrix<double, nlocal, 1> dxprop = Matrix<double, nlocal, 1>::Zero();
 //           if (iiter > 0) {
@@ -1419,7 +1437,30 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             }
           }
 
-          if (iiter > 0) {
+          if (false && iiter > 0) {
+//             Matrix<double, 2, 2> dV = Matrix<double, 2, 2>::Zero();
+//             dV(0, 0) = 1.;
+
+            const Matrix<double, 5, 5> dQinv = -Qinv*dQ*Qinv;
+            const Matrix<double, 5, 5> d2Qinv = 2.*Qinv*dQ*Qinv*dQ*Qinv;
+            const Matrix<double, 5, 5> detfact = Qinv*dQ;
+
+            const double gradres = dprop.transpose()*dQinv*dprop + detfact.trace();
+            const double hessres = dprop.transpose()*d2Qinv*dprop - (detfact*detfact).trace();
+
+            const Matrix<double, nlocal, 1> d2chisqdresdlocal = 2.*Fprop.transpose()*dQinv*dprop;
+
+            gradfull(fullresparmidx) += gradres;
+            hessfull(fullresparmidx, fullresparmidx) += hessres;
+
+            for (unsigned int iidx = 0; iidx < localidxs.size(); ++iidx) {
+              hessfull.block(fullidxs[iidx], fullresparmidx, localsizes[iidx], 1) += d2chisqdresdlocal.segment(localidxs[iidx], localsizes[iidx]);
+              hessfull.block(fullresparmidx, fullidxs[iidx], 1, localsizes[iidx]) += d2chisqdresdlocal.segment(localidxs[iidx], localsizes[iidx]).transpose();
+            }
+
+          }
+
+          if (false && iiter > 0) {
             const Matrix<double, 5, nlocalstate> Fpropstate = Fprop.leftCols<nlocalstate>();
 
             const Matrix<double, 5, 5> dQinv = -Qinv*dQ*Qinv;
@@ -1559,8 +1600,11 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               Vinv(0,0) = 1./preciseHit->localPositionError().xx();
 //               Vinv(1,1) = 1./yerr2;
 
-              //bias the uncertainty by 10um in quadrature
-              Vinv(0, 0) = 1./(preciseHit->localPositionError().xx() + 5e-3*5e-3);
+//               //bias the uncertainty by xx um in quadrature
+//               Vinv(0, 0) = 1./(preciseHit->localPositionError().xx() - 2e-3*2e-3);
+//               Vinv(0, 0) = 1./(preciseHit->localPositionError().xx() + 5e-3*5e-3);
+              //biased small uncertainty by xx um in quadrature
+//               Vinv(0, 0) = 1./(1e-3*1e-3);
               
               R = Matrix2d::Identity();
 
@@ -1741,6 +1785,64 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             }
             
             if (iiter > 0) {
+              Matrix<double, 2, 2> dV = Matrix<double, 2, 2>::Zero();
+              dV(0, 0) = 1.;
+
+              const Matrix<double, 2, 2> dVinv = -Vinv*dV*Vinv;
+              const Matrix<double, 2, 2> d2Vinv = 2.*Vinv*dV*Vinv*dV*Vinv;
+              const Matrix<double, 2, 2> detfact = Vinv*dV;
+
+              const double gradres = dhit.transpose()*dVinv*dhit + detfact.trace();
+              const double hessres = dhit.transpose()*d2Vinv*dhit - (detfact*detfact).trace();
+//               const double hessres = (detfact*detfact).trace();
+              
+              if (false && true) {
+                std::cout << "iiter = " << iiter << " ihit = " << ihit << " gradres = " << gradres << " hessres = " << hessres << std::endl;
+              }
+              
+              
+              if (false && ispixel) {
+              
+                
+                
+                const double dh = 1e-12;
+                
+                const Matrix2d Vnom = Vinv.inverse();
+                const Matrix2d Vup = Vnom + dh*dV;
+                const Matrix2d Vdown = Vnom - dh*dV;
+                
+                const double norm = std::log(Vnom.determinant());
+                const double normup = std::log(Vup.determinant());
+                const double normdown = std::log(Vdown.determinant());
+                
+                const double gradfinite = (normup-normdown)/(2.*dh);
+                const double hessfinite = (normup + normdown - 2.*norm)/(dh*dh);
+                
+                const double grada = detfact.trace();
+                const double hessa = -(detfact*detfact).trace();
+                
+                std::cout << "iiter = " << iiter << " ihit = " << ihit << std::endl;
+                std::cout <<  "Vinv:\n" << Vinv << std::endl;
+                std::cout <<  "Vnom:\n" << Vnom << std::endl;
+                std::cout << "norm = " << norm << " normup = " << normup << " normdown = " << normdown << " grada = " << grada << " hessa = " << hessa << " gradfinite = " << gradfinite << " hessfinite = " << hessfinite << std::endl;
+                
+              }
+
+              const Matrix<double, nlocal, 1> d2chisqdresdlocal = 2.*Fhit.transpose()*dVinv*dhit;
+
+//               std::cout << "iiter = " << iiter << " ihit = " << ihit << " gradres = " << gradres << " hessres = " << hessres << std::endl;
+              
+              gradfull(fullresparmidx) += gradres;
+              hessfull(fullresparmidx, fullresparmidx) += hessres;
+
+              for (unsigned int iidx = 0; iidx < localidxs.size(); ++iidx) {
+                hessfull.block(fullidxs[iidx], fullresparmidx, localsizes[iidx], 1) += d2chisqdresdlocal.segment(localidxs[iidx], localsizes[iidx]);
+                hessfull.block(fullresparmidx, fullidxs[iidx], 1, localsizes[iidx]) += d2chisqdresdlocal.segment(localidxs[iidx], localsizes[iidx]).transpose();
+              }
+
+            }
+
+            if (false && iiter > 0) {
               Matrix<double, 2, 2> dV = Matrix<double, 2, 2>::Zero();
               dV(0, 0) = 1.;
 
@@ -2071,7 +2173,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             
         }
 
-        if (iiter > 0) {
+        if (false && iiter > 0) {
           const unsigned int fullresparmidxprop = nstateparms + 2*ihit + 1;
           const MatrixXd &detfactprop = detfactpropv[ihit];
 
