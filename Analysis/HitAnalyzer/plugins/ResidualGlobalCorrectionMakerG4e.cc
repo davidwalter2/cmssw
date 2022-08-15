@@ -700,6 +700,28 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     const unsigned int nstateparms = 5*(nhits+1);
     const unsigned int nparmsfull = nstateparms + npars;
     
+    const int ncons = 5*nhits + nvalid + nvalidpixel;
+    
+//       ndof = 5*nhits + nvalid + nvalidalign2d - nstateparms;
+    ndof = 5*nhits + nvalid + nvalidpixel - nstateparms;
+//       ndof = 5*nhits + 2.*nvalid - nstateparms;
+    
+    if (bsConstraint_) {
+      ndof += 2;
+    }
+    
+    if (dogen) {
+      ndof += 5;
+    }
+    
+    if (fitFromSimParms_) {
+      ndof += nstateparms - 5;
+    }
+    
+    const double rl = double(ncons-ndof)/double(ncons);
+    
+//     std::cout << "ncons = " << ncons << " ndof = " << ndof << " rl = " << rl << std::endl;
+    
     VectorXd gradfull;
     MatrixXd hessfull;
     
@@ -1748,6 +1770,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             else {
               Vinv = Matrix<double, 2, 2>::Zero();
             }
+            
+//             Vinv *= 100.;
 
             constexpr std::array<unsigned int, 6> alphaidxs = {{0, 2, 3, 4, 5, 1}};
 
@@ -1786,14 +1810,19 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             
             if (iiter > 0) {
               Matrix<double, 2, 2> dV = Matrix<double, 2, 2>::Zero();
-              dV(0, 0) = 1.;
+//               dV(0, 0) = 1.;
+              dV(0, 0) = 1./Vinv(0, 0);
 
               const Matrix<double, 2, 2> dVinv = -Vinv*dV*Vinv;
               const Matrix<double, 2, 2> d2Vinv = 2.*Vinv*dV*Vinv*dV*Vinv;
               const Matrix<double, 2, 2> detfact = Vinv*dV;
 
-              const double gradres = dhit.transpose()*dVinv*dhit + detfact.trace();
-              const double hessres = dhit.transpose()*d2Vinv*dhit - (detfact*detfact).trace();
+//               const double gradres = dhit.transpose()*dVinv*dhit + detfact.trace();
+//               const double hessres = dhit.transpose()*d2Vinv*dhit - (detfact*detfact).trace();
+              
+              const double gradres = dhit.transpose()*dVinv*dhit + rl*detfact.trace();
+              const double hessres = dhit.transpose()*d2Vinv*dhit - rl*(detfact*detfact).trace();
+              
 //               const double hessres = (detfact*detfact).trace();
               
               if (false && true) {
@@ -1829,6 +1858,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               }
 
               const Matrix<double, nlocal, 1> d2chisqdresdlocal = 2.*Fhit.transpose()*dVinv*dhit;
+//               const Matrix<double, nlocal, 1> d2chisqdresdlocal = 0.*Fhit.transpose()*dVinv*dhit;
 
 //               std::cout << "iiter = " << iiter << " ihit = " << ihit << " gradres = " << gradres << " hessres = " << hessres << std::endl;
               
@@ -2246,21 +2276,21 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       
       chisqvalold = chisq0val + deltachisq[0];
         
-//       ndof = 5*nhits + nvalid + nvalidalign2d - nstateparms;
-      ndof = 5*nhits + nvalid + nvalidpixel - nstateparms;
-//       ndof = 5*nhits + 2.*nvalid - nstateparms;
-      
-      if (bsConstraint_) {
-        ndof += 2;
-      }
-      
-      if (dogen) {
-        ndof += 5;
-      }
-      
-      if (fitFromSimParms_) {
-        ndof += nstateparms - 5;
-      }
+// //       ndof = 5*nhits + nvalid + nvalidalign2d - nstateparms;
+//       ndof = 5*nhits + nvalid + nvalidpixel - nstateparms;
+// //       ndof = 5*nhits + 2.*nvalid - nstateparms;
+//       
+//       if (bsConstraint_) {
+//         ndof += 2;
+//       }
+//       
+//       if (dogen) {
+//         ndof += 5;
+//       }
+//       
+//       if (fitFromSimParms_) {
+//         ndof += nstateparms - 5;
+//       }
       
       covfull = 2.*Cinvd.solve(MatrixXd::Identity(nstateparms,nstateparms));
       
@@ -2402,12 +2432,17 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 //     const int nscaleparsfinal = nparsfinal - nparsRes;
 //     grad.head(nscaleparsfinal) += d2chisqdxdparmsfinal.leftCols(nscaleparsfinal).transpose()*dxfull;
 //     hess.topLeftCorner(nscaleparsfinal, nscaleparsfinal) += dxdparms.topRows(nscaleparsfinal)*d2chisqdxdparmsfinal.leftCols(nscaleparsfinal);
-    
-//     std::cout <<"d2chisqdparms2final.diagonal().tail(nparsRes):\n";
-//     std::cout << d2chisqdparms2final.diagonal().tail(nparsRes) << std::endl;
-//     
-//     std::cout <<"hess.diagonal().tail(nparsRes):\n";
-//     std::cout << hess.diagonal().tail(nparsRes) << std::endl;
+
+    if (false) {
+      std::cout <<"grad.tail(nparsRes):\n";
+      std::cout << grad.tail(nparsRes) << std::endl;
+      
+      std::cout <<"d2chisqdparms2final.diagonal().tail(nparsRes):\n";
+      std::cout << d2chisqdparms2final.diagonal().tail(nparsRes) << std::endl;
+
+      std::cout <<"hess.diagonal().tail(nparsRes):\n";
+      std::cout << hess.diagonal().tail(nparsRes) << std::endl;
+    }
     
     
     if (false) {
