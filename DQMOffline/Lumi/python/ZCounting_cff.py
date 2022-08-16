@@ -78,3 +78,9 @@ run2_HLTconditions_2018.toModify(zcounting, MuonTriggerNames = cms.vstring("HLT_
                                    PtCutL1  = cms.untracked.double(27.0),
                                    PtCutL2  = cms.untracked.double(27.0)
                        )
+from Configuration.Eras.Modifier_run3_HLTconditions_cff import run3_HLTconditions
+run3_HLTconditions.toModify(zcounting, MuonTriggerNames = cms.vstring("HLT_IsoMu24_v*"),
+                                   MuonTriggerObjectNames = cms.vstring("hltL3crIsoL1sSingleMu22L1f0L2f10QL3f24QL3trkIsoFiltered0p08"),
+                                   PtCutL1  = cms.untracked.double(27.0),
+                                   PtCutL2  = cms.untracked.double(27.0)
+                       )
