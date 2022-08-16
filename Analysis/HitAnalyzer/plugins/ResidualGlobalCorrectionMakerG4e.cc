@@ -702,8 +702,10 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     
     const int ncons = 5*nhits + nvalid + nvalidpixel;
     
+    ndof = ncons - nstateparms;
+    
 //       ndof = 5*nhits + nvalid + nvalidalign2d - nstateparms;
-    ndof = 5*nhits + nvalid + nvalidpixel - nstateparms;
+//     ndof = 5*nhits + nvalid + nvalidpixel - nstateparms;
 //       ndof = 5*nhits + 2.*nvalid - nstateparms;
     
     if (bsConstraint_) {
@@ -743,6 +745,15 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     MatrixXd hess;
     LDLT<MatrixXd> Cinvd;
     MatrixXd covfull = MatrixXd::Zero(nstateparms, nstateparms);
+    
+    VectorXd rfull;
+    MatrixXd Ffull;
+    MatrixXd Vinvfull;
+    
+    MatrixXd normpre;
+    MatrixXd Rpre;
+    MatrixXd gradpre;
+    MatrixXd hesspre;
     
     if (dogen && genpart==nullptr) {
       std::cout << "no gen part, skipping track\n";
@@ -1019,6 +1030,10 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       gradfull = VectorXd::Zero(nparmsfull);
       hessfull = MatrixXd::Zero(nparmsfull, nparmsfull);
       
+      rfull = VectorXd::Zero(ncons);
+      Ffull = MatrixXd::Zero(ncons, nstateparms);
+      Vinvfull = MatrixXd::Zero(ncons, ncons);
+      
       if (islikelihood) {
         dhessv.assign(nhits, MatrixXd::Zero(nstateparms, nstateparms));
       }
@@ -1052,6 +1067,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       unsigned int alignmentparmidx = 0;
       unsigned int resparmidx = 0;
       unsigned int ivalidhit = 0;
+      
+      unsigned int icons = 0;
       
 //       Matrix<double, 5, 1> dxref = Matrix<double, 5, 1>::Zero();
 
@@ -1458,6 +1475,12 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               hessfull.block(fullidxs[iidx], fullidxs[jidx], localsizes[iidx], localsizes[jidx]) += prophess.block(localidxs[iidx], localidxs[jidx], localsizes[iidx], localsizes[jidx]);
             }
           }
+          
+          rfull.segment<5>(icons) = dprop;
+          Ffull.block<5, nlocalstate>(icons, fullstateidx) += Fprop.leftCols<nlocalstate>();
+          Vinvfull.block<5, 5>(icons, icons) += Qinv;
+          
+          icons += 5;
 
           if (false && iiter > 0) {
 //             Matrix<double, 2, 2> dV = Matrix<double, 2, 2>::Zero();
@@ -1642,6 +1665,10 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                     preciseHit->localPositionError().xy(), preciseHit->localPositionError().yy();
               if (ispixel) {
 
+//                 const double cross = 0.5*std::sqrt(iV(0, 0)*iV(1, 1));
+//                 iV(0, 1) = cross;
+//                 iV(1, 0) = cross;
+                
                 dy0[0] = hitx - lxcor;
                 dy0[1] = hity - lycor;
 
@@ -1773,6 +1800,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             
 //             Vinv *= 100.;
 
+//             Vinv *= 1./1.5;
+
             constexpr std::array<unsigned int, 6> alphaidxs = {{0, 2, 3, 4, 5, 1}};
 
             Matrix<double, 2, nlocal> Fhit;
@@ -1808,6 +1837,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               }
             }
             
+
+            
             if (iiter > 0) {
               Matrix<double, 2, 2> dV = Matrix<double, 2, 2>::Zero();
 //               dV(0, 0) = 1.;
@@ -1820,8 +1851,74 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 //               const double gradres = dhit.transpose()*dVinv*dhit + detfact.trace();
 //               const double hessres = dhit.transpose()*d2Vinv*dhit - (detfact*detfact).trace();
               
-              const double gradres = dhit.transpose()*dVinv*dhit + rl*detfact.trace();
-              const double hessres = dhit.transpose()*d2Vinv*dhit - rl*(detfact*detfact).trace();
+//               std::cout << "iiter = " << iiter << " ihit = " << ihit << " ispixel = " << ispixel << " normpre shape = " << normpre.rows() << " " << normpre.cols() << " icons = " << icons << std::endl;
+              
+//               MatrixXd detfactbig = MatrixXd::Zero(ncons, ncons);
+              MatrixXd dVbig = MatrixXd::Zero(ncons, ncons);
+              double gradnorm = 0.;
+              double hessnorm = 0.;
+              
+              double gradnormalt = 0.;
+              double hessnormalt = 0.;
+              
+              if (ispixel) {
+//                 detfactbig.block<2, 2>(icons, icons) = detfact;
+                dVbig.block<2, 2>(icons, icons) = dV;
+                
+//                 gradnorm = (normpre.block<2, 2>(icons, icons)*detfact).trace();
+//                 hessnorm = -(normpre.block<2, 2>(icons, icons)*detfact*detfact).trace();
+                
+                gradnorm = (gradpre.block<2, 2>(icons, icons)*dV).trace();
+                hessnorm = -(hesspre.block<2, 2>(icons, icons)*dV*dV).trace();
+                
+                gradnormalt = (Rpre.block<2, 2>(icons, icons)*dV).trace();
+                hessnormalt = -((Rpre*Rpre).block<2, 2>(icons, icons)*dV*dV).trace();
+              }
+              else {
+//                 detfactbig(icons, icons) = detfact(0, 0);
+                dVbig(icons, icons) = dV(0, 0);
+                
+//                 gradnorm = normpre(icons, icons)*detfact(0, 0);
+//                 hessnorm = -normpre(icons, icons)*detfact(0, 0)*detfact(0, 0);
+                
+                gradnorm = gradpre(icons, icons)*dV(0, 0);
+                hessnorm = -hesspre(icons, icons)*dV(0, 0)*dV(0, 0);
+                
+                gradnormalt = Rpre(icons, icons)*dV(0, 0);
+                hessnormalt = -(Rpre*Rpre)(icons, icons)*dV(0, 0)*dV(0, 0);
+              }
+
+              const double gradnormbig = (Rpre*dVbig).trace();
+              const double hessnormbig = -(Rpre*dVbig*Rpre*dVbig).trace();
+              const double hessnormbig2 = -(Rpre*Rpre*dVbig*dVbig).trace();
+              const double hessnormbig3 = -(normpre*Rpre*dVbig*Rpre*dVbig).trace();
+               
+//               const double gradnormbig = (gradpre*dVbig).trace();
+//               const double hessnormbig = -(hesspre*dVbig*dVbig).trace();
+              
+//               const double gradnormbig = (normpre*detfactbig).trace();
+
+              const double gradnormsimple = detfact.trace();
+              const double hessnormsimple = -(detfact*detfact).trace();
+              
+//               std::cout << "iiter = " << iiter << " ihit = " << ihit << " ispixel = " << ispixel << " gradnorm = " << gradnorm << " gradnormalt = " << gradnormalt << " hessnorm = " << hessnorm << " hessnormalt = " << hessnormalt << std::endl;
+              
+              std::cout << "iiter = " << iiter << " ihit = " << ihit << " ispixel = " << ispixel << " gradnorm = " << gradnorm << " gradnormalt = " << gradnormalt << " gradnormbig = " << gradnormbig << " hessnorm = " << hessnorm << " hessnormalt = " << hessnormalt << " hessnormbig2 = " << hessnormbig << " hessnormbig2 = " << hessnormbig2 << " hessnormbig3 = " << hessnormbig3 << std::endl;
+              
+//               std::cout << "iiter = " << iiter << " ihit = " << ihit << " ispixel = " << ispixel << " gradnorm = " << gradnorm << " gradnormsimple = " << gradnormsimple << " hessnorm = " << hessnorm << " hessnormsimple = " << hessnormsimple << std::endl;
+
+              
+//               std::cout << "iiter = " << iiter << " ihit = " << ihit << " ispixel = " << ispixel << " gradnormbig = " << gradnormbig << " gradnormsmall = " << gradnormsmall << " gradnormsimple = " << gradnormsimple << std::endl;
+              
+//               std::cout << "iiter = " << iiter << " ihit = " << ihit << " ispixel = " << ispixel << " gradnormbig = " << gradnormbig << " gradnorm = " << gradnorm << " gradnormsimple = " << gradnormsimple << " hessnormbig = " << hessnormbig << " hessnorm = " << hessnorm << " hessnormsimple = " << hessnormsimple  << std::endl;
+//               std::cout << "iiter = " << iiter << " ihit = " << ihit << " ispixel = " << ispixel << " hessnormbig = " << hessnormbig << " hessnorm = " << hessnorms << " hessnormsimple = " << hessnormsimple << std::endl;
+              
+              
+//               const double gradres = dhit.transpose()*dVinv*dhit + detfact.trace();
+//               const double hessres = dhit.transpose()*d2Vinv*dhit - (detfact*detfact).trace();
+
+              const double gradres = dhit.transpose()*dVinv*dhit + gradnorm;
+              const double hessres = dhit.transpose()*d2Vinv*dhit + hessnorm;
               
 //               const double hessres = (detfact*detfact).trace();
               
@@ -1870,6 +1967,21 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                 hessfull.block(fullresparmidx, fullidxs[iidx], 1, localsizes[iidx]) += d2chisqdresdlocal.segment(localidxs[iidx], localsizes[iidx]).transpose();
               }
 
+            }
+            
+            if (ispixel) {
+              rfull.segment<2>(icons) = dhit;
+              Ffull.block<2, nlocalstate>(icons, fullstateidx) += Fhit.leftCols(nlocalstate);
+              Vinvfull.block<2, 2>(icons, icons) += Vinv;
+              
+              icons += 2;
+            }
+            else {
+              rfull(icons) = dhit(0);
+              Ffull.block<1, nlocalstate>(icons, fullstateidx) += Fhit.topLeftCorner(1, nlocalstate);
+              Vinvfull(icons, icons) += Vinv(0, 0);
+              
+              icons += 1;
             }
 
             if (false && iiter > 0) {
@@ -2298,6 +2410,37 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       const Matrix5d Cinner = covfull.topLeftCorner<5,5>();
       
 
+      unsigned int nstatefree = nstateparms;
+      if (dogen) {
+        nstatefree -= 5;
+      }
+      if (fitFromSimParms_) {
+        nstatefree = 0;
+      }
+      
+      auto const &Ff = Ffull.rightCols(nstatefree);
+      
+      // covariance matrix for residuals
+      const MatrixXd R = Vinvfull - Vinvfull*Ff*(Ff.transpose()*Vinvfull*Ff).ldlt().solve(Ff.transpose()*Vinvfull);
+      SelfAdjointEigenSolver<MatrixXd> Reig(R);
+      
+      Rpre = R;
+
+  //     std::cout << "Reig.eigenvalues().head(nstateparms):\n" << Reig.eigenvalues().head(nstateparms) << std::endl;
+  //     std::cout << "Reig.eigenvalues().tail(ndof):\n" << Reig.eigenvalues().tail(ndof) << std::endl;
+      
+      // non-singular eigenvectors
+      auto const &M = Reig.eigenvectors().rightCols(ndof);
+
+      normpre = M*M.transpose();
+      
+      gradpre = M*M.transpose()*R;
+      hesspre = gradpre*R;
+      
+//       const double chisqvalalt = rfull.transpose()*M*Reig.eigenvalues().tail(ndof).asDiagonal()*M.transpose()*rfull;
+      
+//       std::cout << "iiter = " << iiter << " chisqval = " << chisqval << " chisqvalalt = " << chisqvalalt << std::endl;
+      
       if (debugprintout_) {
         std::cout<< "dxRef" << std::endl;
         std::cout<< dxRef << std::endl;
@@ -2378,6 +2521,50 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     if (!nValidHitsFinal) {
       continue;
     }
+    
+//     const MatrixXd R = Vinvfull - 2.*Vinvfull*Ffull*Cinvd.solve(Ffull.transpose()*Vinvfull);
+//     const MatrixXd R = Vinvfull - Vinvfull*Ffull*(Ffull.transpose()*Vinvfull*Ffull).ldlt().solve(Ffull.transpose()*Vinvfull);
+//     SelfAdjointEigenSolver<MatrixXd> Reig(R);
+    
+
+//     unsigned int nstatefree = nstateparms;
+//     if (dogen) {
+//       nstatefree -= 5;
+//     }
+//     if (fitFromSimParms_) {
+//       nstatefree = 0;
+//     }
+//     
+//     auto const &Ff = Ffull.rightCols(nstatefree);
+//     
+//     // covariance matrix for residuals
+//     const MatrixXd R = Vinvfull - Vinvfull*Ff*(Ff.transpose()*Vinvfull*Ff).ldlt().solve(Ff.transpose()*Vinvfull);
+//     SelfAdjointEigenSolver<MatrixXd> Reig(R);
+// 
+// //     std::cout << "Reig.eigenvalues().head(nstateparms):\n" << Reig.eigenvalues().head(nstateparms) << std::endl;
+// //     std::cout << "Reig.eigenvalues().tail(ndof):\n" << Reig.eigenvalues().tail(ndof) << std::endl;
+//     
+//     // non-singular eigenvectors
+//     auto const &M = Reig.eigenvectors().rightCols(ndof);
+//     
+// //     const MatrixXd MtM = M.transpose()*M;
+// 
+// //     std::cout << "MtM:\n" << MtM << std::endl;
+//     
+// //     const MatrixXd normpre = M*MtM.ldlt().solve(M.transpose());
+//     normpre = M*M.transpose();
+    
+//     std::cout << "normpre:\n" << normpre << std::endl;
+    
+//     std::cout << "normpre trace = " << normpre.trace() << std::endl;
+    
+//     SelfAdjointEigenSolver<MatrixXd> MtMeig(MtM);
+    
+//     std::cout << "MtMeig.eigenvalues():\n" << MtMeig.eigenvalues() << std::endl;
+
+    
+    
+    
     
 
     auto const& dchisqdx = gradfull.head(nstateparms);
