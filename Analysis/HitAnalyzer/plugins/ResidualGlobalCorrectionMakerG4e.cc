@@ -1800,7 +1800,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             
 //             Vinv *= 100.;
 
-//             Vinv *= 1./1.5;
+//             Vinv *= 1./1.2;
+            Vinv *= 1.2;
 
             constexpr std::array<unsigned int, 6> alphaidxs = {{0, 2, 3, 4, 5, 1}};
 
@@ -1846,7 +1847,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
               const Matrix<double, 2, 2> dVinv = -Vinv*dV*Vinv;
               const Matrix<double, 2, 2> d2Vinv = 2.*Vinv*dV*Vinv*dV*Vinv;
-              const Matrix<double, 2, 2> detfact = Vinv*dV;
+//               const Matrix<double, 2, 2> detfact = Vinv*dV;
 
 //               const double gradres = dhit.transpose()*dVinv*dhit + detfact.trace();
 //               const double hessres = dhit.transpose()*d2Vinv*dhit - (detfact*detfact).trace();
@@ -1855,111 +1856,44 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               
 //               MatrixXd detfactbig = MatrixXd::Zero(ncons, ncons);
               MatrixXd dVbig = MatrixXd::Zero(ncons, ncons);
-              double gradnorm = 0.;
-              double hessnorm = 0.;
-              
-              double gradnormalt = 0.;
-              double hessnormalt = 0.;
-              
               if (ispixel) {
-//                 detfactbig.block<2, 2>(icons, icons) = detfact;
                 dVbig.block<2, 2>(icons, icons) = dV;
-                
-//                 gradnorm = (normpre.block<2, 2>(icons, icons)*detfact).trace();
-//                 hessnorm = -(normpre.block<2, 2>(icons, icons)*detfact*detfact).trace();
-                
-                gradnorm = (gradpre.block<2, 2>(icons, icons)*dV).trace();
-                hessnorm = -(hesspre.block<2, 2>(icons, icons)*dV*dV).trace();
-                
-                gradnormalt = (Rpre.block<2, 2>(icons, icons)*dV).trace();
-                hessnormalt = -((Rpre*Rpre).block<2, 2>(icons, icons)*dV*dV).trace();
               }
               else {
-//                 detfactbig(icons, icons) = detfact(0, 0);
                 dVbig(icons, icons) = dV(0, 0);
-                
-//                 gradnorm = normpre(icons, icons)*detfact(0, 0);
-//                 hessnorm = -normpre(icons, icons)*detfact(0, 0)*detfact(0, 0);
-                
-                gradnorm = gradpre(icons, icons)*dV(0, 0);
-                hessnorm = -hesspre(icons, icons)*dV(0, 0)*dV(0, 0);
-                
-                gradnormalt = Rpre(icons, icons)*dV(0, 0);
-                hessnormalt = -(Rpre*Rpre)(icons, icons)*dV(0, 0)*dV(0, 0);
-              }
-
-              const double gradnormbig = (Rpre*dVbig).trace();
-              const double hessnormbig = -(Rpre*dVbig*Rpre*dVbig).trace();
-              const double hessnormbig2 = -(Rpre*Rpre*dVbig*dVbig).trace();
-              const double hessnormbig3 = -(normpre*Rpre*dVbig*Rpre*dVbig).trace();
-               
-//               const double gradnormbig = (gradpre*dVbig).trace();
-//               const double hessnormbig = -(hesspre*dVbig*dVbig).trace();
-              
-//               const double gradnormbig = (normpre*detfactbig).trace();
-
-              const double gradnormsimple = detfact.trace();
-              const double hessnormsimple = -(detfact*detfact).trace();
-              
-//               std::cout << "iiter = " << iiter << " ihit = " << ihit << " ispixel = " << ispixel << " gradnorm = " << gradnorm << " gradnormalt = " << gradnormalt << " hessnorm = " << hessnorm << " hessnormalt = " << hessnormalt << std::endl;
-              
-              std::cout << "iiter = " << iiter << " ihit = " << ihit << " ispixel = " << ispixel << " gradnorm = " << gradnorm << " gradnormalt = " << gradnormalt << " gradnormbig = " << gradnormbig << " hessnorm = " << hessnorm << " hessnormalt = " << hessnormalt << " hessnormbig2 = " << hessnormbig << " hessnormbig2 = " << hessnormbig2 << " hessnormbig3 = " << hessnormbig3 << std::endl;
-              
-//               std::cout << "iiter = " << iiter << " ihit = " << ihit << " ispixel = " << ispixel << " gradnorm = " << gradnorm << " gradnormsimple = " << gradnormsimple << " hessnorm = " << hessnorm << " hessnormsimple = " << hessnormsimple << std::endl;
-
-              
-//               std::cout << "iiter = " << iiter << " ihit = " << ihit << " ispixel = " << ispixel << " gradnormbig = " << gradnormbig << " gradnormsmall = " << gradnormsmall << " gradnormsimple = " << gradnormsimple << std::endl;
-              
-//               std::cout << "iiter = " << iiter << " ihit = " << ihit << " ispixel = " << ispixel << " gradnormbig = " << gradnormbig << " gradnorm = " << gradnorm << " gradnormsimple = " << gradnormsimple << " hessnormbig = " << hessnormbig << " hessnorm = " << hessnorm << " hessnormsimple = " << hessnormsimple  << std::endl;
-//               std::cout << "iiter = " << iiter << " ihit = " << ihit << " ispixel = " << ispixel << " hessnormbig = " << hessnormbig << " hessnorm = " << hessnorms << " hessnormsimple = " << hessnormsimple << std::endl;
-              
-              
-//               const double gradres = dhit.transpose()*dVinv*dhit + detfact.trace();
-//               const double hessres = dhit.transpose()*d2Vinv*dhit - (detfact*detfact).trace();
-
-              const double gradres = dhit.transpose()*dVinv*dhit + gradnorm;
-              const double hessres = dhit.transpose()*d2Vinv*dhit + hessnorm;
-              
-//               const double hessres = (detfact*detfact).trace();
-              
-              if (false && true) {
-                std::cout << "iiter = " << iiter << " ihit = " << ihit << " gradres = " << gradres << " hessres = " << hessres << std::endl;
               }
               
+              MatrixXd &detfact = detfactv.emplace_back();
+              detfact = Rpre*dVbig;
+
+              const double gradnorm = detfact.trace();
               
-              if (false && ispixel) {
-              
+              for (unsigned int jvalid = 0; jvalid <= ivalidhit; ++jvalid) {
+                const unsigned int fullresparmidxj = nstateparms + nparsBfield + nparsEloss + nparsAlignment + jvalid;
                 
+                const MatrixXd &detfactj = detfactv[jvalid];
                 
-                const double dh = 1e-12;
+                const double hessnorm = -(detfact*detfactj).trace();
                 
-                const Matrix2d Vnom = Vinv.inverse();
-                const Matrix2d Vup = Vnom + dh*dV;
-                const Matrix2d Vdown = Vnom - dh*dV;
+//                 std::cout << "iiter = " << iiter << " ihit = " << ihit << " ivalidhit = " << ivalidhit << " jvalid = " << jvalid << " gradnorm = " << gradnorm << " hessnorm = " << hessnorm << std::endl;
                 
-                const double norm = std::log(Vnom.determinant());
-                const double normup = std::log(Vup.determinant());
-                const double normdown = std::log(Vdown.determinant());
-                
-                const double gradfinite = (normup-normdown)/(2.*dh);
-                const double hessfinite = (normup + normdown - 2.*norm)/(dh*dh);
-                
-                const double grada = detfact.trace();
-                const double hessa = -(detfact*detfact).trace();
-                
-                std::cout << "iiter = " << iiter << " ihit = " << ihit << std::endl;
-                std::cout <<  "Vinv:\n" << Vinv << std::endl;
-                std::cout <<  "Vnom:\n" << Vnom << std::endl;
-                std::cout << "norm = " << norm << " normup = " << normup << " normdown = " << normdown << " grada = " << grada << " hessa = " << hessa << " gradfinite = " << gradfinite << " hessfinite = " << hessfinite << std::endl;
-                
+                hessfull(fullresparmidx, fullresparmidxj) += hessnorm;
+                if (fullresparmidxj != fullresparmidx) {
+                  hessfull(fullresparmidxj, fullresparmidx) += hessnorm;
+                }
               }
+            
+            
+
+              const double gradres = dhit.transpose()*dVinv*dhit;
+              const double hessres = dhit.transpose()*d2Vinv*dhit;
 
               const Matrix<double, nlocal, 1> d2chisqdresdlocal = 2.*Fhit.transpose()*dVinv*dhit;
 //               const Matrix<double, nlocal, 1> d2chisqdresdlocal = 0.*Fhit.transpose()*dVinv*dhit;
 
 //               std::cout << "iiter = " << iiter << " ihit = " << ihit << " gradres = " << gradres << " hessres = " << hessres << std::endl;
               
-              gradfull(fullresparmidx) += gradres;
+              gradfull(fullresparmidx) += gradres + gradnorm;
               hessfull(fullresparmidx, fullresparmidx) += hessres;
 
               for (unsigned int iidx = 0; iidx < localidxs.size(); ++iidx) {
