@@ -275,7 +275,6 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   
   const bool dogen = fitFromGenParms_;
   const bool dolocalupdate = fitFromSimParms_;
-//   const bool dolocalupdate = true;
 
   using namespace edm;
 
@@ -694,35 +693,10 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     const unsigned int nparsAlignment = 5*nvalid + nvalidalign2d;
     const unsigned int nparsBfield = nhits;
     const unsigned int nparsEloss = nhits;
-    const unsigned int nparsRes = nvalid;
-    const unsigned int npars = nparsAlignment + nparsBfield + nparsEloss + nparsRes;
+    const unsigned int npars = nparsAlignment + nparsBfield + nparsEloss;
     
     const unsigned int nstateparms = 5*(nhits+1);
     const unsigned int nparmsfull = nstateparms + npars;
-    
-    const int ncons = 5*nhits + nvalid + nvalidpixel;
-    
-    ndof = ncons - nstateparms;
-    
-//       ndof = 5*nhits + nvalid + nvalidalign2d - nstateparms;
-//     ndof = 5*nhits + nvalid + nvalidpixel - nstateparms;
-//       ndof = 5*nhits + 2.*nvalid - nstateparms;
-    
-    if (bsConstraint_) {
-      ndof += 2;
-    }
-    
-    if (dogen) {
-      ndof += 5;
-    }
-    
-    if (fitFromSimParms_) {
-      ndof += nstateparms - 5;
-    }
-    
-    const double rl = double(ncons-ndof)/double(ncons);
-    
-//     std::cout << "ncons = " << ncons << " ndof = " << ndof << " rl = " << rl << std::endl;
     
     VectorXd gradfull;
     MatrixXd hessfull;
@@ -745,15 +719,6 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     MatrixXd hess;
     LDLT<MatrixXd> Cinvd;
     MatrixXd covfull = MatrixXd::Zero(nstateparms, nstateparms);
-    
-    VectorXd rfull;
-    MatrixXd Ffull;
-    MatrixXd Vinvfull;
-    
-    MatrixXd normpre;
-    MatrixXd Rpre;
-    MatrixXd gradpre;
-    MatrixXd hesspre;
     
     if (dogen && genpart==nullptr) {
       std::cout << "no gen part, skipping track\n";
@@ -840,31 +805,14 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     
     const bool anomDebug = false;
     
-//     const unsigned int niters = (dogen && !dolocalupdate) || (dogen && fitFromSimParms_) ? 1 : 10;
+    const unsigned int niters = (dogen && !dolocalupdate) || (dogen && fitFromSimParms_) ? 1 : 10;
     
-//     const unsigned int niters = dogen && fitFromSimParms_ ? 1 : 10;
-    const unsigned int niters = 10;
-    
-
-    std::vector<Matrix<double, 2, 2>> Vinvvec;
-    std::vector<Matrix<double, 2, 2>> Fhitstatevec;
-    std::vector<Matrix<double, 2, 1>> dy0vec;
-
-    Vinvvec.reserve(nvalid);
-    Fhitstatevec.reserve(nvalid);
-    dy0vec.reserve(nvalid);
-
     for (unsigned int iiter=0; iiter<niters; ++iiter) {
       if (debugprintout_) {
         std::cout<< "iter " << iiter << std::endl;
       }
 
 //       std::cout<< "iter " << iiter << std::endl;
-
-      Vinvvec.clear();
-      Fhitstatevec.clear();
-      dy0vec.clear();
-
             
       hitidxv.clear();
       hitidxv.reserve(nvalid);
@@ -1030,10 +978,6 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       gradfull = VectorXd::Zero(nparmsfull);
       hessfull = MatrixXd::Zero(nparmsfull, nparmsfull);
       
-      rfull = VectorXd::Zero(ncons);
-      Ffull = MatrixXd::Zero(ncons, nstateparms);
-      Vinvfull = MatrixXd::Zero(ncons, ncons);
-      
       if (islikelihood) {
         dhessv.assign(nhits, MatrixXd::Zero(nstateparms, nstateparms));
       }
@@ -1065,17 +1009,12 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       
       unsigned int parmidx = 0;
       unsigned int alignmentparmidx = 0;
-      unsigned int resparmidx = 0;
       unsigned int ivalidhit = 0;
-      
-      unsigned int icons = 0;
-      
-//       Matrix<double, 5, 1> dxref = Matrix<double, 5, 1>::Zero();
 
       if (iiter > 0) {
         //update current state from reference point state (errors not needed beyond first iteration)
         
-        auto const &dxlocal = dxfull.head<5>();
+        auto const& dxlocal = dxfull.head<5>();
 
         
         if (dopca) {
@@ -1113,17 +1052,12 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           refFts[5] = pzupd;
           refFts[6] = charge;
         }
-        
-//         dxref = dxfull.head<5>();
-//         dxfull.head<5>() = Matrix<double, 5, 1>::Zero();
       }
       
       Matrix<double, 5, 5> ref2curvjac = dopca ? pca2curvJacobianD(refFts, field, *bsH) : Matrix<double, 5, 5>::Identity();
 
       Matrix<double, 7, 1> updtsos = refFts;
 
-      Matrix<double, 5, 5> Fstatetot = Matrix<double, 5, 5>::Identity();
-      
       Matrix<double, 5, 5> Qtot = Matrix<double, 5, 5>::Zero();
 
       float e = genpart == nullptr ? -99. : std::sqrt(genpart->momentum().mag2() + mmu*mmu);
@@ -1193,16 +1127,6 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         hessfull.block<nlocalstate,nlocalstate>(fullstateidx, fullstateidx) += hesslocal.topLeftCorner<nlocalstate,nlocalstate>();
       }
       
-
-      MatrixXd dH;
-
-      std::vector<MatrixXd> detfactpropv;
-      detfactpropv.reserve(hits.size());
-
-      std::vector<MatrixXd> detfactv;
-      detfactv.reserve(nvalid);
-      
-      std::vector<Matrix<double, 5, 1>> dcurvvec(hits.size() + 1, Matrix<double, 5, 1>::Zero());
       
       for (unsigned int ihit = 0; ihit < hits.size(); ++ihit) {
 //         std::cout << "iiter = " << iiter << " ihit " << ihit << std::endl;
@@ -1276,20 +1200,12 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         const Matrix<double, 5, 5> Qcurv = std::get<2>(propresult);
         const Matrix<double, 5, 7> FdFmcurv = std::get<3>(propresult);
         const double dEdxlast = std::get<4>(propresult);
-//         const Matrix<double, 5, 5> dQcurv = std::get<5>(propresult);
-        const Matrix<double, 5, 5> dQcurv = Qcurv;
         
         Matrix<double, 5, 7> FdFm = FdFmcurv;
         if (ihit == 0) {
           // extra jacobian from reference state to curvilinear potentially needed
           FdFm.leftCols<5>() = FdFmcurv.leftCols<5>()*ref2curvjac;
         }
-        
-        Fstatetot = (FdFm.leftCols<5>()*Fstatetot).eval();
-        
-//         if (iiter > 0) {
-//           dxfull.segment<5>(5*(ihit+1)) += -Fstatetot*dxref;
-//         }
 
         Qtot = (FdFmcurv.leftCols<5>()*Qtot*FdFmcurv.leftCols<5>().transpose()).eval();
         Qtot += Qcurv;
@@ -1356,14 +1272,12 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
         }
         
-        const Matrix<double, 5, 1> &dcurvlast = dcurvvec[ihit];
-        Matrix<double, 5, 1> &dcurv = dcurvvec[ihit + 1];
         
-        if (iiter==0) {
-          layerStates.push_back(updtsos);
-        }
-        else {
-          if (dolocalupdate) {
+        if (dolocalupdate) {
+          if (iiter==0) {
+            layerStates.push_back(updtsos);
+          }
+          else {
             //current state from previous state on this layer
             //save current parameters
 
@@ -1381,42 +1295,12 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
             dx0 = (localparms - localparmsprop).head<5>();
           }
-          else {
-            Matrix<double, 7, 1>& oldtsos = layerStates[ihit];
-            const Matrix<double, 5, 5> Hold = curv2localJacobianAltelossD(oldtsos, field, surface, dEdxlast, mmu, dbetaval);
-            const Matrix<double, 5, 1> dxlocal = Hold*dxfull.segment<5>(5*(ihit+1));
-
-            Matrix<double, 6, 1> localparmsupd = globalToLocal(oldtsos, surface);
-            localparmsupd.head<5>() += dxlocal;
-            
-            dcurv = Hm.partialPivLu().solve((localparmsupd-localparmsprop).head<5>());
-            
-            oldtsos = localToGlobal(localparmsupd, surface);
-          }
         }
 
-        //ternary operator is error-prone with eigen stuff
-//         const Matrix<double, 5, 5> &Hp = dolocalupdate ? curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, mmu, dbetaval) : Hm;
-// 
-//         const Matrix<double, 5, 5> &Q = dolocalupdate ? Hm*Qcurv*Hm.transpose() : Qcurv;
-//         const Matrix<double, 5, 5> Qinv = Q.inverse();
-// 
-//         const Matrix<double, 5, 5> &dQ = dolocalupdate ? Hm*dQcurv*Hm.transpose() : dQcurv;
+        const Matrix<double, 5, 5> &Hp = dolocalupdate ? curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, mmu, dbetaval) : Hm;
 
-        const Matrix<double, 5, 5> Hp = curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, mmu, dbetaval);
-
-        Matrix<double, 5, 5> Q = Qcurv;
-        if (dolocalupdate) {
-          Q = Hm*Qcurv*Hm.transpose();
-        }
-        
+        const Matrix<double, 5, 5> &Q = dolocalupdate ? Hm*Qcurv*Hm.transpose() : Qcurv;
         const Matrix<double, 5, 5> Qinv = Q.inverse();
-
-        Matrix<double, 5, 5> dQ = dQcurv;
-        if (dolocalupdate) {
-          dQ = Hm*dQcurv*Hm.transpose();
-        }
-
 
         {
           constexpr unsigned int nlocalstate = 10;
@@ -1432,8 +1316,6 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           const unsigned int fullstateidx = 5*ihit;
           const unsigned int fullparmidx = nstateparms + parmidx;
 
-          const unsigned int fullresparmidx = fullparmidx + 1;
-
           //TODO reduce use of magic numbers
           Matrix<double, 5, nlocal> Fprop;
           if (dolocalupdate) {
@@ -1447,20 +1329,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             Fprop.rightCols<2>() = -FdFm.rightCols<2>();
           }
 
-//           // zero material gradients
-//           Fprop.rightCols<1>() *= 0.;
-          
-          Matrix<double, nlocal, 1> dxprop = Matrix<double, nlocal, 1>::Zero();
-//           if (iiter > 0) {
-//             dxprop.head<nlocalstate>() = dxfull.segment<nlocalstate>(fullstateidx);
-//           }
-          dxprop.head<5>() = dcurvlast;
-          dxprop.segment<5>(5) = dcurv;
-          
-          const Matrix<double, 5, 1> dprop = dx0 + Fprop*dxprop;
-
-          const double propchisq = dprop.transpose()*Qinv*dprop;
-          const Matrix<double, nlocal, 1> propgrad = 2.*Fprop.transpose()*Qinv*dprop;
+          const double propchisq = dx0.transpose()*Qinv*dx0;
+          const Matrix<double, nlocal, 1> propgrad = 2.*Fprop.transpose()*Qinv*dx0;
           const Matrix<double, nlocal, nlocal> prophess = 2.*Fprop.transpose()*Qinv*Fprop;
 
           constexpr std::array<unsigned int, 2> localsizes = {{ nlocalstate, nlocalparms }};
@@ -1473,80 +1343,6 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             gradfull.segment(fullidxs[iidx], localsizes[iidx]) += propgrad.segment(localidxs[iidx], localsizes[iidx]);
             for (unsigned int jidx = 0; jidx < localidxs.size(); ++jidx) {
               hessfull.block(fullidxs[iidx], fullidxs[jidx], localsizes[iidx], localsizes[jidx]) += prophess.block(localidxs[iidx], localidxs[jidx], localsizes[iidx], localsizes[jidx]);
-            }
-          }
-          
-          rfull.segment<5>(icons) = dprop;
-          Ffull.block<5, nlocalstate>(icons, fullstateidx) += Fprop.leftCols<nlocalstate>();
-          Vinvfull.block<5, 5>(icons, icons) += Qinv;
-          
-          icons += 5;
-
-          if (false && iiter > 0) {
-//             Matrix<double, 2, 2> dV = Matrix<double, 2, 2>::Zero();
-//             dV(0, 0) = 1.;
-
-            const Matrix<double, 5, 5> dQinv = -Qinv*dQ*Qinv;
-            const Matrix<double, 5, 5> d2Qinv = 2.*Qinv*dQ*Qinv*dQ*Qinv;
-            const Matrix<double, 5, 5> detfact = Qinv*dQ;
-
-            const double gradres = dprop.transpose()*dQinv*dprop + detfact.trace();
-            const double hessres = dprop.transpose()*d2Qinv*dprop - (detfact*detfact).trace();
-
-            const Matrix<double, nlocal, 1> d2chisqdresdlocal = 2.*Fprop.transpose()*dQinv*dprop;
-
-            gradfull(fullresparmidx) += gradres;
-            hessfull(fullresparmidx, fullresparmidx) += hessres;
-
-            for (unsigned int iidx = 0; iidx < localidxs.size(); ++iidx) {
-              hessfull.block(fullidxs[iidx], fullresparmidx, localsizes[iidx], 1) += d2chisqdresdlocal.segment(localidxs[iidx], localsizes[iidx]);
-              hessfull.block(fullresparmidx, fullidxs[iidx], 1, localsizes[iidx]) += d2chisqdresdlocal.segment(localidxs[iidx], localsizes[iidx]).transpose();
-            }
-
-          }
-
-          if (false && iiter > 0) {
-            const Matrix<double, 5, nlocalstate> Fpropstate = Fprop.leftCols<nlocalstate>();
-
-            const Matrix<double, 5, 5> dQinv = -Qinv*dQ*Qinv;
-            const Matrix<double, 5, 5> d2Qinv = 2.*Qinv*dQ*Qinv*dQ*Qinv;
-
-            dH = MatrixXd::Zero(nstateparms, nstateparms);
-            dH.block<nlocalstate, nlocalstate>(fullstateidx, fullstateidx) = 2.*Fpropstate.transpose()*dQinv*Fpropstate;
-
-            MatrixXd d2H = MatrixXd::Zero(nstateparms, nstateparms);
-            d2H.block<nlocalstate, nlocalstate>(fullstateidx, fullstateidx) = 2.*Fpropstate.transpose()*d2Qinv*Fpropstate;
-
-            MatrixXd &detfact = detfactpropv.emplace_back();
-            detfact = Cinvd.solve(dH);
-
-            const double gradres = dprop.transpose()*dQinv*dprop - detfact.trace();
-
-            const Matrix<double, nlocal, 1> d2chisqdresdlocal = 2.*Fprop.transpose()*dQinv*dprop;
-
-            gradfull(fullresparmidx) += gradres;
-
-            for (unsigned int iidx = 0; iidx < localidxs.size(); ++iidx) {
-              hessfull.block(fullidxs[iidx], fullresparmidx, localsizes[iidx], 1) += d2chisqdresdlocal.segment(localidxs[iidx], localsizes[iidx]);
-              hessfull.block(fullresparmidx, fullidxs[iidx], 1, localsizes[iidx]) += d2chisqdresdlocal.segment(localidxs[iidx], localsizes[iidx]).transpose();
-            }
-
-            for (unsigned int jhit = 0; jhit <= ihit; ++jhit) {
-              const unsigned int fullresparmidxj = nstateparms + 2*jhit + 1;
-
-              const MatrixXd &detfactj = detfactpropv[jhit];
-
-//               std::cout << "ihit = " << ihit << " jhit = " << jhit << " detfact shape " << detfact.rows() << " " << detfact.cols() << " detfactj shape " << detfactj.rows() << " " << detfactj.cols() << std::endl;
-
-              const double hessres = (detfact*detfactj).trace();
-
-              hessfull(fullresparmidx, fullresparmidxj) += hessres;
-              if (fullresparmidxj == fullresparmidx) {
-                hessfull(fullresparmidx, fullresparmidxj) += dprop.transpose()*d2Qinv*dprop - (Cinvd.solve(d2H)).trace();
-              }
-              else {
-                hessfull(fullresparmidxj, fullresparmidx) += hessres;
-              }
             }
           }
 
@@ -1598,8 +1394,6 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             
             const unsigned int fullstateidx = 5*(ihit+1) + 3;
             const unsigned int fullparmidx = nstateparms + nparsBfield + nparsEloss + alignmentparmidx;
-            
-            const unsigned int fullresparmidx = nstateparms + nparsBfield + nparsEloss + nparsAlignment + resparmidx;
 
             const bool ispixel = GeomDetEnumerators::isTrackerPixel(preciseHit->det()->subDetector());
             
@@ -1644,12 +1438,6 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               Vinv = Matrix<double, 2, 2>::Zero();
               Vinv(0,0) = 1./preciseHit->localPositionError().xx();
 //               Vinv(1,1) = 1./yerr2;
-
-//               //bias the uncertainty by xx um in quadrature
-//               Vinv(0, 0) = 1./(preciseHit->localPositionError().xx() - 2e-3*2e-3);
-//               Vinv(0, 0) = 1./(preciseHit->localPositionError().xx() + 5e-3*5e-3);
-              //biased small uncertainty by xx um in quadrature
-//               Vinv(0, 0) = 1./(1e-3*1e-3);
               
               R = Matrix2d::Identity();
 
@@ -1665,10 +1453,6 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                     preciseHit->localPositionError().xy(), preciseHit->localPositionError().yy();
               if (ispixel) {
 
-//                 const double cross = 0.5*std::sqrt(iV(0, 0)*iV(1, 1));
-//                 iV(0, 1) = cross;
-//                 iV(1, 0) = cross;
-                
                 dy0[0] = hitx - lxcor;
                 dy0[1] = hity - lycor;
 
@@ -1797,11 +1581,6 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             else {
               Vinv = Matrix<double, 2, 2>::Zero();
             }
-            
-//             Vinv *= 100.;
-
-//             Vinv *= 1./1.2;
-            Vinv *= 1.2;
 
             constexpr std::array<unsigned int, 6> alphaidxs = {{0, 2, 3, 4, 5, 1}};
 
@@ -1812,17 +1591,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             for (unsigned int ialign = 0; ialign < nlocalalignment; ++ialign) {
               Fhit.col(ialign + 2) = -R*A.col(alphaidxs[ialign]);
             }
-            
-            Matrix<double, nlocal, 1> dxhit = Matrix<double, nlocal, 1>::Zero();
-//             if (iiter > 0) {
-//               dxhit.head(nlocalstate) = dxfull.segment<nlocalstate>(fullstateidx);
-//             }
-            dxhit.head(nlocalstate) = dcurv.tail<2>();
 
-            const Matrix<double, 2, 1> dhit = dy0 + Fhit*dxhit;
-            
-            const double hitchisq = dhit.transpose()*Vinv*dhit;
-            const Matrix<double, nlocal, 1> hitgrad = 2.*Fhit.transpose()*Vinv*dhit;
+            const double hitchisq = dy0.transpose()*Vinv*dy0;
+            const Matrix<double, nlocal, 1> hitgrad = 2.*Fhit.transpose()*Vinv*dy0;
             const Matrix<double, nlocal, nlocal> hithess = 2.*Fhit.transpose()*Vinv*Fhit;
 
             constexpr std::array<unsigned int, 2> localsizes = {{ nlocalstate, nlocalparms }};
@@ -1838,141 +1609,6 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               }
             }
             
-
-            
-            if (iiter > 0) {
-              Matrix<double, 2, 2> dV = Matrix<double, 2, 2>::Zero();
-//               dV(0, 0) = 1.;
-              dV(0, 0) = 1./Vinv(0, 0);
-
-              const Matrix<double, 2, 2> dVinv = -Vinv*dV*Vinv;
-              const Matrix<double, 2, 2> d2Vinv = 2.*Vinv*dV*Vinv*dV*Vinv;
-//               const Matrix<double, 2, 2> detfact = Vinv*dV;
-
-//               const double gradres = dhit.transpose()*dVinv*dhit + detfact.trace();
-//               const double hessres = dhit.transpose()*d2Vinv*dhit - (detfact*detfact).trace();
-              
-//               std::cout << "iiter = " << iiter << " ihit = " << ihit << " ispixel = " << ispixel << " normpre shape = " << normpre.rows() << " " << normpre.cols() << " icons = " << icons << std::endl;
-              
-//               MatrixXd detfactbig = MatrixXd::Zero(ncons, ncons);
-              MatrixXd dVbig = MatrixXd::Zero(ncons, ncons);
-              if (ispixel) {
-                dVbig.block<2, 2>(icons, icons) = dV;
-              }
-              else {
-                dVbig(icons, icons) = dV(0, 0);
-              }
-              
-              MatrixXd &detfact = detfactv.emplace_back();
-              detfact = Rpre*dVbig;
-
-              const double gradnorm = detfact.trace();
-              
-              for (unsigned int jvalid = 0; jvalid <= ivalidhit; ++jvalid) {
-                const unsigned int fullresparmidxj = nstateparms + nparsBfield + nparsEloss + nparsAlignment + jvalid;
-                
-                const MatrixXd &detfactj = detfactv[jvalid];
-                
-                const double hessnorm = -(detfact*detfactj).trace();
-                
-//                 std::cout << "iiter = " << iiter << " ihit = " << ihit << " ivalidhit = " << ivalidhit << " jvalid = " << jvalid << " gradnorm = " << gradnorm << " hessnorm = " << hessnorm << std::endl;
-                
-                hessfull(fullresparmidx, fullresparmidxj) += hessnorm;
-                if (fullresparmidxj != fullresparmidx) {
-                  hessfull(fullresparmidxj, fullresparmidx) += hessnorm;
-                }
-              }
-            
-            
-
-              const double gradres = dhit.transpose()*dVinv*dhit;
-              const double hessres = dhit.transpose()*d2Vinv*dhit;
-
-              const Matrix<double, nlocal, 1> d2chisqdresdlocal = 2.*Fhit.transpose()*dVinv*dhit;
-//               const Matrix<double, nlocal, 1> d2chisqdresdlocal = 0.*Fhit.transpose()*dVinv*dhit;
-
-//               std::cout << "iiter = " << iiter << " ihit = " << ihit << " gradres = " << gradres << " hessres = " << hessres << std::endl;
-              
-              gradfull(fullresparmidx) += gradres + gradnorm;
-              hessfull(fullresparmidx, fullresparmidx) += hessres;
-
-              for (unsigned int iidx = 0; iidx < localidxs.size(); ++iidx) {
-                hessfull.block(fullidxs[iidx], fullresparmidx, localsizes[iidx], 1) += d2chisqdresdlocal.segment(localidxs[iidx], localsizes[iidx]);
-                hessfull.block(fullresparmidx, fullidxs[iidx], 1, localsizes[iidx]) += d2chisqdresdlocal.segment(localidxs[iidx], localsizes[iidx]).transpose();
-              }
-
-            }
-            
-            if (ispixel) {
-              rfull.segment<2>(icons) = dhit;
-              Ffull.block<2, nlocalstate>(icons, fullstateidx) += Fhit.leftCols(nlocalstate);
-              Vinvfull.block<2, 2>(icons, icons) += Vinv;
-              
-              icons += 2;
-            }
-            else {
-              rfull(icons) = dhit(0);
-              Ffull.block<1, nlocalstate>(icons, fullstateidx) += Fhit.topLeftCorner(1, nlocalstate);
-              Vinvfull(icons, icons) += Vinv(0, 0);
-              
-              icons += 1;
-            }
-
-            if (false && iiter > 0) {
-              Matrix<double, 2, 2> dV = Matrix<double, 2, 2>::Zero();
-              dV(0, 0) = 1.;
-
-              const Matrix<double, 2, 2> dVinv = -Vinv*dV*Vinv;
-              const Matrix<double, 2, 2> d2Vinv = 2.*Vinv*dV*Vinv*dV*Vinv;
-              
-              //TODO optimize this to avoid working with "big" matrices
-              const Matrix<double, 2, 2> Fhitstate = Fhit.leftCols(2);
-              
-              dH = MatrixXd::Zero(nstateparms, nstateparms);
-              dH.block<2, 2>(fullstateidx, fullstateidx) = 2.*Fhitstate.transpose()*dVinv*Fhitstate;
-
-              MatrixXd d2H = MatrixXd::Zero(nstateparms, nstateparms);
-              d2H.block<2, 2>(fullstateidx, fullstateidx) = 2.*Fhitstate.transpose()*d2Vinv*Fhitstate;
-
-
-              MatrixXd &detfact = detfactv.emplace_back();
-              detfact = Cinvd.solve(dH);
-              
-              const double gradres = dhit.transpose()*dVinv*dhit - detfact.trace();
-              
-              const Matrix<double, nlocal, 1> d2chisqdresdlocal = 2.*Fhit.transpose()*dVinv*dhit;
-              
-              gradfull(fullresparmidx) += gradres;
-              
-              for (unsigned int iidx = 0; iidx < localidxs.size(); ++iidx) {
-                hessfull.block(fullidxs[iidx], fullresparmidx, localsizes[iidx], 1) += d2chisqdresdlocal.segment(localidxs[iidx], localsizes[iidx]);
-                hessfull.block(fullresparmidx, fullidxs[iidx], 1, localsizes[iidx]) += d2chisqdresdlocal.segment(localidxs[iidx], localsizes[iidx]).transpose();
-              }
-              
-//               std::cout << "iiter = " << iiter << " ihit = " << ihit << " ivalidhit = " << ivalidhit << " gradres = " << gradres << std::endl;
-
-              
-              for (unsigned int jvalid = 0; jvalid <= ivalidhit; ++jvalid) {
-                const unsigned int fullresparmidxj = nstateparms + nparsBfield + nparsEloss + nparsAlignment + jvalid;
-                
-                const MatrixXd &detfactj = detfactv[jvalid];
-                
-                const double hessres = (detfact*detfactj).trace();
-                
-//                 std::cout << "iiter = " << iiter << " ihit = " << ihit << " ivalidhit = " << ivalidhit << " jvalid = " << jvalid << " gradres = " << gradres << " hessres = " << hessres << std::endl;
-
-                
-                hessfull(fullresparmidx, fullresparmidxj) += hessres;
-                if (fullresparmidxj == fullresparmidx) {
-                  hessfull(fullresparmidx, fullresparmidxj) += dhit.transpose()*d2Vinv*dhit - (Cinvd.solve(d2H)).trace();
-                }
-                else {
-                  hessfull(fullresparmidxj, fullresparmidx) += hessres;
-                }
-              }
-            
-            }
-            
             for (unsigned int idim=0; idim<nlocalalignment; ++idim) {
               const unsigned int xglobalidx = detidparms.at(std::make_pair(alphaidxs[idim], aligndetid));
               globalidxv[nparsBfield + nparsEloss + alignmentparmidx] = xglobalidx;
@@ -1981,14 +1617,6 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                 hitidxv.push_back(xglobalidx);
               }
             }
-
-            const unsigned int resglobalidx = detidparms.at(std::make_pair(8, hit->geographicalId()));
-            globalidxv[nparsBfield + nparsEloss + nparsAlignment + resparmidx] = resglobalidx;
-            ++resparmidx;
-
-            Vinvvec.push_back(Vinv);
-            Fhitstatevec.push_back(Fhit.leftCols(2));
-            dy0vec.push_back(dy0);
             
             localqop_iter[ivalidhit] = localqopval;
             localdxdz_iter[ivalidhit] = localdxdzval;
@@ -2248,23 +1876,6 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           ivalidhit++;
             
         }
-
-        if (false && iiter > 0) {
-          const unsigned int fullresparmidxprop = nstateparms + 2*ihit + 1;
-          const MatrixXd &detfactprop = detfactpropv[ihit];
-
-          for (unsigned int jvalid = 0; jvalid < ivalidhit; ++jvalid) {
-            const unsigned int fullresparmidxhit = nstateparms + nparsBfield + nparsEloss + nparsAlignment + jvalid;
-
-            const MatrixXd &detfacthit = detfactv[jvalid];
-
-            const double hessres = (detfactprop*detfacthit).trace();
-
-            hessfull(fullresparmidxprop, fullresparmidxhit) += hessres;
-            hessfull(fullresparmidxhit, fullresparmidxprop) += hessres;
-
-          }
-        }
         
       }
             
@@ -2322,21 +1933,21 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       
       chisqvalold = chisq0val + deltachisq[0];
         
-// //       ndof = 5*nhits + nvalid + nvalidalign2d - nstateparms;
-//       ndof = 5*nhits + nvalid + nvalidpixel - nstateparms;
-// //       ndof = 5*nhits + 2.*nvalid - nstateparms;
-//       
-//       if (bsConstraint_) {
-//         ndof += 2;
-//       }
-//       
-//       if (dogen) {
-//         ndof += 5;
-//       }
-//       
-//       if (fitFromSimParms_) {
-//         ndof += nstateparms - 5;
-//       }
+//       ndof = 5*nhits + nvalid + nvalidalign2d - nstateparms;
+      ndof = 5*nhits + nvalid + nvalidpixel - nstateparms;
+//       ndof = 5*nhits + 2.*nvalid - nstateparms;
+      
+      if (bsConstraint_) {
+        ndof += 2;
+      }
+      
+      if (dogen) {
+        ndof += 5;
+      }
+      
+      if (fitFromSimParms_) {
+        ndof += nstateparms - 5;
+      }
       
       covfull = 2.*Cinvd.solve(MatrixXd::Identity(nstateparms,nstateparms));
       
@@ -2344,37 +1955,6 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       const Matrix5d Cinner = covfull.topLeftCorner<5,5>();
       
 
-      unsigned int nstatefree = nstateparms;
-      if (dogen) {
-        nstatefree -= 5;
-      }
-      if (fitFromSimParms_) {
-        nstatefree = 0;
-      }
-      
-      auto const &Ff = Ffull.rightCols(nstatefree);
-      
-      // covariance matrix for residuals
-      const MatrixXd R = Vinvfull - Vinvfull*Ff*(Ff.transpose()*Vinvfull*Ff).ldlt().solve(Ff.transpose()*Vinvfull);
-      SelfAdjointEigenSolver<MatrixXd> Reig(R);
-      
-      Rpre = R;
-
-  //     std::cout << "Reig.eigenvalues().head(nstateparms):\n" << Reig.eigenvalues().head(nstateparms) << std::endl;
-  //     std::cout << "Reig.eigenvalues().tail(ndof):\n" << Reig.eigenvalues().tail(ndof) << std::endl;
-      
-      // non-singular eigenvectors
-      auto const &M = Reig.eigenvectors().rightCols(ndof);
-
-      normpre = M*M.transpose();
-      
-      gradpre = M*M.transpose()*R;
-      hesspre = gradpre*R;
-      
-//       const double chisqvalalt = rfull.transpose()*M*Reig.eigenvalues().tail(ndof).asDiagonal()*M.transpose()*rfull;
-      
-//       std::cout << "iiter = " << iiter << " chisqval = " << chisqval << " chisqvalalt = " << chisqvalalt << std::endl;
-      
       if (debugprintout_) {
         std::cout<< "dxRef" << std::endl;
         std::cout<< dxRef << std::endl;
@@ -2435,16 +2015,12 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       }
 
       
-      if (iiter > 0 && edmval < 1e-5) {
+      if (iiter > 0 && dolocalupdate && edmval < 1e-5) {
         break;
       }
-      
-//       if (iiter > 0 && dolocalupdate && edmval < 1e-5) {
-//         break;
-//       }
-//       else if (iiter > 0 && !dolocalupdate && edmvalref < 1e-5) {
-//         break;
-//       }
+      else if (iiter > 0 && !dolocalupdate && edmvalref < 1e-5) {
+        break;
+      }
     
     }
     
@@ -2455,50 +2031,6 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     if (!nValidHitsFinal) {
       continue;
     }
-    
-//     const MatrixXd R = Vinvfull - 2.*Vinvfull*Ffull*Cinvd.solve(Ffull.transpose()*Vinvfull);
-//     const MatrixXd R = Vinvfull - Vinvfull*Ffull*(Ffull.transpose()*Vinvfull*Ffull).ldlt().solve(Ffull.transpose()*Vinvfull);
-//     SelfAdjointEigenSolver<MatrixXd> Reig(R);
-    
-
-//     unsigned int nstatefree = nstateparms;
-//     if (dogen) {
-//       nstatefree -= 5;
-//     }
-//     if (fitFromSimParms_) {
-//       nstatefree = 0;
-//     }
-//     
-//     auto const &Ff = Ffull.rightCols(nstatefree);
-//     
-//     // covariance matrix for residuals
-//     const MatrixXd R = Vinvfull - Vinvfull*Ff*(Ff.transpose()*Vinvfull*Ff).ldlt().solve(Ff.transpose()*Vinvfull);
-//     SelfAdjointEigenSolver<MatrixXd> Reig(R);
-// 
-// //     std::cout << "Reig.eigenvalues().head(nstateparms):\n" << Reig.eigenvalues().head(nstateparms) << std::endl;
-// //     std::cout << "Reig.eigenvalues().tail(ndof):\n" << Reig.eigenvalues().tail(ndof) << std::endl;
-//     
-//     // non-singular eigenvectors
-//     auto const &M = Reig.eigenvectors().rightCols(ndof);
-//     
-// //     const MatrixXd MtM = M.transpose()*M;
-// 
-// //     std::cout << "MtM:\n" << MtM << std::endl;
-//     
-// //     const MatrixXd normpre = M*MtM.ldlt().solve(M.transpose());
-//     normpre = M*M.transpose();
-    
-//     std::cout << "normpre:\n" << normpre << std::endl;
-    
-//     std::cout << "normpre trace = " << normpre.trace() << std::endl;
-    
-//     SelfAdjointEigenSolver<MatrixXd> MtMeig(MtM);
-    
-//     std::cout << "MtMeig.eigenvalues():\n" << MtMeig.eigenvalues() << std::endl;
-
-    
-    
-    
     
 
     auto const& dchisqdx = gradfull.head(nstateparms);
@@ -2543,100 +2075,6 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     grad = dchisqdparmsfinal + d2chisqdxdparmsfinal.transpose()*dxfull;
     hess = d2chisqdparms2final + dxdparms*d2chisqdxdparmsfinal;
     
-
-//     grad = dchisqdparmsfinal + dxdparms*dchisqdx;
-//     hess = d2chisqdparms2final + dxdparms*d2chisqdx2*dxdparms.transpose();
-
-//     grad = dchisqdparmsfinal;
-//     hess = d2chisqdparms2final;
-//
-//     const int nscaleparsfinal = nparsfinal - nparsRes;
-//     grad.head(nscaleparsfinal) += d2chisqdxdparmsfinal.leftCols(nscaleparsfinal).transpose()*dxfull;
-//     hess.topLeftCorner(nscaleparsfinal, nscaleparsfinal) += dxdparms.topRows(nscaleparsfinal)*d2chisqdxdparmsfinal.leftCols(nscaleparsfinal);
-
-    if (false) {
-      std::cout <<"grad.tail(nparsRes):\n";
-      std::cout << grad.tail(nparsRes) << std::endl;
-      
-      std::cout <<"d2chisqdparms2final.diagonal().tail(nparsRes):\n";
-      std::cout << d2chisqdparms2final.diagonal().tail(nparsRes) << std::endl;
-
-      std::cout <<"hess.diagonal().tail(nparsRes):\n";
-      std::cout << hess.diagonal().tail(nparsRes) << std::endl;
-    }
-    
-    
-    if (false) {
-      unsigned int ivalid = 0;
-      unsigned int resparmidx = 0;
-
-      MatrixXd dH;
-      std::vector<MatrixXd> detfactv;
-      detfactv.reserve(nvalid);
-
-      for (unsigned int ihit = 0; ihit < nhits; ++ihit) {
-        auto const& hit = hits[ihit];
-        const bool isvalid = hit->isValid();
-
-        if (isvalid) {
-          const Matrix<double, 2, 2> &Vinv = Vinvvec[ivalid];
-          const Matrix<double, 2, 2> &Fhitstate = Fhitstatevec[ivalid];
-          const Matrix<double, 2, 1> &dy0 = dy0vec[ivalid];
-
-          const unsigned int fullstateidx = 5*(ihit+1) + 3;
-          const unsigned int fullparmidxpost = nparsBfield + nparsEloss + nparsAlignment + resparmidx;
-          const unsigned int fullparmidxpostfinal = idxmap.at(globalidxv[fullparmidxpost]);
-
-
-          const Matrix<double, 2, 1> dxlocal = dxfull.segment<2>(fullstateidx);
-
-          const Matrix<double, 2, 1> dy0post = dy0 + Fhitstate*dxlocal;
-
-          Matrix<double, 2, 2> dV = Matrix<double, 2, 2>::Zero();
-          dV(0, 0) = 1.;
-
-          const Matrix<double, 2, 2> dVinv = -Vinv*dV*Vinv;
-
-          //TODO optimize this to avoid working with "big" matrices
-          dH = MatrixXd::Zero(nstateparms, nstateparms);
-          dH.block<2, 2>(fullstateidx, fullstateidx) = 2.*Fhitstate.transpose()*dVinv*Fhitstate;
-
-          MatrixXd &detfact = detfactv.emplace_back();
-          detfact = Cinvd.solve(dH);
-
-          const double gradlocal = dy0post.transpose()*dVinv*dy0post - detfact.trace();
-
-          //TODO this ignores off diagonal terms with alignment parameters
-
-          grad(fullparmidxpostfinal) += gradlocal;
-          
-          for (unsigned int jvalid = 0; jvalid <= ivalid; ++jvalid) {
-            const unsigned int fullparmidxpostj = nparsBfield + nparsEloss + nparsAlignment + jvalid;
-            const unsigned int fullparmidxpostfinalj = idxmap.at(globalidxv[fullparmidxpostj]);
-
-            
-            const MatrixXd &detfactj = detfactv[jvalid];
-            
-            const double hesslocal = (detfact*detfactj).trace();
-            
-            hess(fullparmidxpostfinal, fullparmidxpostfinalj) += hesslocal;
-            if (fullparmidxpostfinalj != fullparmidxpostfinal) {
-              hess(fullparmidxpostfinalj, fullparmidxpostfinal) += hesslocal;
-            }
-          }
-          
-          
-  //         std::cout << "ihit = " << ihit << " ivalid = " << ivalid << " resparmidx = " << resparmidx << " fullstateidx = " << fullstateidx << " fullparmidxpost = " << fullparmidxpost << " grad.size() = " << grad.size() << " npars = " << npars << std::endl;
-
-          
-          ++resparmidx;
-          ++ivalid;
-        }
-      }
-    
-    }
-    
-
     nParms = nparsfinal;
 
     
