@@ -812,9 +812,15 @@ std::pair<TrajectoryStateOnSurface, double> Geant4ePropagator::propagateGeneric(
 //     }
     
     Matrix<double, 5, 5> errMSIout = PropagateErrorMSC(g4eTrajState.GetG4Track(), pforced);
+    
+    // scaling affects MS only
+    const double xifact = std::exp(dxi);
+    errMSIout *= xifact;
+    
     errMSIout(0, 0) = computeErrorIoni(g4eTrajState.GetG4Track(), pforced);
       
-      
+
+
     
     g4errorEnd += errMSIout;
     

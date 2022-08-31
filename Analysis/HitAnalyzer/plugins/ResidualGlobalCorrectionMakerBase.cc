@@ -132,7 +132,7 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   applyHitQuality_ = iConfig.getParameter<bool>("applyHitQuality");
   doMuons_ = iConfig.getParameter<bool>("doMuons");
   doTrigger_ = iConfig.getParameter<bool>("doTrigger");
-  corFile_ = iConfig.getParameter<std::string>("corFile");
+  corFiles_ = iConfig.getParameter<std::vector<std::string>>("corFiles");
 
   inputBs_ = consumes<reco::BeamSpot>(edm::InputTag("offlineBeamSpot"));
 
@@ -238,6 +238,11 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
 //     tree->Branch("globalidxv", globalidxv.data(), "globalidxv[nParms]/i", basketSize);
     tree->Branch("globalidxv", &globalidxvfinal, basketSize);
     
+    if (fillJac_) {
+      tree->Branch("gradchisqv", &gradchisqv);
+    }
+
+    
     if (fillGrads_) {
       tree->Branch("gradv", gradv.data(), "gradv[nParms]/F", basketSize);
       tree->Branch("nSym", &nSym, basketSize);
@@ -341,8 +346,6 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
   std::set<std::pair<int, DetId> > parmset;
   
   
-
-  
   for (const GeomDet* det : globalGeometry->detUnits()) {
     if (!det) {
       continue;
@@ -402,7 +405,17 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       // bfield and material parameters are associated to glued detids where applicable
       parmset.emplace(6, parmdetid);
       parmset.emplace(7, parmdetid);
+      
+      // hit resolution parameters are associated to individual modules
+      // local x/phi hit resolution
       parmset.emplace(8, det->geographicalId());
+      
+      // local y hit resolution (pixels only)
+      if (ispixel) {
+        parmset.emplace(9, det->geographicalId());
+      }
+      
+      
     }
   }
   
@@ -418,6 +431,7 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
 //       parmset.emplace(8, bin);
 //     }
 //   }
+
   
   if (detidparms.empty()) {
 
@@ -713,25 +727,26 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
     }
     
     // load corrections from previous iteration if applicable
+    corparmsIncremental_.assign(corFiles_.size(), std::vector<double>(parmset.size(), 0.));
     corparms_.assign(parmset.size(), 0.);
-    
-    if (!corFile_.empty()) {
-      TFile *corfile = TFile::Open(corFile_.c_str());
+
+    for (unsigned int iiter = 0; iiter < corFiles_.size(); ++iiter) {
+      TFile *corfile = TFile::Open(corFiles_[iiter].c_str());
       TTree *cortree = (TTree*)corfile->Get("parmtree");
-      
-      unsigned int idx;
+
       float val;
-      
-//       cortree->SetBranchAddress("idx", &idx);
+
       cortree->SetBranchAddress("x", &val);
-      
+
       const unsigned int nparms = cortree->GetEntries();
       assert(nparms == parmset.size());
       for (unsigned int iparm = 0; iparm < nparms; ++iparm) {
         cortree->GetEntry(iparm);
-        corparms_[iparm] = val;
-//         corparms_[idx] = val;
+        corparmsIncremental_[iiter][iparm] = val;
+        corparms_[iparm] += val;
       }
+
+      corfile->Close();
     }
   
   }
@@ -766,14 +781,15 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       Matrix<double, 2, 2> Rglued = Matrix<double, 2, 2>::Identity();
 
       if (isglued) {
-        const GloballyPositioned<double> surfaceGlued = surfaceToDouble(parmDet->surface());
+        GloballyPositioned<double> surfaceGlued = surfaceToDouble(parmDet->surface());
 
-        auto const dpos = surfaceD.position() - surfaceGlued.position();
-
-        const double gluedot = surfaceD.rotation().z()*surfaceGlued.rotation().z();
-        const double gluecross = surfaceD.rotation().z().cross(surfaceGlued.rotation().z()).mag();
+        applyAlignment(surfaceGlued, parmdetid);
 
         if (false) {
+          auto const dpos = surfaceD.position() - surfaceGlued.position();
+          const double gluedot = surfaceD.rotation().z()*surfaceGlued.rotation().z();
+          const double gluecross = surfaceD.rotation().z().cross(surfaceGlued.rotation().z()).mag();
+
           std::cout << "surface pos:\n" << surfaceD.position() << std::endl;
           std::cout << "surfaceglued pos:\n" << surfaceGlued.position() << std::endl;
           std::cout << "gluedot = " << gluedot <<" gluecross = " << gluecross << " dpos:\n" << dpos << std::endl;
@@ -828,6 +844,10 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
         Rglued(1, 0) = lxalt.y();
         Rglued(1, 1) = lyalt.y();
       }
+      else {
+        applyAlignment(surfaceD, det->geographicalId());
+      }
+
       surfacemapD_[det->geographicalId()] = surfaceD;
       rgluemap_[det->geographicalId()] = Rglued;
       
@@ -920,6 +940,53 @@ GloballyPositioned<double> ResidualGlobalCorrectionMakerBase::surfaceToDouble(co
   return res;
 
 }
+
+void ResidualGlobalCorrectionMakerBase::applyAlignment(GloballyPositioned<double> &surface, const DetId &detid) const {
+
+  using RotationT = GloballyPositioned<double>::RotationType;
+
+  const int idx = detidparms.at(std::make_pair(0, detid));
+  const int idz = detidparms.at(std::make_pair(2, detid));
+  const int idthetax = detidparms.at(std::make_pair(3, detid));
+  const int idthetay = detidparms.at(std::make_pair(4, detid));
+  const int idthetaz = detidparms.at(std::make_pair(5, detid));
+
+  int idy = -1;
+  auto const &dyiter = detidparms.find(std::make_pair(1, detid));
+  if (dyiter != detidparms.end()) {
+    idy = dyiter->second;
+  }
+
+  for (auto const &icorparms : corparmsIncremental_) {
+    const double dx = icorparms[idx];
+    const double dy = idy >= 0 ? icorparms[idy] : 0.;
+    const double dz = icorparms[idz];
+    const double dthetax = icorparms[idthetax];
+    const double dthetay = icorparms[idthetay];
+    const double dthetaz = icorparms[idthetaz];
+
+    const Vector3DBase<double, LocalTag> dxlocal(dx, dy, dz);
+    const Vector3DBase<double, GlobalTag> dxglobal = surface.toGlobal(dxlocal);
+
+    const RotationT rx(surface.rotation().x(), dthetax);
+    const RotationT ry(surface.rotation().y(), dthetay);
+    const RotationT rz(surface.rotation().x(), dthetaz);
+
+    surface.move(dxglobal);
+
+    // order is arbitrary since these angles are implicitly derived under an assumption of infinitesimal rotations.  The ambiguity will be sorted out as part of the iteration process
+    surface.rotate(rx);
+    surface.rotate(ry);
+    surface.rotate(rz);
+
+
+
+
+  }
+
+
+}
+
 
 Matrix<double, 6, 1> ResidualGlobalCorrectionMakerBase::globalToLocal(const Matrix<double, 7, 1> &state, const GloballyPositioned<double> &surface) const {
 

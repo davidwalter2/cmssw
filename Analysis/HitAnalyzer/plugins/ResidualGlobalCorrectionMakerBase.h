@@ -177,6 +177,8 @@ protected:
 
   GloballyPositioned<double> surfaceToDouble(const Surface &surface, const Basic3DVector<double> &gz) const;
 
+  void applyAlignment(GloballyPositioned<double> &surface, const DetId &detid) const;
+
   Matrix<double, 6, 1> globalToLocal(const Matrix<double, 7, 1> &state, const GloballyPositioned<double> &surface) const;
 
   Matrix<double, 7, 1> localToGlobal(const Matrix<double, 6, 1> &localstate, const GloballyPositioned<double> &surface) const;
@@ -259,7 +261,7 @@ protected:
   std::vector<int> triggerDecisions_;
   
   
-  std::string corFile_;
+  std::vector<std::string> corFiles_;
   
 //   SiStripClusterInfo siStripClusterInfo_;
 
@@ -403,7 +405,9 @@ protected:
   std::map<DetId, ReferenceCountingPointer<Plane>> surfacemap_;
   std::map<DetId, GloballyPositioned<double>> surfacemapD_;
   std::map<DetId, Eigen::Matrix<double, 2, 2>> rgluemap_;
-  std::vector<float> corparms_;
+
+  std::vector<std::vector<double>> corparmsIncremental_;
+  std::vector<double> corparms_;
   
   unsigned int run;
   unsigned int lumi;
@@ -481,6 +485,8 @@ protected:
   float Pileup_nTrueInt = 0.;
 
   float genl3d = -99.;
+  
+  std::vector<float> gradchisqv;
   
   TH2D *hetaphi = nullptr;
 
