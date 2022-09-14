@@ -15,7 +15,7 @@
 #include <Eigen/Core>
 
 #include "TrackPropagation/Geant4e/interface/G4UniversalFluctuationForExtrapolator.hh"
-
+#include "TrackPropagation/Geant4e/interface/G4WentzelVIModelCustom.hh"
 
 /** Propagator based on the Geant4e package. Uses the Propagator class
  *  in the TrackingTools/GeomPropagators package to define the interface.
@@ -62,8 +62,9 @@ public:
 
   const MagneticField *magneticField() const override { return theField; }
                                                                
-  std::tuple<bool, Eigen::Matrix<double, 7, 1>, Eigen::Matrix<double, 5, 5>, Eigen::Matrix<double, 5, 7>, double, Eigen::Matrix<double, 5, 5>> propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 7, 1> &ftsStart,
-                                                                                const GloballyPositioned<double> &pDest, double dBz = 0., double dxi = 0., double pforced = -1.) const;
+  std::tuple<bool, Eigen::Matrix<double, 7, 1>, Eigen::Matrix<double, 5, 5>, Eigen::Matrix<double, 5, 7>, double, Eigen::Matrix<double, 5, 5>, Eigen::Matrix<double, 5, 5>> propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 7, 1> &ftsStart,
+                                                                                const GloballyPositioned<double> &pDest, double dBz = 0., double dxi = 0.,
+                                                                                double drad = 0., double pforced = -1.) const;
 
   static void CalculateEffectiveZandA(const G4Material* mate, G4double& effZ, G4double& effA);
                                                                                 
@@ -159,6 +160,7 @@ private:
   Eigen::Matrix<double, 5, 7> transportJacobianBzD(const Eigen::Matrix<double, 7, 1> &start, double s, double dEdx, double mass, double dBz) const;
 
   G4UniversalFluctuationForExtrapolator *fluct = nullptr;
+  G4WentzelVIModelCustom *msmodel = nullptr;
   
 };
 

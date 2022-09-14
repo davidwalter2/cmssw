@@ -414,6 +414,9 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       if (ispixel) {
         parmset.emplace(9, det->geographicalId());
       }
+
+      //material resolution parameter associated to glued detids where applicable
+      parmset.emplace(10, parmdetid);
       
       
     }

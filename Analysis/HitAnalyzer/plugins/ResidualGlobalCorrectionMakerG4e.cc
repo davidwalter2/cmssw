@@ -60,6 +60,8 @@ private:
   float outEtaStart;
   float outPhiStart;
 
+  float trackQopErr = 0.;
+
   edm::EDPutTokenT<edm::ValueMap<float>> outputCorPt_;
   edm::EDPutTokenT<edm::ValueMap<float>> outputCorEta_;
   edm::EDPutTokenT<edm::ValueMap<float>> outputCorPhi_;
@@ -104,6 +106,7 @@ void ResidualGlobalCorrectionMakerG4e::beginStream(edm::StreamID streamid)
     tree->Branch("trackEta", &trackEta, basketSize);
     tree->Branch("trackPhi", &trackPhi, basketSize);
     tree->Branch("trackCharge", &trackCharge, basketSize);
+    tree->Branch("trackQopErr", &trackQopErr);
     //workaround for older ROOT version inability to store std::array automatically
   //   tree->Branch("trackOrigParms", trackOrigParms.data(), "trackOrigParms[5]/F", basketSize);
   //   tree->Branch("trackOrigCov", trackOrigCov.data(), "trackOrigCov[25]/F", basketSize);
@@ -397,6 +400,11 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     trackPhi = track.phi();
     trackCharge = track.charge();
     trackPtErr = track.ptError();
+    trackQopErr = track.qoverpError();
+
+//     if (abs(trackEta) > 0.1) {
+//       continue;
+//     }
 
     trackHighPurity = track.quality(reco::TrackBase::highPurity);
     
@@ -613,6 +621,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             assert(pixhit != nullptr);
             
             hitquality = !pixhit->isOnEdge() && cluster.sizeX() > 1;
+//             hitquality = false;
           }
           else {
             assert(tkhit->cluster_strip().isNonnull());
@@ -625,6 +634,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             const bool isOnEdge = firstStrip == 0 || lastStrip == (striptopology->nstrips() - 1);
             
             hitquality = true;
+//             hitquality = false;
           }
           
         }
@@ -693,7 +703,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     const unsigned int nparsAlignment = 5*nvalid + nvalidalign2d;
     const unsigned int nparsBfield = nhits;
     const unsigned int nparsEloss = nhits;
-    const unsigned int nparsRes = nvalid + nvalidpixel;
+    const unsigned int nparsRes = nhits + nvalid + nvalidpixel;
     const unsigned int npars = nparsAlignment + nparsBfield + nparsEloss + nparsRes;
     
     const unsigned int nstateparms = 5*(nhits+1);
@@ -750,6 +760,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     MatrixXd Jfull;
     MatrixXd Vinvfull;
     VectorXd dxfree;
+    
+    MatrixXd Vinvfullalt;
     
     SparseMatrix<double> Fsparse;
     SparseMatrix<double> Vinvsparse;
@@ -1022,6 +1034,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       Ffull = MatrixXd::Zero(ncons, nstateparms);
       Jfull = MatrixXd::Zero(ncons, npars);
       Vinvfull = MatrixXd::Zero(ncons, ncons);
+      Vinvfullalt = MatrixXd::Zero(ncons, ncons);
       
       dVs.clear();
       residxs.clear();
@@ -1163,6 +1176,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         rfull.segment<nlocalcons>(icons) = dbs0;
         Ffull.block<nlocalcons, nlocalstate>(icons, fullstateidx) = Fbs;
         Vinvfull.block<nlocalcons, nlocalcons>(icons, icons) = covBSinv;
+        Vinvfullalt.block<nlocalcons, nlocalcons>(icons, icons) = covBSinv;
         
         icons += nlocalcons;
       }
@@ -1208,9 +1222,11 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         
         const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(6, propdetid));
         const unsigned int elossglobalidx = detidparms.at(std::make_pair(7, propdetid));
+        const unsigned int msglobalidx = detidparms.at(std::make_pair(10, propdetid));
         
         const double dbetaval = corparms_[bfieldglobalidx];
         const double dxival = corparms_[elossglobalidx];
+        const double dradval = corparms_[msglobalidx];
         
         const PSimHit *simhit = nullptr;
         
@@ -1230,7 +1246,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
 //         std::cout << "iiter = " << iiter << " ihit = " << ihit << " updtsos:\n" << updtsos << std::endl;
         
-        auto const &propresult = g4prop->propagateGenericWithJacobianAltD(updtsos, surface, dbetaval, dxival);
+        auto const &propresult = g4prop->propagateGenericWithJacobianAltD(updtsos, surface, dbetaval, dxival, dradval);
 
         if (!std::get<0>(propresult)) {
           std::cout << "Abort: Propagation Failed!" << std::endl;
@@ -1242,7 +1258,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         const Matrix<double, 5, 5> Qcurv = std::get<2>(propresult);
         const Matrix<double, 5, 7> FdFmcurv = std::get<3>(propresult);
         const double dEdxlast = std::get<4>(propresult);
-        const Matrix<double, 5, 5> dQcurv = std::get<5>(propresult);
+        const Matrix<double, 5, 5> dQMScurv = std::get<5>(propresult);
+        const Matrix<double, 5, 5> dQIcurv = std::get<6>(propresult);
 //         const Matrix<double, 5, 5> dQcurv = Qcurv;
         
         Matrix<double, 5, 7> FdFm = FdFmcurv;
@@ -1250,6 +1267,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           // extra jacobian from reference state to curvilinear potentially needed
           FdFm.leftCols<5>() = FdFmcurv.leftCols<5>()*ref2curvjac;
         }
+        
+//         //zero energy loss contribution
+//         FdFm.rightCols<1>() *= 0.;
 
         Qtot = (FdFmcurv.leftCols<5>()*Qtot*FdFmcurv.leftCols<5>().transpose()).eval();
         Qtot += Qcurv;
@@ -1356,9 +1376,11 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         
         const Matrix<double, 5, 5> Qinv = Q.inverse();
         
-        Matrix<double, 5, 5> dQ = dQcurv;
+        Matrix<double, 5, 5> dQMS = dQMScurv;
+        Matrix<double, 5, 5> dQI = dQIcurv;
         if (dolocalupdate) {
-          dQ = Hm*dQcurv*Hm.transpose();
+          dQMS = Hm*dQMScurv*Hm.transpose();
+          dQI = Hm*dQIcurv*Hm.transpose();
         }
         
         {
@@ -1371,7 +1393,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           const unsigned int fullstateidx = 5*ihit;
           const unsigned int fullparmidx = iparm;
 
-          rfull.segment<5>(icons) = dx0;
+          rfull.segment<nlocalcons>(icons) = dx0;
           
           if (dolocalupdate) {
             Ffull.block<nlocalcons, nlocalstateparms>(icons, fullstateidx) = -Hm*FdFm.leftCols<nlocalstateparms>();
@@ -1385,17 +1407,35 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           }
           
           Vinvfull.block<nlocalcons, nlocalcons>(icons, icons) = Qinv;
+//           Vinvfullalt.block<nlocalcons, nlocalcons>(icons, icons) = Qinv;
+          Vinvfullalt.block<nlocalcons, nlocalcons>(icons, icons) = (Q - 0.1*dQMS).inverse();
           
-          std::vector<Triplet<double>> coeffs;
-          for (unsigned int irow = 0; irow < nlocalcons; ++irow) {
-            for (unsigned int icol = 0; icol < nlocalcons; ++icol) {
-              coeffs.emplace_back(icons + irow, icons + icol, dQ(irow, icol));
+          {
+            std::vector<Triplet<double>> coeffs;
+            for (unsigned int irow = 0; irow < nlocalcons; ++irow) {
+              for (unsigned int icol = 0; icol < nlocalcons; ++icol) {
+                coeffs.emplace_back(icons + irow, icons + icol, dQMS(irow, icol));
+              }
             }
+            SparseMatrix<double> &dV = dVs.emplace_back(ncons, ncons);
+            dV.setFromTriplets(coeffs.begin(), coeffs.end());
+            // MS resolution parameter is decoupled from energy loss
+            residxs.push_back(iparm + 2);
           }
-          SparseMatrix<double> &dV = dVs.emplace_back(ncons, ncons);
-          dV.setFromTriplets(coeffs.begin(), coeffs.end());
-          // resolution parameter is the material term
-          residxs.push_back(iparm + 1);
+
+//           {
+//             std::vector<Triplet<double>> coeffs;
+//             for (unsigned int irow = 0; irow < nlocalcons; ++irow) {
+//               for (unsigned int icol = 0; icol < nlocalcons; ++icol) {
+//                 coeffs.emplace_back(icons + irow, icons + icol, dQI(irow, icol));
+//               }
+//             }
+//             SparseMatrix<double> &dV = dVs.emplace_back(ncons, ncons);
+//             dV.setFromTriplets(coeffs.begin(), coeffs.end());
+//             // energy loss resolution parameter is decoupled from the energy loss mean value
+//             residxs.push_back(iparm + 2);
+//           }
+
           
           icons += nlocalcons;
 
@@ -1403,6 +1443,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           iparm++;
 
           globalidxv[iparm] = elossglobalidx;
+          iparm++;
+
+          globalidxv[iparm] = msglobalidx;
           iparm++;
         }
 
@@ -1468,6 +1511,14 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
             const double hitx = preciseHit->localPosition().x() - defcorr.x();
             const double hity = preciseHit->localPosition().y() - defcorr.y();
+
+            double dxrecsimval = -99.;
+            double dyrecsimval = -99.;
+
+            if (simhit != nullptr) {
+              dxrecsimval = hitx - simhit->localPosition().x();
+              dyrecsimval = hity - simhit->localPosition().y();
+            }
 
             double lyoffset = 0.;
             double hitphival = -99.;
@@ -1544,6 +1595,17 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                 // TODO apply (inverse) corrections for module deformations here? (take into account for jacobian?)
                 const double phistate = rdir*std::atan2(lxcor, rdir*lycor + radius);
                 const double rhostate = std::sqrt(lxcor*lxcor + std::pow(rdir*lycor + radius, 2));
+
+                if (simhit != nullptr) {
+                  const double lxsim = simhit->localPosition().x();
+                  const double lysim = simhit->localPosition().y();
+
+                  const double phisim = rdir*std::atan2(lxsim, rdir*lysim + radius);
+                  const double rhosim = std::sqrt(lxsim*lxsim + std::pow(rdir*lysim + radius, 2));
+
+                  dxrecsimval = phihit - phisim;
+                  dyrecsimval = rhohit - rhosim;
+                }
 
                 iV = Matrix<double, 2, 2>::Zero();
                 iV(0, 0) = phierr2;
@@ -1632,6 +1694,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             const double yyresfact = ispixel ? std::exp(corparms_[yresglobalidx]) : 1.;
             const double xyresfact = std::sqrt(xxresfact*yyresfact);
             
+//             std::cout << "xxresfact = " << xxresfact << " yyresfact = " << yyresfact << " xyresfact = " << xyresfact << std::endl;
+
             iV(0, 0) *= xxresfact;
             iV(0, 1) *= xyresfact;
             iV(1, 0) *= xyresfact;
@@ -1677,6 +1741,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
             constexpr std::array<unsigned int, 6> alphaidxs = {{0, 2, 3, 4, 5, 1}};
 
+//             const double scalecov = hit1d ? 1.2 : 1.0;
+            const double scalecov = ispixel ? 0.8 : 1.2;
+            
             if (ispixel) {
               constexpr unsigned int nlocalcons = 2;
               
@@ -1688,6 +1755,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               }
               
               Vinvfull.block<nlocalcons, nlocalcons>(icons, icons) = iV.inverse();
+              Vinvfullalt.block<nlocalcons, nlocalcons>(icons, icons) = (scalecov*iV).inverse();
               
               icons += nlocalcons;
             }
@@ -1702,6 +1770,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               }
               
               Vinvfull(icons, icons) = 1./iV(0, 0);
+              Vinvfullalt(icons, icons) = 1./(scalecov*iV)(0, 0);
               
               icons += nlocalcons;
             }
@@ -1860,12 +1929,17 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                   dxsimgenlocal.push_back(dy0simgenlocal[0]);
                   dysimgenlocal.push_back(dy0simgenlocal[1]);
                   
-                  Vector2d dyrecsimlocal;
-                  dyrecsimlocal << preciseHit->localPosition().x() - simhit->localPosition().x(),
-                                  preciseHit->localPosition().y() - simhit->localPosition().y();
-                  const Vector2d dyrecsimeig = R*dyrecsimlocal;
-                  dxrecsim.push_back(dyrecsimeig[0]);
-                  dyrecsim.push_back(dyrecsimeig[1]);
+                  // Vector2d dyrecsimlocal;
+                  // dyrecsimlocal << preciseHit->localPosition().x() - simhit->localPosition().x(),
+                  //                 preciseHit->localPosition().y() - simhit->localPosition().y();
+                  // const Vector2d dyrecsimeig = R*dyrecsimlocal;
+                  // dxrecsim.push_back(dyrecsimeig[0]);
+                  // dyrecsim.push_back(dyrecsimeig[1]);
+
+                  dxrecsim.push_back(dxrecsimval);
+                  dyrecsim.push_back(dyrecsimval);
+
+
                   
                   dE.push_back(dEval);
                   
@@ -1989,8 +2063,32 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       Vinvsparse = Vinvfull.sparseView();
       
       VinvF = Vinvsparse*Fsparse;
+
+
       
       Cinvd.compute(Fsparse.transpose()*VinvF);
+
+
+      // randomize residuals given covariance matrix
+      if (false) {
+        const SparseMatrix<double> Vinvsparsealt = Vinvfullalt.sparseView();
+        const SparseMatrix<double> VinvFalt = Vinvsparsealt*Fsparse;
+
+        const SimplicialLDLT<SparseMatrix<double>> Cinvdalt(Fsparse.transpose()*VinvFalt);
+        
+        const SparseMatrix<double> FtVinvalt = VinvFalt.transpose();
+        const SparseMatrix<double> Rsparsealt = Vinvsparsealt - VinvFalt*Cinvdalt.solve(FtVinvalt);
+        const MatrixXd Ralt = Rsparsealt;
+
+        const Eigen::SelfAdjointEigenSolver<MatrixXd> Reig(Ralt);
+
+        rfull = VectorXd::Zero(ncons);
+        for (int ieig = ncons - ndof; ieig < ncons; ++ieig) {
+          const double rnd = gRandom->Gaus();
+          rfull += (rnd/std::sqrt(Reig.eigenvalues()(ieig)))*Reig.eigenvectors().col(ieig);
+        }
+
+      }
       
 //       SimplicialLLT<SparseMatrix<double>> lltsparse;
 //       lltsparse.compute(Fsparse.transpose()*VinvF);
@@ -2124,6 +2222,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     }
     
     if (!valid) {
+      // chisqval = -99.;
+      // tree->Fill();
       continue;
     }
         
@@ -2351,7 +2451,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       
 //       grad(residxi) += gradres;
       gradll(residxi) += gradres;
-      
+            
 //       VectorXd hesscross = -2.*Jsparse.transpose()*R*dViR*rfull;
       // adjust diagonal element since it will be added twice
 //       hesscross(residxi) *= 0.5;
@@ -2375,7 +2475,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 //         const double hessres = 2.*rfull.transpose()*R*dViRdVjR*rfull - MatrixXd(dViRdVjR).trace();
         
         // below is equivalent to -(dViR*dVjR).trace()
-        const double hessres = -dViRT.cwiseProduct(dVjR).sum();
+//         const double hessres = -dViRT.cwiseProduct(dVjR).sum();
+        const double hessres = dViRT.cwiseProduct(dVjR).sum();
 //         const double hessresalt = -MatrixXd(dViR*dVjR).trace();
         
 //         std::cout << "ires = " << ires << " jres = " << jres << " hessres = " << hessres << " hessresalt = " << hessresalt << std::endl;
@@ -2437,11 +2538,15 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 //     grad += -(rfull.transpose()*R*dVRrsparse).transpose();
 //     grad += -(Rr.transpose()*dVRrsparse).transpose();
     grad += -dVRrsparse.transpose()*Rr;
-    hess += 2.*dVRrsparse.transpose()*R*dVRrsparse;
     
-    const SparseMatrix<double> hesscross = -2.*Jsparse.transpose()*Rsparse*dVRrsparse;    
-    hess += hesscross;
-    hess += hesscross.transpose();
+    if (false) {
+      hess += 2.*dVRrsparse.transpose()*R*dVRrsparse;
+      
+      const SparseMatrix<double> hesscross = -2.*Jsparse.transpose()*Rsparse*dVRrsparse;    
+      hess += hesscross;
+      hess += hesscross.transpose();
+    }
+    
 //     hess += hesscross + hesscross.transpose();
 
     //TODO deduplicate with above
