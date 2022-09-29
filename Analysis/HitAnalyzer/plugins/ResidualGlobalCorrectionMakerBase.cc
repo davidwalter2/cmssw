@@ -326,8 +326,11 @@ void
 ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup const& es)
 {
   
-  edm::ESHandle<GlobalTrackingGeometry> globalGeometry;
-  es.get<GlobalTrackingGeometryRecord>().get(globalGeometry);
+//   edm::ESHandle<GlobalTrackingGeometry> globalGeometry;
+//   es.get<GlobalTrackingGeometryRecord>().get(globalGeometry);
+  
+  edm::ESHandle<TrackerGeometry> globalGeometry;
+  es.get<TrackerDigiGeometryRecord>().get("idealForDigi", globalGeometry);
   
   edm::ESHandle<TrackerGeometry> globalGeometryIdeal;
   es.get<TrackerDigiGeometryRecord>().get("idealForDigi", globalGeometryIdeal);

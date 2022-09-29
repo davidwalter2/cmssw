@@ -71,6 +71,13 @@ public:
                                       G4double,
                                       G4double);
 
+  virtual G4double SampleFluctuations2(const G4Material*,
+                                      const G4DynamicParticle*,
+                                      G4double,
+                                      G4double,
+                                      G4double,
+                                      G4double);
+
   virtual G4double SampleFluctuations(const G4MaterialCutsCouple*,
                                       const G4DynamicParticle*,
                                       G4double,
@@ -95,6 +102,14 @@ private:
 
   inline void SampleGauss(G4double eav, G4double esig2,
                           G4double& eloss, G4double& esig2tot);
+
+  inline void AddExcitation2(CLHEP::HepRandomEngine* rndm,
+                            G4double a, G4double e, G4double& eav,
+                            G4double& eloss, G4double& esig2);
+
+  inline void SampleGauss2(CLHEP::HepRandomEngine* rndm,
+                          G4double eav, G4double esig2,
+                          G4double& eloss);
 
   // hide assignment operator
   G4UniversalFluctuationForExtrapolator & operator=(const  G4UniversalFluctuationForExtrapolator &right) = delete;
@@ -190,6 +205,38 @@ G4UniversalFluctuationForExtrapolator::SampleGauss(G4double eav, G4double esig2,
   }
   eloss += x;
 } 
+
+inline void
+G4UniversalFluctuationForExtrapolator::AddExcitation2(CLHEP::HepRandomEngine* rndm,
+                                      G4double ax, G4double ex, G4double& eav,
+                                      G4double& eloss, G4double& esig2)
+{
+  if(ax > nmaxCont) {
+    eav  += ax*ex;
+    esig2 += ax*ex*ex;
+  } else {
+    G4int p = G4Poisson(ax);
+    if(p > 0) { eloss += ((p + 1) - 2.*rndm->flat())*ex; }
+  }
+}
+
+inline void
+G4UniversalFluctuationForExtrapolator::SampleGauss2(CLHEP::HepRandomEngine* rndm,
+                                    G4double eav, G4double esig2,
+                                    G4double& eloss)
+{
+  G4double x = eav;
+  G4double sig = std::sqrt(esig2);
+  if(eav < 0.25*sig) {
+    x += (2.*rndm->flat() - 1.)*eav;
+  } else {
+    do {
+      x = G4RandGauss::shoot(rndm, eav, sig);
+    } while (x < 0.0 || x > 2*eav);
+    // Loop checking, 23-Feb-2016, Vladimir Ivanchenko
+  }
+  eloss += x;
+}
 
 #endif
 

@@ -216,6 +216,9 @@ void ResidualGlobalCorrectionMakerG4e::beginStream(edm::StreamID streamid)
       tree->Branch("simlocaldydzprop", &simlocaldydzprop);
       tree->Branch("simlocalxprop", &simlocalxprop);
       tree->Branch("simlocalyprop", &simlocalyprop);
+
+      tree->Branch("landauDelta", &landauDelta);
+      tree->Branch("landauW", &landauW);
       
       tree->Branch("localqop", &localqop);
       tree->Branch("localdxdz", &localdxdz);
@@ -278,6 +281,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   
   const bool dogen = fitFromGenParms_;
   const bool dolocalupdate = fitFromSimParms_;
+  // const bool dolocalupdate = true;
 
   using namespace edm;
 
@@ -628,13 +632,16 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             const SiStripCluster& cluster = *tkhit->cluster_strip();
             const StripTopology* striptopology = dynamic_cast<const StripTopology*>(&(detectorG->topology()));
             assert(striptopology);
-            
+
             const uint16_t firstStrip = cluster.firstStrip();
             const uint16_t lastStrip = cluster.firstStrip() + cluster.amplitudes().size() - 1;
             const bool isOnEdge = firstStrip == 0 || lastStrip == (striptopology->nstrips() - 1);
+
+            const bool isstereo = trackerTopology->isStereo((*it)->geographicalId());
             
             hitquality = true;
 //             hitquality = false;
+            // hitquality = !isstereo;
           }
           
         }
@@ -721,6 +728,14 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     if (fitFromSimParms_) {
       freestatemask = VectorXb::Zero(nstateparms);
     }
+
+    // if (dogen) {
+    //   for (unsigned int istate = 0; istate < nstateparms; ++istate) {
+    //     if (istate % 5 == 0) {
+    //       freestatemask[istate] = false;
+    //     }
+    //   }
+    // }
     
     std::vector<Eigen::Index> freestateidxs;
     freestateidxs.reserve(nstateparms);
@@ -963,6 +978,12 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         simlocalxprop.reserve(nvalid);
         simlocalyprop.reserve(nvalid);
         
+        landauDelta.clear();
+        landauW.clear();
+
+        landauDelta.reserve(nvalid);
+        landauW.reserve(nvalid);
+
         localqop.clear();
         localdxdz.clear();
         localdydz.clear();
@@ -1113,6 +1134,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
       Matrix<double, 7, 1> updtsos = refFts;
 
+      Matrix<double, 7, 1> propfromtsos = refFts;
+
       Matrix<double, 5, 5> Qtot = Matrix<double, 5, 5>::Zero();
 
       float e = genpart == nullptr ? -99. : std::sqrt(genpart->momentum().mag2() + mmu*mmu);
@@ -1187,7 +1210,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
         auto const& hit = hits[ihit];
         
-        auto const &surface = surfacemapD_.at(hit->geographicalId());
+        // auto const &surface = surfacemapD_.at(hit->geographicalId());
+        GloballyPositioned<double> surface = surfacemapD_.at(hit->geographicalId());
 
         // check propagation direction to choose correct bfield and material parameters
         // when propagating inside-out the parameters correspond to the target module
@@ -1244,9 +1268,46 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           }
         }
 
+        // const bool simhitdebug = true;
+        const bool simhitdebug = false;
+
+        if (simhitdebug && !simhit) {
+          std::cout << "WARNING: no simhit for debugging scenario, abort!\n";
+          valid = false;
+          break;
+        }
+
+        if (simhitdebug && simhit) {
+          //move surface to plane of sim entry point for consistency in debugging vs sim state
+
+          const double lz = simhit->entryPoint().z();
+          const Vector3DBase<double, LocalTag> dlocal(0., 0., lz);
+          const Vector3DBase<double, GlobalTag> dglobal = surface.toGlobal(dlocal);
+          surface.move(dglobal);
+        }
+
 //         std::cout << "iiter = " << iiter << " ihit = " << ihit << " updtsos:\n" << updtsos << std::endl;
         
-        auto const &propresult = g4prop->propagateGenericWithJacobianAltD(updtsos, surface, dbetaval, dxival, dradval);
+        // auto const &propresult = g4prop->propagateGenericWithJacobianAltD(updtsos, surface, dbetaval, dxival, dradval);
+        // auto const &propresult = g4prop->propagateGenericWithJacobianAltD(propfromtsos, surface, dbetaval, dxival, dradval);
+
+        auto const &propresult = simhitdebug ? g4prop->propagateGenericWithJacobianAltD(propfromtsos, surface, dbetaval, dxival, dradval) : g4prop->propagateGenericWithJacobianAltD(updtsos, surface, dbetaval, dxival, dradval);
+
+
+        if (simhitdebug && simhit) {
+          // reset propagation start point to sim hit for debugging purposes
+          auto const &origsurface = surfacemapD_.at(hit->geographicalId());
+          const Point3DBase<double, GlobalTag> pos = origsurface.toGlobal(simhit->entryPoint());
+          const Vector3DBase<double, GlobalTag> mom = origsurface.toGlobal(simhit->momentumAtEntry());
+
+          propfromtsos[0] = pos.x();
+          propfromtsos[1] = pos.y();
+          propfromtsos[2] = pos.z();
+          propfromtsos[3] = mom.x();
+          propfromtsos[4] = mom.y();
+          propfromtsos[5] = mom.z();
+          propfromtsos[6] = genpart->charge();
+        }
 
         if (!std::get<0>(propresult)) {
           std::cout << "Abort: Propagation Failed!" << std::endl;
@@ -1261,6 +1322,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         const Matrix<double, 5, 5> dQMScurv = std::get<5>(propresult);
         const Matrix<double, 5, 5> dQIcurv = std::get<6>(propresult);
 //         const Matrix<double, 5, 5> dQcurv = Qcurv;
+        const double deltaTotal = std::get<7>(propresult);
+        const double wTotal = std::get<8>(propresult);
         
         Matrix<double, 5, 7> FdFm = FdFmcurv;
         if (ihit == 0) {
@@ -1268,11 +1331,19 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           FdFm.leftCols<5>() = FdFmcurv.leftCols<5>()*ref2curvjac;
         }
         
+
+        // propfromtsos = updtsos;
+
 //         //zero energy loss contribution
 //         FdFm.rightCols<1>() *= 0.;
 
+
         Qtot = (FdFmcurv.leftCols<5>()*Qtot*FdFmcurv.leftCols<5>().transpose()).eval();
         Qtot += Qcurv;
+
+        if (simhitdebug) {
+          Qtot = Qcurv;
+        }
 
         const Matrix<double, 5, 5> Hm = curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, mmu, dbetaval);
         
@@ -1851,6 +1922,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               hitphi.push_back(hitphival);
               localphi.push_back(localphival);
 
+              landauDelta.push_back(deltaTotal);
+              landauW.push_back(wTotal);
+
               const TrackerSingleRecHit* tkhit = dynamic_cast<const TrackerSingleRecHit*>(preciseHit.get());
               assert(tkhit != nullptr);
               
@@ -1950,11 +2024,19 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                   const double simqopval = genpart->charge()/std::sqrt(emid*emid - mmu*mmu);
 //                   std::cout << "eloss = " << simhit->energyLoss() << std::endl;
                   
-                  simlocalqop.push_back(simqopval);
+                  // "hybrid state" trying to adjust for entry point -> midpoint
+                  // simlocalqop.push_back(simqopval);
+                  // simlocaldxdz.push_back(momsim.x()/momsim.z());
+                  // simlocaldydz.push_back(momsim.y()/momsim.z());
+                  // simlocalx.push_back(simhit->localPosition().x());
+                  // simlocaly.push_back(simhit->localPosition().y());
+
+                  // just fill entry state for debugging
+                  simlocalqop.push_back(genpart->charge()/simhit->pabs());
                   simlocaldxdz.push_back(momsim.x()/momsim.z());
                   simlocaldydz.push_back(momsim.y()/momsim.z());
-                  simlocalx.push_back(simhit->localPosition().x());
-                  simlocaly.push_back(simhit->localPosition().y());
+                  simlocalx.push_back(simhit->entryPoint().x());
+                  simlocaly.push_back(simhit->entryPoint().y());
                     
                   if (false) {
 

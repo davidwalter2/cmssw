@@ -368,6 +368,9 @@ protected:
   std::vector<float> simlocaldydzprop;
   std::vector<float> simlocalxprop;
   std::vector<float> simlocalyprop;
+
+  std::vector<float> landauDelta;
+  std::vector<float> landauW;
   
   std::vector<float> localqop;
   std::vector<float> localdxdz;
