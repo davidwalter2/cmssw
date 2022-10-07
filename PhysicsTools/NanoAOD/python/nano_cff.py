@@ -542,6 +542,9 @@ def nanoAOD_wmassMuonVariables(process):
     v = process.muonTable.variables
     v.innerTrackAlgo = Var('? innerTrack().isNonnull() ? innerTrack().algo() : -99', 'int', precision=-1, doc='Track algo enum, check DataFormats/TrackReco/interface/TrackBase.h for details.')
     v.innerTrackOriginalAlgo = Var('? innerTrack().isNonnull() ? innerTrack().originalAlgo() : -99', 'int', precision=-1, doc='Track original algo enum')
+    v.pfRelIso04_chg = Var("pfIsolationR04().sumChargedHadronPt/pt", float, doc="PF relative isolation dR=0.4, charged component")
+    v.pfRelIso04_neu = Var("pfIsolationR04().sumNeutralHadronEt/pt", float, doc="PF relative isolation dR=0.4, charged component")
+    v.pfRelIso04_pho = Var("pfIsolationR04().sumPhotonEt/pt", float, doc="PF relative isolation dR=0.4, charged component")
     v.standalonePt = Var("? standAloneMuon().isNonnull() ? standAloneMuon().pt() : -1", float, doc="pt of the standalone muon", precision=14)
     v.standaloneEta = Var("? standAloneMuon().isNonnull() ? standAloneMuon().eta() : -99", float, doc="eta of the standalone muon", precision=14)
     v.standalonePhi = Var("? standAloneMuon().isNonnull() ? standAloneMuon().phi() : -99", float, doc="phi of the standalone muon", precision=14)
