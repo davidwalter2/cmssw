@@ -20,6 +20,9 @@ generalTrackTable = cms.EDProducer("SimpleTrackFlatTableProducer",
         trackOriginalAlgo = Var('originalAlgo()', 'int', precision=-1, doc='Track original algo enum'),
         qualityMask = Var('qualityMask()', 'int', precision=-1, doc='Quality mask of the track.'),
         extraIdx = Var('extra().key()', 'int', precision=-1, doc='Index of the TrackExtra in the original collection'),
+        X = Var('vx', 'float', precision=-1, doc='Track X position'),
+        Y = Var('vy', 'float', precision=-1, doc='Track Y position'),
+        Z = Var('vz', 'float', precision=-1, doc='Track Z position'),
     ),
 )
 
