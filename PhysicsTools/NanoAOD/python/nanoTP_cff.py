@@ -66,6 +66,9 @@ def customizeNANOTP(process):
     muonTable.variables = cms.PSet(muonTable.variables,
             standaloneExtraIdx = Var('? standAloneMuon().isNonnull() ? standAloneMuon().extra().key() : -99', 'int', precision=-1, doc='Index of the innerTrack TrackExtra in the original collection'),
             innerTrackExtraIdx = Var('? innerTrack().isNonnull() ? innerTrack().extra().key() : -99', 'int', precision=-1, doc='Index of the innerTrack TrackExtra in the original collection'),
+            X = Var('vx', 'float', precision=-1, doc='Muon X position'),
+            Y = Var('vy', 'float', precision=-1, doc='Muon Y position'),
+            Z = Var('vz', 'float', precision=-1, doc='Muon Z position'),
     )
     muonTable.externalVariables = cms.PSet(
             isStandAloneUpdatedAtVtx = ExtVar(cms.InputTag("mergedStandAloneMuons:muonUpdatedAtVtx"),bool, doc="is standalone muon track updated at vertex"),
