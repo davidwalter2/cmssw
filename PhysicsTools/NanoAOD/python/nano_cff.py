@@ -549,5 +549,6 @@ def nanoAOD_wmassMuonVariables(process):
     v.standaloneEta = Var("? standAloneMuon().isNonnull() ? standAloneMuon().eta() : -99", float, doc="eta of the standalone muon", precision=14)
     v.standalonePhi = Var("? standAloneMuon().isNonnull() ? standAloneMuon().phi() : -99", float, doc="phi of the standalone muon", precision=14)
     v.standaloneCharge = Var("? standAloneMuon().isNonnull() ? standAloneMuon().charge() : -99", float, doc="phi of the standalone muon", precision=14)
+    v.standaloneNumberOfValidHits = Var('? standAloneMuon().isNonnull() ? standAloneMuon().numberOfValidHits() : -1', 'int', precision=-1, doc='Number of valid hits in track (standalone chambers)')
     return process
 
