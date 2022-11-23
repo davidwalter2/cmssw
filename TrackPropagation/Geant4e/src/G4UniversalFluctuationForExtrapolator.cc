@@ -491,20 +491,35 @@ G4UniversalFluctuationForExtrapolator::SampleFluctuations(const G4Material* mate
 //       }
 //       const double f = -std::log(1.-w)*w2/w;
 //       const double f2 = w2*w2/(1.-w);
-//       const double alpha = 0.996;
-      const double alpha = 0.9995;
-//       const double alpha = 1.;
-      // const double alpha = 1. - 1e-7;
+      // const double alpha = 0.996;
+//       const double alpha = 0.9999;
+      // const double alpha = 1.;
+      const double alpha = 1. - 2e-5;
 //       const double ualpha = (1. - std::pow(1. - w, alpha))/w;
 //       std::cout << "w = " << w << " ualpha = " << ualpha << std::endl;
       const double ualpha = alpha;
       const double f = -std::log(1.-ualpha*w)*w2/w;
       const double f2 = ualpha*w2*w2/(1.-ualpha*w);
       const double sigf2 = f2 - f*f;
+      
+      //w2/(1-uf*w) = f
+      //w2 = f - f*w*uf
+      //uf = (f - w2)/(fw)
+//       const double uf = (f - w2)/(f*w);
+      
+      //sigf2 = w*w*w2*w2/(1. - uf*w)^4 * siguf^2
+      // siguf^2 = sigf2*(1-uf*w)^4/(w*w*w2*w2)
+//       const double siguf2 = sigf2*std::pow(1. - uf*w, 4)/(w*w*w2*w2);
+      
+//       std::cout << "uf = " << uf << std::endl;
       loss += p3*f;
-      esig2tot += f*f*p3 + p3*p3*sigf2;
+      esig2tot += f*f*p3 + p3*sigf2;
+      
+//       esig2tot += f*f*p3 + p3*p3*sigf2;
 //       loss += p3*w2/(1. - 0.5*w);
 //       esig2tot += p3*w2*w2/std::pow(1. - 0.5*w, 2) + p3*p3*w*w*w2*w2/std::pow(1. - 0.5*w, 4)/12.;
+//       esig2tot += p3*w2*w2/std::pow(1. - 0.5*w, 2) + p3*w*w*w2*w2/std::pow(1. - 0.5*w, 4)/12.;
+//       esig2tot += p3*w2*w2/std::pow(1. - uf*w, 2) + p3*w*w*w2*w2/std::pow(1. - uf*w, 4)/12.;
     }
     if(sig2e > 0.0) { SampleGauss(emean, sig2e, loss, esig2tot); }
   }

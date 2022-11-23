@@ -507,7 +507,7 @@ std::pair<TrajectoryStateOnSurface, double> Geant4ePropagator::propagateGeneric(
 }
 
  std::tuple<bool, Eigen::Matrix<double, 7, 1>, Eigen::Matrix<double, 5, 5>, Eigen::Matrix<double, 5, 7>, double, Eigen::Matrix<double, 5, 5>, Eigen::Matrix<double, 5, 5>, double, double> Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 7, 1> &ftsStart,
-                                                                                const GloballyPositioned<double> &pDest, double dBz, double dxi, double drad, double pforced) const {
+                                                                                const GloballyPositioned<double> &pDest, double dBz, double dxi, double dms, double dioni, double pforced) const {
                           
   using namespace Eigen;
 
@@ -844,12 +844,14 @@ std::pair<TrajectoryStateOnSurface, double> Geant4ePropagator::propagateGeneric(
     // std::cout << "dxi = " << dxi << " drad = " << drad << std::endl;
 
     // scaling only affects MS
-    const double radfact = std::exp(drad);
-    errMSIout *= radfact;
+    const double msfact = std::exp(dms);
+    // std::cout << "dms = " << dms << " msfact = " << msfact << std::endl;
+    
+    errMSIout *= msfact;
 
     const G4Material* mate = g4eTrajState.GetG4Track()->GetVolume()->GetLogicalVolume()->GetMaterial();
     const double X0 = mate->GetRadlen() / cm;
-    RItotal += radfact*thisPathLength/X0;
+    RItotal += msfact*thisPathLength/X0;
 
     // DDtotal += errMSIout(1, 1);
 
@@ -857,37 +859,45 @@ std::pair<TrajectoryStateOnSurface, double> Geant4ePropagator::propagateGeneric(
 
 //     errMSIout *= radfact;
 
-    // XItotal += computeXi(g4eTrajState.GetG4Track());
-    const std::pair<double, double> landau = computeLandau(g4eTrajState.GetG4Track());
+    if (false) {
+      // XItotal += computeXi(g4eTrajState.GetG4Track());
+      const std::pair<double, double> landau = computeLandau(g4eTrajState.GetG4Track());
 
-    // G4double dedxsqurban = 1e-6*fluct->SampleFluctuations(mate, aTrack->GetDynamicParticle(), Emaxmev, stepLengthmm, ekinmev);
+      // G4double dedxsqurban = 1e-6*fluct->SampleFluctuations(mate, aTrack->GetDynamicParticle(), Emaxmev, stepLengthmm, ekinmev);
 
-    // std::cout << "material = " << mate->GetName() << " thisPathLength = " << thisPathLength << " dEdx = " << dEdx << " dEdx*thisPathLength = " << dEdx*thisPathLength <<  " delta = " << landau.first << " w = " << landau.second << std::endl;
+      // std::cout << "material = " << mate->GetName() << " thisPathLength = " << thisPathLength << " dEdx = " << dEdx << " dEdx*thisPathLength = " << dEdx*thisPathLength <<  " delta = " << landau.first << " w = " << landau.second << std::endl;
 
-    deltaTotal += landau.first;
-    wTotal += landau.second;
+      deltaTotal += landau.first;
+      wTotal += landau.second;
+      
+      // const double kd = ROOT::Math::landau_pdf(ROOT::Math::landau_quantile(0.5))
+      constexpr double kd = 0.13017714;
+      const double c = landau.second;
+
+      const double ascale = 2.*c/M_PI;
+
+      constexpr double alphalandau = 0.996;
+      const double varE = ascale*ascale*ROOT::Math::landau_xm2(ROOT::Math::landau_quantile(alphalandau));
+
+
+      // const double varE = 2.*c*c/M_PI/M_PI/M_PI/kd/kd;
+
+      // Etot  = aTrack->GetTotalEnergy() / GeV;
+
+      const double pPre6 = std::pow(pPre, 6);
+      // Apply it to error
+      const double varqop = ePre * ePre * varE / pPre6;
+
+    }
+
     
-    // const double kd = ROOT::Math::landau_pdf(ROOT::Math::landau_quantile(0.5))
-    constexpr double kd = 0.13017714;
-    const double c = landau.second;
+    const double ionifact = std::exp(dioni);
+    
+    // std::cout << "dioni = " << dioni << " ionifact = " << ionifact << std::endl;
 
-    const double ascale = 2.*c/M_PI;
-
-    constexpr double alphalandau = 0.996;
-    const double varE = ascale*ascale*ROOT::Math::landau_xm2(ROOT::Math::landau_quantile(alphalandau));
-
-
-    // const double varE = 2.*c*c/M_PI/M_PI/M_PI/kd/kd;
-
-    // Etot  = aTrack->GetTotalEnergy() / GeV;
-
-    const double pPre6 = std::pow(pPre, 6);
-    // Apply it to error
-    const double varqop = ePre * ePre * varE / pPre6;
-
-
-    errMSIout(0, 0) = varqop;
-    // errMSIout(0, 0) = computeErrorIoni(g4eTrajState.GetG4Track(), pforced);
+    
+//     errMSIout(0, 0) = varqop;
+    errMSIout(0, 0) = ionifact*computeErrorIoni(g4eTrajState.GetG4Track(), pforced);
       
 
     // separate scaling for ionization and MS
@@ -1353,6 +1363,8 @@ Eigen::Matrix<double, 5, 5> Geant4ePropagator::PropagateErrorMSC( const G4Track*
   // DD = DDX0;
 
   // DD *= 0.715;
+  
+  DD *= 0.8;
 
   //TODO more accurate coeffs from fine structure constant and electron mass?
   const double tmin = 2.66e-6*std::pow(effZ, 1./3.)/pPre;
@@ -1539,8 +1551,8 @@ std::pair<double, double> Geant4ePropagator::computeLandau(const G4Track* aTrack
   const double ePostmev = aTrack->GetStep()->GetPostStepPoint()->GetTotalEnergy();
   const double elossmev = ePremev - ePostmev;
 
-  const unsigned int nsamples = 100;
-  // const unsigned int nsamples = 1;
+//   const unsigned int nsamples = 100;
+  const unsigned int nsamples = 1;
 
   std::vector<double> elossv;
   elossv.reserve(nsamples);
@@ -1802,10 +1814,20 @@ double Geant4ePropagator::computeErrorIoni(const G4Track* aTrack, double pforced
 
   const double dedxsqfixed = XI*1e-6;
 
+  // constexpr double sigalpha = 15.76; //corresponds to 0.996 quantile
+//       constexpr double sigalpha = 22.33; //corresponds to 0.998 quantile
+  constexpr double sigalpha = 31.59; //corresponds to 0.999 quantile
+  
+  const double dedxSqlandau = sigalpha*sigalpha*XI*XI*1e-12;  
+  
+  // std::cout << "material = " << mate->GetName() << " stepLengthCm = " << stepLengthCm << " urban/vavilov = " << dedxsqurban/dedxsqvavilov << std::endl;
+  
   G4double dedxSq = dedxsqurban;
-  // G4double dedxSq = dedxsqvavilov;
+//   G4double dedxSq = 0.01*dedxsqvavilov;
+//   G4double dedxSq = dedxsqvavilov;
   // G4double dedxSq = dedxsqvavilovtruncated;
   // G4double dedxSq = dedxsqfixed;
+//   G4double dedxSq = dedxSqlandau;
 
 //   std::cout << "dedxsqurban = " << dedxsqurban << " dedxsqvavilov = " << dedxsqvavilov << " dedxsqvavilovtruncated = " << dedxsqvavilovtruncated << std::endl;;
 

@@ -407,6 +407,7 @@ protected:
   
   std::map<DetId, ReferenceCountingPointer<Plane>> surfacemap_;
   std::map<DetId, GloballyPositioned<double>> surfacemapD_;
+  std::map<DetId, GloballyPositioned<double>> surfacemapIdealD_;
   std::map<DetId, Eigen::Matrix<double, 2, 2>> rgluemap_;
 
   std::vector<std::vector<double>> corparmsIncremental_;

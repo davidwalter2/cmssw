@@ -64,7 +64,7 @@ public:
                                                                
   std::tuple<bool, Eigen::Matrix<double, 7, 1>, Eigen::Matrix<double, 5, 5>, Eigen::Matrix<double, 5, 7>, double, Eigen::Matrix<double, 5, 5>, Eigen::Matrix<double, 5, 5>, double, double> propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 7, 1> &ftsStart,
                                                                                 const GloballyPositioned<double> &pDest, double dBz = 0., double dxi = 0.,
-                                                                                double drad = 0., double pforced = -1.) const;
+                                                                                double dms = 0., double dioni = 0., double pforced = -1.) const;
 
   static void CalculateEffectiveZandA(const G4Material* mate, G4double& effZ, G4double& effA);
                                                                                 

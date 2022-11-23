@@ -418,8 +418,11 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
         parmset.emplace(9, det->geographicalId());
       }
 
-      //material resolution parameter associated to glued detids where applicable
+      //MS resolution parameter associated to glued detids where applicable
       parmset.emplace(10, parmdetid);
+      
+      //ionization resolution parameter associated to glued detids where applicable
+      parmset.emplace(11, parmdetid);
       
       
     }
@@ -759,7 +762,22 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
   
   surfacemap_.clear();
   surfacemapD_.clear();
+  surfacemapIdealD_.clear();
   rgluemap_.clear();
+
+  // fill map of ideal surfaces
+  for (const GeomDet* det : globalGeometryIdeal->detUnits()) {
+    if (!det) {
+      continue;
+    }
+    if (GeomDetEnumerators::isTracker(det->subDetector())) {
+      const Surface &surface = det->surface();
+
+      surfacemapIdealD_[det->geographicalId()] = surfaceToDouble(surface);
+    }
+  }
+
+
   // fill map of modified surfaces with results of previous iteration if applicable
   for (const GeomDet* det : globalGeometry->detUnits()) {
 //   for (const GeomDet* det : globalGeometryIdeal->detUnits()) {

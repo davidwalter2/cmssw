@@ -710,7 +710,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     const unsigned int nparsAlignment = 5*nvalid + nvalidalign2d;
     const unsigned int nparsBfield = nhits;
     const unsigned int nparsEloss = nhits;
-    const unsigned int nparsRes = nhits + nvalid + nvalidpixel;
+//     const unsigned int nparsRes = nhits + nvalid + nvalidpixel;
+    const unsigned int nparsRes = 2*nhits + nvalid + nvalidpixel;
     const unsigned int npars = nparsAlignment + nparsBfield + nparsEloss + nparsRes;
     
     const unsigned int nstateparms = 5*(nhits+1);
@@ -1247,10 +1248,12 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(6, propdetid));
         const unsigned int elossglobalidx = detidparms.at(std::make_pair(7, propdetid));
         const unsigned int msglobalidx = detidparms.at(std::make_pair(10, propdetid));
+        const unsigned int ioniglobalidx = detidparms.at(std::make_pair(11, propdetid));
         
         const double dbetaval = corparms_[bfieldglobalidx];
         const double dxival = corparms_[elossglobalidx];
-        const double dradval = corparms_[msglobalidx];
+        const double dmsval = corparms_[msglobalidx];
+        const double dionival = corparms_[ioniglobalidx];
         
         const PSimHit *simhit = nullptr;
         
@@ -1277,7 +1280,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           break;
         }
 
-        if (simhitdebug && simhit) {
+        if ((simhitdebug || fitFromSimParms_) && simhit) {
           //move surface to plane of sim entry point for consistency in debugging vs sim state
 
           const double lz = simhit->entryPoint().z();
@@ -1290,8 +1293,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         
         // auto const &propresult = g4prop->propagateGenericWithJacobianAltD(updtsos, surface, dbetaval, dxival, dradval);
         // auto const &propresult = g4prop->propagateGenericWithJacobianAltD(propfromtsos, surface, dbetaval, dxival, dradval);
-
-        auto const &propresult = simhitdebug ? g4prop->propagateGenericWithJacobianAltD(propfromtsos, surface, dbetaval, dxival, dradval) : g4prop->propagateGenericWithJacobianAltD(updtsos, surface, dbetaval, dxival, dradval);
+        
+        auto const &propresult = simhitdebug ? g4prop->propagateGenericWithJacobianAltD(propfromtsos, surface, dbetaval, dxival, dmsval, dionival) : g4prop->propagateGenericWithJacobianAltD(updtsos, surface, dbetaval, dxival, dmsval, dionival);
 
 
         if (simhitdebug && simhit) {
@@ -1375,13 +1378,16 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             break;
           }
 
+          auto const &surfaceideal = surfacemapIdealD_.at(hit->geographicalId());
+
+
           // alternate version with propagation from entry state
 
           const Point3DBase<double, LocalTag> simlocalpos = simhit->entryPoint();
           const Vector3DBase<double, LocalTag> simlocalmom = simhit->momentumAtEntry();
 
-          const Point3DBase<double, GlobalTag> simglobalpos = surface.toGlobal(simlocalpos);
-          const Vector3DBase<double, GlobalTag> simglobalmom = surface.toGlobal(simlocalmom);
+          const Point3DBase<double, GlobalTag> simglobalpos = surfaceideal.toGlobal(simlocalpos);
+          const Vector3DBase<double, GlobalTag> simglobalmom = surfaceideal.toGlobal(simlocalmom);
 
           updtsos[0] = simglobalpos.x();
           updtsos[1] = simglobalpos.y();
@@ -1391,15 +1397,17 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           updtsos[5] = simglobalmom.z();
           updtsos[6] = genpart->charge();
 
-          auto const &propresultsim = g4prop->propagateGenericWithJacobianAltD(updtsos, surface, dbetaval, dxival);
+          if (false) {
+            auto const &propresultsim = g4prop->propagateGenericWithJacobianAltD(updtsos, surface, dbetaval, dxival, dmsval, dionival);
 
-          if (!std::get<0>(propresultsim)) {
-            std::cout << "Abort: Sim state Propagation Failed!" << std::endl;
-            valid = false;
-            break;
+            if (!std::get<0>(propresultsim)) {
+              std::cout << "Abort: Sim state Propagation Failed!" << std::endl;
+              valid = false;
+              break;
+            }
+
+            updtsos = std::get<1>(propresultsim);
           }
-
-          updtsos = std::get<1>(propresultsim);
 
           localparms = globalToLocal(updtsos, surface);
 
@@ -1430,6 +1438,47 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
             dx0 = (localparms - localparmsprop).head<5>();
           }
+        }
+        
+        Matrix<double, 6, 1> localparmsalignprop = localparms;
+        Matrix<double, 7, 1> updtsosalign = updtsos;
+        
+        if (fitFromSimParms_) {
+        // re-propagate to unmodified surface
+
+          
+          auto const &surfaceideal = surfacemapIdealD_.at(hit->geographicalId());
+
+
+          // alternate version with propagation from entry state
+
+          const Point3DBase<double, LocalTag> simlocalpos = simhit->entryPoint();
+          const Vector3DBase<double, LocalTag> simlocalmom = simhit->momentumAtEntry();
+
+          const Point3DBase<double, GlobalTag> simglobalpos = surfaceideal.toGlobal(simlocalpos);
+          const Vector3DBase<double, GlobalTag> simglobalmom = surfaceideal.toGlobal(simlocalmom);
+
+          Matrix<double, 7, 1> simtsos;
+          simtsos[0] = simglobalpos.x();
+          simtsos[1] = simglobalpos.y();
+          simtsos[2] = simglobalpos.z();
+          simtsos[3] = simglobalmom.x();
+          simtsos[4] = simglobalmom.y();
+          simtsos[5] = simglobalmom.z();
+          simtsos[6] = genpart->charge();          
+          
+          auto const &surfacealign = surfacemapD_.at(hit->geographicalId());
+          auto const &propresultsalign = g4prop->propagateGenericWithJacobianAltD(simtsos, surfacealign, dbetaval, dxival, dmsval, dionival);
+
+          if (!std::get<0>(propresultsalign)) {
+            std::cout << "WARNING propagation for alignment failed!\n";
+            valid = false;
+            break;
+          }
+          
+          updtsosalign = std::get<1>(propresultsalign);
+          
+          localparmsalignprop = globalToLocal(updtsosalign, surfacealign);
         }
 
         //TODO optimize this without ternary functions
@@ -1494,18 +1543,18 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             residxs.push_back(iparm + 2);
           }
 
-//           {
-//             std::vector<Triplet<double>> coeffs;
-//             for (unsigned int irow = 0; irow < nlocalcons; ++irow) {
-//               for (unsigned int icol = 0; icol < nlocalcons; ++icol) {
-//                 coeffs.emplace_back(icons + irow, icons + icol, dQI(irow, icol));
-//               }
-//             }
-//             SparseMatrix<double> &dV = dVs.emplace_back(ncons, ncons);
-//             dV.setFromTriplets(coeffs.begin(), coeffs.end());
-//             // energy loss resolution parameter is decoupled from the energy loss mean value
-//             residxs.push_back(iparm + 2);
-//           }
+          {
+            std::vector<Triplet<double>> coeffs;
+            for (unsigned int irow = 0; irow < nlocalcons; ++irow) {
+              for (unsigned int icol = 0; icol < nlocalcons; ++icol) {
+                coeffs.emplace_back(icons + irow, icons + icol, dQI(irow, icol));
+              }
+            }
+            SparseMatrix<double> &dV = dVs.emplace_back(ncons, ncons);
+            dV.setFromTriplets(coeffs.begin(), coeffs.end());
+            // energy loss resolution parameter is decoupled from the energy loss mean value
+            residxs.push_back(iparm + 3);
+          }
 
           
           icons += nlocalcons;
@@ -1518,17 +1567,20 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
           globalidxv[iparm] = msglobalidx;
           iparm++;
+          
+          globalidxv[iparm] = ioniglobalidx;
+          iparm++;
         }
 
         if (hit->isValid()) {
 
           //apply measurement update if applicable
-          LocalTrajectoryParameters locparm(localparms[0],
-                                            localparms[1],
-                                            localparms[2],
-                                            localparms[3],
-                                            localparms[4],
-                                            localparms[5]);
+          LocalTrajectoryParameters locparm(localparmsalignprop[0],
+                                            localparmsalignprop[1],
+                                            localparmsalignprop[2],
+                                            localparmsalignprop[3],
+                                            localparmsalignprop[4],
+                                            localparmsalignprop[5]);
           const TrajectoryStateOnSurface tsostmp(locparm, *hit->surface(), field);
 
           auto const& preciseHit = cloner.makeShared(hit, tsostmp);
@@ -1567,8 +1619,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             // rotation from module to strip coordinates
             Matrix2d R;
             
-            const double lxcor = localparms[3];
-            const double lycor = localparms[4];
+            const double lxcor = localparmsalignprop[3];
+            const double lycor = localparmsalignprop[4];
 
 
             const Topology &topology = preciseHit->det()->topology();
@@ -1716,9 +1768,10 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
 //             const Matrix<double, 6, 1> &localparmsalign = alignGlued_ ? globalToLocal(updtsos, surfaceglued) : localparms;
             
-            Matrix<double, 6, 1> localparmsalign = localparms;
+//             Matrix<double, 6, 1> localparmsalign = localparms;
+            Matrix<double, 6, 1> localparmsalign = localparmsalignprop;
             if (alignGlued_) {
-              localparmsalign = globalToLocal(updtsos, surfaceglued);
+              localparmsalign = globalToLocal(updtsosalign, surfaceglued);
             }
 
             const double localqopval = localparmsalign[0];
