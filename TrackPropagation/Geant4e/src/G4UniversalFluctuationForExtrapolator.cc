@@ -494,7 +494,8 @@ G4UniversalFluctuationForExtrapolator::SampleFluctuations(const G4Material* mate
       // const double alpha = 0.996;
 //       const double alpha = 0.9999;
       // const double alpha = 1.;
-      const double alpha = 1. - 2e-5;
+      // const double alpha = 1. - 1e-1;
+      const double alpha = 0.999;
 //       const double ualpha = (1. - std::pow(1. - w, alpha))/w;
 //       std::cout << "w = " << w << " ualpha = " << ualpha << std::endl;
       const double ualpha = alpha;

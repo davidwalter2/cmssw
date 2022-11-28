@@ -439,6 +439,9 @@ protected:
   
   bool applyHitQuality_;
   
+  bool doRes_ = false;
+  bool useIdealGeometry_ = false;
+  
   float dxpxb1;
   float dypxb1;
   

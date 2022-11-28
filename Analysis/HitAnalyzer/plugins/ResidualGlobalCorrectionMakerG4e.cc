@@ -1,5 +1,4 @@
 #include "ResidualGlobalCorrectionMakerBase.h"
-#include "MagneticFieldOffset.h"
 #include "DataFormats/MuonReco/interface/Muon.h"
 #include "TrackPropagation/Geant4e/interface/Geant4ePropagator.h"
 
@@ -282,6 +281,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   const bool dogen = fitFromGenParms_;
   const bool dolocalupdate = fitFromSimParms_;
   // const bool dolocalupdate = true;
+  
+  const bool dores = doRes_;
 
   using namespace edm;
 
@@ -302,12 +303,6 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   
   const Geant4ePropagator *g4prop = dynamic_cast<const Geant4ePropagator*>(thePropagator.product());
   const MagneticField* field = thePropagator->magneticField();
-  
-  ESHandle<MagneticField> fieldh;
-  iSetup.get<IdealMagneticFieldRecord>().get("", fieldh);
-  std::unique_ptr<MagneticFieldOffset> fieldOffset = std::make_unique<MagneticFieldOffset>(&(*fieldh));
-  
-  std::unique_ptr<PropagatorWithMaterial> fPropagator = std::make_unique<PropagatorWithMaterial>(alongMomentum, 0.105, fieldOffset.get(), 1.6, true,  -1., true);
   
   constexpr double mmu = 0.1056583745;
 
@@ -711,7 +706,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     const unsigned int nparsBfield = nhits;
     const unsigned int nparsEloss = nhits;
 //     const unsigned int nparsRes = nhits + nvalid + nvalidpixel;
-    const unsigned int nparsRes = 2*nhits + nvalid + nvalidpixel;
+    const unsigned int nparsRes = dores ? 2*nhits + nvalid + nvalidpixel : 0;
     const unsigned int npars = nparsAlignment + nparsBfield + nparsEloss + nparsRes;
     
     const unsigned int nstateparms = 5*(nhits+1);
@@ -1247,13 +1242,13 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         
         const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(6, propdetid));
         const unsigned int elossglobalidx = detidparms.at(std::make_pair(7, propdetid));
-        const unsigned int msglobalidx = detidparms.at(std::make_pair(10, propdetid));
-        const unsigned int ioniglobalidx = detidparms.at(std::make_pair(11, propdetid));
+        const unsigned int msglobalidx = dores ? detidparms.at(std::make_pair(10, propdetid)) : 0;
+        const unsigned int ioniglobalidx = dores ? detidparms.at(std::make_pair(11, propdetid)) : 0;
         
         const double dbetaval = corparms_[bfieldglobalidx];
         const double dxival = corparms_[elossglobalidx];
-        const double dmsval = corparms_[msglobalidx];
-        const double dionival = corparms_[ioniglobalidx];
+        const double dmsval = dores ? corparms_[msglobalidx] : dxival;
+        const double dionival = dores ? corparms_[ioniglobalidx] : dxival;
         
         const PSimHit *simhit = nullptr;
         
@@ -1299,9 +1294,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
         if (simhitdebug && simhit) {
           // reset propagation start point to sim hit for debugging purposes
-          auto const &origsurface = surfacemapD_.at(hit->geographicalId());
-          const Point3DBase<double, GlobalTag> pos = origsurface.toGlobal(simhit->entryPoint());
-          const Vector3DBase<double, GlobalTag> mom = origsurface.toGlobal(simhit->momentumAtEntry());
+          auto const &surfaceideal = surfacemapIdealD_.at(hit->geographicalId());
+          const Point3DBase<double, GlobalTag> pos = surfaceideal.toGlobal(simhit->entryPoint());
+          const Vector3DBase<double, GlobalTag> mom = surfaceideal.toGlobal(simhit->momentumAtEntry());
 
           propfromtsos[0] = pos.x();
           propfromtsos[1] = pos.y();
@@ -1530,7 +1525,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 //           Vinvfullalt.block<nlocalcons, nlocalcons>(icons, icons) = Qinv;
           Vinvfullalt.block<nlocalcons, nlocalcons>(icons, icons) = (Q - 0.1*dQMS).inverse();
           
-          {
+          if (dores) {
             std::vector<Triplet<double>> coeffs;
             for (unsigned int irow = 0; irow < nlocalcons; ++irow) {
               for (unsigned int icol = 0; icol < nlocalcons; ++icol) {
@@ -1543,7 +1538,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             residxs.push_back(iparm + 2);
           }
 
-          {
+          if (dores) {
             std::vector<Triplet<double>> coeffs;
             for (unsigned int irow = 0; irow < nlocalcons; ++irow) {
               for (unsigned int icol = 0; icol < nlocalcons; ++icol) {
@@ -1565,11 +1560,13 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           globalidxv[iparm] = elossglobalidx;
           iparm++;
 
-          globalidxv[iparm] = msglobalidx;
-          iparm++;
-          
-          globalidxv[iparm] = ioniglobalidx;
-          iparm++;
+          if (dores) {
+            globalidxv[iparm] = msglobalidx;
+            iparm++;
+            
+            globalidxv[iparm] = ioniglobalidx;
+            iparm++;
+          }
         }
 
         if (hit->isValid()) {
@@ -1810,12 +1807,12 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               A = R*Rglued*Aval;
             }
             
-            const unsigned int xresglobalidx = detidparms.at(std::make_pair(8, hit->geographicalId()));
-            const unsigned int yresglobalidx = ispixel ? detidparms.at(std::make_pair(9, hit->geographicalId())) : 0;
+            const unsigned int xresglobalidx = dores ? detidparms.at(std::make_pair(8, hit->geographicalId())) : 0;
+            const unsigned int yresglobalidx = dores && ispixel ? detidparms.at(std::make_pair(9, hit->geographicalId())) : 0;
 
             // apply correction to hit covariance from previous iterations if applicable
-            const double xxresfact = std::exp(corparms_[xresglobalidx]);
-            const double yyresfact = ispixel ? std::exp(corparms_[yresglobalidx]) : 1.;
+            const double xxresfact = dores ? std::exp(corparms_[xresglobalidx]) : 1.;
+            const double yyresfact = dores && ispixel ? std::exp(corparms_[yresglobalidx]) : 1.;
             const double xyresfact = std::sqrt(xxresfact*yyresfact);
             
 //             std::cout << "xxresfact = " << xxresfact << " yyresfact = " << yyresfact << " xyresfact = " << xyresfact << std::endl;
@@ -1826,7 +1823,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             iV(1, 1) *= yyresfact;
             
             // local x/phi resolution variation
-            {
+            if (dores) {
               // scale diagonal element by exp(parm), preserve correlations
               const double dVxx = iV(0, 0);
               
@@ -1847,7 +1844,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             }
             
             // local y resolution variation
-            if (ispixel) {
+            if (dores && ispixel) {
               // scale diagonal element by exp(parm), preserve correlations
               const double dVxy = 0.5*iV(0, 1);
               const double dVyy = iV(1, 1);
@@ -1908,10 +1905,12 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               }
             }
             
-            globalidxv[iparm] = xresglobalidx;
-            ++iparm;
+            if (dores) {
+              globalidxv[iparm] = xresglobalidx;
+              ++iparm;
+            }
             
-            if (ispixel) {
+            if (dores && ispixel) {
               globalidxv[iparm] = yresglobalidx;
               ++iparm;
             }

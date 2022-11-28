@@ -132,6 +132,8 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   applyHitQuality_ = iConfig.getParameter<bool>("applyHitQuality");
   doMuons_ = iConfig.getParameter<bool>("doMuons");
   doTrigger_ = iConfig.getParameter<bool>("doTrigger");
+  doRes_ = iConfig.getParameter<bool>("doRes");
+  useIdealGeometry_ = iConfig.getParameter<bool>("useIdealGeometry");
   corFiles_ = iConfig.getParameter<std::vector<std::string>>("corFiles");
 
   inputBs_ = consumes<reco::BeamSpot>(edm::InputTag("offlineBeamSpot"));
@@ -221,7 +223,9 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
     std::stringstream filenamestream;
 //     filenamestream << "globalcor_" << streamid.value() << ".root";
     filenamestream << outprefix << "_" << streamid.value() << ".root";
+    // std::cout << "file is: " << filenamestream.str().c_str() << std::endl;
     fout = new TFile(filenamestream.str().c_str(), "RECREATE");
+    // std::cout << "filename is: " << fout->GetName() << std::endl;
   }
   
 //   runtree = new TTree("runtree","");
@@ -326,14 +330,13 @@ void
 ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup const& es)
 {
   
-//   edm::ESHandle<GlobalTrackingGeometry> globalGeometry;
-//   es.get<GlobalTrackingGeometryRecord>().get(globalGeometry);
-  
-  edm::ESHandle<TrackerGeometry> globalGeometry;
-  es.get<TrackerDigiGeometryRecord>().get("idealForDigi", globalGeometry);
+  edm::ESHandle<GlobalTrackingGeometry> globalGeometryNominal;
+  es.get<GlobalTrackingGeometryRecord>().get(globalGeometryNominal);
   
   edm::ESHandle<TrackerGeometry> globalGeometryIdeal;
   es.get<TrackerDigiGeometryRecord>().get("idealForDigi", globalGeometryIdeal);
+  
+  const TrackingGeometry *globalGeometry = useIdealGeometry_ ? static_cast<const TrackingGeometry*>(globalGeometryIdeal.product()) : static_cast<const TrackingGeometry*>(globalGeometryNominal.product());
   
   edm::ESHandle<TrackerTopology> trackerTopology;
   es.get<TrackerTopologyRcd>().get(trackerTopology);
@@ -409,20 +412,22 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       parmset.emplace(6, parmdetid);
       parmset.emplace(7, parmdetid);
       
-      // hit resolution parameters are associated to individual modules
-      // local x/phi hit resolution
-      parmset.emplace(8, det->geographicalId());
-      
-      // local y hit resolution (pixels only)
-      if (ispixel) {
-        parmset.emplace(9, det->geographicalId());
-      }
+      if (doRes_) {
+        // hit resolution parameters are associated to individual modules
+        // local x/phi hit resolution
+        parmset.emplace(8, det->geographicalId());
+        
+        // local y hit resolution (pixels only)
+        if (ispixel) {
+          parmset.emplace(9, det->geographicalId());
+        }
 
-      //MS resolution parameter associated to glued detids where applicable
-      parmset.emplace(10, parmdetid);
-      
-      //ionization resolution parameter associated to glued detids where applicable
-      parmset.emplace(11, parmdetid);
+        //MS resolution parameter associated to glued detids where applicable
+        parmset.emplace(10, parmdetid);
+        
+        //ionization resolution parameter associated to glued detids where applicable
+        parmset.emplace(11, parmdetid);
+      }
       
       
     }

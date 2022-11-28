@@ -898,6 +898,8 @@ std::pair<TrajectoryStateOnSurface, double> Geant4ePropagator::propagateGeneric(
     
 //     errMSIout(0, 0) = varqop;
     errMSIout(0, 0) = ionifact*computeErrorIoni(g4eTrajState.GetG4Track(), pforced);
+    
+    // std::cout << "ionifact = " << ionifact << " errMSIout(0, 0) = " << errMSIout(0, 0) << std::endl;
       
 
     // separate scaling for ionization and MS
@@ -1364,80 +1366,86 @@ Eigen::Matrix<double, 5, 5> Geant4ePropagator::PropagateErrorMSC( const G4Track*
 
   // DD *= 0.715;
   
-  DD *= 0.8;
+  // DD *= 0.8;
+  
+  // DD *= 0.72*0.95;
+  
+  if (false) {
 
-  //TODO more accurate coeffs from fine structure constant and electron mass?
-  const double tmin = 2.66e-6*std::pow(effZ, 1./3.)/pPre;
-  const double tmax = 0.14*std::pow(effA, -1./3.)/pPre;
-  
-  const double k = 2.*tmin*tmin*(1. + tmin*tmin/tmax/tmax);
-  const double nbar = 1.587e7*stepLengthCm*std::pow(effZ, -2./3.)/std::log(159.*std::pow(effZ, -1./3.))/Xs/beta/beta;
-  
-//   const double alpha = 0.996;
-//   const double alpha = 0.9999;
-  // const double alpha = 1. - 1e-7;
-  const double alpha = 1.0;
-  const double talpha = std::sqrt(2.*alpha/(k - 2.*tmin*tmin*alpha))*tmin*tmin;
-  
-  // const double tbar = 0.5*k*(std::atan(talpha/tmin)/tmin - talpha/(tmin*tmin + talpha*talpha));
-  const double tsqbar = k*(0.5*tmin*tmin/(talpha*talpha + tmin*tmin) - std::log(tmin) + 0.5*std::log(talpha*talpha + tmin*tmin) - 0.5);
-  
-  // const double sigtsq = tsqbar - tbar*tbar;
-  
-  const double DDalpha = 0.5*nbar*tsqbar;
-  // const double DDalpha = 0.5*nbar*sigtsq;
-  
-//   const double tbarone = 4.18e-6*std::pow(effZ, 1./3.)/pPre;
-//   const double tsqbarone = 2.84e-11*std::pow(effZ, 2./3.)*std::log(159.*std::pow(effZ, -1./3.))/pPre/pPre;
-//   
-//   const double tbaronealt = 0.5*M_PI*tmin;
-//   const double tsqbaronealt = 2.*tmin*tmin*(std::log(tmax/tmin) - 0.5);
-//   
-// //   DD = 0.5*sigtsq;
-//   
-//   std::cout << "tmin = " << tmin << " tmax = " << tmax << " talpha = " << talpha << std::endl;
-//   
-//   std::cout << "tbar = " << tbar << " tsqbar = " << tsqbar << " tbarone = " << tbarone << " tsqbarone = " << tsqbarone << " tbaronealt = " << tbaronealt << " tsqbaronealt = " << tsqbaronealt << std::endl;
-//   
-//   std::cout << "DD = " << DD << " DDalpha = " << DDalpha << std::endl;
-  // DD = DDalpha;
+    //TODO more accurate coeffs from fine structure constant and electron mass?
+    const double tmin = 2.66e-6*std::pow(effZ, 1./3.)/pPre;
+    const double tmax = 0.14*std::pow(effA, -1./3.)/pPre;
+    
+    const double k = 2.*tmin*tmin*(1. + tmin*tmin/tmax/tmax);
+    const double nbar = 1.587e7*stepLengthCm*std::pow(effZ, -2./3.)/std::log(159.*std::pow(effZ, -1./3.))/Xs/beta/beta;
+    
+  //   const double alpha = 0.996;
+  //   const double alpha = 0.9999;
+    // const double alpha = 1. - 1e-7;
+    const double alpha = 1.0;
+    const double talpha = std::sqrt(2.*alpha/(k - 2.*tmin*tmin*alpha))*tmin*tmin;
+    
+    // const double tbar = 0.5*k*(std::atan(talpha/tmin)/tmin - talpha/(tmin*tmin + talpha*talpha));
+    const double tsqbar = k*(0.5*tmin*tmin/(talpha*talpha + tmin*tmin) - std::log(tmin) + 0.5*std::log(talpha*talpha + tmin*tmin) - 0.5);
+    
+    // const double sigtsq = tsqbar - tbar*tbar;
+    
+    const double DDalpha = 0.5*nbar*tsqbar;
+    // const double DDalpha = 0.5*nbar*sigtsq;
+    
+  //   const double tbarone = 4.18e-6*std::pow(effZ, 1./3.)/pPre;
+  //   const double tsqbarone = 2.84e-11*std::pow(effZ, 2./3.)*std::log(159.*std::pow(effZ, -1./3.))/pPre/pPre;
+  //   
+  //   const double tbaronealt = 0.5*M_PI*tmin;
+  //   const double tsqbaronealt = 2.*tmin*tmin*(std::log(tmax/tmin) - 0.5);
+  //   
+  // //   DD = 0.5*sigtsq;
+  //   
+  //   std::cout << "tmin = " << tmin << " tmax = " << tmax << " talpha = " << talpha << std::endl;
+  //   
+  //   std::cout << "tbar = " << tbar << " tsqbar = " << tsqbar << " tbarone = " << tbarone << " tsqbarone = " << tsqbarone << " tbaronealt = " << tbaronealt << " tsqbaronealt = " << tsqbaronealt << std::endl;
+  //   
+  //   std::cout << "DD = " << DD << " DDalpha = " << DDalpha << std::endl;
+    // DD = DDalpha;
 
+    
+    
+    // if (std::fabs(effZ - 4.0) < 0.1) {
+      // zero MS for beryllium!?
+      // DD = 0.;
+    // }
+    
+    // const double rhopost = aTrack->GetStep()->GetPostStepPoint()->GetPosition().rho()/cm;
+    // if (rhopost < 4.5) {
+    //   std::cout << "material = " << mate->GetName() << " rhopost = " << rhopost << " zeroing material\n";
+    //   DD = 0.;
+    // }
+    
+  //   G4double DD = X0 < 25e3 ? 2.25e-4*stepLengthCm*(charge/pBeta * charge/pBeta )/Xs : 0.;
+
+  // //   G4double DD = 2.25e-4*RI*(charge/pBeta * charge/pBeta );
+
+  //   std::cout << "name = " << mate->GetName() << " X0 = " << X0 << " lambdaeff = " << lambdaeff << " Nsnorminv = " << Nsnorminv << " lambdaeff/Nsnorminv = " << lambdaeff/Nsnorminv << " lambdaeff/Xs = " << lambdaeff/Xs << " p = " << pPre << " beta = " << beta << std::endl;
+
+  //   const double DDlam = stepLengthCm/lambdaeff/lambdaeff;
+
+  //   std::cout << "name = " << mate->GetName() << " X0 = " << X0 << " Xs = " << Xs << " DD = " << DD << " DDold = " << DDold << " DDlam = " << DDlam << " DDlam/DD = " << DDlam/DD << " DDlam/DDold = " << DDlam/DDold << " stepLengthCm = " << stepLengthCm << " pPre = " << pPre << " DDlamscaled = " << DDlamscaled << " DDlamscaled2 = " << DDlamscaled2 << std::endl;
+
+  //   std::cout << "name = " << mate->GetName() << " X0 = " << X0 << " Xs = " << Xs << " lambdaeff = " << lambdaeff << " lambdaeff/X0 = " << lambdaeff/X0 << " lambdaeff/Xs = " << lambdaeff/Xs << " DD = " << DD << " phivar = " << phivar << " phivar/DD = " << phivar/DD << " phivar/DDold = " << phivar/DDold << " stepLengthCm = " << stepLengthCm << " pPre = " << pPre << std::endl;
+
+
+    // G4double DDcore = 0.0136*0.0136*RI*(charge/pBeta * charge/pBeta )*std::pow(1. + 0.038*std::log(RI), 2);
+    // DD = DDcore;
+  // //   G4double DDcorealt = 0.0136*0.0136*RI*(charge/pBeta * charge/pBeta )*std::pow(1. + 0.038*std::log(RI/beta/beta), 2);
+  //
+  //   const double dp = stepLengthCm/Xs/beta/beta;
+  //   const double lndp = std::log(dp);
+  //   const double var1 = 0.8510 + 0.03314*lndp - 0.001825*lndp*lndp;
+  //   const double DDcorealt = 2.25e-4*dp*var1/pPre/pPre;
+    
+  //   std::cout << "name = " << mate->GetName() << " mate->GetDensity() = " << mate->GetDensity() <<  " X0 = " << X0 << " Xs = " << Xs << " stepLengthCm = " << stepLengthCm << " var1 = " << var1 << " DDcorealt/DDcore = " << DDcorealt/DDcore << std::endl;
   
-  
-  // if (std::fabs(effZ - 4.0) < 0.1) {
-    // zero MS for beryllium!?
-    // DD = 0.;
-  // }
-  
-  // const double rhopost = aTrack->GetStep()->GetPostStepPoint()->GetPosition().rho()/cm;
-  // if (rhopost < 4.5) {
-  //   std::cout << "material = " << mate->GetName() << " rhopost = " << rhopost << " zeroing material\n";
-  //   DD = 0.;
-  // }
-  
-//   G4double DD = X0 < 25e3 ? 2.25e-4*stepLengthCm*(charge/pBeta * charge/pBeta )/Xs : 0.;
-
-// //   G4double DD = 2.25e-4*RI*(charge/pBeta * charge/pBeta );
-
-//   std::cout << "name = " << mate->GetName() << " X0 = " << X0 << " lambdaeff = " << lambdaeff << " Nsnorminv = " << Nsnorminv << " lambdaeff/Nsnorminv = " << lambdaeff/Nsnorminv << " lambdaeff/Xs = " << lambdaeff/Xs << " p = " << pPre << " beta = " << beta << std::endl;
-
-//   const double DDlam = stepLengthCm/lambdaeff/lambdaeff;
-
-//   std::cout << "name = " << mate->GetName() << " X0 = " << X0 << " Xs = " << Xs << " DD = " << DD << " DDold = " << DDold << " DDlam = " << DDlam << " DDlam/DD = " << DDlam/DD << " DDlam/DDold = " << DDlam/DDold << " stepLengthCm = " << stepLengthCm << " pPre = " << pPre << " DDlamscaled = " << DDlamscaled << " DDlamscaled2 = " << DDlamscaled2 << std::endl;
-
-//   std::cout << "name = " << mate->GetName() << " X0 = " << X0 << " Xs = " << Xs << " lambdaeff = " << lambdaeff << " lambdaeff/X0 = " << lambdaeff/X0 << " lambdaeff/Xs = " << lambdaeff/Xs << " DD = " << DD << " phivar = " << phivar << " phivar/DD = " << phivar/DD << " phivar/DDold = " << phivar/DDold << " stepLengthCm = " << stepLengthCm << " pPre = " << pPre << std::endl;
-
-
-  // G4double DDcore = 0.0136*0.0136*RI*(charge/pBeta * charge/pBeta )*std::pow(1. + 0.038*std::log(RI), 2);
-  // DD = DDcore;
-// //   G4double DDcorealt = 0.0136*0.0136*RI*(charge/pBeta * charge/pBeta )*std::pow(1. + 0.038*std::log(RI/beta/beta), 2);
-//
-//   const double dp = stepLengthCm/Xs/beta/beta;
-//   const double lndp = std::log(dp);
-//   const double var1 = 0.8510 + 0.03314*lndp - 0.001825*lndp*lndp;
-//   const double DDcorealt = 2.25e-4*dp*var1/pPre/pPre;
-  
-//   std::cout << "name = " << mate->GetName() << " mate->GetDensity() = " << mate->GetDensity() <<  " X0 = " << X0 << " Xs = " << Xs << " stepLengthCm = " << stepLengthCm << " var1 = " << var1 << " DDcorealt/DDcore = " << DDcorealt/DDcore << std::endl;
+  }
   
 //   DD = DDold;
   // DD = DDcore;
@@ -1824,7 +1832,7 @@ double Geant4ePropagator::computeErrorIoni(const G4Track* aTrack, double pforced
   
   G4double dedxSq = dedxsqurban;
 //   G4double dedxSq = 0.01*dedxsqvavilov;
-//   G4double dedxSq = dedxsqvavilov;
+  // G4double dedxSq = dedxsqvavilov;
   // G4double dedxSq = dedxsqvavilovtruncated;
   // G4double dedxSq = dedxsqfixed;
 //   G4double dedxSq = dedxSqlandau;

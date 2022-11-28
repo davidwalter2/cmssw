@@ -14,9 +14,11 @@ using namespace edm;
 
 GeantPropagatorESProducer::GeantPropagatorESProducer(const edm::ParameterSet &p)
     : magFieldToken_(setWhatProduced(this, p.getParameter<std::string>("ComponentName"))
-                         .consumesFrom<MagneticField, IdealMagneticFieldRecord>(edm::ESInputTag("", ""))) {
+                         .consumesFrom<MagneticField, IdealMagneticFieldRecord>(
+                             edm::ESInputTag("", p.getParameter<std::string>("MagneticFieldLabel")))) {
   pset_ = p;
   plimit_ = pset_.getParameter<double>("PropagationPtotLimit");
+  fieldlabel_ = pset_.getParameter<std::string>("MagneticFieldLabel");
 }
 
 GeantPropagatorESProducer::~GeantPropagatorESProducer() {}

@@ -27,6 +27,7 @@ private:
   edm::ParameterSet pset_;
   edm::ESGetToken<MagneticField, IdealMagneticFieldRecord> magFieldToken_;
   double plimit_;
+  std::string fieldlabel_;
 };
 
 #endif
