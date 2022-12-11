@@ -855,6 +855,31 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
 
         surfaceD = GloballyPositioned<double>(posglobal, tkrot);
 
+        if (false) {
+          const Point3DBase<double, LocalTag> posrel = surfaceGlued.toLocal(surfaceD.position());
+          
+          const Vector3DBase<double, LocalTag> uxrel = surfaceGlued.toLocal(Vector3DBase<double, GlobalTag>(surfaceD.rotation().x()));
+          const Vector3DBase<double, LocalTag> uyrel = surfaceGlued.toLocal(Vector3DBase<double, GlobalTag>(surfaceD.rotation().y()));
+          const Vector3DBase<double, LocalTag> uzrel = surfaceGlued.toLocal(Vector3DBase<double, GlobalTag>(surfaceD.rotation().z()));
+          
+          const Point3DBase<double, LocalTag> posrelideal = surfaceGluedIdeal.toLocal(surfaceIdeal.position());
+          
+          const Vector3DBase<double, LocalTag> uxrelideal = surfaceGluedIdeal.toLocal(Vector3DBase<double, GlobalTag>(surfaceIdeal.rotation().x()));
+          const Vector3DBase<double, LocalTag> uyrelideal = surfaceGluedIdeal.toLocal(Vector3DBase<double, GlobalTag>(surfaceIdeal.rotation().y()));
+          const Vector3DBase<double, LocalTag> uzrelideal = surfaceGluedIdeal.toLocal(Vector3DBase<double, GlobalTag>(surfaceIdeal.rotation().z()));
+          
+          std::cout << "posrel: " << posrel << std::endl;
+          std::cout << "uxrel: " << uxrel << std::endl;
+          std::cout << "uyrel: " << uyrel << std::endl;
+          std::cout << "uzrel: " << uzrel << std::endl;
+          
+          std::cout << "posrelideal: " << posrelideal << std::endl;
+          std::cout << "uxrelideal: " << uxrelideal << std::endl;
+          std::cout << "uyrelideal: " << uyrelideal << std::endl;
+          std::cout << "uzrelideal: " << uzrelideal << std::endl;
+          
+        }
+        
 //         const GloballyPositioned<double> surfacemod(posglobal, tkrot);
 // //
 //         std::cout << "surfaceD position:\n" << surfaceD.position() << "\nrotation:\n" << surfaceD.rotation() << std::endl;

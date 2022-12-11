@@ -1142,9 +1142,19 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               }
 
               // curvilinear to local jacobian
-              const Matrix<double, 5, 5> &Hp = dolocalupdate ? curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, mmu, dbetaval) : Hm;
+              // const Matrix<double, 5, 5> &Hp = dolocalupdate ? curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, mmu, dbetaval) : Hm;
+              Matrix<double, 5, 5> Hp = Hm;
+              if (dolocalupdate) {
+                Hp = curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, mmu, dbetaval);
+              }
               
-              const Matrix<double, 5, 5> &Q = dolocalupdate ? Hm*Qcurv*Hm.transpose() : Qcurv;
+              // const Matrix<double, 5, 5> &Q = dolocalupdate ? Hm*Qcurv*Hm.transpose() : Qcurv;
+
+              Matrix<double, 5, 5> Q = Qcurv;
+              if (dolocalupdate) {
+                Q = Hm*Qcurv*Hm.transpose();
+              }
+
               const Matrix<double, 5, 5> Qinv = Q.inverse();
 
               if (ihit == 0) {
@@ -1419,7 +1429,12 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                   // alignment jacobian
                   Matrix<double, 2, 6> Aval = Matrix<double, 2, 6>::Zero();
 
-                  const Matrix<double, 6, 1> &localparmsalign = alignGlued_ ? globalToLocal(updtsos, surfaceglued) : localparms;
+                  // const Matrix<double, 6, 1> &localparmsalign = alignGlued_ ? globalToLocal(updtsos, surfaceglued) : localparms;
+
+                  Matrix<double, 6, 1> localparmsalign = localparms;
+                  if (alignGlued_) {
+                    localparmsalign = globalToLocal(updtsos, surfaceglued);
+                  }
 
                   const double localqopval = localparmsalign[0];
                   const double localdxdzval = localparmsalign[1];
@@ -1430,27 +1445,32 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                   //standard case
 
                   // dx/dx
-                  Aval(0,0) = 1.;
+                  Aval(0,0) = -1.;
                   // dy/dy
-                  Aval(1,1) = 1.;
+                  Aval(1,1) = -1.;
                   // dx/dz
                   Aval(0,2) = localdxdzval;
                   // dy/dz
                   Aval(1,2) = localdydzval;
                   // dx/dtheta_x
-                  Aval(0,3) = -localyval*localdxdzval;
+                  Aval(0,3) = localyval*localdxdzval;
                   // dy/dtheta_x
-                  Aval(1,3) = -localyval*localdydzval;
+                  Aval(1,3) = localyval*localdydzval;
                   // dx/dtheta_y
                   Aval(0,4) = -localxval*localdxdzval;
                   // dy/dtheta_y
                   Aval(1,4) = -localxval*localdydzval;
                   // dx/dtheta_z
-                  Aval(0,5) = -localyval;
+                  Aval(0,5) = localyval;
                   // dy/dtheta_z
-                  Aval(1,5) = localxval;
+                  Aval(1,5) = -localxval;
 
-                  const Matrix<double, 2, 6> &A = alignGlued_ ? Rglued*Aval : Aval;
+                  // const Matrix<double, 2, 6> &A = alignGlued_ ? Rglued*Aval : Aval;
+
+                  Matrix<double, 2, 6> A = Aval;
+                  if (alignGlued_) {
+                    A = Rglued*Aval;
+                  }
 
                   double thetaincidence = std::asin(1./std::sqrt(std::pow(localdxdzval,2) + std::pow(localdydzval,2) + 1.));
 
@@ -2370,6 +2390,14 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
           Muminus_jacRef.resize(3*nparsfinal);
           Map<Matrix<float, 3, Dynamic, RowMajor>>(Muminus_jacRef.data(), 3, nparsfinal) = dxdparms.block(0, trackstateidxminus, nparsfinal, 3).transpose().cast<float>();
+
+          if (false) {
+            std::cout << "Muplus pt eta phi = " << Muplus_pt << "  " << Muplus_eta << " " << Muplus_phi << std::endl;
+            std::cout << "Muminus pt eta phi = " << Muminus_pt << "  " << Muminus_eta << " " << Muminus_phi << std::endl;
+
+            std::cout << "Muplus_jacref:\n" << Map<Matrix<float, 3, Dynamic, RowMajor>>(Muplus_jacRef.data(), 3, nparsfinal) << std::endl;
+            std::cout << "Muminus_jacref:\n" << Map<Matrix<float, 3, Dynamic, RowMajor>>(Muminus_jacRef.data(), 3, nparsfinal) << std::endl;
+          }
         }
 
       }

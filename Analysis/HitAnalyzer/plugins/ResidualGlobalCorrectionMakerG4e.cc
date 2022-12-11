@@ -2781,6 +2781,19 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     
 //     jacrefout = dxdparms.leftCols<5>().transpose().cast<float>();    
     jacrefout = ( (dxdparms).leftCols<5>().transpose() ).cast<float>();  
+
+
+    if (false) {
+      const double refpt = std::fabs(1./refParms[0])*std::sin(M_PI_2 - refParms[1]);
+      const double refphi = refParms[2];
+      const double reftheta = M_PI_2 - refParms[1];
+      const double refeta = -std::log(std::tan(0.5*reftheta));
+
+      std::cout << "ref pt eta phi: " << refpt << " " << refeta << " " << refphi << std::endl;
+      std::cout << "jacref qop lam phi:\n" << jacrefout.topRows<3>() << std::endl;
+
+    }
+
     
 
     gradout = grad.cast<float>();
