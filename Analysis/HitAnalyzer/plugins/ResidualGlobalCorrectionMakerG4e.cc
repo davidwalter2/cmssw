@@ -493,6 +493,10 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     
 //     std::cout << "genPt = " << genPt << " genEta = " << genEta << " genPhi = " << genPhi << " genCharge = " << genCharge << " genX = " << genX << " genY = " << genY << " genZ = " << genZ << std::endl;
     
+    if (requireGen_ && genpart == nullptr) {
+      continue;
+    }
+    
     int simtrackid = -99;
     if (genpart != nullptr && doSim_) {
       for (auto const& simTrack : *simTracks) {
@@ -1643,7 +1647,10 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             double lyoffset = 0.;
             double hitphival = -99.;
             double localphival = -99.;
-            
+
+            if (false) {
+              std::cout << "ihit = " << ihit << " orig x y = " << preciseHit->localPosition().x() << " " << preciseHit->localPosition().y() << " defcor x y = " << defcorr.x() << " " << defcorr.y() << " hit x y = " << hitx << " " << hity << std::endl;
+            }
 
             if (hit1d) {
               const ProxyStripTopology *proxytopology = dynamic_cast<const ProxyStripTopology*>(&(preciseHit->det()->topology()));

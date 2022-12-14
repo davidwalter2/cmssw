@@ -127,6 +127,7 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   fillJac_ = iConfig.getParameter<bool>("fillJac");
   fillRunTree_ = iConfig.getParameter<bool>("fillRunTree");
   doGen_ = iConfig.getParameter<bool>("doGen");
+  requireGen_ = iConfig.getParameter<bool>("requireGen");
   doSim_ = iConfig.getParameter<bool>("doSim");
   bsConstraint_ = iConfig.getParameter<bool>("bsConstraint");
   applyHitQuality_ = iConfig.getParameter<bool>("applyHitQuality");
@@ -835,6 +836,12 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
 
         const GloballyPositioned<double> surfaceGluedIdeal = surfaceToDouble(surfaceGluedIdealPre);
         const GloballyPositioned<double> surfaceIdeal = surfaceToDouble(surfaceIdealPre, zsign*surfaceGluedIdeal.rotation().z());
+
+        if (false) {
+          // const GloballyPositioned<double> surfaceIdealOrig = surfaceToDouble(surfaceIdealPre);
+
+          std::cout << "zdot = " << zdot << std::endl;
+        }
 
         const Vector3DBase<double, GlobalTag> uxpre(surfaceIdeal.rotation().x());
         const Vector3DBase<double, GlobalTag> uypre(surfaceIdeal.rotation().y());

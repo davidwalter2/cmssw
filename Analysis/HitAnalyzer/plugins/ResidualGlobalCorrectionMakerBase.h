@@ -434,6 +434,7 @@ protected:
   bool doGen_;
   bool doSim_;
   bool doMuons_;
+  bool requireGen_;
   
   bool bsConstraint_;
   

@@ -507,6 +507,27 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
     if (itrack->isLooper()) {
       continue;
     }
+    
+    const reco::Candidate *mu0gen = nullptr;
+    if (doGen_ && !doSim_) {
+      for (auto const &genpart : *genPartCollection) {
+        if (genpart.status() != 1) {
+          continue;
+        }
+        if (std::abs(genpart.pdgId()) != 13) {
+          continue;
+        }
+        
+        float dR0 = deltaR(genpart, *itrack);
+        if (dR0 < 0.1 && genpart.charge() == itrack->charge()) {
+          mu0gen = &genpart;
+        }
+      }
+    }
+    
+    if (requireGen_ && mu0gen == nullptr) {
+      continue;
+    }
 
     const reco::TransientTrack itt = TTBuilder->build(*itrack);
 
@@ -532,6 +553,31 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
         continue;
       }
 
+      const reco::Candidate *mu1gen = nullptr;
+      
+      double massconstraintval = massConstraint_;
+      if (doGen_ && !doSim_) {
+        for (auto const &genpart : *genPartCollection) {
+          if (genpart.status() != 1) {
+            continue;
+          }
+          if (std::abs(genpart.pdgId()) != 13) {
+            continue;
+          }
+          
+          float dR1 = deltaR(genpart, *jtrack);
+          if (dR1 < 0.1 && genpart.charge() == jtrack->charge()) {
+            mu1gen = &genpart;
+          }
+        }
+        
+      }
+      
+      if (requireGen_ && mu1gen == nullptr) {
+        continue;
+      }
+      
+      
       const reco::TransientTrack jtt = TTBuilder->build(*jtrack);
 
       const reco::Muon *matchedmuon1 = nullptr;
@@ -548,44 +594,6 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             }
           }
         }
-      }
-
-      const reco::Candidate *mu0gen = nullptr;
-      const reco::Candidate *mu1gen = nullptr;
-      
-      double massconstraintval = massConstraint_;
-      if (doGen_ && !doSim_) {
-        for (auto const &genpart : *genPartCollection) {
-          if (genpart.status() != 1) {
-            continue;
-          }
-          if (std::abs(genpart.pdgId()) != 13) {
-            continue;
-          }
-          
-//           float dR0 = deltaR(genpart.phi(), itrack->phi(), genpart.eta(), itrack->eta());
-          float dR0 = deltaR(genpart, *itrack);
-          if (dR0 < 0.1 && genpart.charge() == itrack->charge()) {
-            mu0gen = &genpart;
-          }
-          
-//           float dR1 = deltaR(genpart.phi(), jtrack->phi(), genpart.eta(), jtrack->eta());
-          float dR1 = deltaR(genpart, *jtrack);
-          if (dR1 < 0.1 && genpart.charge() == jtrack->charge()) {
-            mu1gen = &genpart;
-          }
-        }
-        
-//         if (mu0gen != nullptr && mu1gen != nullptr) {
-//           auto const jpsigen = ROOT::Math::PtEtaPhiMVector(mu0gen->pt(), mu0gen->eta(), mu0gen->phi(), mmu) +
-//                             ROOT::Math::PtEtaPhiMVector(mu1gen->pt(), mu1gen->eta(), mu1gen->phi(), mmu);
-// 
-//           massconstraintval = jpsigen.mass();
-//         }
-//         else {
-//           continue;
-//         }
-        
       }
       
 //       std::cout << "massconstraintval = " << massconstraintval << std::endl;
