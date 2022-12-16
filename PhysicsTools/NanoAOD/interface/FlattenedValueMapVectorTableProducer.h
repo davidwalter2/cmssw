@@ -85,10 +85,10 @@ class FlattenedValueMapVectorTableProducer : public edm::stream::EDProducer<> {
                 iEvent.getByToken(intVecMaps_[i], vmap);
                 const auto& results = readVals(*vmap, objs, sizes);
 
-                auto intsizetab = std::make_unique<nanoaod::FlatTable>(objs.size(), this->name_+intNames_[i]+"_Counts", false, false);
+                auto intsizetab = std::make_unique<nanoaod::FlatTable>(objs.size(), this->name_ + "_" + intNames_[i]+"_Counts", false, false);
                 intsizetab->template addColumn<int>("", sizes, "Number of entries per object", countPrecision_);
                 intsizetab->setDoc(doc_);
-                auto intvectab = std::make_unique<nanoaod::FlatTable>(results.size(), this->name_+intNames_[i], false, false);
+                auto intvectab = std::make_unique<nanoaod::FlatTable>(results.size(), this->name_+ "_" + intNames_[i], false, false);
                 intvectab->template addColumn<int>("Vals", results, intDocs_[i], intPrecisions_[i]);
                 intvectab->setDoc(doc_);
 
@@ -101,10 +101,10 @@ class FlattenedValueMapVectorTableProducer : public edm::stream::EDProducer<> {
                 iEvent.getByToken(floatVecMaps_[i], vmap);
                 const auto& results = readVals(*vmap, objs, sizes);
 
-                auto floatsizetab = std::make_unique<nanoaod::FlatTable>(objs.size(), this->name_+floatNames_[i]+"_Counts", false, false);
+                auto floatsizetab = std::make_unique<nanoaod::FlatTable>(objs.size(), this->name_ + "_" + floatNames_[i]+"_Counts", false, false);
                 floatsizetab->template addColumn<int>("", sizes, "Number of entries per object", countPrecision_);
                 floatsizetab->setDoc(doc_);
-                auto floatvectab = std::make_unique<nanoaod::FlatTable>(results.size(), this->name_+floatNames_[i], false, false);
+                auto floatvectab = std::make_unique<nanoaod::FlatTable>(results.size(), this->name_ + "_" + floatNames_[i], false, false);
                 floatvectab->template addColumn<float>("Vals", results, floatDocs_[i], floatPrecisions_[i]);
                 floatvectab->setDoc(doc_);
 
