@@ -427,7 +427,7 @@ protected:
   bool fillGrads_;
   bool fillJac_;
   bool fillRunTree_;
-  bool alignGlued_ = true;
+  bool alignGlued_ = false;
   
   bool debugprintout_;
   
