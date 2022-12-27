@@ -377,8 +377,8 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
 // //       const bool align2d = ispixel || isglued || isendcap;      
 //       const DetId parmdetid = isglued ? DetId(gluedid) : det->geographicalId();
       
-//       const bool align2d = ispixel || isendcap;
-      const bool align2d = ispixel || isendcap || (alignGlued_ && isglued);
+      const bool align2d = ispixel || isendcap;
+      // const bool align2d = ispixel || isendcap || (alignGlued_ && isglued);
 //       const bool align2d = true;
 //       const bool align2d = ispixel;
 //       const bool align2d = false;
@@ -398,15 +398,15 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
 //         parmset.emplace(1, det->geographicalId());
 //       }
 
-      parmset.emplace(0, aligndetid);
+      parmset.emplace(0, det->geographicalId());
       parmset.emplace(2, aligndetid);
       parmset.emplace(3, aligndetid);
       parmset.emplace(4, aligndetid);
-      parmset.emplace(5, aligndetid);
+      parmset.emplace(5, det->geographicalId());
 
       if (align2d) {
         //local y alignment parameters only for pixels and wedge modules
-        parmset.emplace(1, aligndetid);
+        parmset.emplace(1, det->geographicalId());
       }
 
       // bfield and material parameters are associated to glued detids where applicable
@@ -802,9 +802,10 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       const DetId parmdetid = isglued ? DetId(gluedid) : det->geographicalId();
       const GeomDet* parmDet = isglued ? globalGeometry->idToDet(parmdetid) : det;
       
-      const DetId aligndetid = alignGlued_ ? parmdetid : det->geographicalId();
+      // const DetId aligndetid = alignGlued_ ? parmdetid : det->geographicalId();
 
-      const bool align2d = detidparms.count(std::make_pair(1, aligndetid));
+      const bool align2d = detidparms.count(std::make_pair(1, det->geographicalId()));
+      // const bool align2d = detidparms.count(std::make_pair(1, aligndetid));
       
       const Surface &surface = det->surface();
       
@@ -818,7 +819,7 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       
       if (isstereo) {
         GloballyPositioned<double> surfaceGlued = surfaceToDouble(parmDet->surface());
-        
+
         if (alignGlued_) {
         
           const DetId partnerid = trackerTopology->partnerDetId(det->geographicalId());
@@ -898,8 +899,6 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
           Rglued(1, 0) = lxalt.y();
           Rglued(1, 1) = lyalt.y();
 
-          
-          
         }
         
         surfacemapD_[parmdetid] = surfaceGlued;

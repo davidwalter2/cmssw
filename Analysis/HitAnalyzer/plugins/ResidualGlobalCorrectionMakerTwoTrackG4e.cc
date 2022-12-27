@@ -1484,6 +1484,9 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                   const double localxval = localparmsalign[3];
                   const double localyval = localparmsalign[4];
 
+                  const double localxvalorig = localparms[3];
+                  const double localyvalorig = localparms[4];
+
                   //standard case
 
                   // dx/dx
@@ -1503,15 +1506,16 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                   // dy/dtheta_y
                   Aval(1,4) = -localxval*localdydzval;
                   // dx/dtheta_z
-                  Aval(0,5) = localyval;
+                  Aval(0,5) = localyvalorig;
                   // dy/dtheta_z
-                  Aval(1,5) = -localxval;
+                  Aval(1,5) = -localxvalorig;
 
                   // const Matrix<double, 2, 6> &A = alignGlued_ ? Rglued*Aval : Aval;
 
                   Matrix<double, 2, 6> A = Aval;
                   if (alignGlued_) {
-                    A = Rglued*Aval;
+                    // glued alignment dofs only for out-of-plance
+                    A.middleCols<3>(2) = Rglued*Aval.middleCols<3>(2);
                   }
 
                   double thetaincidence = std::asin(1./std::sqrt(std::pow(localdxdzval,2) + std::pow(localdydzval,2) + 1.));
@@ -1557,7 +1561,9 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                   }
                   
                   for (unsigned int idim=0; idim<nlocalalignment; ++idim) {
-                    const unsigned int xglobalidx = detidparms.at(std::make_pair(alphaidxs[idim], aligndetid));
+                    const unsigned int iidx = alphaidxs[idim];
+                    const DetId ialigndetid = iidx > 1 && iidx < 5 ? aligndetid : preciseHit->geographicalId();
+                    const unsigned int xglobalidx = detidparms.at(std::make_pair(iidx, ialigndetid));
                     globalidxv[nparsBfield + nparsEloss + alignmentparmidx] = xglobalidx;
                     alignmentparmidx++;
                     if (alphaidxs[idim]==0) {
