@@ -679,13 +679,13 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         
         const uint32_t gluedid = trackerTopology->glued(hit->geographicalId());
         const bool isglued = gluedid != 0;
-        // const DetId parmdetid = isglued ? DetId(gluedid) : hit->geographicalId();
+        const DetId parmdetid = isglued ? DetId(gluedid) : hit->geographicalId();
 
-        // const DetId aligndetid = alignGlued_ ? parmdetid : hit->geographicalId();
+        const DetId aligndetid = alignGlued_ ? parmdetid : hit->geographicalId();
 
         
-        const bool align2d = detidparms.count(std::make_pair(1, hit->geographicalId()));
-        // const bool align2d = detidparms.count(std::make_pair(1, aligndetid));
+//         const bool align2d = detidparms.count(std::make_pair(1, hit->geographicalId()));
+        const bool align2d = detidparms.count(std::make_pair(1, aligndetid));
 //         
         if (align2d) {
           nvalidalign2d += 1;
@@ -1591,8 +1591,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             break;
           }
 
-          const bool align2d = detidparms.count(std::make_pair(1, preciseHit->geographicalId()));
-          // const bool align2d = detidparms.count(std::make_pair(1, aligndetid));
+          const bool align2d = detidparms.count(std::make_pair(1, aligndetid));
 
           const Matrix<double, 2, 2> &Rglued = rgluemap_.at(preciseHit->geographicalId());
           const GloballyPositioned<double> &surfaceglued = surfacemapD_.at(parmdetid);
@@ -1784,9 +1783,6 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             const double localdydzval = localparmsalign[2];
             const double localxval = localparmsalign[3];
             const double localyval = localparmsalign[4];
-
-            const double localxvalorig = localparmsalignprop[3];
-            const double localyvalorig = localparmsalignprop[4];
                         
             //standard case
 
@@ -1807,16 +1803,15 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             // dy/dtheta_y
             Aval(1,4) = -localxval*localdydzval;
             // dx/dtheta_z
-            Aval(0,5) = localyvalorig;
+            Aval(0,5) = localyval;
             // dy/dtheta_z
-            Aval(1,5) = -localxvalorig;
+            Aval(1,5) = -localxval;
 
 //             const Matrix<double, 2, 6> &A = alignGlued_ ? Rglued*Aval : Aval;
             
             Matrix<double, 2, 6> A = R*Aval;
             if (alignGlued_) {
-              // glued alignment dofs only for out-of-plance
-              A.middleCols<3>(2) = R*Rglued*Aval.middleCols<3>(2);
+              A = R*Rglued*Aval;
             }
             
             const unsigned int xresglobalidx = dores ? detidparms.at(std::make_pair(8, hit->geographicalId())) : 0;
@@ -1909,9 +1904,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             }
             
             for (unsigned int idim=0; idim<nlocalalignment; ++idim) {
-              const unsigned int iidx = alphaidxs[idim];
-              const DetId ialigndetid = iidx > 1 && iidx < 5 ? aligndetid : preciseHit->geographicalId();
-              const unsigned int xglobalidx = detidparms.at(std::make_pair(iidx, ialigndetid));
+              const unsigned int xglobalidx = detidparms.at(std::make_pair(alphaidxs[idim], aligndetid));
               globalidxv[iparm] = xglobalidx;
               iparm++;
               if (alphaidxs[idim]==0) {
