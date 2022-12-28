@@ -80,6 +80,19 @@ private:
   float Muminuskin_eta;
   float Muminuskin_phi;
   
+  float Jpsitrk_pt;
+  float Jpsitrk_eta;
+  float Jpsitrk_phi;
+  float Jpsitrk_mass;
+  
+  float Muplustrk_pt;
+  float Muplustrk_eta;
+  float Muplustrk_phi;
+  
+  float Muminustrk_pt;
+  float Muminustrk_eta;
+  float Muminustrk_phi;
+  
   float Jpsicons_d;
   float Jpsicons_x;
   float Jpsicons_y;
@@ -233,6 +246,19 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::beginStream(edm::StreamID streami
     tree->Branch("Muminuskin_pt", &Muminuskin_pt);
     tree->Branch("Muminuskin_eta", &Muminuskin_eta);
     tree->Branch("Muminuskin_phi", &Muminuskin_phi);
+    
+    tree->Branch("Jpsitrk_pt", &Jpsitrk_pt);
+    tree->Branch("Jpsitrk_eta", &Jpsitrk_eta);
+    tree->Branch("Jpsitrk_phi", &Jpsitrk_phi);
+    tree->Branch("Jpsitrk_mass", &Jpsitrk_mass);
+    
+    tree->Branch("Muplustrk_pt", &Muplustrk_pt);
+    tree->Branch("Muplustrk_eta", &Muplustrk_eta);
+    tree->Branch("Muplustrk_phi", &Muplustrk_phi);
+    
+    tree->Branch("Muminustrk_pt", &Muminustrk_pt);
+    tree->Branch("Muminustrk_eta", &Muminustrk_eta);
+    tree->Branch("Muminustrk_phi", &Muminustrk_phi);
     
     tree->Branch("Jpsicons_d", &Jpsicons_d);
     tree->Branch("Jpsicons_x", &Jpsicons_x);
@@ -552,6 +578,11 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
       if (jtrack->isLooper()) {
         continue;
       }
+      
+      std::array<ROOT::Math::PxPyPzMVector, 2> mutrkarr;
+      mutrkarr[0] = ROOT::Math::PxPyPzMVector(itrack->px(), itrack->py(), itrack->pz(), mmu);
+      mutrkarr[1] = ROOT::Math::PxPyPzMVector(jtrack->px(), jtrack->py(), jtrack->pz(), mmu);
+      
 
       const reco::Candidate *mu1gen = nullptr;
       
@@ -1329,6 +1360,9 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
                   const double hitx = preciseHit->localPosition().x() - defcorr.x();
                   const double hity = preciseHit->localPosition().y() - defcorr.y();
+                  
+                  // const double hitx = preciseHit->localPosition().x() - 0.*defcorr.x();
+                  // const double hity = preciseHit->localPosition().y() - 0.*defcorr.y();
 
                   double lyoffset = 0.;
                   double hitphival = -99.;
@@ -1975,6 +2009,24 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
           const unsigned int idxplus = muchargearr[0] > 0 ? 0 : 1;
           const unsigned int idxminus = muchargearr[0] > 0 ? 1 : 0;
+          
+          const ROOT::Math::PxPyPzMVector jpsitrkmom = mutrkarr[0] + mutrkarr[1];
+          
+          Muplustrk_pt = mutrkarr[idxplus].pt();
+          Muplustrk_eta = mutrkarr[idxplus].eta();
+          Muplustrk_phi = mutrkarr[idxplus].phi();
+          
+          Muminustrk_pt = mutrkarr[idxminus].pt();
+          Muminustrk_eta = mutrkarr[idxminus].eta();
+          Muminustrk_phi = mutrkarr[idxminus].phi();
+          
+          Jpsitrk_pt = jpsitrkmom.pt();
+          Jpsitrk_eta = jpsitrkmom.eta();
+          Jpsitrk_phi = jpsitrkmom.phi();
+          Jpsitrk_mass = jpsitrkmom.mass();
+          
+          
+          
           
           if (icons == 0) {
           
