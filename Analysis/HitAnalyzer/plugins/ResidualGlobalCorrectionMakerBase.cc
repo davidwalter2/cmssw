@@ -837,21 +837,48 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
           const GloballyPositioned<double> surfaceIdeal = surfaceToDouble(surfaceIdealPre, zsign*surfacePartnerIdeal.rotation().z());
           
 
-          auto const poslocal = surfacePartnerIdeal.toLocal(surfaceIdeal.position());
-          const Vector3DBase<double, GlobalTag> uxpre(surfaceIdeal.rotation().x());
-          const Vector3DBase<double, GlobalTag> uypre(surfaceIdeal.rotation().y());
+          auto const poslocalideal = surfacePartnerIdeal.toLocal(surfaceIdeal.position());
+          // const Vector3DBase<double, GlobalTag> uxpre(surfaceIdeal.rotation().x());
+          // const Vector3DBase<double, GlobalTag> uypre(surfaceIdeal.rotation().y());
+          
+          auto const poslocalnom = surfacePartner.toLocal(surfaceD.position());
+          
+          const Point3DBase<double, LocalTag> poslocal(poslocalnom.x(), poslocalnom.y(), poslocalideal.z());
 
-          const Vector3DBase<double, LocalTag> uxlocal = surfacePartnerIdeal.toLocal(uxpre);
-          const Vector3DBase<double, LocalTag> uylocal = surfacePartnerIdeal.toLocal(uypre);
-
+          
+          
+//           const Vector3DBase<double, LocalTag> uxlocal = surfacePartnerIdeal.toLocal(uxpre);
+//           const Vector3DBase<double, LocalTag> uylocal = surfacePartnerIdeal.toLocal(uypre);
+// 
+//           const Point3DBase<double, GlobalTag> posglobal = surfacePartner.toGlobal(poslocal);
+//           const Vector3DBase<double, GlobalTag> uxglobal = surfacePartner.toGlobal(uxlocal);
+//           const Vector3DBase<double, GlobalTag> uyglobal = surfacePartner.toGlobal(uylocal);
+//           auto const &uzglobal = zsign*surfacePartner.rotation().z();
+//           
+//           const TkRotation<double> tkrot(uxglobal.x(), uxglobal.y(), uxglobal.z(),
+//                                         uyglobal.x(), uyglobal.y(), uyglobal.z(),
+//                                         uzglobal.x(), uzglobal.y(), uzglobal.z());
+//           
+//           surfaceD = GloballyPositioned<double>(posglobal, tkrot);
+          
           const Point3DBase<double, GlobalTag> posglobal = surfacePartner.toGlobal(poslocal);
-          const Vector3DBase<double, GlobalTag> uxglobal = surfacePartner.toGlobal(uxlocal);
-          const Vector3DBase<double, GlobalTag> uyglobal = surfacePartner.toGlobal(uylocal);
+          
           auto const &uzglobal = zsign*surfacePartner.rotation().z();
           
-          const TkRotation<double> tkrot(uxglobal.x(), uxglobal.y(), uxglobal.z(),
-                                        uyglobal.x(), uyglobal.y(), uyglobal.z(),
-                                        uzglobal.x(), uzglobal.y(), uzglobal.z());
+          auto const &gy = surfaceD.rotation().y();
+          auto const &gz = uzglobal;
+
+          const Matrix<double, 3, 1> vy(gy.x(), gy.y(), gy.z());
+          const Matrix<double, 3, 1> vz(gz.x(), gz.y(), gz.z());
+
+          const Matrix<double, 3, 1> &uz = vz;
+          const Matrix<double, 3, 1> ux = vy.cross(vz).normalized();
+          const Matrix<double, 3, 1> uy = uz.cross(ux);
+
+          const TkRotation<double> tkrot(ux[0], ux[1], ux[2],
+                                        uy[0], uy[1], uy[2],
+                                        uz[0], uz[1], uz[2]);
+
           
           surfaceD = GloballyPositioned<double>(posglobal, tkrot);
           
