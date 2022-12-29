@@ -802,69 +802,42 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       const DetId parmdetid = isglued ? DetId(gluedid) : det->geographicalId();
       const GeomDet* parmDet = isglued ? globalGeometry->idToDet(parmdetid) : det;
       
-      // const DetId aligndetid = alignGlued_ ? parmdetid : det->geographicalId();
-
       const bool align2d = detidparms.count(std::make_pair(1, det->geographicalId()));
-      // const bool align2d = detidparms.count(std::make_pair(1, aligndetid));
       
       const Surface &surface = det->surface();
       
       GloballyPositioned<double> surfaceD = surfaceToDouble(surface);
       
       Matrix<double, 2, 2> Rglued = Matrix<double, 2, 2>::Identity();
-
-      const bool isstereo = trackerTopology->isStereo(det->geographicalId());
       
       //TODO restore alignment application functionality
       
-      if (isstereo) {
+      if (isglued) {
         GloballyPositioned<double> surfaceGlued = surfaceToDouble(parmDet->surface());
 
         if (alignGlued_) {
-        
-          const DetId partnerid = trackerTopology->partnerDetId(det->geographicalId());
           
-          const Surface &surfacePartnerPre = globalGeometry->idToDet(partnerid)->surface();
-          const Surface &surfacePartnerPreIdeal = globalGeometryIdeal->idToDet(partnerid)->surface();
+          //TODO apply partial alignment to surfaceGlued here
           
-          const GloballyPositioned<double> surfacePartner = surfaceToDouble(surfacePartnerPre);
-          const GloballyPositioned<double> surfacePartnerIdeal = surfaceToDouble(surfacePartnerPreIdeal);
-          
+          // recreate plane using relative position and orientation from ideal geometry, enforcing that the plane is parallel to the glued one (but preserving the relative orientation of the local z axis in case they are flipped)
+          // only the out-of-plane DOF's are preserved (ie the spacing of the planes), whereas the in-plane DOF's (position and orientation of local x and y axes) are left as-is from the nominal geometry
+          const Surface &surfaceGluedIdealPre = globalGeometryIdeal->idToDet(parmDet->geographicalId())->surface();
           const Surface &surfaceIdealPre = globalGeometryIdeal->idToDet(det->geographicalId())->surface();
 
-          const double zdot = surfacePartnerPreIdeal.rotation().z()*surfaceIdealPre.rotation().z();
+          const double zdot = surfaceGluedIdealPre.rotation().z()*surfaceIdealPre.rotation().z();
           const double zsign = std::copysign(1.0, zdot);
 
-          const GloballyPositioned<double> surfaceIdeal = surfaceToDouble(surfaceIdealPre, zsign*surfacePartnerIdeal.rotation().z());
+          const GloballyPositioned<double> surfaceGluedIdeal = surfaceToDouble(surfaceGluedIdealPre);
+          const GloballyPositioned<double> surfaceIdeal = surfaceToDouble(surfaceIdealPre, zsign*surfaceGluedIdeal.rotation().z());
           
-
-          auto const poslocalideal = surfacePartnerIdeal.toLocal(surfaceIdeal.position());
-          // const Vector3DBase<double, GlobalTag> uxpre(surfaceIdeal.rotation().x());
-          // const Vector3DBase<double, GlobalTag> uypre(surfaceIdeal.rotation().y());
-          
-          auto const poslocalnom = surfacePartner.toLocal(surfaceD.position());
+          auto const poslocalideal = surfaceGluedIdeal.toLocal(surfaceIdeal.position());
+          auto const poslocalnom = surfaceGlued.toLocal(surfaceD.position());
           
           const Point3DBase<double, LocalTag> poslocal(poslocalnom.x(), poslocalnom.y(), poslocalideal.z());
-
           
+          auto const posglobal = surfaceGlued.toGlobal(poslocal);
           
-//           const Vector3DBase<double, LocalTag> uxlocal = surfacePartnerIdeal.toLocal(uxpre);
-//           const Vector3DBase<double, LocalTag> uylocal = surfacePartnerIdeal.toLocal(uypre);
-// 
-//           const Point3DBase<double, GlobalTag> posglobal = surfacePartner.toGlobal(poslocal);
-//           const Vector3DBase<double, GlobalTag> uxglobal = surfacePartner.toGlobal(uxlocal);
-//           const Vector3DBase<double, GlobalTag> uyglobal = surfacePartner.toGlobal(uylocal);
-//           auto const &uzglobal = zsign*surfacePartner.rotation().z();
-//           
-//           const TkRotation<double> tkrot(uxglobal.x(), uxglobal.y(), uxglobal.z(),
-//                                         uyglobal.x(), uyglobal.y(), uyglobal.z(),
-//                                         uzglobal.x(), uzglobal.y(), uzglobal.z());
-//           
-//           surfaceD = GloballyPositioned<double>(posglobal, tkrot);
-          
-          const Point3DBase<double, GlobalTag> posglobal = surfacePartner.toGlobal(poslocal);
-          
-          auto const &uzglobal = zsign*surfacePartner.rotation().z();
+          auto const uzglobal = zsign*surfaceGlued.rotation().z();
           
           auto const &gy = surfaceD.rotation().y();
           auto const &gz = uzglobal;
@@ -883,9 +856,7 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
           
           surfaceD = GloballyPositioned<double>(posglobal, tkrot);
           
-          auto const posglued = Point3DBase<double, GlobalTag>(0.5*(surfaceD.position().basicVector() + surfacePartner.position().basicVector()));
-          surfaceGlued = GloballyPositioned<double>(posglued, surfacePartner.rotation());
-          
+          //TODO apply partial alignment to surfaceD here
           
           const Vector3DBase<double, GlobalTag> uxglued(surfaceGlued.rotation().x());
           const Vector3DBase<double, GlobalTag> uyglued(surfaceGlued.rotation().y());
