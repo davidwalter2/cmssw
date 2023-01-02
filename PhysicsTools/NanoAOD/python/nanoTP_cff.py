@@ -49,7 +49,7 @@ nanotpSequenceMC = cms.Sequence(
         muonTable + vertexTables+ isoTrackTables + generalTrackTable + standaloneMuonTable + standaloneMuonUpdatedAtVtxTable + mergedStandaloneMuonTable +
         genParticleSequence + genParticleTable +
         genWeightsTables + genVertexTables + puTable + genTable + 
-        muonMC + 
+        muonMCTP + 
         triggerObjectTables + l1bits
         )
 
