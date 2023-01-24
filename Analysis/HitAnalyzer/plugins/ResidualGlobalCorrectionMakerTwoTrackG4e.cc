@@ -141,12 +141,16 @@ private:
   float Muminusgen_pt;
   float Muminusgen_eta;
   float Muminusgen_phi;
+
+  float Muplusgen_dr;
+  float Muminusgen_dr;
   
   std::array<float, 3> Muplus_refParms;
   std::array<float, 3> Muminus_refParms;
   
   std::vector<float> Muplus_jacRef;
   std::vector<float> Muminus_jacRef;
+  std::vector<float> Jpsi_jacMass;
   
   unsigned int Muplus_nhits;
   unsigned int Muplus_nvalid;
@@ -308,6 +312,9 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::beginStream(edm::StreamID streami
     tree->Branch("Muminusgen_pt", &Muminusgen_pt);
     tree->Branch("Muminusgen_eta", &Muminusgen_eta);
     tree->Branch("Muminusgen_phi", &Muminusgen_phi);
+
+    tree->Branch("Muplusgen_dr", &Muplusgen_dr);
+    tree->Branch("Muminusgen_dr", &Muminusgen_dr);
     
     tree->Branch("Muplus_refParms", Muplus_refParms.data(), "Muplus_refParms[3]/F");
     tree->Branch("Muminus_refParms", Muminus_refParms.data(), "Muminus_refParms[3]/F");
@@ -315,6 +322,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::beginStream(edm::StreamID streami
     if (fillJac_) {
       tree->Branch("Muplus_jacRef", &Muplus_jacRef);
       tree->Branch("Muminus_jacRef", &Muminus_jacRef);
+      tree->Branch("Jpsi_jacMass", &Jpsi_jacMass);
     }
     
     tree->Branch("Muplus_nhits", &Muplus_nhits);
@@ -535,6 +543,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
     }
     
     const reco::Candidate *mu0gen = nullptr;
+    double drmin0 = 0.1;
     if (doGen_ && !doSim_) {
       for (auto const &genpart : *genPartCollection) {
         if (genpart.status() != 1) {
@@ -544,9 +553,10 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           continue;
         }
         
-        float dR0 = deltaR(genpart, *itrack);
-        if (dR0 < 0.1 && genpart.charge() == itrack->charge()) {
+        const double dR0 = deltaR(genpart, *itrack);
+        if (dR0 < drmin0 && genpart.charge() == itrack->charge()) {
           mu0gen = &genpart;
+          drmin0 = dR0;
         }
       }
     }
@@ -585,6 +595,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
       
 
       const reco::Candidate *mu1gen = nullptr;
+      double drmin1 = 0.1;
       
       double massconstraintval = massConstraint_;
       if (doGen_ && !doSim_) {
@@ -596,9 +607,10 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             continue;
           }
           
-          float dR1 = deltaR(genpart, *jtrack);
-          if (dR1 < 0.1 && genpart.charge() == jtrack->charge()) {
+          const double dR1 = deltaR(genpart, *jtrack);
+          if (dR1 < drmin1 && genpart.charge() == jtrack->charge()) {
             mu1gen = &genpart;
+            drmin1 = dR1;
           }
         }
         
@@ -2202,7 +2214,13 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           const reco::Candidate *muplusgen = nullptr;
           const reco::Candidate *muminusgen = nullptr;
           
+          Muplusgen_dr = -99.;
+          Muminusgen_dr = -99.;
+
           if (doGen_) {
+            double drminplus = 0.1;
+            double drminminus = 0.1;
+
             for (auto const &genpart : *genPartCollection) {
               if (genpart.status() != 1) {
                 continue;
@@ -2210,19 +2228,30 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               if (std::abs(genpart.pdgId()) != 13) {
                 continue;
               }
-              
+
 //               float dRplus = deltaR(genpart.phi(), muarr[idxplus].phi(), genpart.eta(), muarr[idxplus].eta());
-              float dRplus = deltaR(genpart, muarr[idxplus]);
-              if (dRplus < 0.1 && genpart.charge() > 0) {
+              const double dRplus = deltaR(genpart, muarr[idxplus]);
+              if (dRplus < drminplus && genpart.charge() > 0) {
                 muplusgen = &genpart;
+                drminplus = dRplus;
               }
-              
+
 //               float dRminus = deltaR(genpart.phi(), muarr[idxminus].phi(), genpart.eta(), muarr[idxminus].eta());
-              float dRminus = deltaR(genpart, muarr[idxminus]);
-              if (dRminus < 0.1 && genpart.charge() < 0) {
+              const double dRminus = deltaR(genpart, muarr[idxminus]);
+              if (dRminus < drminminus && genpart.charge() < 0) {
                 muminusgen = &genpart;
+                drminminus = dRminus;
               }
             }
+
+            if (muplusgen != nullptr) {
+              Muplusgen_dr = drminplus;
+            }
+
+            if (muminusgen != nullptr) {
+              Muminusgen_dr = drminminus;
+            }
+
           }
           
           if (muplusgen != nullptr) {
@@ -2456,6 +2485,12 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
           Muminus_jacRef.resize(3*nparsfinal);
           Map<Matrix<float, 3, Dynamic, RowMajor>>(Muminus_jacRef.data(), 3, nparsfinal) = dxdparms.block(0, trackstateidxminus, nparsfinal, 3).transpose().cast<float>();
+
+          const Matrix<double, 1, 6> mjacalt = massJacobianAltD(refftsarr[0], refftsarr[1], mmu);
+
+          Jpsi_jacMass.resize(nparsfinal);
+          Map<Matrix<float, 1, Dynamic, RowMajor>>(Jpsi_jacMass.data(), 1, nparsfinal) = (mjacalt*dxdparms.leftCols<6>().transpose()).cast<float>();
+
 
           if (false) {
             std::cout << "Muplus pt eta phi = " << Muplus_pt << "  " << Muplus_eta << " " << Muplus_phi << std::endl;
