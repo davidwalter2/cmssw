@@ -76,6 +76,7 @@
 #include "CommonTools/UtilAlgos/interface/TFileService.h"
 
 #include "Alignment/CommonAlignment/interface/Utilities.h"
+#include "TRandom.h"
 
 // #include "DataFormats/Math/interface/Point3D.h"
 
@@ -349,6 +350,61 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
   edm::ESHandle<MagneticField> magfield;
   es.get<IdealMagneticFieldRecord>().get(magfield);
   auto field = magfield.product();
+
+  constexpr bool dofieldtest = false;
+
+  if (dofieldtest) {
+    constexpr int npoints = 1000;
+
+    std::vector<GlobalPoint> points;
+    points.reserve(npoints);
+
+    std::vector<GlobalVector> fieldfwd(npoints);
+    std::vector<GlobalVector> fieldrev(npoints);
+
+    for (int ipoint = 0; ipoint < npoints; ++ipoint) {
+      // const double x = gRandom->Uniform(-100., 100.);
+      // const double y = gRandom->Uniform(-10., 10.);
+      // const double z = gRandom->Uniform(-10., 10.);
+
+      const double rho = gRandom->Uniform(0., 200.);
+      const double phi = gRandom->Uniform(-M_PI, M_PI);
+      const double z = gRandom->Uniform(-500., 500.);
+
+      const double x = rho*std::cos(phi);
+      const double y = rho*std::sin(phi);
+
+      points.emplace_back(x, y, z);
+    }
+
+    for (int ipoint = 0; ipoint < npoints; ++ipoint) {
+      fieldfwd[ipoint] = field->inTeslaUnchecked(points[ipoint]);
+    }
+
+    for (int ipoint = npoints - 1; ipoint >= 0; --ipoint) {
+      fieldrev[ipoint] = field->inTeslaUnchecked(points[ipoint]);
+    }
+
+    bool fieldmatch = true;
+    for (int ipoint = 0; ipoint < npoints; ++ipoint) {
+      auto const &ifieldfwd = fieldfwd[ipoint];
+      auto const &ifieldrev = fieldrev[ipoint];
+      bool imatch = ifieldfwd.x() == ifieldrev.x() && ifieldfwd.y() == ifieldrev.y() && ifieldfwd.z() == ifieldrev.z();
+      if (!imatch) {
+        std::cout << "field mismatch! ipoint = " << ipoint << " fwd: " << ifieldfwd << " rev: " << ifieldrev << std::endl;
+        fieldmatch = false;
+      }
+    }
+
+    std::cout << "fieldmatch = " << fieldmatch << std::endl;
+
+    if (!fieldmatch) {
+      throw std::logic_error("field values depend on evaluation order");
+    }
+
+
+
+  }
   
   std::set<std::pair<int, DetId> > parmset;
   

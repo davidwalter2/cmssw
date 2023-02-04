@@ -882,6 +882,12 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
       bool valid = true;
       
       
+      if (false) {
+        const GlobalPoint fieldrefpoint(itrack->vertex().x(), itrack->vertex().y(), itrack->vertex().z());
+        auto const fieldvalref = field->inTesla(fieldrefpoint);
+        std::cout << "refpos: " << fieldrefpoint << " bfield = " << fieldvalref << std::endl;
+      }
+
       const unsigned int nicons = doMassConstraint_ ? 2 : 1;
 //       const unsigned int nicons = doMassConstraint_ ? 3 : 1;
       
@@ -912,6 +918,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
         
         if (kinTree->isEmpty() || !kinTree->isConsistent()) {
 //           continue;
+          std::cout << "Abort: invalid kinematic fit!\n";
           valid = false;
           break;
         }
