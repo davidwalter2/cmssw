@@ -545,6 +545,7 @@ def nanoAOD_wmassMuonVariables(process):
     v.pfRelIso04_chg = Var("pfIsolationR04().sumChargedHadronPt/pt", float, doc="PF relative isolation dR=0.4, charged component")
     v.pfRelIso04_neu = Var("pfIsolationR04().sumNeutralHadronEt/pt", float, doc="PF relative isolation dR=0.4, charged component")
     v.pfRelIso04_pho = Var("pfIsolationR04().sumPhotonEt/pt", float, doc="PF relative isolation dR=0.4, charged component")
+    v.pfRelIso04_pu = Var("pfIsolationR04().sumPUPt/pt", float, doc="PF relative isolation dR=0.4, charged component")
     v.standalonePt = Var("? standAloneMuon().isNonnull() ? standAloneMuon().pt() : -1", float, doc="pt of the standalone muon", precision=14)
     v.standaloneEta = Var("? standAloneMuon().isNonnull() ? standAloneMuon().eta() : -99", float, doc="eta of the standalone muon", precision=14)
     v.standalonePhi = Var("? standAloneMuon().isNonnull() ? standAloneMuon().phi() : -99", float, doc="phi of the standalone muon", precision=14)
