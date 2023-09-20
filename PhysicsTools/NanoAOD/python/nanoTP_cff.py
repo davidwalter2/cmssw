@@ -37,7 +37,7 @@ nanotpSequence = cms.Sequence(
         nanoMetadata + 
         muonSequence + linkedMuons + vertexSequence+
         isoTrackSequence + # must be after all the leptons
-        mergedStandAloneMuons + muoncrosscheckiso04 + muoncrosscheckiso03 + muonvtxagniso04 + muonvtxagniso03 +
+        mergedStandAloneMuons + muonvtxagniso04 + muonvtxagniso03 +
         muonTable + vertexTables+ isoTrackTables + generalTrackTable + standaloneMuonTable + standaloneMuonUpdatedAtVtxTable + mergedStandaloneMuonTable +
         triggerObjectTables + l1bits
         )
@@ -46,7 +46,7 @@ nanotpSequenceMC = cms.Sequence(
         nanoMetadata + 
         muonSequence + linkedMuons + vertexSequence+
         isoTrackSequence + # must be after all the leptons
-        mergedStandAloneMuons + muoncrosscheckiso04 + muoncrosscheckiso03 + muonvtxagniso04 + muonvtxagniso03 +
+        mergedStandAloneMuons + muonvtxagniso04 + muonvtxagniso03 +
         muonTable + vertexTables+ isoTrackTables + generalTrackTable + standaloneMuonTable + standaloneMuonUpdatedAtVtxTable + mergedStandaloneMuonTable +
         genParticleSequence + genParticleTable +
         genWeightsTables + genVertexTables + puTable + genTable + 
@@ -67,8 +67,6 @@ def customizeNANOTP(process):
 
     muonvtxagniso04.muonInputTag = muonTable.src
     muonvtxagniso03.muonInputTag = muonTable.src
-    muoncrosscheckiso04.muonInputTag = muonTable.src
-    muoncrosscheckiso03.muonInputTag = muonTable.src
 
     muonTable.variables = cms.PSet(muonTable.variables,
             standaloneExtraIdx = Var('? standAloneMuon().isNonnull() ? standAloneMuon().extra().key() : -99', 'int', precision=-1, doc='Index of the innerTrack TrackExtra in the original collection'),
@@ -77,7 +75,7 @@ def customizeNANOTP(process):
             vy = Var('vy', 'float', precision=-1, doc='Muon Y position'),
             vz = Var('vz', 'float', precision=-1, doc='Muon Z position'),
     )
-    muonTable.externalVariables = cms.PSet(vtxAgnIsoVariables, crossCheckIsoVariables,
+    muonTable.externalVariables = cms.PSet(vtxAgnIsoVariables,
             isStandAloneUpdatedAtVtx = ExtVar(cms.InputTag("mergedStandAloneMuons:muonUpdatedAtVtx"),bool, doc="is standalone muon track updated at vertex"),
     )
 
