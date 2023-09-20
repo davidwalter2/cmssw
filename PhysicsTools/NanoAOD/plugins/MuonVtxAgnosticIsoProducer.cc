@@ -41,7 +41,8 @@ private:
   using map_t = edm::ValueMap<float>;
 
   float maxdr_;
-  float mindr_;
+  float mindrchg_;
+  float mindrrest_;
   float maxdeltaz_;
   float minptchg_;
   float minptneu_;
@@ -64,7 +65,8 @@ MuonVtxAgnosticIsoProducer::MuonVtxAgnosticIsoProducer(const edm::ParameterSet &
 
 {
   maxdr_ = iConfig.getParameter<double>("maxdr");
-  mindr_ = iConfig.getParameter<double>("mindr");
+  mindrchg_ = iConfig.getParameter<double>("mindrchg");
+  mindrrest_ = iConfig.getParameter<double>("mindrrest");
   maxdeltaz_ = iConfig.getParameter<double>("maxdeltaz");
   minptchg_ = iConfig.getParameter<double>("minptchg");
   minptneu_ = iConfig.getParameter<double>("minptneu");
@@ -101,12 +103,18 @@ void MuonVtxAgnosticIsoProducer::produce(edm::Event &iEvent, const edm::EventSet
       auto pdgid=packedpfcandidate.pdgId();
       if ((abs(pdgid)==11)||(abs(pdgid)==13)) continue;
       if (deltas::deltaR2(muon.eta(),muon.phi(),packedpfcandidate.eta(),packedpfcandidate.phi())>(maxdr_*maxdr_)) continue;
-      if (deltas::deltaR2(muon.eta(),muon.phi(),packedpfcandidate.eta(),packedpfcandidate.phi())<(mindr_*mindr_)) continue;
       if (abs(packedpfcandidate.charge())>0) {
-        if (abs(muon.vz()-packedpfcandidate.vz()) < maxdeltaz_) {if (packedpfcandidate.pt()>minptchg_) Charged+=packedpfcandidate.pt();}
-        else {if (packedpfcandidate.pt()>minptpu_) PU+=packedpfcandidate.pt();}
+        if (abs(muon.vz()-packedpfcandidate.vz()) < maxdeltaz_) {
+          if (deltas::deltaR2(muon.eta(),muon.phi(),packedpfcandidate.eta(),packedpfcandidate.phi())<(mindrchg_*mindrchg_)) continue;
+          if (packedpfcandidate.pt()>minptchg_) Charged+=packedpfcandidate.pt();
+        }
+        else {
+          if (deltas::deltaR2(muon.eta(),muon.phi(),packedpfcandidate.eta(),packedpfcandidate.phi())<(mindrrest_*mindrrest_)) continue;
+          if (packedpfcandidate.pt()>minptpu_) PU+=packedpfcandidate.pt();
+        }
       }
-      else if (neutrpho_) {
+      else if (neutrpho_!=0) {
+        if (deltas::deltaR2(muon.eta(),muon.phi(),packedpfcandidate.eta(),packedpfcandidate.phi())<(mindrrest_*mindrrest_)) continue;
         if (pdgid==22) {if (packedpfcandidate.et()>minptpho_) Photon+=packedpfcandidate.et();}
         else {if (packedpfcandidate.et()>minptneu_) Neutral+=packedpfcandidate.et();}
       }
