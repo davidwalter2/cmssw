@@ -7,8 +7,7 @@
 
 #include "DataFormats/PatCandidates/interface/Muon.h"
 #include "DataFormats/PatCandidates/interface/PackedCandidate.h"
-#include <eigen3/Eigen/Dense>
-#include <eigen3/unsupported/Eigen/CXX11/Tensor>
+
 #include "ROOT/RVec.hxx"
 #include <Math/Vector4D.h>
 #include "TVector2.h"
