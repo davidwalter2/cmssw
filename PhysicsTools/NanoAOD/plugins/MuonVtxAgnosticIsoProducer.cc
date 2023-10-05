@@ -8,10 +8,6 @@
 #include "DataFormats/PatCandidates/interface/Muon.h"
 #include "DataFormats/PatCandidates/interface/PackedCandidate.h"
 
-#include "ROOT/RVec.hxx"
-#include <Math/Vector4D.h>
-#include "TVector2.h"
-
 namespace deltas {
   double deltaPhi(float phi1, float phi2) {
     double result = phi1 - phi2;
