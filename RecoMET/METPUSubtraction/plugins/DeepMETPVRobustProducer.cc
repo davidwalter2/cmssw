@@ -24,6 +24,7 @@ public:
 
 private:
   const edm::EDGetTokenT<std::vector<pat::PackedCandidate> > pf_token_;
+  const bool usePUPPI_;
   const float norm_;
   const bool ignore_leptons_;
   const unsigned int max_n_pf_;
@@ -51,6 +52,7 @@ namespace {
 
 DeepMETPVRobustProducer::DeepMETPVRobustProducer(const edm::ParameterSet& cfg, const DeepMETPVRobustCache* cache)
     : pf_token_(consumes<std::vector<pat::PackedCandidate> >(cfg.getParameter<edm::InputTag>("pf_src"))),
+      usePUPPI_(cfg.getParameter<bool>("usePUPPI")),
       norm_(cfg.getParameter<double>("norm_factor")),
       ignore_leptons_(cfg.getParameter<bool>("ignore_leptons")),
       max_n_pf_(cfg.getParameter<unsigned int>("max_n_pf")),
@@ -58,7 +60,8 @@ DeepMETPVRobustProducer::DeepMETPVRobustProducer(const edm::ParameterSet& cfg, c
       session_(tensorflow::createSession(cache->graph_def)) {
   produces<pat::METCollection>();
 
-  const tensorflow::TensorShape shape({1, max_n_pf_, 7});
+  const int n_input = usePUPPI_ ? 7: 6;
+  const tensorflow::TensorShape shape({1, max_n_pf_, n_input});
   const tensorflow::TensorShape cat_shape({1, max_n_pf_, 1});
 
   input_ = tensorflow::Tensor(tensorflow::DT_FLOAT, shape);
@@ -98,7 +101,8 @@ void DeepMETPVRobustProducer::produce(edm::Event& event, const edm::EventSetup& 
     *(++ptr) = pf.eta();
     *(++ptr) = pf.mass();
     *(++ptr) = scale_and_rm_outlier(pf.pt(), scale);
-    *(++ptr) = pf.puppiWeight();
+    if (usePUPPI_)
+      *(++ptr) = pf.puppiWeight();
     *(++ptr) = scale_and_rm_outlier(pf.px(), scale);
     *(++ptr) = scale_and_rm_outlier(pf.py(), scale);
     input_cat0_.tensor<float, 3>()(0, i_pf, 0) = charge_embedding_.at(pf.charge());
@@ -153,6 +157,7 @@ void DeepMETPVRobustProducer::globalEndJob(DeepMETPVRobustCache* cache) { delete
 void DeepMETPVRobustProducer::fillDescriptions(edm::ConfigurationDescriptions& descriptions) {
   edm::ParameterSetDescription desc;
   desc.add<edm::InputTag>("pf_src", edm::InputTag("packedPFCandidates"));
+  desc.add<bool>("usePUPPI", true);
   desc.add<bool>("ignore_leptons", false);
   desc.add<double>("norm_factor", 50.);
   desc.add<unsigned int>("max_n_pf", 4500);
