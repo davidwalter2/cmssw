@@ -31,7 +31,8 @@ public:
   typedef math::XYZTLorentzVector LorentzVector;
   typedef std::vector<LorentzVector> LorentzVectorCollection;
   typedef reco::VertexCollection VertexCollection;
-  typedef edm::View<reco::Candidate> CandidateView;
+  //typedef edm::View<reco::Candidate> CandidateView;
+  typedef edm::View<pat::PackedCandidate> CandidateView;
   typedef std::vector<reco::PFCandidate> PFInputCollection;
   typedef std::vector<reco::PFCandidate> PFOutputCollection;
   typedef std::vector<pat::PackedCandidate> PackedOutputCollection;

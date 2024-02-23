@@ -97,14 +97,14 @@ void PuppiPVRobustProducer::produce(edm::Event& iEvent, const edm::EventSetup& i
   // leading vertex closest to the "leading" muon passing the loose ID
   int iLV = 0;
   double muonz = 0;
-  double pv_z = 0;
+  //double pv_z = 0;
   for (auto const& muon : *muonCol) {
     if (muon.pt() < 5)
       continue;
     if (!muon.isLooseMuon())
       continue;
 
-    std::cout << "muonz " << muon.vz() << " BestTrack_z " << muon.muonBestTrack()->vz() << std::endl;
+    //std::cout << "muonz " << muon.vz() << " BestTrack_z " << muon.muonBestTrack()->vz() << std::endl;
     // is this the best way to get the z position of the muon?
     muonz = muon.vz();
 
@@ -118,15 +118,15 @@ void PuppiPVRobustProducer::produce(edm::Event& iEvent, const edm::EventSetup& i
         dzClosest = fabs(muon.muonBestTrack()->dz(aV.position()));
         iVClosest = iV;
 
-        pv_z = aV.z();
+        //pv_z = aV.z();
       }
       iV++;
     }
     iLV = iVClosest;
     break;
   }
-  std::cout << "Leading vertex closest to the leading muon passing the loose ID: " << iLV << " muonz " << muonz
-            << " pv_z " << pv_z << std::endl;
+  //std::cout << "Leading vertex closest to the leading muon passing the loose ID: " << iLV << " muonz " << muonz
+  //          << " pv_z " << pv_z << std::endl;
 
   math::XYZPoint pvPoint;
   if (iLV >= 0) {
@@ -159,37 +159,42 @@ void PuppiPVRobustProducer::produce(edm::Event& iEvent, const edm::EventSetup& i
     pReco.rapidity = aPF.rapidity();
     pReco.charge = aPF.charge();
 
-    const pat::PackedCandidate* lPack = dynamic_cast<const pat::PackedCandidate*>(&aPF);
-
-    if (lPack->vertexRef().isNonnull()) {
-      double pDZ = lPack->dz(pvPoint);
-      double pD0 = lPack->dxy(pvPoint);
-      pReco.dZ = pDZ;
-      // i dont think d0 is used anywhere though?
-      pReco.d0 = pD0;
+    // not sure why we need this "if" here
+    if (aPF.vertexRef().isNonnull()) {
       // id: 0 to be calculated; 1: from PV; 2: from PU
       pReco.id = 0;
 
-      if (std::abs(pReco.charge) > 0) {
+      if (std::abs(pReco.charge) == 0) {
+        // for neutral particles, d0 and dZ are always 0
+        pReco.dZ = 0;
+        pReco.d0 = 0;
+      } else {
+        double pDZ = aPF.dz(pvPoint);
+        double pD0 = aPF.dxy(pvPoint);
+
+        pReco.dZ = pDZ;
+        // i dont think d0 is used anywhere though?
+        pReco.d0 = pD0;
+
         if (iLV >= 0) {
           // leading vertex closest to the leading muon exists/reconstructed
-          if (lPack->fromPV(iLV) == 0) {
+          if (aPF.fromPV(iLV) == 0) {
             pReco.id = 2;
             if ((fNumOfPUVtxsForCharged > 0) and (std::abs(pDZ) < fDZCutForChargedFromPUVtxs)) {
               // for vertex splitting case
               for (size_t puVtx_idx = 0; puVtx_idx <= (fNumOfPUVtxsForCharged + 1) && puVtx_idx < pvCol->size();
                    ++puVtx_idx) {
                 // loop from 0th now, since the iLV is not necessarily the 0th vertex
-                if (lPack->fromPV(puVtx_idx) >= 2) {
+                if (aPF.fromPV(puVtx_idx) >= 2) {
                   pReco.id = 1;
                   break;
                 }
               }
             }
-          } else if (lPack->fromPV(iLV) == (pat::PackedCandidate::PVUsedInFit)) {
+          } else if (aPF.fromPV(iLV) == (pat::PackedCandidate::PVUsedInFit)) {
             pReco.id = 1;
-          } else if (lPack->fromPV(iLV) == (pat::PackedCandidate::PVTight) ||
-                     lPack->fromPV(iLV) == (pat::PackedCandidate::PVLoose)) {
+          } else if (aPF.fromPV(iLV) == (pat::PackedCandidate::PVTight) ||
+                     aPF.fromPV(iLV) == (pat::PackedCandidate::PVLoose)) {
             pReco.id = 0;
             if ((fPtMaxCharged > 0) and (pReco.pt > fPtMaxCharged))
               pReco.id = 1;
@@ -197,9 +202,9 @@ void PuppiPVRobustProducer::produce(edm::Event& iEvent, const edm::EventSetup& i
               pReco.id = 1;
             else if ((fUseDZ) && (std::abs(pReco.eta) >= fEtaMinUseDZ))
               pReco.id = (std::abs(pDZ) < fDZCut) ? 1 : 2;
-            else if (fUseFromPVLooseTight && lPack->fromPV(iLV) == (pat::PackedCandidate::PVLoose))
+            else if (fUseFromPVLooseTight && aPF.fromPV(iLV) == (pat::PackedCandidate::PVLoose))
               pReco.id = 2;
-            else if (fUseFromPVLooseTight && lPack->fromPV(iLV) == (pat::PackedCandidate::PVTight))
+            else if (fUseFromPVLooseTight && aPF.fromPV(iLV) == (pat::PackedCandidate::PVTight))
               pReco.id = 1;
           }
         } else {
@@ -214,56 +219,23 @@ void PuppiPVRobustProducer::produce(edm::Event& iEvent, const edm::EventSetup& i
         }
       }
 
-      std::cout << "lPack pt " << lPack->pt() << " eta " << lPack->eta() << " phi " << lPack->phi() << " charge "
-                << lPack->charge() << " pdgId " << lPack->pdgId() << " d0 " << lPack->dxy() << " d0_BS "
-                << lPack->dxy(beamPoint) << " d0_PV " << lPack->dxy(pvPoint) << " dz " << lPack->dz() << " dz_BS "
-                << lPack->dz(beamPoint) << " dz_PV " << lPack->dz(pvPoint) << std::endl;
+      //std::cout << "PF pt " << aPF.pt() << " eta " << aPF.eta() << " phi " << aPF.phi() << " charge " << aPF.charge()
+      //          << " pdgId " << aPF.pdgId() << " d0 " << aPF.dxy() << " d0_BS " << aPF.dxy(beamPoint) << " d0_PV "
+      //          << aPF.dxy(pvPoint) << " dz " << aPF.dz() << " dz_BS " << aPF.dz(beamPoint) << " dz_PV "
+      //          << aPF.dz(pvPoint) << " id " << pReco.id << std::endl;
     }
 
     fRecoObjCollection.push_back(pReco);
   }
 
+  assert(fRecoObjCollection.size() == pfCol->size());
+
   fPuppiContainer->initialize(fRecoObjCollection);
   fPuppiContainer->setNPV(npv);
 
-  std::vector<double> lWeights;
-  std::vector<PuppiCandidate> lCandidates;
-  if (!fUseExistingWeights) {
-    //Compute the weights and get the particles
-    lWeights = fPuppiContainer->puppiWeights();
-    lCandidates = fPuppiContainer->puppiParticles();
-  } else {
-    //Use the existing weights
-    int lPackCtr = 0;
-    for (auto const& aPF : *pfCol) {
-      const pat::PackedCandidate* lPack = dynamic_cast<const pat::PackedCandidate*>(&aPF);
-      float curpupweight = -1.;
-      if (lPack == nullptr) {
-        // throw error
-        throw edm::Exception(edm::errors::LogicError,
-                             "PuppiPVRobustProducer: cannot get weights since inputs are not PackedCandidates");
-      } else {
-        if (fUseWeightsNoLep) {
-          curpupweight = lPack->puppiWeightNoLep();
-        } else {
-          curpupweight = lPack->puppiWeight();
-        }
-      }
-      lWeights.push_back(curpupweight);
-      PuppiCandidate curjet;
-      curjet.px = curpupweight * lPack->px();
-      curjet.py = curpupweight * lPack->py();
-      curjet.pz = curpupweight * lPack->pz();
-      curjet.e = curpupweight * lPack->energy();
-      curjet.pt = curpupweight * lPack->pt();
-      curjet.eta = lPack->eta();
-      curjet.rapidity = lPack->rapidity();
-      curjet.phi = lPack->phi();
-      curjet.m = curpupweight * lPack->mass();
-      lCandidates.push_back(curjet);
-      lPackCtr++;
-    }
-  }
+  //Compute the weights and get the particles
+  std::vector<double> lWeights = fPuppiContainer->puppiWeights();
+  std::vector<PuppiCandidate> lCandidates = fPuppiContainer->puppiParticles();
 
   //Fill it into the event
   std::unique_ptr<edm::ValueMap<float>> lPupOut(new edm::ValueMap<float>());
@@ -323,7 +295,8 @@ void PuppiPVRobustProducer::produce(edm::Event& iEvent, const edm::EventSetup& i
     puppiP4s.push_back(pVec);
 
     if (fUseExistingWeights || fClonePackedCands) {
-      pCand->setP4(pVec);
+      // already have PUPPI weight, do not reset kinematic
+      //pCand->setP4(pVec);
       pCand->setSourceCandidatePtr(aCand.sourceCandidatePtr(0));
       fPackedPuppiCandidates->push_back(*pCand);
     } else {
