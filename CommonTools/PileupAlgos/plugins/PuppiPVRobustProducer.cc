@@ -22,7 +22,6 @@
 
 // ------------------------------------------------------------------------------------------
 PuppiPVRobustProducer::PuppiPVRobustProducer(const edm::ParameterSet& iConfig) {
-  fPuppiDiagnostics = iConfig.getParameter<bool>("puppiDiagnostics");
   fPuppiForLeptons = iConfig.getParameter<bool>("puppiForLeptons");
   fUseFromPVLooseTight = iConfig.getParameter<bool>("UseFromPVLooseTight");
   fUseDZ = iConfig.getParameter<bool>("UseDeltaZCut");
@@ -44,22 +43,13 @@ PuppiPVRobustProducer::PuppiPVRobustProducer(const edm::ParameterSet& iConfig) {
   tokenMuons_ = consumes<MuonCollection>(iConfig.getParameter<edm::InputTag>("muonName"));
   offlinebeamSpot_ = consumes<reco::BeamSpot>(edm::InputTag("offlineBeamSpot"));
 
+  produces<int>("PVRobustIndex");
   produces<edm::ValueMap<float>>();
-  produces<edm::ValueMap<LorentzVector>>();
-  produces<edm::ValueMap<reco::CandidatePtr>>();
+  produces<pat::PackedCandidateCollection>();
 
-  if (fUseExistingWeights || fClonePackedCands)
-    produces<pat::PackedCandidateCollection>();
-  else
-    produces<reco::PFCandidateCollection>();
-
-  if (fPuppiDiagnostics) {
-    produces<double>("PuppiNAlgos");
-    produces<std::vector<double>>("PuppiRawAlphas");
-    produces<std::vector<double>>("PuppiAlphas");
-    produces<std::vector<double>>("PuppiAlphasMed");
-    produces<std::vector<double>>("PuppiAlphasRms");
-  }
+  produces<edm::ValueMap<double>>("PFPVRobustDxy");
+  produces<edm::ValueMap<double>>("PFPVRobustDz");
+  produces<edm::ValueMap<double>>("PFPVRobustPuppiWeight");
 }
 // ------------------------------------------------------------------------------------------
 PuppiPVRobustProducer::~PuppiPVRobustProducer() {}
@@ -97,16 +87,13 @@ void PuppiPVRobustProducer::produce(edm::Event& iEvent, const edm::EventSetup& i
   // leading vertex closest to the "leading" muon passing the loose ID
   int iLV = 0;
   double muonz = 0;
-  //double pv_z = 0;
+  double muonpt = 0;
+  double muoneta = 0;
   for (auto const& muon : *muonCol) {
     if (muon.pt() < 5)
       continue;
     if (!muon.isLooseMuon())
       continue;
-
-    //std::cout << "muonz " << muon.vz() << " BestTrack_z " << muon.muonBestTrack()->vz() << std::endl;
-    // is this the best way to get the z position of the muon?
-    muonz = muon.vz();
 
     int iVClosest = -1;
     int iV = 0;
@@ -117,28 +104,35 @@ void PuppiPVRobustProducer::produce(edm::Event& iEvent, const edm::EventSetup& i
       if (fabs(muon.muonBestTrack()->dz(aV.position())) < dzClosest) {
         dzClosest = fabs(muon.muonBestTrack()->dz(aV.position()));
         iVClosest = iV;
-
-        //pv_z = aV.z();
       }
       iV++;
     }
     iLV = iVClosest;
+    // if the leading muon is not close to any vertex,
+    // use the beamspot and muon z position to make a "fake" vertex
+    //muonz = muon.vz();
+    muonz = muon.muonBestTrack()->dz(beamPoint) + beamPoint.z();
+    muonpt = muon.pt();
+    muoneta = muon.eta();
     break;
   }
-  //std::cout << "Leading vertex closest to the leading muon passing the loose ID: " << iLV << " muonz " << muonz
-  //          << " pv_z " << pv_z << std::endl;
 
   math::XYZPoint pvPoint;
   if (iLV >= 0) {
     auto const& aLV = pvCol->at(iLV);
     pvPoint = math::XYZPoint(aLV.x(), aLV.y(), aLV.z());
   } else {
-    // failed to find a vertex close to the leading muon within 0.2 cm
-    // use the beamspot and muon z position to make a "fake" vertex
+    // failed to find any vertex close to the leading muon within 0.2 cm
     pvPoint = math::XYZPoint(beamSpot.x0(), beamSpot.y0(), muonz);
   }
-  //auto const& aLV = *pvCol->begin();
-  //const math::XYZPoint pvPoint(aLV.x(), aLV.y(), aLV.z());
+
+  if (iLV != 0) {
+    std::cout << "PuppiPVRobustProducer: leading vertex closest to the leading muon passing the loose ID. Event "
+                 "coordinate run: "
+              << iEvent.run() << " lumi: " << iEvent.luminosityBlock() << " event " << iEvent.id().event()
+              << " closest PV " << iLV << " muonpt " << muonpt << " muoneta " << muoneta << " muonz " << muonz
+              << " pv_z " << pvPoint.z() << " pv0_z " << pvCol->at(0).z() << " pv size " << pvCol->size() << std::endl;
+  }
 
   int npv = 0;
   const reco::VertexCollection::const_iterator vtxEnd = pvCol->end();
@@ -210,6 +204,7 @@ void PuppiPVRobustProducer::produce(edm::Event& iEvent, const edm::EventSetup& i
         } else {
           // no PV closest to the leading muon within 0.2cm
           // use dZ as the discriminator for determining LV or PU
+          // similar to the case where the particle is not associated with any vertex (fromPV = 1 PVLoose or 2 PVTight)
           if ((fPtMaxCharged > 0) and (pReco.pt > fPtMaxCharged))
             pReco.id = 1;
           else if (std::abs(pReco.eta) > fEtaMaxCharged)
@@ -243,40 +238,37 @@ void PuppiPVRobustProducer::produce(edm::Event& iEvent, const edm::EventSetup& i
   lPupFiller.insert(hPFProduct, lWeights.begin(), lWeights.end());
   lPupFiller.fill();
 
-  // This is a dummy to access the "translate" method which is a
-  // non-static member function even though it doesn't need to be.
-  // Will fix in the future.
-  static const reco::PFCandidate dummySinceTranslateIsNotStatic;
-
   // Fill a new PF/Packed Candidate Collection and write out the ValueMap of the new p4s.
   // Since the size of the ValueMap must be equal to the input collection, we need
   // to search the "puppi" particles to find a match for each input. If none is found,
   // the input is set to have a four-vector of 0,0,0,0
-  fPuppiCandidates.reset(new PFOutputCollection);
   fPackedPuppiCandidates.reset(new PackedOutputCollection);
-  std::unique_ptr<edm::ValueMap<LorentzVector>> p4PupOut(new edm::ValueMap<LorentzVector>());
-  LorentzVectorCollection puppiP4s;
-  std::vector<reco::CandidatePtr> values(hPFProduct->size());
+
+  std::vector<double> dxyVals(hPFProduct->size());
+  std::vector<double> dzVals(hPFProduct->size());
+  std::vector<double> puppiWeights(hPFProduct->size());
 
   int val = -1;
   for (auto const& aCand : *hPFProduct) {
     val++;
     std::unique_ptr<pat::PackedCandidate> pCand;
     std::unique_ptr<reco::PFCandidate> pfCand;
-    if (fUseExistingWeights || fClonePackedCands) {
-      const pat::PackedCandidate* cand = dynamic_cast<const pat::PackedCandidate*>(&aCand);
-      if (!cand)
-        throw edm::Exception(edm::errors::LogicError, "PuppiPVRobustProducer: inputs are not PackedCandidates");
-      pCand.reset(new pat::PackedCandidate(*cand));
-    } else {
-      auto id = dummySinceTranslateIsNotStatic.translatePdgIdToType(aCand.pdgId());
-      const reco::PFCandidate* cand = dynamic_cast<const reco::PFCandidate*>(&aCand);
-      pfCand.reset(new reco::PFCandidate(cand ? *cand : reco::PFCandidate(aCand.charge(), aCand.p4(), id)));
-    }
+    const pat::PackedCandidate* cand = dynamic_cast<const pat::PackedCandidate*>(&aCand);
+    if (!cand)
+      throw edm::Exception(edm::errors::LogicError, "PuppiPVRobustProducer: inputs are not PackedCandidates");
+    pCand.reset(new pat::PackedCandidate(*cand));
+
     LorentzVector pVec;
 
     //get an index to a pup in lCandidates: either fUseExistingWeights with no skips or get from fPuppiContainer
     int iPuppiMatched = fUseExistingWeights ? val : fPuppiContainer->recoToPup()[val];
+    if (val != iPuppiMatched) {
+      // how could they be different here?
+      // pCand is a copy of aCand, so there is a mismatch between the input and the output
+      // this would be a huge problem later on
+      std::cout << "PuppiPVRobustProducer matching difference: val " << val << " iPuppiMatched " << iPuppiMatched
+                << std::endl;
+    }
     if (iPuppiMatched >= 0) {
       auto const& puppiMatched = lCandidates[iPuppiMatched];
       pVec.SetPxPyPzE(puppiMatched.px, puppiMatched.py, puppiMatched.pz, puppiMatched.e);
@@ -292,62 +284,42 @@ void PuppiPVRobustProducer::produce(edm::Event& iEvent, const edm::EventSetup& i
         pCand->setPuppiWeight(0, 0);
       }
     }
-    puppiP4s.push_back(pVec);
 
-    if (fUseExistingWeights || fClonePackedCands) {
-      // already have PUPPI weight, do not reset kinematic
-      //pCand->setP4(pVec);
-      pCand->setSourceCandidatePtr(aCand.sourceCandidatePtr(0));
-      fPackedPuppiCandidates->push_back(*pCand);
-    } else {
-      pfCand->setP4(pVec);
-      pfCand->setSourceCandidatePtr(aCand.sourceCandidatePtr(0));
-      fPuppiCandidates->push_back(*pfCand);
-    }
+    // fill the dxy, dz, and puppiWeight
+    dxyVals[val] = fRecoObjCollection[val].d0;
+    dzVals[val] = fRecoObjCollection[val].dZ;
+    puppiWeights[val] = iPuppiMatched >= 0 ? lWeights[val] : 0;
+
+    // already have PUPPI weight, do not reset kinematic
+    //pCand->setP4(pVec);
+    pCand->setSourceCandidatePtr(aCand.sourceCandidatePtr(0));
+    fPackedPuppiCandidates->push_back(*pCand);
   }
+
+  std::unique_ptr<int> lV(new int(iLV));
+  iEvent.put(std::move(lV), "PVRobustIndex");
 
   //Compute the modified p4s
-  edm::ValueMap<LorentzVector>::Filler p4PupFiller(*p4PupOut);
-  p4PupFiller.insert(hPFProduct, puppiP4s.begin(), puppiP4s.end());
-  p4PupFiller.fill();
-
   iEvent.put(std::move(lPupOut));
-  iEvent.put(std::move(p4PupOut));
-  if (fUseExistingWeights || fClonePackedCands) {
-    edm::OrphanHandle<pat::PackedCandidateCollection> oh = iEvent.put(std::move(fPackedPuppiCandidates));
-    for (unsigned int ic = 0, nc = oh->size(); ic < nc; ++ic) {
-      reco::CandidatePtr pkref(oh, ic);
-      values[ic] = pkref;
-    }
-  } else {
-    edm::OrphanHandle<reco::PFCandidateCollection> oh = iEvent.put(std::move(fPuppiCandidates));
-    for (unsigned int ic = 0, nc = oh->size(); ic < nc; ++ic) {
-      reco::CandidatePtr pkref(oh, ic);
-      values[ic] = pkref;
-    }
-  }
-  std::unique_ptr<edm::ValueMap<reco::CandidatePtr>> pfMap_p(new edm::ValueMap<reco::CandidatePtr>());
-  edm::ValueMap<reco::CandidatePtr>::Filler filler(*pfMap_p);
-  filler.insert(hPFProduct, values.begin(), values.end());
-  filler.fill();
-  iEvent.put(std::move(pfMap_p));
+  iEvent.put(std::move(fPackedPuppiCandidates));
 
-  //////////////////////////////////////////////
-  if (fPuppiDiagnostics && !fUseExistingWeights) {
-    // all the different alphas per particle
-    // THE alpha per particle
-    std::unique_ptr<std::vector<double>> theAlphas(new std::vector<double>(fPuppiContainer->puppiAlphas()));
-    std::unique_ptr<std::vector<double>> theAlphasMed(new std::vector<double>(fPuppiContainer->puppiAlphasMed()));
-    std::unique_ptr<std::vector<double>> theAlphasRms(new std::vector<double>(fPuppiContainer->puppiAlphasRMS()));
-    std::unique_ptr<std::vector<double>> alphas(new std::vector<double>(fPuppiContainer->puppiRawAlphas()));
-    std::unique_ptr<double> nalgos(new double(fPuppiContainer->puppiNAlgos()));
+  std::unique_ptr<edm::ValueMap<double>> dxyMap_p(new edm::ValueMap<double>());
+  edm::ValueMap<double>::Filler dxyFiller(*dxyMap_p);
+  dxyFiller.insert(hPFProduct, dxyVals.begin(), dxyVals.end());
+  dxyFiller.fill();
+  iEvent.put(std::move(dxyMap_p), "PFPVRobustDxy");
 
-    iEvent.put(std::move(alphas), "PuppiRawAlphas");
-    iEvent.put(std::move(nalgos), "PuppiNAlgos");
-    iEvent.put(std::move(theAlphas), "PuppiAlphas");
-    iEvent.put(std::move(theAlphasMed), "PuppiAlphasMed");
-    iEvent.put(std::move(theAlphasRms), "PuppiAlphasRms");
-  }
+  std::unique_ptr<edm::ValueMap<double>> dzMap_p(new edm::ValueMap<double>());
+  edm::ValueMap<double>::Filler dzFiller(*dzMap_p);
+  dzFiller.insert(hPFProduct, dzVals.begin(), dzVals.end());
+  dzFiller.fill();
+  iEvent.put(std::move(dzMap_p), "PFPVRobustDz");
+
+  std::unique_ptr<edm::ValueMap<double>> puppiWeightMap_p(new edm::ValueMap<double>());
+  edm::ValueMap<double>::Filler puppiWeightFiller(*puppiWeightMap_p);
+  puppiWeightFiller.insert(hPFProduct, puppiWeights.begin(), puppiWeights.end());
+  puppiWeightFiller.fill();
+  iEvent.put(std::move(puppiWeightMap_p), "PFPVRobustPuppiWeight");
 }
 
 // ------------------------------------------------------------------------------------------

@@ -33,10 +33,7 @@ public:
   typedef reco::VertexCollection VertexCollection;
   //typedef edm::View<reco::Candidate> CandidateView;
   typedef edm::View<pat::PackedCandidate> CandidateView;
-  typedef std::vector<reco::PFCandidate> PFInputCollection;
-  typedef std::vector<reco::PFCandidate> PFOutputCollection;
   typedef std::vector<pat::PackedCandidate> PackedOutputCollection;
-  typedef edm::View<reco::PFCandidate> PFView;
   typedef std::vector<pat::Muon> MuonCollection;
 
 private:
@@ -52,10 +49,11 @@ private:
   std::string fPuppiName;
   std::string fPFName;
   std::string fPVName;
-  bool fPuppiDiagnostics;
   bool fPuppiForLeptons;
   bool fUseFromPVLooseTight;
   bool fUseDZ;
+  // seems to me fDZCut and fDZCutForChargedFromPUVtxs are very similar
+  // not sure why need two variables
   float fDZCut;
   double fEtaMinUseDZ;
   double fPtMaxCharged;
@@ -69,7 +67,6 @@ private:
   double fVtxZCut;
   std::unique_ptr<PuppiContainer> fPuppiContainer;
   std::vector<RecoObj> fRecoObjCollection;
-  std::unique_ptr<PFOutputCollection> fPuppiCandidates;
   std::unique_ptr<PackedOutputCollection> fPackedPuppiCandidates;
 };
 #endif
