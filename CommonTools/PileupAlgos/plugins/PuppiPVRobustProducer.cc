@@ -44,6 +44,7 @@ PuppiPVRobustProducer::PuppiPVRobustProducer(const edm::ParameterSet& iConfig) {
   offlinebeamSpot_ = consumes<reco::BeamSpot>(edm::InputTag("offlineBeamSpot"));
 
   produces<int>("PVRobustIndex");
+  produces<int>("PVMuonIndex");
   produces<edm::ValueMap<float>>();
   produces<pat::PackedCandidateCollection>();
 
@@ -86,11 +87,13 @@ void PuppiPVRobustProducer::produce(edm::Event& iEvent, const edm::EventSetup& i
 
   // leading vertex closest to the "leading" muon passing the loose ID
   int iLV = 0;
+  int iMuon = -1;
   double muonz = 0;
   double muonpt = 0;
   double muoneta = 0;
   for (auto const& muon : *muonCol) {
-    if (muon.pt() < 5)
+    iMuon++;
+    if (muon.pt() < 10.0)
       continue;
     if (!muon.isLooseMuon())
       continue;
@@ -298,6 +301,9 @@ void PuppiPVRobustProducer::produce(edm::Event& iEvent, const edm::EventSetup& i
 
   std::unique_ptr<int> lV(new int(iLV));
   iEvent.put(std::move(lV), "PVRobustIndex");
+
+  std::unique_ptr<int> lMuon(new int(iMuon));
+  iEvent.put(std::move(lMuon), "PVMuonIndex");
 
   //Compute the modified p4s
   iEvent.put(std::move(lPupOut));
