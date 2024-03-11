@@ -3,9 +3,9 @@ from PhysicsTools.NanoAOD.common_cff import *
 
 generalTrackTable = cms.EDProducer("SimpleTrackFlatTableProducer",
     src = cms.InputTag("generalTracks"),
-    cut = cms.string("pt > 15"), # filtered already above
+    cut = cms.string("pt > 10"), # filtered already above
     name = cms.string("Track"),
-    doc  = cms.string("General tracks with pt > 15 GeV"),
+    doc  = cms.string("General tracks with pt > 10 GeV"),
     singleton = cms.bool(False), # the number of entries is variable
     extension = cms.bool(False), # this is the main table for the muons
     variables = cms.PSet(P3Vars,
