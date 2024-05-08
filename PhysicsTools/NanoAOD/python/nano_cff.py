@@ -543,6 +543,8 @@ def nanoAOD_wmassMuonVariables(process):
     v.innerTrackAlgo = Var('? innerTrack().isNonnull() ? innerTrack().algo() : -99', 'int', precision=-1, doc='Track algo enum, check DataFormats/TrackReco/interface/TrackBase.h for details.')
     v.innerTrackOriginalAlgo = Var('? innerTrack().isNonnull() ? innerTrack().originalAlgo() : -99', 'int', precision=-1, doc='Track original algo enum')
     v.trkKink = Var("combinedQuality().trkKink", float, doc="kink finder output")
+    v.nTrackerValidHits = Var("?track.isNonnull?innerTrack().hitPattern().numberOfValidHits():0", int, doc="number of valid hits in the tracker")
+    v.nPixelValidHits = Var("?track.isNonnull?innerTrack().hitPattern().numberOfValidPixelHits():0", int, doc="number of valid hits in the pixel detector")
     v.pfRelIso04_chg = Var("pfIsolationR04().sumChargedHadronPt/pt", float, doc="PF relative isolation dR=0.4, charged component")
     v.pfRelIso04_neu = Var("pfIsolationR04().sumNeutralHadronEt/pt", float, doc="PF relative isolation dR=0.4, charged component")
     v.pfRelIso04_pho = Var("pfIsolationR04().sumPhotonEt/pt", float, doc="PF relative isolation dR=0.4, charged component")
