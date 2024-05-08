@@ -66,6 +66,8 @@ private:
   edm::EDPutTokenT<edm::ValueMap<float>> outputCorPhi_;
   edm::EDPutTokenT<edm::ValueMap<int>> outputCorCharge_;
   edm::EDPutTokenT<edm::ValueMap<float>> outputEdmval_;
+  edm::EDPutTokenT<edm::ValueMap<int>> outputNValidHits_;
+  edm::EDPutTokenT<edm::ValueMap<int>> outputNValidPixelHits_;
 
   edm::EDPutTokenT<edm::ValueMap<std::vector<int>>> outputGlobalIdxs_;
 
@@ -85,6 +87,8 @@ ResidualGlobalCorrectionMakerG4e::ResidualGlobalCorrectionMakerG4e(const edm::Pa
   outputCorPhi_ = produces<edm::ValueMap<float>>("corPhi");
   outputCorCharge_ = produces<edm::ValueMap<int>>("corCharge");
   outputEdmval_ = produces<edm::ValueMap<float>>("edmval");
+  outputNValidHits_ = produces<edm::ValueMap<int>>("nValidHits");
+  outputNValidPixelHits_ = produces<edm::ValueMap<int>>("nValidPixelHits");
 
   outputGlobalIdxs_ = produces<edm::ValueMap<std::vector<int>>>("globalIdxs");
 
@@ -361,6 +365,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   std::vector<float> corPhiV;
   std::vector<int> corChargeV;
   std::vector<float> edmvalV;
+  std::vector<int> nValidHitsV;
+  std::vector<int> nValidPixelHitsV;
 
   std::vector<std::vector<int>> globalidxsV;
   std::vector<std::vector<float>> jacRefV;
@@ -374,6 +380,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     corPhiV.assign(muonAssoc->ref()->size(), -99.);
     corChargeV.assign(muonAssoc->ref()->size(), -99);
     edmvalV.assign(muonAssoc->ref()->size(), -99.);
+    nValidHitsV.assign(muonAssoc->ref()->size(), -99);
+    nValidPixelHitsV.assign(muonAssoc->ref()->size(), -99);
     globalidxsV.assign(muonAssoc->ref()->size(), std::vector<int>());
     jacRefV.assign(muonAssoc->ref()->size(), std::vector<float>());
     momCovV.assign(muonAssoc->ref()->size(), std::vector<float>());
@@ -2933,6 +2941,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       corPhiV[muonref.index()] = phiupd;
       corChargeV[muonref.index()] = chargeupd;
       edmvalV[muonref.index()] = edmval;
+      nValidHitsV[muonref.index()] = nvalid;
+      nValidPixelHitsV[muonref.index()] = nvalidpixel;
 
       auto &iglobalidxv = globalidxsV[muonref.key()];
       iglobalidxv.clear();
@@ -2966,6 +2976,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   edm::ValueMap<float> corPhiMap;
   edm::ValueMap<int> corChargeMap;
   edm::ValueMap<float> edmvalMap;
+  edm::ValueMap<int> nValidHitsMap;
+  edm::ValueMap<int> nValidPixelHitsMap;
 
   edm::ValueMap<std::vector<int>> globalidxsMap;
 
@@ -2993,6 +3005,14 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     edmvalMapFiller.insert(muonAssoc->ref(), std::make_move_iterator(edmvalV.begin()), std::make_move_iterator(edmvalV.end()));
     edmvalMapFiller.fill();
 
+    edm::ValueMap<int>::Filler nValidHitsMapFiller(nValidHitsMap);
+    nValidHitsMapFiller.insert(muonAssoc->ref(), std::make_move_iterator(nValidHitsV.begin()), std::make_move_iterator(nValidHitsV.end()));
+    nValidHitsMapFiller.fill();
+
+    edm::ValueMap<int>::Filler nValidPixelHitsMapFiller(nValidPixelHitsMap);
+    nValidPixelHitsMapFiller.insert(muonAssoc->ref(), std::make_move_iterator(nValidPixelHitsV.begin()), std::make_move_iterator(nValidPixelHitsV.end()));
+    nValidPixelHitsMapFiller.fill();
+
     edm::ValueMap<std::vector<int>>::Filler globalidxsMapFiller(globalidxsMap);
     globalidxsMapFiller.insert(muonAssoc->ref(), std::make_move_iterator(globalidxsV.begin()), std::make_move_iterator(globalidxsV.end()));
     globalidxsMapFiller.fill();
@@ -3011,6 +3031,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   iEvent.emplace(outputCorPhi_, std::move(corPhiMap));
   iEvent.emplace(outputCorCharge_, std::move(corChargeMap));
   iEvent.emplace(outputEdmval_, std::move(edmvalMap));
+  iEvent.emplace(outputNValidHits_, std::move(nValidHitsMap));
+  iEvent.emplace(outputNValidPixelHits_, std::move(nValidPixelHitsMap));
 
   iEvent.emplace(outputGlobalIdxs_, std::move(globalidxsMap));
 
