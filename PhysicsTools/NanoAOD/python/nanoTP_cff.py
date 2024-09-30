@@ -65,6 +65,8 @@ def customizeNANOTP(process):
 
     muonTable.src = "linkedMuons"
 
+    process.vertexTable.svSrc = "slimmedSecondaryVertices"
+
     muonvtxagniso04.muonInputTag = muonTable.src
     muonvtxagniso03.muonInputTag = muonTable.src
 
