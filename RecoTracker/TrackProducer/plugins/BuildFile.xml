@@ -1,11 +1,58 @@
+<flags CXXFLAGS="-g"/>
+<use name="RecoTracker/TkDetLayers"/>
+<use name="TrackingTools/TransientTrack"/>
+<use name="FWCore/Utilities"/>
 <use name="RecoTracker/Record"/>
 <use name="RecoTracker/SiTrackerMRHTools"/>
 <use name="RecoTracker/TrackProducer"/>
-<use name="TrackingTools/TransientTrack"/>
-<use name="FWCore/Utilities"/>
+<use name="FWCore/Framework"/>
+<use name="FWCore/PluginManager"/>
+<use name="FWCore/ParameterSet"/>
+<use name="DataFormats/TrackReco"/>
+<use name="DataFormats/SiStripDetId"/>
+<use name="DataFormats/HepMCCandidate"/>
+<use name="DataFormats/MuonReco"/>
+<use name="DataFormats/PatCandidates"/>
+<use name="TrackingTools/PatternTools"/>
+<use name="Geometry/CommonDetUnit"/>
+<use name="Geometry/Records"/>
+<use name="Geometry/CommonTopologies"/>
+<use name="TrackingTools/GeomPropagators"/>
+<use name="eigen"/>
+<use name="DataFormats/Math"/>
+<use name="TrackingTools/MaterialEffects"/>
+<use name="TrackingTools/GsfTools"/>
+<use name="DataFormats/Common"/>
+<use name="DataFormats/GsfTrackReco"/>
+<use name="DataFormats/SiPixelDetId"/>
+<use name="DataFormats/TrackingRecHit"/>
+<use name="DataFormats/TrajectorySeed"/>
+<use name="DataFormats/TrackerCommon"/>
+<use name="Geometry/TrackerGeometryBuilder"/>
+<use name="RecoTracker/MeasurementDet"/>
+<use name="TrackingTools/Records"/>
+<use name="RecoTracker/TransientTrackingRecHit"/>
+<use name="TrackingTools/TrackFitters"/>
+<use name="TrackingTools/TrajectoryState"/>
+<use name="TrackingTools/KalmanUpdators"/>
+<use name="Utilities/General"/>
+<use name="TrackPropagation/RungeKutta"/>
+<use name="CommonTools/UtilAlgos"/>
+<use name="RecoLocalTracker/SiStripClusterizer"/>
+<use name="RecoVertex/LinearizationPointFinders"/>
+<use name="RecoVertex/KinematicFitPrimitives"/>
+<use name="RecoVertex/KinematicFit"/>
+<use name="Alignment/CommonAlignment"/>
+<use name="TrackPropagation/Geant4e"/>
 <library file="*.cc" name="RecoTrackerTrackProducerPlugins">
   <use name="Alignment/TwoBodyDecay"/>
   <use name="Alignment/ReferenceTrajectories"/>
   <use name="TrackingTools/GsfTracking"/>
   <flags EDM_PLUGIN="1"/>
 </library>
+
+<!-- <use   name="geant4"/> -->
+
+<export>
+  <lib name="1"/>
+</export>

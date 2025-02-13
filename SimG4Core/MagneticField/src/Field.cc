@@ -2,6 +2,7 @@
 #include "SimG4Core/MagneticField/interface/Field.h"
 
 #include "DataFormats/GeometryVector/interface/GlobalPoint.h"
+#include "G4Mag_UsualEqRhs.hh"
 
 #include <CLHEP/Units/SystemOfUnits.h>
 

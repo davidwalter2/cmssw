@@ -1,5 +1,6 @@
 #include "GeantPropagatorESProducer.h"
-
+#include "MagneticField/Engine/interface/MagneticField.h"
+#include "MagneticField/Records/interface/IdealMagneticFieldRecord.h"
 #include "TrackPropagation/Geant4e/interface/Geant4ePropagator.h"
 
 #include "FWCore/Framework/interface/ESHandle.h"
@@ -13,12 +14,12 @@
 using namespace edm;
 
 GeantPropagatorESProducer::GeantPropagatorESProducer(const edm::ParameterSet &p)
-    : magFieldToken_(setWhatProduced(this, p.getParameter<std::string>("ComponentName"))
-                         .consumesFrom<MagneticField, IdealMagneticFieldRecord>(
-                             edm::ESInputTag("", p.getParameter<std::string>("MagneticFieldLabel")))) {
+    : fieldlabel_(p.getParameter<std::string>("MagneticFieldLabel")),
+      magFieldToken_(setWhatProduced(this, p.getParameter<std::string>("ComponentName"))
+                         .consumesFrom<MagneticField, IdealMagneticFieldRecord>(edm::ESInputTag("", fieldlabel_))) {
   pset_ = p;
   plimit_ = pset_.getParameter<double>("PropagationPtotLimit");
-  fieldlabel_ = pset_.getParameter<std::string>("MagneticFieldLabel");
+  forCVH_ = pset_.getParameter<bool>("ForCVH");
 }
 
 GeantPropagatorESProducer::~GeantPropagatorESProducer() {}
@@ -37,5 +38,5 @@ std::unique_ptr<Propagator> GeantPropagatorESProducer::produce(const TrackingCom
     dir = anyDirection;
   }
 
-  return std::make_unique<Geant4ePropagator>(&(iRecord.get(magFieldToken_)), particleName, dir, plimit_);
+  return std::make_unique<Geant4ePropagator>(&(iRecord.get(magFieldToken_)), particleName, dir, plimit_, forCVH_);
 }

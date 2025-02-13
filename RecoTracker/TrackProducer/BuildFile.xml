@@ -22,6 +22,19 @@
 <use name="TrackingTools/TrackFitters"/>
 <use name="TrackingTools/TrajectoryState"/>
 <use name="TrackingTools/KalmanUpdators"/>
+<use name="FWCore/PluginManager"/>
+<use name="DataFormats/HepMCCandidate"/>
+<use name="DataFormats/MuonReco"/>
+<use name="Geometry/CommonDetUnit"/>
+<use name="Geometry/CommonTopologies"/>
+<use name="eigen"/>
+<use name="DataFormats/Math"/>
+<use name="TrackingTools/MaterialEffects"/>
+<use name="DataFormats/SiPixelDetId"/>
+<use name="DataFormats/TrackerCommon"/>
+<use name="Utilities/General"/>
+<use name="TrackPropagation/RungeKutta"/>
+<use name="TrackPropagation/Geant4e"/>
 <export>
   <lib name="1"/>
 </export>

@@ -1,4 +1,4 @@
-<Flags CXXFLAGS="-g"/>
+<flags CXXFLAGS="-g"/>
 <use name="root"/>
 <use name="geant4"/>
 <use name="FWCore/ParameterSet"/>
@@ -10,7 +10,7 @@
 <use name="FWCore/MessageLogger"/>
 <use name="DataFormats/CLHEP"/>
 <use name="CLHEP"/>
-<use name="Eigen"/>
+<use name="eigen"/>
 <use name="SimG4Core/MagneticField"/>
 <export>
   <lib name="1"/>

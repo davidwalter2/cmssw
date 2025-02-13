@@ -15,7 +15,7 @@
 #include <Eigen/Core>
 
 #include "TrackPropagation/Geant4e/interface/G4UniversalFluctuationForExtrapolator.hh"
-#include "TrackPropagation/Geant4e/interface/G4WentzelVIModelCustom.hh"
+#include "TrackPropagation/Geant4e/interface/G4WentzelVIModelForCVH.hh"
 
 /** Propagator based on the Geant4e package. Uses the Propagator class
  *  in the TrackingTools/GeomPropagators package to define the interface.
@@ -24,8 +24,7 @@
 
 class Geant4ePropagator : public Propagator {
 public:
-  
-  typedef ROOT::Math::SMatrix<double, 5, 7, ROOT::Math::MatRepStd<double, 5, 7> > AlgebraicMatrix57;
+  typedef ROOT::Math::SMatrix<double, 5, 7, ROOT::Math::MatRepStd<double, 5, 7>> AlgebraicMatrix57;
   /** Constructor. Takes as arguments:
    *  * The magnetic field
    *  * The particle name whose properties will be used in the propagation.
@@ -35,7 +34,8 @@ public:
   Geant4ePropagator(const MagneticField *field = nullptr,
                     std::string particleName = "mu",
                     PropagationDirection dir = alongMomentum,
-                    double plimit = 1.0);
+                    double plimit = 1.0,
+                    bool forCVH = false);
 
   ~Geant4ePropagator() override;
 
@@ -61,13 +61,28 @@ public:
   Geant4ePropagator *clone() const override { return new Geant4ePropagator(*this); }
 
   const MagneticField *magneticField() const override { return theField; }
-                                                               
-  std::tuple<bool, Eigen::Matrix<double, 7, 1>, Eigen::Matrix<double, 5, 5>, Eigen::Matrix<double, 5, 7>, double, Eigen::Matrix<double, 5, 5>, Eigen::Matrix<double, 5, 5>, double, double> propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 7, 1> &ftsStart,
-                                                                                const GloballyPositioned<double> &pDest, double dBz = 0., double dxi = 0.,
-                                                                                double dms = 0., double dioni = 0., double pforced = -1.) const;
 
-  static void CalculateEffectiveZandA(const G4Material* mate, G4double& effZ, G4double& effA);
-                                                                                
+  std::tuple<bool,
+             Eigen::Matrix<double, 7, 1>,
+             Eigen::Matrix<double, 5, 5>,
+             Eigen::Matrix<double, 5, 7>,
+             double,
+             Eigen::Matrix<double, 5, 5>,
+             Eigen::Matrix<double, 5, 5>,
+             double,
+             double>
+  propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 7, 1> &ftsStart,
+                                   const GloballyPositioned<double> &pDest,
+                                   double dBz = 0.,
+                                   double dxi = 0.,
+                                   double dms = 0.,
+                                   double dioni = 0.,
+                                   double pforced = -1.) const;
+
+  static void CalculateEffectiveZandA(const G4Material *mate, G4double &effZ, G4double &effA);
+
+  bool GetForCVH() const { return forCVH_; }
+
 private:
   typedef std::pair<TrajectoryStateOnSurface, double> TsosPP;
   typedef std::pair<bool, std::shared_ptr<G4ErrorTarget>> ErrorTargetPair;
@@ -87,7 +102,7 @@ private:
   // propagation
   template <class SurfaceType>
   ErrorTargetPair transformToG4SurfaceTarget(const SurfaceType &pDest, bool moveTargetToEndOfSurface) const;
-  
+
   template <class SurfaceType>
   ErrorTargetPair transformToG4SurfaceTargetD(const SurfaceType &pDest, bool moveTargetToEndOfSurface) const;
 
@@ -107,7 +122,6 @@ private:
   template <class SurfaceType>
   std::pair<TrajectoryStateOnSurface, double> propagateGeneric(const FreeTrajectoryState &ftsStart,
                                                                const SurfaceType &pDest) const;
-                                                               
 
   // saves the Geant4 propagation direction (Forward or Backward) in the
   // provided variable reference mode and returns true if the propagation
@@ -134,6 +148,7 @@ private:
   // This can be necessary, when Geant4 needs to read in a new MagneticField
   // object, which changed during lumi section crossing
   void ensureGeant4eIsInitilized(bool forceInit) const;
+  void ensureGeant4eIsInitilizedForCVH(bool forceInit) const;
 
   // returns the name of the SurfaceType. Mostly for debug outputs
   template <class SurfaceType>
@@ -152,18 +167,19 @@ private:
                              GlobalVector const &cmsInitMom,
                              CLHEP::Hep3Vector const &g4InitMom,
                              const SurfaceType &pDest) const;
-                             
-  Eigen::Matrix<double, 5, 5> PropagateErrorMSC( const G4Track* aTrack, double pforced = -1. ) const;
 
-  std::pair<double, double> computeLandau(const G4Track* aTrack) const;
+  Eigen::Matrix<double, 5, 5> PropagateErrorMSC(const G4Track *aTrack, double pforced = -1.) const;
 
-  double computeErrorIoni(const G4Track* aTrack, double pforced = -1.) const;
-    
-  Eigen::Matrix<double, 5, 7> transportJacobianBzD(const Eigen::Matrix<double, 7, 1> &start, double s, double dEdx, double mass, double dBz) const;
+  std::pair<double, double> computeLandau(const G4Track *aTrack) const;
+
+  double computeErrorIoni(const G4Track *aTrack, double pforced = -1.) const;
+
+  Eigen::Matrix<double, 5, 7> transportJacobianBzD(
+      const Eigen::Matrix<double, 7, 1> &start, double s, double dEdx, double mass, double dBz) const;
 
   G4UniversalFluctuationForExtrapolator *fluct = nullptr;
-  G4WentzelVIModelCustom *msmodel = nullptr;
-  
+  G4WentzelVIModelForCVH *msmodel = nullptr;
+  bool forCVH_ = false;
 };
 
 #endif

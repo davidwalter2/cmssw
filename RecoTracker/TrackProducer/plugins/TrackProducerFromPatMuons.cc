@@ -19,35 +19,56 @@ private:
 
   const edm::EDGetTokenT<std::vector<pat::Muon>> inputMuons_;
   const edm::EDPutTokenT<reco::TrackCollection> outputTrack_;
+  edm::EDPutTokenT<edm::Association<std::vector<pat::Muon>>> outputAssoc_;
   const bool innerTrackOnly_;
+  double ptMin_;
 };
 
 TrackProducerFromPatMuons::TrackProducerFromPatMuons(const edm::ParameterSet &iConfig)
     : inputMuons_(consumes<std::vector<pat::Muon>>(iConfig.getParameter<edm::InputTag>("src"))),
       outputTrack_(produces<reco::TrackCollection>()),
-      innerTrackOnly_(iConfig.getParameter<bool>("innerTrackOnly")) {}
+      outputAssoc_(produces<edm::Association<std::vector<pat::Muon>>>()),
+      innerTrackOnly_(iConfig.getParameter<bool>("innerTrackOnly")),
+      ptMin_(iConfig.getParameter<double>("ptMin")) {}
 
 // ------------ method called for each event  ------------
 void TrackProducerFromPatMuons::produce(edm::StreamID, edm::Event &iEvent, const edm::EventSetup &iSetup) const {
   using namespace edm;
 
-  auto const &muons = iEvent.get(inputMuons_);
+  Handle<std::vector<pat::Muon>> muons;
+  iEvent.getByToken(inputMuons_, muons);
 
   reco::TrackCollection tracksOut;
 
-  for (auto const &muon : muons) {
+  edm::Association<std::vector<pat::Muon>> association;
+  edm::Association<std::vector<pat::Muon>>::Filler assocfiller(association);
+
+  edm::RefProd<std::vector<pat::Muon>> muonRefProd(muons);
+  association.setRef(muonRefProd);
+
+  std::vector<int> associdxs;
+
+  for (unsigned int iMuon = 0; iMuon < muons->size(); ++iMuon) {
+    auto const &muon = (*muons)[iMuon];
+    if (muon.pt() < ptMin_)
+      continue;
     const reco::TrackRef trackRef = innerTrackOnly_ ? muon.innerTrack() : muon.muonBestTrack();
     if (trackRef.isNonnull() && trackRef->extra().isAvailable()) {
       tracksOut.emplace_back(*trackRef);
+      associdxs.push_back(iMuon);
     }
   }
-  iEvent.emplace(outputTrack_, std::move(tracksOut));
+  auto trackouth = iEvent.emplace(outputTrack_, std::move(tracksOut));
+  assocfiller.insert(trackouth, associdxs.begin(), associdxs.end());
+  assocfiller.fill();
+  iEvent.emplace(outputAssoc_, std::move(association));
 }
 
 void TrackProducerFromPatMuons::fillDescriptions(edm::ConfigurationDescriptions &descriptions) {
   edm::ParameterSetDescription desc;
   desc.setComment("Simple prooducer to generate track from pat::muons ");
   desc.add<edm::InputTag>("src", edm::InputTag("slimmedMuons"))->setComment("input track collections");
+  desc.add<double>("ptMin", 0.)->setComment("set minimum muon.pt");
   desc.add<bool>("innerTrackOnly", true)->setComment("use only inner track");
   descriptions.addWithDefaultLabel(desc);
 }

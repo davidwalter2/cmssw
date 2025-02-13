@@ -56,6 +56,7 @@ static void createWatchers(const edm::ParameterSet &iP,
 
 GeometryProducer::GeometryProducer(edm::ParameterSet const &p)
     : m_kernel(nullptr),
+      m_fieldlabel(p.getParameter<std::string>("MagneticFieldLabel")),
       m_pField(p.getParameter<edm::ParameterSet>("MagneticField")),
       m_p(p),
       m_pDD(nullptr),
@@ -82,7 +83,8 @@ GeometryProducer::GeometryProducer(edm::ParameterSet const &p)
 
   m_kernel->SetVerboseLevel(m_verbose);
 
-  tokMF_ = esConsumes<MagneticField, IdealMagneticFieldRecord, edm::Transition::BeginRun>();
+  tokMF_ =
+      esConsumes<MagneticField, IdealMagneticFieldRecord, edm::Transition::BeginRun>(edm::ESInputTag("", m_fieldlabel));
   if (m_pGeoFromDD4hep) {
     tokDD4hep_ = esConsumes<cms::DDCompactView, IdealGeometryRecord, edm::Transition::BeginRun>();
   } else {

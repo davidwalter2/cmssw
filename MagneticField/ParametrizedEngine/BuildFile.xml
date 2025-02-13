@@ -1,6 +1,9 @@
+<flags CXXFLAGS="-fno-tree-vectorize"/>
+<use name="DataFormats/GeometryVector"/>
 <use name="DataFormats/Math"/>
 <use name="FWCore/ParameterSet"/>
 <use name="MagneticField/Engine"/>
+<use name="MagneticField/Records"/>
 <use name="MagneticField/UniformEngine"/>
 <export>
   <lib name="1"/>

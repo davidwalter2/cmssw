@@ -62,6 +62,7 @@ private:
   void makeGeom(const edm::EventSetup &c);
 
   G4RunManagerKernel *m_kernel;
+  std::string m_fieldlabel;
   edm::ParameterSet m_pField;
   SimActivityRegistry m_registry;
   std::vector<std::shared_ptr<SimWatcher>> m_watchers;

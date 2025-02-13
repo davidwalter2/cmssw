@@ -3,6 +3,7 @@
 <use name="TrackPropagation/Geant4e"/>
 <use name="CLHEP"/>
 <use name="geant4"/>
+<use name="DataFormats/CLHEP"/>
 <library file="*.cc" name="TrackPropagatorsGeant4ePlugins">
   <flags EDM_PLUGIN="1"/>
 </library>
