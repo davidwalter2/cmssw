@@ -2,7 +2,7 @@ import FWCore.ParameterSet.Config as cms
 
 from RecoTracker.TrackProducer.trackRefitter_cfi import trackRefitter
 TrackRefitter = trackRefitter.clone(
-    MagneticFieldLabel = cms.string(""),
+    MagneticFieldLabel = "",
     src = "generalTracks",
     beamSpot = "offlineBeamSpot",
     Fitter = 'KFFittingSmootherWithOutliersRejectionAndRK',

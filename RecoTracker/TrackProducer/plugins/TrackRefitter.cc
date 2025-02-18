@@ -85,6 +85,7 @@ void TrackRefitter::fillDescriptions(edm::ConfigurationDescriptions &description
   desc.add<edm::InputTag>("src", edm::InputTag(""));
   desc.add<std::string>("constraint", "");
   desc.add<edm::InputTag>("srcConstr", edm::InputTag(""));
+  desc.add<std::string>("MagneticFieldLabel","");
   TrackProducerAlgorithm<reco::Track>::fillPSetDescription(desc);
   KfTrackProducerBase::fillPSetDescription(desc);
   descriptions.addWithDefaultLabel(desc);

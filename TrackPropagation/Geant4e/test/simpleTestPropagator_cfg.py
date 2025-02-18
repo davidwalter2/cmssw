@@ -50,6 +50,7 @@ process.maxEvents = cms.untracked.PSet(
 from SimG4Core.Application.g4SimHits_cfi import g4SimHits as _g4SimHits
 process.geopro = cms.EDProducer("GeometryProducer",
      GeoFromDD4hep = cms.bool(False),
+     MagneticFieldLabel = cms.string(""),
      UseMagneticField = cms.bool(True),
      UseSensitiveDetectors = cms.bool(False),
      MagneticField =  _g4SimHits.MagneticField.clone()
