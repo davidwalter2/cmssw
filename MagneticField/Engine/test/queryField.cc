@@ -25,6 +25,7 @@
 #include <sstream>
 #include <iostream>
 #include <fstream>
+#include <iomanip>
 
 using namespace edm;
 using namespace Geom;
@@ -43,6 +44,7 @@ class queryField : public edm::EDAnalyzer {
 
    field = magfield.product();
 
+   cout << fixed << setprecision(10);
    cout << "Field Nominal Value: " << field->nominalValue() << endl;
 
    double x,y,z;
@@ -50,12 +52,27 @@ class queryField : public edm::EDAnalyzer {
    while (1) {
      
      cout << "Enter X Y Z (cm): ";
+    // cout << "Enter R Phi Z (cm): ";
+    if (!(cin >> x >>  y >>  z)) exit(0);
 
-     if (!(cin >> x >>  y >>  z)) exit(0);
+      GlobalPoint g(x,y,z);
+    // GlobalPoint g(GlobalPoint::Cylindrical(x,y,z));
 
-     GlobalPoint g(x,y,z);
-     
-     cout << "At R=" << g.perp() << " phi=" << g.phi()<< " B=" << field->inTesla(g) << endl;
+      GlobalPoint gx(x+0.1,y,z);
+      GlobalPoint gy(x,y+0.1,z);
+      GlobalPoint gz(x,y,z+0.1);
+
+      GlobalVector b = field->inTesla(g);
+
+      const double bmag = b.mag() ;
+
+      const double bx = field->inTesla(gx).mag();
+      const double by = field->inTesla(gy).mag();
+      const double bz = field->inTesla(gz).mag();
+
+      const double berr = std::sqrt(std::pow(bmag-bx,2) + std::pow(bmag-by,2) + std::pow(bmag-bz,2));
+
+      cout << "At R=" << g.perp() << " phi=" << g.phi()<< " B=" << b << " |B|=" << b.mag() << " dB=" << berr << endl;// << " BR " << b.transverse() << " BPhi " << b.phi() << endl;
    }
    
   }
