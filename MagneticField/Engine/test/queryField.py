@@ -64,25 +64,18 @@ process.maxEvents = cms.untracked.PSet(
 # process.load("MagneticField.Engine.volumeBasedMagneticField_130503_smallYE4_cfi")
 # process.load("MagneticField.Engine.volumeBasedMagneticField_130503_largeYE4_cfi")
 
-# process.load("MagneticField.Engine.volumeBasedMagneticField_160812_cfi")
-# process.VolumeBasedMagneticFieldESProducer.version = "grid_160812_3_8t_Run1" # grid_160812_3_8t, grid_160812_3_8t_Run1
+process.load("MagneticField.Engine.volumeBasedMagneticField_160812_cfi")
+process.VolumeBasedMagneticFieldESProducer.version = "grid_160812_3_8t" # grid_160812_3_8t, grid_160812_3_8t_Run1
 
 # process.load("MagneticField.Engine.volumeBasedMagneticField_170812_cfi")
 # process.VolumeBasedMagneticFieldESProducer.version = "grid_170812_3_8t" # grid_170812_3_8t, grid_170812_3_8t_Run1, grid_170812_3_8t_SX5
 
+# disable 2D parameterization in tracker and use slower but more accurate 3D splines of original data
+process.VolumeBasedMagneticFieldESProducer.useParametrizedTrackerField = cms.bool(False) 
 
 # activate MTCC field map data
-# process.ParametrizedMagneticFieldProducer = cms.ESProducer("ParametrizedMagneticFieldProducer",
-#     # version = cms.string('OAE_1103l_071212'),
-#     version = cms.string('PolyFit3D'),
-#     parameters = cms.PSet(
-#         BValue = cms.string('3_8T')
-#         # BValue = cms.double(3.81143)
-#     ),
-#     # label = cms.untracked.string('parametrizedField')
-# )
 # process.load("MagneticField.ParametrizedEngine.parametrizedMagneticField_PolyFit2D_cfi")
-process.load("MagneticField.ParametrizedEngine.parametrizedMagneticField_PolyFit3D_cfi")
+# process.load("MagneticField.ParametrizedEngine.parametrizedMagneticField_PolyFit3D_cfi")
 
 
 ### Configuration to select map based on recorded current in the DB
@@ -103,23 +96,23 @@ process.GlobalTag = GlobalTag(process.GlobalTag, 'auto:run2_data', '')
 #process.VolumeBasedMagneticFieldESProducer.scalingFactors = ( 1.5 , )
 
 
-process.MessageLogger = cms.Service("MessageLogger",
-    categories   = cms.untracked.vstring("MagneticField"),
-    destinations = cms.untracked.vstring("cout"),
-    cout = cms.untracked.PSet(  
-    noLineBreaks = cms.untracked.bool(True),
-    threshold = cms.untracked.string("INFO"),
-    INFO = cms.untracked.PSet(
-      limit = cms.untracked.int32(0)
-    ),
-    WARNING = cms.untracked.PSet(
-      limit = cms.untracked.int32(0)
-    ),
-    MagneticField = cms.untracked.PSet(
-     limit = cms.untracked.int32(10000000)
-    )
-  )
-)
+# process.MessageLogger = cms.Service("MessageLogger",
+#     categories   = cms.untracked.vstring("MagneticField"),
+#     destinations = cms.untracked.vstring("cout"),
+#     cout = cms.untracked.PSet(  
+#     noLineBreaks = cms.untracked.bool(True),
+#     threshold = cms.untracked.string("INFO"),
+#     INFO = cms.untracked.PSet(
+#       limit = cms.untracked.int32(0)
+#     ),
+#     WARNING = cms.untracked.PSet(
+#       limit = cms.untracked.int32(0)
+#     ),
+#     MagneticField = cms.untracked.PSet(
+#      limit = cms.untracked.int32(10000000)
+#     )
+#   )
+# )
 
 process.queryField  = cms.EDAnalyzer("queryField")
 process.p1 = cms.Path(process.queryField)

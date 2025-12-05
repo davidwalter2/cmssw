@@ -31,7 +31,7 @@ from MagneticField.Engine.ScalingFactors_090322_2pi_090520_cfi import *
 
 VolumeBasedMagneticFieldESProducer = cms.ESProducer("VolumeBasedMagneticFieldESProducer",
     fieldScaling,
-    useParametrizedTrackerField = cms.bool(False),
+    useParametrizedTrackerField = cms.bool(True),
     label = cms.untracked.string(''),
     paramLabel = cms.string('parametrizedField'),
     version = cms.string('grid_1103l_090322_3_8t'),
