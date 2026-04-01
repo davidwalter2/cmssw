@@ -473,19 +473,24 @@ def nanoAOD_customizeData(process):
                                 )
 
     # # load 3d field map and use it for g4e propagator, geant4 internals via geometry producer and a few other places related to the track refit
-    # from MagneticField.ParametrizedEngine.parametrizedMagneticField_PolyFit3D_cfi import ParametrizedMagneticFieldProducer as MagneticFieldProducer
+    # from MagneticField.ParametrizedEngine.parametrizedMagneticField_PolyFit3D_cfi import ParametrizedMagneticFieldProducer as PolyFit3DMagneticFieldProducer
+    # process.PolyFit3DMagneticFieldProducer = PolyFit3DMagneticFieldProducer
     # fieldlabel = "PolyFit3DMf"
+    # process.PolyFit3DMagneticFieldProducer.label = fieldlabel
 
-    # load latest model
+    # load latest TOSCA model (volumeBasedMagneticField_170812_cfi also provides the magfield XMLIdealGeometryESSource
+    # which supplies DDCompactView("magfield") needed by VolumeBasedMagneticFieldESProducer)
     from MagneticField.Engine.volumeBasedMagneticField_170812_cfi import VolumeBasedMagneticFieldESProducer as MagneticFieldProducer
+    from MagneticField.Engine.volumeBasedMagneticField_170812_cfi import magfield as MagneticFieldGeometry
+    from MagneticField.Engine.volumeBasedMagneticField_170812_cfi import es_prefer_magfield
+    process.magfield = MagneticFieldGeometry
+    process.es_prefer_magfield = es_prefer_magfield
+    process.Opera3DMagneticFieldProducer = MagneticFieldProducer
     fieldlabel = "grid_170812_3_8t"
-
-    process.MagneticFieldProducer = MagneticFieldProducer
-
+    process.Opera3DMagneticFieldProducer.label = fieldlabel
     # disable 2D parameterization in tracker and use slower but more accurate 3D splines of original data
-    process.MagneticFieldProducer.useParametrizedTrackerField = cms.bool(False) 
+    process.Opera3DMagneticFieldProducer.useParametrizedTrackerField = cms.bool(False)
 
-    process.MagneticFieldProducer.label = fieldlabel
     process.geopro.MagneticFieldLabel = fieldlabel
     process.Geant4ePropagator.MagneticFieldLabel = fieldlabel
     process.stripCPEESProducer.MagneticFieldLabel = fieldlabel
