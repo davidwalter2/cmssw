@@ -482,9 +482,8 @@ def nanoAOD_customizeData(process):
     # which supplies DDCompactView("magfield") needed by VolumeBasedMagneticFieldESProducer)
     from MagneticField.Engine.volumeBasedMagneticField_170812_cfi import VolumeBasedMagneticFieldESProducer as MagneticFieldProducer
     from MagneticField.Engine.volumeBasedMagneticField_170812_cfi import magfield as MagneticFieldGeometry
-    from MagneticField.Engine.volumeBasedMagneticField_170812_cfi import es_prefer_magfield
     process.magfield = MagneticFieldGeometry
-    process.es_prefer_magfield = es_prefer_magfield
+    process.es_prefer_magfield_cvhrefit = cms.ESPrefer("XMLIdealGeometryESSource", "magfield")
     process.Opera3DMagneticFieldProducer = MagneticFieldProducer
     fieldlabel = "grid_170812_3_8t"
     process.Opera3DMagneticFieldProducer.label = fieldlabel
