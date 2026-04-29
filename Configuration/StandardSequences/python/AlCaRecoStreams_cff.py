@@ -28,6 +28,10 @@ from Alignment.CommonAlignmentProducer.ALCARECOTkAlDstToD0Pi_cff import *
 from Alignment.CommonAlignmentProducer.ALCARECOTkAlUpsilonMuMu_cff import *
 # AlCaReco for track based alignment using Upsilon events for PA data-taking
 from Alignment.CommonAlignmentProducer.ALCARECOTkAlUpsilonMuMuPA_cff import *
+# AlCaReco for track based alignment using KS->pi+pi- events
+from Alignment.CommonAlignmentProducer.ALCARECOTkAlKsToPiPi_cff import *
+# AlCaReco for track based alignment using Lambda0->proton+pi- events
+from Alignment.CommonAlignmentProducer.ALCARECOTkAlLambdaToProtonPi_cff import *
 # AlCaReco for track based alignment using MinBias events
 from Alignment.CommonAlignmentProducer.ALCARECOTkAlMinBias_cff import *
 
@@ -169,6 +173,8 @@ pathALCARECOTkAlMuonIsolatedPA = cms.Path(seqALCARECOTkAlMuonIsolatedPA*ALCARECO
 pathALCARECOTkAlJpsiMuMu = cms.Path(seqALCARECOTkAlJpsiMuMu*ALCARECOTkAlJpsiMuMuDQM)
 pathALCARECOTkAlDstToD0Pi = cms.Path(seqALCARECOTkAlDstToD0Pi)
 pathALCARECOTkAlUpsilonMuMu = cms.Path(seqALCARECOTkAlUpsilonMuMu*ALCARECOTkAlUpsilonMuMuDQM)
+pathALCARECOTkAlKsToPiPi = cms.Path(seqALCARECOTkAlKsToPiPi)
+pathALCARECOTkAlLambdaToProtonPi = cms.Path(seqALCARECOTkAlLambdaToProtonPi)
 pathALCARECOTkAlUpsilonMuMuPA = cms.Path(seqALCARECOTkAlUpsilonMuMuPA*ALCARECOTkAlUpsilonMuMuPADQM)
 pathALCARECOTkAlMinBias = cms.Path(seqALCARECOTkAlMinBias*ALCARECOTkAlMinBiasDQM)
 pathALCARECOTkAlMinBias = cms.Path(seqALCARECOTkAlMinBias*ALCARECOTkAlMinBiasDQM)
@@ -347,6 +353,24 @@ ALCARECOStreamTkAlUpsilonMuMu = cms.FilteredStream(
 	paths  = (pathALCARECOTkAlUpsilonMuMu),
 	content = OutALCARECOTkAlUpsilonMuMu.outputCommands,
 	selectEvents = OutALCARECOTkAlUpsilonMuMu.SelectEvents,
+	dataTier = cms.untracked.string('ALCARECO')
+	)
+
+ALCARECOStreamTkAlKsToPiPi = cms.FilteredStream(
+	responsible = 'David Walter',
+	name = 'TkAlKsToPiPi',
+	paths  = (pathALCARECOTkAlKsToPiPi),
+	content = OutALCARECOTkAlKsToPiPi.outputCommands,
+	selectEvents = OutALCARECOTkAlKsToPiPi.SelectEvents,
+	dataTier = cms.untracked.string('ALCARECO')
+	)
+
+ALCARECOStreamTkAlLambdaToProtonPi = cms.FilteredStream(
+	responsible = 'David Walter',
+	name = 'TkAlLambdaToProtonPi',
+	paths  = (pathALCARECOTkAlLambdaToProtonPi),
+	content = OutALCARECOTkAlLambdaToProtonPi.outputCommands,
+	selectEvents = OutALCARECOTkAlLambdaToProtonPi.SelectEvents,
 	dataTier = cms.untracked.string('ALCARECO')
 	)
 

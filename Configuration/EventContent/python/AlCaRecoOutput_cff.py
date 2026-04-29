@@ -34,6 +34,10 @@ from Alignment.CommonAlignmentProducer.ALCARECOTkAlUpsilonMuMu_Output_cff import
 from Alignment.CommonAlignmentProducer.ALCARECOTkAlUpsilonMuMuHI_Output_cff import *
 # AlCaReco for track based alignment using Upsilon events for PA data-taking
 from Alignment.CommonAlignmentProducer.ALCARECOTkAlUpsilonMuMuPA_Output_cff import *
+# AlCaReco for track based alignment using KS->pi+pi- events
+from Alignment.CommonAlignmentProducer.ALCARECOTkAlKsToPiPi_Output_cff import *
+# AlCaReco for track based alignment using Lambda0->proton+pi- events
+from Alignment.CommonAlignmentProducer.ALCARECOTkAlLambdaToProtonPi_Output_cff import *
 # AlCaReco for track based alignment using MinBias events
 from Alignment.CommonAlignmentProducer.ALCARECOTkAlMinBias_Output_cff import *
 # AlCaReco for track based alignment using MinBias events for PbPb data-taking

@@ -12,13 +12,17 @@
 <library   name="AlignmentCommonAlignmentProducerAsAnalyzerPlugin" file="AlignmentProducerAsAnalyzer.cc">
   <use   name="Alignment/CommonAlignmentProducer"/>
 </library>
-<library   name="CommonAlignmentProducerSelectors" file="Alignment*SelectorModule.cc,AlignmentMuonHIPTrajectorySelector.cc">
+<library   name="CommonAlignmentProducerSelectors" file="Alignment*SelectorModule.cc,AlignmentMuonHIPTrajectorySelector.cc,AlignmentTracksFromV0Selector.cc">
   <use   name="Alignment/CommonAlignmentProducer"/>
   <use   name="DataFormats/DetId"/>
   <use   name="DataFormats/MuonDetId"/>
   <use   name="DataFormats/TrackingRecHit"/>
   <use   name="DataFormats/TrackReco"/>
   <use   name="DataFormats/Alignment"/>
+  <use   name="DataFormats/Candidate"/>
+  <use   name="DataFormats/RecoCandidate"/>
+  <use   name="DataFormats/SiStripCluster"/>
+  <use   name="DataFormats/SiPixelCluster"/>
   <use   name="FWCore/ServiceRegistry"/>
   <use   name="CommonTools/UtilAlgos"/>
   <use   name="CommonTools/RecoAlgos"/>
