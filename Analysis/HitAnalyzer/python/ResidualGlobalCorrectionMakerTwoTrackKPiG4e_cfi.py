@@ -1,7 +1,7 @@
 import FWCore.ParameterSet.Config as cms
 
 globalCorD0 = cms.EDProducer(
-    'ResidualGlobalCorrectionMakerTwoTrackKPiG4e',
+    'ResidualGlobalCorrectionMakerTwoTrackG4e',
     src=cms.InputTag('ALCARECOTkAlDstToD0Pi'),
     fitFromGenParms=cms.bool(False),
     fitFromSimParms=cms.bool(False),
@@ -30,10 +30,10 @@ globalCorD0 = cms.EDProducer(
     doMassConstraint=cms.bool(False),
     massConstraint=cms.double(1.86483),
     massConstraintWidth=cms.double(1e-5),
-    kaonMass=cms.double(0.493677),
-    pionMass=cms.double(0.139570),
-    kaonMassErr=cms.double(1e-6),
-    pionMassErr=cms.double(1e-6),
+    daughterMass1=cms.double(0.493677),
+    daughterMass2=cms.double(0.139570),
+    daughterMass1Err=cms.double(1e-6),
+    daughterMass2Err=cms.double(1e-6),
     minPairMass=cms.double(1.70),
     maxPairMass=cms.double(2.00),
     respectTrackOrder=cms.bool(False),

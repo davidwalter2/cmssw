@@ -31,8 +31,8 @@ process.options = cms.untracked.PSet(
 
 # Step-2 V0 candidate finder: re-pairs the deduplicated daughter tracks,
 # applies V0Producer-like cuts, picks the best candidate per event.
-process.load('Analysis.HitAnalyzer.V0CandidateProducer_cfi')
-process.selectedKsTracks = process.V0CandidateProducer.clone(
+process.load('Analysis.HitAnalyzer.KsToPiPiCandidateProducer_cfi')
+process.selectedKsTracks = process.KsToPiPiCandidateProducer.clone(
     tracks = cms.InputTag('ALCARECOTkAlKsToPiPi'),
     daughterMass1 = 0.139570,        # both pions
     daughterMass2 = 0.139570,

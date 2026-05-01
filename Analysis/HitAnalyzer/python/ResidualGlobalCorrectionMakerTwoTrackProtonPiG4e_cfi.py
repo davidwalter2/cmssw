@@ -1,14 +1,14 @@
 import FWCore.ParameterSet.Config as cms
 
-# Configuration of the existing ResidualGlobalCorrectionMakerTwoTrackKPiG4e
+# Configuration of the existing ResidualGlobalCorrectionMakerTwoTrackG4e
 # C++ class for Lambda0->p pi-: asymmetric, kaon position holds the proton.
 # The class itself is already mass-parameterised, so this is a pure
 # configuration clone (no new C++ needed). Track ordering matters --
-# track[0] gets kaonMass, track[1] gets pionMass -- so the upstream
+# track[0] gets daughterMass1, track[1] gets daughterMass2 -- so the upstream
 # V0CandidateProducer (with tryBothAssignments=True) is responsible for
 # emitting (proton-candidate, pion-candidate) in that order.
 globalCorLambda = cms.EDProducer(
-    'ResidualGlobalCorrectionMakerTwoTrackKPiG4e',
+    'ResidualGlobalCorrectionMakerTwoTrackG4e',
     src = cms.InputTag('ALCARECOTkAlLambdaToProtonPi'),
     fitFromGenParms = cms.bool(False),
     fitFromSimParms = cms.bool(False),
@@ -37,10 +37,10 @@ globalCorLambda = cms.EDProducer(
     doMassConstraint = cms.bool(False),
     massConstraint = cms.double(1.115683),        # Lambda mass
     massConstraintWidth = cms.double(1.e-5),
-    kaonMass = cms.double(0.938272),              # proton (in track[0] slot)
-    pionMass = cms.double(0.139570),
-    kaonMassErr = cms.double(1.e-6),
-    pionMassErr = cms.double(1.e-6),
+    daughterMass1 = cms.double(0.938272),              # proton (in track[0] slot)
+    daughterMass2 = cms.double(0.139570),
+    daughterMass1Err = cms.double(1.e-6),
+    daughterMass2Err = cms.double(1.e-6),
     minPairMass = cms.double(1.05),               # Lambda window
     maxPairMass = cms.double(1.18),
     respectTrackOrder = cms.bool(True),           # asymmetric: track[0]=proton, track[1]=pion

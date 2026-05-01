@@ -1,11 +1,11 @@
 import FWCore.ParameterSet.Config as cms
 
-# Configuration of the existing ResidualGlobalCorrectionMakerTwoTrackKPiG4e
+# Configuration of the existing ResidualGlobalCorrectionMakerTwoTrackG4e
 # C++ class for KS->pi+pi-: both daughter masses set to the charged pion.
 # The class itself is already mass-parameterised, so this is a pure
 # configuration clone (no new C++ needed).
 globalCorKs = cms.EDProducer(
-    'ResidualGlobalCorrectionMakerTwoTrackKPiG4e',
+    'ResidualGlobalCorrectionMakerTwoTrackG4e',
     src = cms.InputTag('ALCARECOTkAlKsToPiPi'),
     fitFromGenParms = cms.bool(False),
     fitFromSimParms = cms.bool(False),
@@ -34,10 +34,10 @@ globalCorKs = cms.EDProducer(
     doMassConstraint = cms.bool(False),
     massConstraint = cms.double(0.497611),       # KS mass
     massConstraintWidth = cms.double(1.e-5),
-    kaonMass = cms.double(0.139570),              # both daughters: pion
-    pionMass = cms.double(0.139570),
-    kaonMassErr = cms.double(1.e-6),
-    pionMassErr = cms.double(1.e-6),
+    daughterMass1 = cms.double(0.139570),              # both daughters: pion
+    daughterMass2 = cms.double(0.139570),
+    daughterMass1Err = cms.double(1.e-6),
+    daughterMass2Err = cms.double(1.e-6),
     minPairMass = cms.double(0.40),               # KS V0Producer-like window
     maxPairMass = cms.double(0.60),
     respectTrackOrder = cms.bool(False),          # symmetric: order doesn't matter
