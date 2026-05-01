@@ -37,6 +37,7 @@
 <use name="RecoVertex/LinearizationPointFinders"/>
 <use name="RecoVertex/KinematicFitPrimitives"/>
 <use name="RecoVertex/KinematicFit"/>
+<use name="DataFormats/BeamSpot"/>
 <use name="Alignment/CommonAlignment"/>
 <use name="TrackPropagation/Geant4e"/>
 
