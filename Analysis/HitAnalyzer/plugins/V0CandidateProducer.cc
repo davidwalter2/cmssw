@@ -16,7 +16,7 @@
 /// single best candidate per event (sorted by V0 pT), in pair order:
 /// track[0] = "first" daughter (gets m1 downstream), track[1] = "second".
 /// This matches the input convention of
-/// ResidualGlobalCorrectionMakerTwoTrackKPiG4e with respectTrackOrder=True.
+/// ResidualGlobalCorrectionMakerTwoTrackG4e with respectTrackOrder=True.
 /// Designed to be a drop-in V0 analog of DstToD0PiCandidateProducer.
 
 #include <algorithm>

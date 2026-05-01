@@ -25,6 +25,13 @@
 #include "TrackPropagation/Geant4e/interface/Geant4ePropagator.h"
 
 #include "FWCore/Common/interface/TriggerNames.h"
+#include "DataFormats/L1GlobalTrigger/interface/L1GlobalTriggerReadoutRecord.h"
+#include "CondFormats/DataRecord/interface/L1GtTriggerMenuRcd.h"
+#include "CondFormats/L1TObjects/interface/L1GtTriggerMenu.h"
+
+#include <iostream>
+#include <limits>
+#include <sstream>
 
 
 class ResidualGlobalCorrectionMakerTwoTrackG4e : public ResidualGlobalCorrectionMakerBase
@@ -44,6 +51,20 @@ private:
   bool doMassConstraint_;
   double massConstraint_;
   double massConstraintWidth_;
+  double daughterMass1_;
+  double daughterMass2_;
+  double daughterMass1Err_;
+  double daughterMass2Err_;
+  double minPairMass_;
+  double maxPairMass_;
+  bool respectTrackOrder_;
+
+  bool doL1Trigger_;
+  edm::EDGetTokenT<L1GlobalTriggerReadoutRecord> inputL1ReadoutRecord_;
+  edm::InputTag inputL1ReadoutRecordTag_;
+  std::vector<std::string> l1Triggers_;
+  std::vector<unsigned int> l1TriggerBitNumbers_;
+  std::vector<int> l1TriggerDecisions_;
   
   float Jpsi_d;
   float Jpsi_x;
@@ -203,12 +224,39 @@ private:
 };
 
 
-ResidualGlobalCorrectionMakerTwoTrackG4e::ResidualGlobalCorrectionMakerTwoTrackG4e(const edm::ParameterSet &iConfig) : ResidualGlobalCorrectionMakerBase(iConfig) 
+ResidualGlobalCorrectionMakerTwoTrackG4e::ResidualGlobalCorrectionMakerTwoTrackG4e(const edm::ParameterSet &iConfig)
+    : ResidualGlobalCorrectionMakerBase(iConfig)
 {
   doVtxConstraint_ = iConfig.getParameter<bool>("doVtxConstraint");
   doMassConstraint_ = iConfig.getParameter<bool>("doMassConstraint");
   massConstraint_ = iConfig.getParameter<double>("massConstraint");
   massConstraintWidth_ = iConfig.getParameter<double>("massConstraintWidth");
+  // Per-daughter masses default to the muon mass to preserve the legacy
+  // J/psi/Upsilon configuration where the cfi simply doesn't specify them.
+  // Override (e.g. to kaon+pion for D*, pion+pion for KS, proton+pion for
+  // Lambda) via the channel-specific cfi.
+  constexpr double mmu = 0.1056583745;
+  daughterMass1_ = iConfig.existsAs<double>("daughterMass1") ? iConfig.getParameter<double>("daughterMass1") : mmu;
+  daughterMass2_ = iConfig.existsAs<double>("daughterMass2") ? iConfig.getParameter<double>("daughterMass2") : mmu;
+  daughterMass1Err_ = iConfig.existsAs<double>("daughterMass1Err") ? iConfig.getParameter<double>("daughterMass1Err") : 1.e-6;
+  daughterMass2Err_ = iConfig.existsAs<double>("daughterMass2Err") ? iConfig.getParameter<double>("daughterMass2Err") : 1.e-6;
+  // Pair-mass window default is "no cut" so legacy configurations work.
+  minPairMass_ = iConfig.existsAs<double>("minPairMass") ? iConfig.getParameter<double>("minPairMass") : 0.;
+  maxPairMass_ = iConfig.existsAs<double>("maxPairMass") ? iConfig.getParameter<double>("maxPairMass") : 1.e9;
+  respectTrackOrder_ =
+      iConfig.existsAs<bool>("respectTrackOrder") ? iConfig.getParameter<bool>("respectTrackOrder") : false;
+
+  doL1Trigger_ = iConfig.existsAs<bool>("doL1Trigger") ? iConfig.getParameter<bool>("doL1Trigger") : false;
+  if (doL1Trigger_) {
+    const edm::InputTag l1Results = iConfig.existsAs<edm::InputTag>("l1Results")
+                                        ? iConfig.getParameter<edm::InputTag>("l1Results")
+                                        : edm::InputTag("gtDigis", "", "RECO");
+    inputL1ReadoutRecordTag_ = l1Results;
+    inputL1ReadoutRecord_ = consumes<L1GlobalTriggerReadoutRecord>(l1Results);
+    l1Triggers_ = iConfig.getParameter<std::vector<std::string>>("l1Triggers");
+    l1TriggerBitNumbers_.assign(l1Triggers_.size(), std::numeric_limits<unsigned int>::max());
+    l1TriggerDecisions_.assign(l1Triggers_.size(), 0);
+  }
 }
 
 void ResidualGlobalCorrectionMakerTwoTrackG4e::beginStream(edm::StreamID streamid)
@@ -368,8 +416,12 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::beginStream(edm::StreamID streami
     tree->Branch("dmassconvval_cons0", &dmassconvval_cons0);
     tree->Branch("dinvmasssqconvval_cons0", &dinvmasssqconvval_cons0);
 
+    for (std::size_t itrig = 0; itrig < l1Triggers_.size(); ++itrig) {
+      tree->Branch(l1Triggers_[itrig].c_str(), &l1TriggerDecisions_[itrig]);
+    }
+
 //     tree->Branch("hessv", &hessv);
-    
+
   }
 }
 
@@ -439,6 +491,11 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
     iEvent.getByToken(inputTriggerResults_, triggerResults);
   }
 
+  Handle<L1GlobalTriggerReadoutRecord> l1ReadoutRecord;
+  if (doL1Trigger_) {
+    iEvent.getByToken(inputL1ReadoutRecord_, l1ReadoutRecord);
+  }
+
   KFUpdator updator;
   TkClonerImpl const& cloner = static_cast<TkTransientTrackingRecHitBuilder const *>(ttrh.product())->cloner();
   
@@ -449,8 +506,9 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
   Handle<reco::BeamSpot> bsH;
   iEvent.getByToken(inputBs_, bsH);
   
-  constexpr double mmu = 0.1056583745;
-  constexpr double mmuerr = 0.0000000024;
+  const std::array<double, 2> trackMass = {{daughterMass1_, daughterMass2_}};
+  const std::array<double, 2> trackMassErr = {{daughterMass1Err_, daughterMass2Err_}};
+  const double massForConstraintHelpers = 0.5 * (daughterMass1_ + daughterMass2_);
 
   VectorXd gradfull;
   MatrixXd hessfull;
@@ -470,6 +528,10 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
   run = iEvent.run();
   lumi = iEvent.luminosityBlock();
   event = iEvent.id().event();
+
+  const bool useFixedPairOrder = respectTrackOrder_ && trackOrigH->size() >= 2;
+  const auto firstTrack = trackOrigH->begin();
+  const auto secondTrack = useFixedPairOrder ? std::next(trackOrigH->begin()) : trackOrigH->end();
 
   genweight = 1.;
   if (doGen_) {
@@ -535,9 +597,80 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 //     std::cout << "trigger index2 = " << idx2 << std::endl;
   
   }
+
+  if (doL1Trigger_) {
+    edm::ESHandle<L1GtTriggerMenu> l1Menu;
+    iSetup.get<L1GtTriggerMenuRcd>().get(l1Menu);
+
+    auto const &algorithmMap = l1Menu->gtAlgorithmMap();
+    std::vector<std::string> missingTriggers;
+    for (std::size_t itrig = 0; itrig < l1Triggers_.size(); ++itrig) {
+      auto const menuIt = algorithmMap.find(l1Triggers_[itrig]);
+      l1TriggerBitNumbers_[itrig] =
+          menuIt != algorithmMap.end() ? static_cast<unsigned int>(menuIt->second.algoBitNumber())
+                                       : std::numeric_limits<unsigned int>::max();
+      if (menuIt == algorithmMap.end()) {
+        missingTriggers.push_back(l1Triggers_[itrig]);
+      }
+    }
+
+    std::fill(l1TriggerDecisions_.begin(), l1TriggerDecisions_.end(), 0);
+    bool validDecisionWord = false;
+    bool finalOr = false;
+    unsigned int nFinalBitsSet = 0;
+    unsigned int decisionWordSize = 0;
+    if (l1ReadoutRecord.isValid()) {
+      auto const &decisionWord = l1ReadoutRecord->decisionWord();
+      validDecisionWord = !decisionWord.empty();
+      finalOr = l1ReadoutRecord->decision();
+      decisionWordSize = decisionWord.size();
+      for (std::size_t ibit = 0; ibit < decisionWord.size(); ++ibit) {
+        if (decisionWord.at(ibit)) {
+          ++nFinalBitsSet;
+        }
+      }
+      for (std::size_t itrig = 0; itrig < l1TriggerBitNumbers_.size(); ++itrig) {
+        const unsigned int bit = l1TriggerBitNumbers_[itrig];
+        l1TriggerDecisions_[itrig] =
+            bit < decisionWord.size() ? static_cast<int>(decisionWord.at(bit)) : 0;
+      }
+    }
+
+    std::ostringstream l1DecisionStream;
+    l1DecisionStream << "run:lumi:event = " << run << ":" << lumi << ":" << event
+                     << " L1 source=" << inputL1ReadoutRecordTag_.encode()
+                     << " handleValid=" << (l1ReadoutRecord.isValid() ? 1 : 0)
+                     << " decisionWordValid=" << (validDecisionWord ? 1 : 0)
+                     << " decisionWordSize=" << decisionWordSize
+                     << " finalOr=" << (finalOr ? 1 : 0)
+                     << " nFinalBitsSet=" << nFinalBitsSet;
+    if (!missingTriggers.empty()) {
+      l1DecisionStream << " missingMenuNames=";
+      for (std::size_t itrig = 0; itrig < missingTriggers.size(); ++itrig) {
+        if (itrig != 0) {
+          l1DecisionStream << ",";
+        }
+        l1DecisionStream << missingTriggers[itrig];
+      }
+    }
+    l1DecisionStream << " L1 bits:";
+    for (std::size_t itrig = 0; itrig < l1Triggers_.size(); ++itrig) {
+      l1DecisionStream << " " << l1Triggers_[itrig] << "[";
+      if (l1TriggerBitNumbers_[itrig] == std::numeric_limits<unsigned int>::max()) {
+        l1DecisionStream << "missing";
+      } else {
+        l1DecisionStream << l1TriggerBitNumbers_[itrig];
+      }
+      l1DecisionStream << "]=" << l1TriggerDecisions_[itrig];
+    }
+    std::cout << l1DecisionStream.str() << std::endl;
+  }
   
   // loop over combinatorics of track pairs
   for (auto itrack = trackOrigH->begin(); itrack != trackOrigH->end(); ++itrack) {
+    if (useFixedPairOrder && itrack != firstTrack) {
+      break;
+    }
     if (itrack->isLooper()) {
       continue;
     }
@@ -584,14 +717,29 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
       }
     }
 
-    for (auto jtrack = itrack + 1; jtrack != trackOrigH->end(); ++jtrack) {
+    for (auto jtrack = trackOrigH->begin(); jtrack != trackOrigH->end(); ++jtrack) {
+      if (useFixedPairOrder && jtrack != secondTrack) {
+        continue;
+      }
+      if (jtrack == itrack) {
+        continue;
+      }
       if (jtrack->isLooper()) {
         continue;
       }
       
+      if ((itrack->charge() + jtrack->charge()) != 0) {
+        continue;
+      }
+
       std::array<ROOT::Math::PxPyPzMVector, 2> mutrkarr;
-      mutrkarr[0] = ROOT::Math::PxPyPzMVector(itrack->px(), itrack->py(), itrack->pz(), mmu);
-      mutrkarr[1] = ROOT::Math::PxPyPzMVector(jtrack->px(), jtrack->py(), jtrack->pz(), mmu);
+      mutrkarr[0] = ROOT::Math::PxPyPzMVector(itrack->px(), itrack->py(), itrack->pz(), trackMass[0]);
+      mutrkarr[1] = ROOT::Math::PxPyPzMVector(jtrack->px(), jtrack->py(), jtrack->pz(), trackMass[1]);
+
+      const double rawPairMass = (mutrkarr[0] + mutrkarr[1]).mass();
+      if (rawPairMass < minPairMass_ || rawPairMass > maxPairMass_) {
+        continue;
+      }
       
 
       const reco::Candidate *mu1gen = nullptr;
@@ -897,11 +1045,12 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
         // common vertex fit
         std::vector<RefCountedKinematicParticle> parts;
         
-        float masserr = mmuerr;
+        float daughterMass1Err = trackMassErr[0];
+        float daughterMass2Err = trackMassErr[1];
         float chisq = 0.;
         float ndf = 0.;
-        parts.push_back(pFactory.particle(itt, mmu, chisq, ndf, masserr));
-        parts.push_back(pFactory.particle(jtt, mmu, chisq, ndf, masserr));
+        parts.push_back(pFactory.particle(itt, trackMass[0], chisq, ndf, daughterMass1Err));
+        parts.push_back(pFactory.particle(jtt, trackMass[1], chisq, ndf, daughterMass2Err));
         
         RefCountedKinematicTree kinTree;
         if (icons > 0) {
@@ -1168,7 +1317,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               const Matrix<double, 5, 7> FdFm = std::get<3>(propresult);
               const double dEdxlast = std::get<4>(propresult);
               
-              const Matrix<double, 5, 5> Hm = curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, mmu, dbetaval);
+              const Matrix<double, 5, 5> Hm =
+                  curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, trackMass[id], dbetaval);
               
               const Matrix<double, 6, 1> localparmsprop = globalToLocal(updtsos, surface);
 
@@ -1184,7 +1334,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                   //save current parameters  
                   
                   Matrix<double, 7, 1>& oldtsos = layerStates[ihit];
-                  const Matrix<double, 5, 5> Hold = curv2localJacobianAltelossD(oldtsos, field, surface, dEdxlast, mmu, dbetaval);
+                  const Matrix<double, 5, 5> Hold =
+                      curv2localJacobianAltelossD(oldtsos, field, surface, dEdxlast, trackMass[id], dbetaval);
                   const Matrix<double, 5, 1> dxlocal = Hold*dxfull.segment<5>(trackstateidx + 5*ihit);
 
                   localparms = globalToLocal(oldtsos, surface);
@@ -1203,7 +1354,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               // const Matrix<double, 5, 5> &Hp = dolocalupdate ? curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, mmu, dbetaval) : Hm;
               Matrix<double, 5, 5> Hp = Hm;
               if (dolocalupdate) {
-                Hp = curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, mmu, dbetaval);
+                Hp = curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, trackMass[id], dbetaval);
               }
               
               // const Matrix<double, 5, 5> &Q = dolocalupdate ? Hm*Qcurv*Hm.transpose() : Qcurv;
@@ -1616,8 +1767,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           const Matrix<double, 7, 1> &refFts0 = refftsarr[0];
           const Matrix<double, 7, 1> &refFts1 = refftsarr[1];    
           
-          const Matrix<double, 6, 6> mhess = massHessianAltD(refFts0, refFts1, mmu);
-          const Matrix<double, 6, 6> mhessinvsq = massinvsqHessianAltD(refFts0, refFts1, mmu);
+          const Matrix<double, 6, 6> mhess = massHessianAltD(refFts0, refFts1, massForConstraintHelpers);
+          const Matrix<double, 6, 6> mhessinvsq = massinvsqHessianAltD(refFts0, refFts1, massForConstraintHelpers);
           
           const double dmassconv = iiter > 0 ? 0.5*(mhess*covrefmom).trace() : 0.;
           const double dmassconvinvsq = iiter > 0 ? 0.5*(mhessinvsq*covrefmom).trace() : 0.;
@@ -1652,16 +1803,16 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             const ROOT::Math::PxPyPzMVector mom0(refFts0[3],
                                                     refFts0[4],
                                                     refFts0[5],
-                                                    mmu);
+                                                    trackMass[0]);
             
             const ROOT::Math::PxPyPzMVector mom1(refFts1[3],
                                                     refFts1[4],
                                                     refFts1[5],
-                                                    mmu);
+                                                    trackMass[1]);
             
             const double massval = (mom0 + mom1).mass();
             
-            const Matrix<double, 1, 6> mjacalt = massJacobianAltD(refFts0, refFts1, mmu);
+            const Matrix<double, 1, 6> mjacalt = massJacobianAltD(refFts0, refFts1, massForConstraintHelpers);
 
 //             const double dmsq0 = massval - massconstraintval;
             const double dmsq0 = massval - massconstraintval - dmassconv;
@@ -1967,7 +2118,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             const double pyupd = pupd*std::cos(lamupd)*std::sin(phiupd);
             const double pzupd = pupd*std::sin(lamupd);
             
-            muarr[id] = ROOT::Math::PxPyPzMVector(pxupd, pyupd, pzupd, mmu);
+            muarr[id] = ROOT::Math::PxPyPzMVector(pxupd, pyupd, pzupd, trackMass[id]);
             muchargearr[id] = charge;
             
             auto &refParms = mucurvarr[id];
@@ -2032,8 +2183,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             break;
           }
 
-          const unsigned int idxplus = muchargearr[0] > 0 ? 0 : 1;
-          const unsigned int idxminus = muchargearr[0] > 0 ? 1 : 0;
+          const unsigned int idxplus = 0;
+          const unsigned int idxminus = 1;
           
           const ROOT::Math::PxPyPzMVector jpsitrkmom = mutrkarr[0] + mutrkarr[1];
           
@@ -2140,7 +2291,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             
             
             
-            const Matrix<double, 1, 6> mjacalt = massJacobianAltD(refftsarr[0], refftsarr[1], mmu);
+            const Matrix<double, 1, 6> mjacalt =
+                massJacobianAltD(refftsarr[0], refftsarr[1], massForConstraintHelpers);
 
             
             Jpsi_sigmamass = std::sqrt((mjacalt*covrefmom*mjacalt.transpose())[0]);
@@ -2196,12 +2348,12 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           const ROOT::Math::PxPyPzMVector mompluskin(outparts[idxplus]->currentState().globalMomentum().x(),
                                                             outparts[idxplus]->currentState().globalMomentum().y(),
                                                             outparts[idxplus]->currentState().globalMomentum().z(),
-                                                            mmu);
+                                                            trackMass[idxplus]);
           
           const ROOT::Math::PxPyPzMVector momminuskin(outparts[idxminus]->currentState().globalMomentum().x(),
                                                             outparts[idxminus]->currentState().globalMomentum().y(),
                                                             outparts[idxminus]->currentState().globalMomentum().z(),
-                                                            mmu);
+                                                            trackMass[idxminus]);
           
           auto const jpsimomkin = mompluskin + momminuskin;
           
@@ -2284,8 +2436,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           }
           
           if (muplusgen != nullptr && muminusgen != nullptr) {
-            auto const jpsigen = ROOT::Math::PtEtaPhiMVector(muplusgen->pt(), muplusgen->eta(), muplusgen->phi(), mmu) +
-                                ROOT::Math::PtEtaPhiMVector(muminusgen->pt(), muminusgen->eta(), muminusgen->phi(), mmu);
+            auto const jpsigen = ROOT::Math::PtEtaPhiMVector(muplusgen->pt(), muplusgen->eta(), muplusgen->phi(), trackMass[0]) +
+                                ROOT::Math::PtEtaPhiMVector(muminusgen->pt(), muminusgen->eta(), muminusgen->phi(), trackMass[1]);
             
             Jpsigen_pt = jpsigen.pt();
             Jpsigen_eta = jpsigen.eta();
@@ -2493,7 +2645,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           Muminus_jacRef.resize(3*nparsfinal);
           Map<Matrix<float, 3, Dynamic, RowMajor>>(Muminus_jacRef.data(), 3, nparsfinal) = dxdparms.block(0, trackstateidxminus, nparsfinal, 3).transpose().cast<float>();
 
-          const Matrix<double, 1, 6> mjacalt = massJacobianAltD(refftsarr[0], refftsarr[1], mmu);
+          const Matrix<double, 1, 6> mjacalt =
+              massJacobianAltD(refftsarr[0], refftsarr[1], massForConstraintHelpers);
 
           Jpsi_jacMass.resize(nparsfinal);
           Map<Matrix<float, 1, Dynamic, RowMajor>>(Jpsi_jacMass.data(), 1, nparsfinal) = (mjacalt*dxdparms.leftCols<6>().transpose()).cast<float>();

@@ -31,8 +31,8 @@ process.options = cms.untracked.PSet(
 # applies V0Producer-like cuts, tries both (p,pi) and (pi,p) assignments per
 # pair, picks the assignment closer to m_Lambda, then keeps the best candidate
 # per event in (proton-track, pion-track) order.
-process.load('Analysis.HitAnalyzer.V0CandidateProducer_cfi')
-process.selectedLambdaTracks = process.V0CandidateProducer.clone(
+process.load('Analysis.HitAnalyzer.LambdaToProtonPiCandidateProducer_cfi')
+process.selectedLambdaTracks = process.LambdaToProtonPiCandidateProducer.clone(
     tracks = cms.InputTag('ALCARECOTkAlLambdaToProtonPi'),
     daughterMass1 = 0.938272,        # proton (track[0])
     daughterMass2 = 0.139570,        # pion   (track[1])
