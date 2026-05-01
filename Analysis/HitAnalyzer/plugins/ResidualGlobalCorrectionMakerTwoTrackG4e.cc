@@ -59,6 +59,14 @@ private:
   double maxPairMass_;
   bool respectTrackOrder_;
 
+  // Optional 2D-transverse pointing-angle constraint on the V0 (KS, Lambda):
+  // requires the V0 momentum direction in xy to coincide with the flight
+  // vector from the beamspot to the secondary vertex. Default off, so the
+  // legacy behaviour for J/psi/Upsilon/D* runners (which never set these)
+  // is preserved exactly.
+  bool   doPointingConstraint_;
+  double pointingSigma_;        // angular pointing resolution, radians
+
   bool doL1Trigger_;
   edm::EDGetTokenT<L1GlobalTriggerReadoutRecord> inputL1ReadoutRecord_;
   edm::InputTag inputL1ReadoutRecordTag_;
@@ -250,6 +258,14 @@ ResidualGlobalCorrectionMakerTwoTrackG4e::ResidualGlobalCorrectionMakerTwoTrackG
   maxPairMass_ = iConfig.existsAs<double>("maxPairMass") ? iConfig.getParameter<double>("maxPairMass") : 1.e9;
   respectTrackOrder_ =
       iConfig.existsAs<bool>("respectTrackOrder") ? iConfig.getParameter<bool>("respectTrackOrder") : false;
+
+  // 2D-transverse pointing-angle constraint (V0 channels). Default off.
+  doPointingConstraint_ = iConfig.existsAs<bool>("doPointingConstraint")
+      ? iConfig.getParameter<bool>("doPointingConstraint") : false;
+  // Angular pointing resolution width, radians; ~1 mrad matches V0Producer's
+  // cosThetaXY > 0.998 cut converted to a 1-sigma soft constraint.
+  pointingSigma_ = iConfig.existsAs<double>("pointingSigma")
+      ? iConfig.getParameter<double>("pointingSigma") : 1.e-3;
 
   doL1Trigger_ = iConfig.existsAs<bool>("doL1Trigger") ? iConfig.getParameter<bool>("doL1Trigger") : false;
   if (doL1Trigger_) {
@@ -1271,15 +1287,103 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               const Matrix<double, nlocal, nlocal> hesslocal = 2.*Fbs.transpose()*covBSinv*Fbs;
 
               chisq0val += bschisq;
-              
+
               //fill global gradient
               gradfull.segment<nlocalvtx>(fullvtxidx) += gradlocal.head<nlocalvtx>();
               //fill global hessian (upper triangular blocks only)
               hessfull.block<nlocalvtx,nlocalvtx>(fullvtxidx, fullvtxidx) += hesslocal.topLeftCorner<nlocalvtx,nlocalvtx>();
-              
+
             }
-            
-            
+
+            // 2D-transverse pointing-angle constraint on the V0:
+            //   g(x) = (xv - xBS) * pVy  -  (yv - yBS) * pVx  =  0
+            // Soft-Gaussian chi^2 = g^2 / sigma_g^2 with
+            //   sigma_g = pointingSigma_ * Lxy * |p_xy|   (linearised, small angle)
+            // Touches vertex-state indices 0-5 (daughter qop/lambda/phi for both tracks)
+            // and 7-8 (vertex xy). Index 6 (d0) and 9 (vertex z) are not coupled.
+            // Applied once per iteration (guarded with id == 0) since it is intrinsically
+            // a 2-track constraint, not per-daughter.
+            if (doPointingConstraint_ && id == 0) {
+              constexpr unsigned int nlocal = 10;          // full vertex-state block
+              constexpr unsigned int fullvtxidx = 0;       // vertex state lives at 0..9
+
+              // Linearisation-point momentum of each daughter (Cartesian, GeV)
+              const double p1x = refftsarr[0][3];
+              const double p1y = refftsarr[0][4];
+              const double p1z = refftsarr[0][5];
+              const double p2x = refftsarr[1][3];
+              const double p2y = refftsarr[1][4];
+              const double p2z = refftsarr[1][5];
+              const double p1mag = std::sqrt(p1x*p1x + p1y*p1y + p1z*p1z);
+              const double p2mag = std::sqrt(p2x*p2x + p2y*p2y + p2z*p2z);
+
+              // Helix-state coordinates derived from the Cartesian linearisation point
+              const double lam1 = (p1mag > 0.) ? std::asin(p1z / p1mag) : 0.;
+              const double phi1 = std::atan2(p1y, p1x);
+              const double lam2 = (p2mag > 0.) ? std::asin(p2z / p2mag) : 0.;
+              const double phi2 = std::atan2(p2y, p2x);
+              const double q1 = (refftsarr[0][6] >= 0.) ? +1. : -1.;
+              const double q2 = (refftsarr[1][6] >= 0.) ? +1. : -1.;
+
+              // V0 transverse momentum at SV
+              const double pVx = p1x + p2x;
+              const double pVy = p1y + p2y;
+              const double pVxy = std::hypot(pVx, pVy);
+
+              // Beamspot reference and flight vector in xy
+              const double xBSp = bsH->x0();
+              const double yBSp = bsH->y0();
+              const double fx = refftsarr[0][0] - xBSp;
+              const double fy = refftsarr[0][1] - yBSp;
+              const double Lxy = std::hypot(fx, fy);
+
+              // Constraint value (cm * GeV) and its width sigma_g.
+              const double g = fx * pVy - fy * pVx;
+              const double sigma_g = std::max(pointingSigma_ * Lxy * pVxy, 1.e-9);
+              const double inv_var = 1. / (sigma_g * sigma_g);
+
+              // Build 1x10 Jacobian J_g of g w.r.t. the local vertex-state perturbations.
+              // Index layout: 0..2 = (qop,lam,phi)_track0, 3..5 = (qop,lam,phi)_track1,
+              //               6 = d0 (no contribution), 7..9 = vertex (x,y,z); z no contribution.
+              Matrix<double, 1, nlocal> Jg = Matrix<double, 1, nlocal>::Zero();
+
+              // Per-track block: dpx/d(qop,lam,phi) and dpy/d(qop,lam,phi)
+              {
+                const double dpx_dqop = -p1x * p1mag * q1;
+                const double dpy_dqop = -p1y * p1mag * q1;
+                const double dpx_dlam = -p1mag * std::sin(lam1) * std::cos(phi1);
+                const double dpy_dlam = -p1mag * std::sin(lam1) * std::sin(phi1);
+                const double dpx_dphi = -p1y;
+                const double dpy_dphi = +p1x;
+                Jg(0, 0) = fx * dpy_dqop - fy * dpx_dqop;
+                Jg(0, 1) = fx * dpy_dlam - fy * dpx_dlam;
+                Jg(0, 2) = fx * dpy_dphi - fy * dpx_dphi;
+              }
+              {
+                const double dpx_dqop = -p2x * p2mag * q2;
+                const double dpy_dqop = -p2y * p2mag * q2;
+                const double dpx_dlam = -p2mag * std::sin(lam2) * std::cos(phi2);
+                const double dpy_dlam = -p2mag * std::sin(lam2) * std::sin(phi2);
+                const double dpx_dphi = -p2y;
+                const double dpy_dphi = +p2x;
+                Jg(0, 3) = fx * dpy_dqop - fy * dpx_dqop;
+                Jg(0, 4) = fx * dpy_dlam - fy * dpx_dlam;
+                Jg(0, 5) = fx * dpy_dphi - fy * dpx_dphi;
+              }
+              Jg(0, 7) = +pVy;          // dg/dxv
+              Jg(0, 8) = -pVx;          // dg/dyv
+              // Jg(0, 6) and Jg(0, 9) are zero by construction.
+
+              const double pointingChisq = g * g * inv_var;
+              const Matrix<double, nlocal, 1> gradlocalPt = 2. * inv_var * g * Jg.transpose();
+              const Matrix<double, nlocal, nlocal> hesslocalPt = 2. * inv_var * Jg.transpose() * Jg;
+
+              chisq0val += pointingChisq;
+              gradfull.segment<nlocal>(fullvtxidx) += gradlocalPt;
+              hessfull.block<nlocal, nlocal>(fullvtxidx, fullvtxidx) += hesslocalPt;
+            }
+
+
 
             for (unsigned int ihit = 0; ihit < hits.size(); ++ihit) {
       //         std::cout << "ihit " << ihit << std::endl;
@@ -1984,6 +2088,11 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           
           if (bsConstraint_) {
             ndof += 3;
+          }
+
+          if (doPointingConstraint_) {
+            // 2D-transverse pointing adds 1 scalar constraint
+            ++ndof;
           }
 
           if (doVtxConstraint_) {
