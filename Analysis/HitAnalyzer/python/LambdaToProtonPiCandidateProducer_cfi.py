@@ -19,10 +19,11 @@ LambdaToProtonPiCandidateProducer = cms.EDProducer(
     daughterMassErr = cms.double(1.e-6),
     tryBothAssignments = cms.bool(True),      # asymmetric: disambiguate per pair
     expectedV0Mass = cms.double(1.115683),    # Lambda PDG mass
-    # post-fit V0 mass window (a bit wider than V0Producer's +/-50 MeV to
-    # leave margin for kinematic-fit shifts)
-    minV0Mass = cms.double(1.05),
-    maxV0Mass = cms.double(1.18),
+    # Post-fit V0 mass window: asymmetric around the Lambda PDG mass
+    # (-46 MeV / +44 MeV). Tightened from the previous +/-65 MeV window
+    # to suppress combinatorial background.
+    minV0Mass = cms.double(1.07),
+    maxV0Mass = cms.double(1.16),
     # vertex / pointing / flight cuts (V0Producer-like)
     pvalMin           = cms.double(0.0),
     cosThetaXYMin     = cms.double(0.998),

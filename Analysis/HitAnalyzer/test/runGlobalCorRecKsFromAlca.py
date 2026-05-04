@@ -33,14 +33,9 @@ process.options = cms.untracked.PSet(
 process.load('Analysis.HitAnalyzer.KsToPiPiCandidateProducer_cfi')
 process.selectedKsTracks = process.KsToPiPiCandidateProducer.clone(
     tracks = cms.InputTag('ALCARECOTkAlKsToPiPi'),
-    daughterMass1 = 0.139570,        # both pions
-    daughterMass2 = 0.139570,
-    tryBothAssignments = False,      # symmetric
-    expectedV0Mass = 0.497611,       # KS PDG mass
-    minV0Mass = 0.40,
-    maxV0Mass = 0.60,
-    cosThetaXYMin = 0.998,
-    LxyOverSigmaMin = 15.0,
+    # other parameters (mass hypotheses, tryBothAssignments, V0 mass window,
+    # cosThetaXYMin, LxyOverSigmaMin) are taken from the cfi defaults
+    # (V0Producer-style: KS PDG +/-70 MeV, cosThetaXY > 0.998, Lxy/sigma > 15).
 )
 
 # CVH 2-track refit + flat tree, KS configuration (both pions).
