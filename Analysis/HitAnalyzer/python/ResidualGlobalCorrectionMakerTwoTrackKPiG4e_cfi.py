@@ -3,6 +3,10 @@ import FWCore.ParameterSet.Config as cms
 globalCorD0 = cms.EDProducer(
     'ResidualGlobalCorrectionMakerTwoTrackG4e',
     src=cms.InputTag('ALCARECOTkAlDstToD0Pi'),
+    dedxSourceTracks  =cms.InputTag('ALCARECOTkAlDstToD0Pi'),
+    dedxHarmonic2     =cms.InputTag('ALCARECOTkAlDstToD0PiDeDxHarmonic2'),
+    dedxPixelHarmonic2=cms.InputTag('ALCARECOTkAlDstToD0PiDeDxPixelHarmonic2'),
+    dedxAllHarmonic2  =cms.InputTag('ALCARECOTkAlDstToD0PiDeDxAllHarmonic2'),
     fitFromGenParms=cms.bool(False),
     fitFromSimParms=cms.bool(False),
     fillTrackTree=cms.bool(True),
@@ -36,7 +40,7 @@ globalCorD0 = cms.EDProducer(
     daughterMass2Err=cms.double(1e-6),
     minPairMass=cms.double(1.70),
     maxPairMass=cms.double(2.00),
-    respectTrackOrder=cms.bool(False),
+    respectTrackOrder=cms.bool(True),           # asymmetric: track[0]=kaon, track[1]=pion
     corFiles=cms.vstring(),
     MagneticFieldLabel=cms.string(''),
     outprefix=cms.untracked.string('globalcor_d0')
