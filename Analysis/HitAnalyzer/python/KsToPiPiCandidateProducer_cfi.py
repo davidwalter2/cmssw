@@ -15,9 +15,10 @@ KsToPiPiCandidateProducer = cms.EDProducer(
     daughterMassErr = cms.double(1.e-6),
     tryBothAssignments = cms.bool(False),     # symmetric: nothing to swap
     expectedV0Mass = cms.double(0.497611),    # KS PDG mass
-    # post-fit V0 mass window
-    minV0Mass = cms.double(0.40),
-    maxV0Mass = cms.double(0.60),
+    # Post-fit V0 mass window: KS PDG +/-60 MeV. Tightened from the previous
+    # +/-100 MeV window to suppress combinatorial background.
+    minV0Mass = cms.double(0.44),
+    maxV0Mass = cms.double(0.56),
     # vertex / pointing / flight cuts (V0Producer-like)
     pvalMin           = cms.double(0.0),      # vertex chi2 p-value > pvalMin
     cosThetaXYMin     = cms.double(0.998),    # 2D pointing angle

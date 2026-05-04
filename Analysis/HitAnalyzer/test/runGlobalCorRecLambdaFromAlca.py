@@ -34,14 +34,10 @@ process.options = cms.untracked.PSet(
 process.load('Analysis.HitAnalyzer.LambdaToProtonPiCandidateProducer_cfi')
 process.selectedLambdaTracks = process.LambdaToProtonPiCandidateProducer.clone(
     tracks = cms.InputTag('ALCARECOTkAlLambdaToProtonPi'),
-    daughterMass1 = 0.938272,        # proton (track[0])
-    daughterMass2 = 0.139570,        # pion   (track[1])
-    tryBothAssignments = True,       # asymmetric: try both swaps
-    expectedV0Mass = 1.115683,       # Lambda PDG mass
-    minV0Mass = 1.05,
-    maxV0Mass = 1.18,
-    cosThetaXYMin = 0.998,
-    LxyOverSigmaMin = 15.0,
+    # other parameters (mass hypotheses, tryBothAssignments, V0 mass window,
+    # cosThetaXYMin, LxyOverSigmaMin) are taken from the cfi defaults
+    # (V0Producer-style: Lambda PDG +/-50 MeV, cosThetaXY > 0.998,
+    # Lxy/sigma > 15).
 )
 
 # CVH 2-track refit + flat tree, Lambda configuration (proton + pion).
