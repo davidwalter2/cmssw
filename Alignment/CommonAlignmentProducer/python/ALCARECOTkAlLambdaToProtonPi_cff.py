@@ -11,30 +11,74 @@ ALCARECOTkAlLambdaToProtonPiDCSFilter = DPGAnalysis.Skims.skim_detstatus_cfi.dcs
     DebugOn      = cms.untracked.bool(False)
 )
 
-# Event pre-filter: require >=1 reconstructed Lambda0 candidate.
-# generalV0Candidates:Lambda is produced by the standard V0Producer in RECO with
-# full displaced-vertex cuts already applied.
+# Local V0Producer clone with a lower track-pT cut (see ALCARECOTkAlV0Candidates_cff.py).
+# Shared between the KS and Lambda ALCARECOs (deduplicated by the framework so it
+# runs at most once per event even if both ALCARECO paths reference it).
+from Alignment.CommonAlignmentProducer.ALCARECOTkAlV0Candidates_cff import ALCARECOTkAlV0Candidates
+
+# Event pre-filter: require >=1 reconstructed Lambda0 candidate in our private
+# V0 collection. All V0Producer cuts (incl. post-fit mass +/-50 MeV) are applied.
 ALCARECOTkAlLambdaToProtonPiV0Filter = cms.EDFilter('CandViewCountFilter',
-    src = cms.InputTag('generalV0Candidates', 'Lambda'),
+    src = cms.InputTag('ALCARECOTkAlV0Candidates', 'Lambda'),
     minNumber = cms.uint32(1)
 )
 
-# Store the proton + pion tracks of every reconstructed Lambda0 candidate, with
-# cloned hits and clusters. AlignmentTracksFromV0Selector extracts the unique
-# daughter TrackRefs from generalV0Candidates:Lambda and uses the standard
-# helper::TrackCollectionStoreManager machinery to clone tracks + extras + hits
-# + clusters into self-contained collections. By V0Producer convention,
-# daughter(0) = baryon (p or pbar) and daughter(1) = pion (pi- or pi+); both
-# Lambda0 and anti-Lambda0 are accepted automatically. filter() always returns
-# true; gating is done upstream by the V0 CandViewCountFilter.
-ALCARECOTkAlLambdaToProtonPi = cms.EDFilter('AlignmentTracksFromV0Selector',
-    src    = cms.InputTag('generalTracks'),                         ## main input (ObjectSelector convention)
-    v0src  = cms.InputTag('generalV0Candidates', 'Lambda'),         ## V0 candidates whose daughter tracks to keep
-    filter = cms.bool(True),                                         ## drop event if zero daughters survive
+# Extract the daughter tracks of the V0 candidates as a small TrackCollection.
+# By V0Producer convention, daughter(0) = baryon (p or pbar) and daughter(1) =
+# pion (pi- or pi+); both Lambda0 and anti-Lambda0 are accepted automatically.
+# The TrackExtraRefs in each copied Track still point back to generalTracks, so
+# the downstream AlignmentTrackSelectorModule + TrackCollectionStoreManager
+# clones tracks + extras + hits + clusters into the ALCARECO output.
+ALCARECOTkAlLambdaToProtonPiV0Tracks = cms.EDProducer('V0DaughterTrackProducer',
+    src = cms.InputTag('ALCARECOTkAlV0Candidates', 'Lambda'),
+)
+
+# Standard alignment track selector. Track-quality cuts mirror our V0Producer
+# clone's so every accepted daughter track passes; they're nominally redundant
+# and serve mainly as documentation + a failsafe. TwoBodyDecaySelector is not
+# used (left at defaults: all switches off) -- the V0 candidates have already
+# passed V0Producer's tighter post-fit mass cut so re-pairing the tracks here
+# would be redundant and could spuriously reject candidates due to small
+# post-fit vs raw mass shifts.
+import Alignment.CommonAlignmentProducer.AlignmentTrackSelector_cfi
+ALCARECOTkAlLambdaToProtonPi = Alignment.CommonAlignmentProducer.AlignmentTrackSelector_cfi.AlignmentTrackSelector.clone(
+    src = cms.InputTag('ALCARECOTkAlLambdaToProtonPiV0Tracks'),
+    filter = True,
+    applyBasicCuts = True,
+    ptMin   = 0.1,    ## matches our local V0Producer clone tkPtCut
+    etaMin  = -3.5,
+    etaMax  = 3.5,
+    nHitMin = 3,      ## matches V0Producer tkNHitsCut
+)
+ALCARECOTkAlLambdaToProtonPi.GlobalSelector.applyGlobalMuonFilter = False
+ALCARECOTkAlLambdaToProtonPi.GlobalSelector.applyIsolationtest    = False
+
+# Persist per-track dE/dx (Harmonic2 strip + pixel-only + joint strip+pixel)
+# for the selected V0 daughters, re-keyed onto the cloned
+# ALCARECOTkAlLambdaToProtonPi track collection. The projection uses each
+# cloned Track's preserved TrackExtraRef.key() to look up the original
+# generalTracks-keyed value.
+from Alignment.CommonAlignmentProducer.alcaDedxJointEstimator_cfi import alcaDedxJointEstimator
+ALCARECOTkAlLambdaToProtonPiDeDxHarmonic2 = cms.EDProducer('DeDxValueMapProjector',
+    selectedTracks = cms.InputTag('ALCARECOTkAlLambdaToProtonPi'),
+    sourceTracks   = cms.InputTag('generalTracks'),
+    sourceValueMap = cms.InputTag('dedxHarmonic2'),
+)
+ALCARECOTkAlLambdaToProtonPiDeDxPixelHarmonic2 = ALCARECOTkAlLambdaToProtonPiDeDxHarmonic2.clone(
+    sourceValueMap = cms.InputTag('dedxPixelHarmonic2'),
+)
+ALCARECOTkAlLambdaToProtonPiDeDxAllHarmonic2 = ALCARECOTkAlLambdaToProtonPiDeDxHarmonic2.clone(
+    sourceValueMap = cms.InputTag('alcaDedxJointEstimator'),
 )
 
 seqALCARECOTkAlLambdaToProtonPi = cms.Sequence(
     ALCARECOTkAlLambdaToProtonPiDCSFilter +
+    ALCARECOTkAlV0Candidates +
     ALCARECOTkAlLambdaToProtonPiV0Filter +
-    ALCARECOTkAlLambdaToProtonPi
+    ALCARECOTkAlLambdaToProtonPiV0Tracks +
+    ALCARECOTkAlLambdaToProtonPi +
+    alcaDedxJointEstimator +
+    ALCARECOTkAlLambdaToProtonPiDeDxHarmonic2 +
+    ALCARECOTkAlLambdaToProtonPiDeDxPixelHarmonic2 +
+    ALCARECOTkAlLambdaToProtonPiDeDxAllHarmonic2
 )

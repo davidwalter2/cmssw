@@ -2,7 +2,7 @@
 # using: 
 # Revision: 1.19 
 # Source: /local/reps/CMSSW/CMSSW/Configuration/Applications/python/ConfigBuilder.py,v 
-# with command line options: RECO -s RAW2DIGI,L1Reco,RECO,SKIM:LogError+LogErrorMonitor,ALCA:TkAlKsToPiPi+TkAlLambdaToProtonPi,EI,DQM:@rerecoCommon --runUnscheduled --nThreads 8 --data --era Run2_2016 --scenario pp --conditions 106X_dataRun2_v27 --eventcontent AOD,DQM --datatier AOD,DQMIO --customise Configuration/DataProcessing/RecoTLR.customisePostEra_Run2_2016,Configuration/DataProcessing/Utils.addMonitoring --filein /store/data/Run2016G/SingleMuon/RAW/v1/000/279/654/00000/8245F1D7-D46B-E611-A448-02163E014137.root -n 1000 --python_filename Alignment/CommonAlignmentProducer/test/recoskim_Run2016G_SingleMuon_KsLambda.py --no_exec
+# with command line options: RECO -s RAW2DIGI,L1Reco,RECO,SKIM:LogError+LogErrorMonitor,ALCA:TkAlKsToPiPi+TkAlLambdaToProtonPi+TkAlDstToD0Pi,EI,DQM:@rerecoCommon --runUnscheduled --nThreads 8 --data --era Run2_2016 --scenario pp --conditions 106X_dataRun2_v27 --eventcontent AOD,DQM --datatier AOD,DQMIO --customise Configuration/DataProcessing/RecoTLR.customisePostEra_Run2_2016,Configuration/DataProcessing/Utils.addMonitoring --filein /store/data/Run2016G/SingleMuon/RAW/v1/000/279/654/00000/8245F1D7-D46B-E611-A448-02163E014137.root -n 1000 --python_filename Alignment/CommonAlignmentProducer/test/recoskim_Run2016G_SingleMuon_KsLambdaDst.py --no_exec
 import FWCore.ParameterSet.Config as cms
 
 from Configuration.Eras.Era_Run2_2016_cff import Run2_2016
@@ -72,6 +72,26 @@ process.DQMoutput = cms.OutputModule("DQMRootOutputModule",
 )
 
 # Additional output definition
+process.ALCARECOStreamTkAlDstToD0Pi = cms.OutputModule("PoolOutputModule",
+    SelectEvents = cms.untracked.PSet(
+        SelectEvents = cms.vstring('pathALCARECOTkAlDstToD0Pi')
+    ),
+    dataset = cms.untracked.PSet(
+        dataTier = cms.untracked.string('ALCARECO'),
+        filterName = cms.untracked.string('TkAlDstToD0Pi')
+    ),
+    eventAutoFlushCompressedSize = cms.untracked.int32(5242880),
+    fileName = cms.untracked.string('TkAlDstToD0Pi.root'),
+    outputCommands = cms.untracked.vstring(
+        'drop *', 
+        'keep *_ALCARECOTkAlDstToD0Pi_*_*', 
+        'keep L1AcceptBunchCrossings_*_*_*', 
+        'keep L1GlobalTriggerReadoutRecord_gtDigis_*_*', 
+        'keep *_TriggerResults_*_*', 
+        'keep DcsStatuss_scalersRawToDigi_*_*', 
+        'keep *_offlinePrimaryVertices_*_*'
+    )
+)
 process.ALCARECOStreamTkAlKsToPiPi = cms.OutputModule("PoolOutputModule",
     SelectEvents = cms.untracked.PSet(
         SelectEvents = cms.vstring('pathALCARECOTkAlKsToPiPi')
@@ -89,7 +109,6 @@ process.ALCARECOStreamTkAlKsToPiPi = cms.OutputModule("PoolOutputModule",
         'keep L1GlobalTriggerReadoutRecord_gtDigis_*_*', 
         'keep *_TriggerResults_*_*', 
         'keep DcsStatuss_scalersRawToDigi_*_*', 
-        'keep recoBeamSpot_offlineBeamSpot_*_*', 
         'keep *_offlinePrimaryVertices_*_*'
     )
 )
@@ -110,7 +129,6 @@ process.ALCARECOStreamTkAlLambdaToProtonPi = cms.OutputModule("PoolOutputModule"
         'keep L1GlobalTriggerReadoutRecord_gtDigis_*_*', 
         'keep *_TriggerResults_*_*', 
         'keep DcsStatuss_scalersRawToDigi_*_*', 
-        'keep recoBeamSpot_offlineBeamSpot_*_*', 
         'keep *_offlinePrimaryVertices_*_*'
     )
 )
@@ -633,6 +651,7 @@ process.SKIMStreamLogErrorMonitor = cms.OutputModule("PoolOutputModule",
 
 # Other statements
 process.ALCARECOEventContent.outputCommands.extend(process.OutALCARECOTkAlLambdaToProtonPi_noDrop.outputCommands)
+process.ALCARECOEventContent.outputCommands.extend(process.OutALCARECOTkAlDstToD0Pi_noDrop.outputCommands)
 process.ALCARECOEventContent.outputCommands.extend(process.OutALCARECOTkAlKsToPiPi_noDrop.outputCommands)
 from Configuration.AlCa.GlobalTag import GlobalTag
 process.GlobalTag = GlobalTag(process.GlobalTag, '106X_dataRun2_v27', '')
@@ -655,13 +674,14 @@ process.dqmoffline_9_step = cms.EndPath(process.DQMOfflineL1TMonitoring)
 process.dqmofflineOnPAT_step = cms.EndPath(process.PostDQMOffline)
 process.AODoutput_step = cms.EndPath(process.AODoutput)
 process.DQMoutput_step = cms.EndPath(process.DQMoutput)
+process.ALCARECOStreamTkAlDstToD0PiOutPath = cms.EndPath(process.ALCARECOStreamTkAlDstToD0Pi)
 process.ALCARECOStreamTkAlKsToPiPiOutPath = cms.EndPath(process.ALCARECOStreamTkAlKsToPiPi)
 process.ALCARECOStreamTkAlLambdaToProtonPiOutPath = cms.EndPath(process.ALCARECOStreamTkAlLambdaToProtonPi)
 process.SKIMStreamLogErrorOutPath = cms.EndPath(process.SKIMStreamLogError)
 process.SKIMStreamLogErrorMonitorOutPath = cms.EndPath(process.SKIMStreamLogErrorMonitor)
 
 # Schedule definition
-process.schedule = cms.Schedule(process.raw2digi_step,process.L1Reco_step,process.reconstruction_step,process.pathlogerror,process.pathlogerrormonitor,process.pathALCARECOTkAlLambdaToProtonPi,process.pathALCARECOTkAlKsToPiPi,process.eventinterpretaion_step,process.dqmoffline_step,process.dqmoffline_1_step,process.dqmoffline_2_step,process.dqmoffline_3_step,process.dqmoffline_4_step,process.dqmoffline_5_step,process.dqmoffline_6_step,process.dqmoffline_7_step,process.dqmoffline_8_step,process.dqmoffline_9_step,process.dqmofflineOnPAT_step,process.AODoutput_step,process.DQMoutput_step,process.ALCARECOStreamTkAlKsToPiPiOutPath,process.ALCARECOStreamTkAlLambdaToProtonPiOutPath,process.SKIMStreamLogErrorOutPath,process.SKIMStreamLogErrorMonitorOutPath)
+process.schedule = cms.Schedule(process.raw2digi_step,process.L1Reco_step,process.reconstruction_step,process.pathlogerror,process.pathlogerrormonitor,process.pathALCARECOTkAlLambdaToProtonPi,process.pathALCARECOTkAlDstToD0Pi,process.pathALCARECOTkAlKsToPiPi,process.eventinterpretaion_step,process.dqmoffline_step,process.dqmoffline_1_step,process.dqmoffline_2_step,process.dqmoffline_3_step,process.dqmoffline_4_step,process.dqmoffline_5_step,process.dqmoffline_6_step,process.dqmoffline_7_step,process.dqmoffline_8_step,process.dqmoffline_9_step,process.dqmofflineOnPAT_step,process.AODoutput_step,process.DQMoutput_step,process.ALCARECOStreamTkAlDstToD0PiOutPath,process.ALCARECOStreamTkAlKsToPiPiOutPath,process.ALCARECOStreamTkAlLambdaToProtonPiOutPath,process.SKIMStreamLogErrorOutPath,process.SKIMStreamLogErrorMonitorOutPath)
 from PhysicsTools.PatAlgos.tools.helpers import associatePatAlgosToolsTask
 associatePatAlgosToolsTask(process)
 

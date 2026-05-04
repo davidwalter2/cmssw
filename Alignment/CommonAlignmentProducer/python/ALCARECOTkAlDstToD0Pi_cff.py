@@ -40,5 +40,27 @@ ALCARECOTkAlDstToD0Pi.ThreeBodyDecaySelector.charge = 1
 ALCARECOTkAlDstToD0Pi.ThreeBodyDecaySelector.useUnsignedCharge = True
 ALCARECOTkAlDstToD0Pi.ThreeBodyDecaySelector.numberOfCandidates = 1
 
+# Persist per-track dE/dx (Harmonic2 strip + pixel-only + joint strip+pixel)
+# for the selected D* daughter tracks, re-keyed onto the cloned
+# ALCARECOTkAlDstToD0Pi track collection. The projection uses each cloned
+# Track's preserved TrackExtraRef.key() to look up the original
+# generalTracks-keyed value.
+from Alignment.CommonAlignmentProducer.alcaDedxJointEstimator_cfi import alcaDedxJointEstimator
+ALCARECOTkAlDstToD0PiDeDxHarmonic2 = cms.EDProducer('DeDxValueMapProjector',
+    selectedTracks = cms.InputTag('ALCARECOTkAlDstToD0Pi'),
+    sourceTracks   = cms.InputTag('generalTracks'),
+    sourceValueMap = cms.InputTag('dedxHarmonic2'),
+)
+ALCARECOTkAlDstToD0PiDeDxPixelHarmonic2 = ALCARECOTkAlDstToD0PiDeDxHarmonic2.clone(
+    sourceValueMap = cms.InputTag('dedxPixelHarmonic2'),
+)
+ALCARECOTkAlDstToD0PiDeDxAllHarmonic2 = ALCARECOTkAlDstToD0PiDeDxHarmonic2.clone(
+    sourceValueMap = cms.InputTag('alcaDedxJointEstimator'),
+)
+
 seqALCARECOTkAlDstToD0Pi = cms.Sequence(ALCARECOTkAlDstToD0PiDCSFilter+
-                                        ALCARECOTkAlDstToD0Pi)
+                                        ALCARECOTkAlDstToD0Pi+
+                                        alcaDedxJointEstimator+
+                                        ALCARECOTkAlDstToD0PiDeDxHarmonic2+
+                                        ALCARECOTkAlDstToD0PiDeDxPixelHarmonic2+
+                                        ALCARECOTkAlDstToD0PiDeDxAllHarmonic2)
