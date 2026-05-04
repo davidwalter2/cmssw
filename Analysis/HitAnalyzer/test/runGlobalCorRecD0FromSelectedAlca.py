@@ -37,7 +37,6 @@ process.selectedD0Tracks = process.DstToD0PiCandidateProducer.clone(
 process.globalCorD0 = process.globalCorD0.clone(
     src='selectedD0Tracks',
     useIdealGeometry=False,
-    respectTrackOrder=True,
     outprefix='globalcor_d0_selected'
 )
 

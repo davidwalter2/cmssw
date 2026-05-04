@@ -43,7 +43,6 @@ process.load('Analysis.HitAnalyzer.ResidualGlobalCorrectionMakerTwoTrackPiPiG4e_
 process.globalCorKs = process.globalCorKs.clone(
     src = 'selectedKsTracks',
     useIdealGeometry = False,
-    respectTrackOrder = True,         # exactly two tracks per event in pair order
     outprefix = 'globalcor_ks',
 )
 

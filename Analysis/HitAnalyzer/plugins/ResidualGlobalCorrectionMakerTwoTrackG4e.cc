@@ -56,9 +56,6 @@ private:
   double daughterMass2_;
   double daughterMass1Err_;
   double daughterMass2Err_;
-  double minPairMass_;
-  double maxPairMass_;
-  bool respectTrackOrder_;
 
   // Optional 2D-transverse pointing-angle constraint on the V0 (KS, Lambda):
   // requires the V0 momentum direction in xy to coincide with the flight
@@ -279,12 +276,6 @@ ResidualGlobalCorrectionMakerTwoTrackG4e::ResidualGlobalCorrectionMakerTwoTrackG
   daughterMass2_ = iConfig.existsAs<double>("daughterMass2") ? iConfig.getParameter<double>("daughterMass2") : mmu;
   daughterMass1Err_ = iConfig.existsAs<double>("daughterMass1Err") ? iConfig.getParameter<double>("daughterMass1Err") : 1.e-6;
   daughterMass2Err_ = iConfig.existsAs<double>("daughterMass2Err") ? iConfig.getParameter<double>("daughterMass2Err") : 1.e-6;
-  // Pair-mass window default is "no cut" so legacy configurations work.
-  minPairMass_ = iConfig.existsAs<double>("minPairMass") ? iConfig.getParameter<double>("minPairMass") : 0.;
-  maxPairMass_ = iConfig.existsAs<double>("maxPairMass") ? iConfig.getParameter<double>("maxPairMass") : 1.e9;
-  respectTrackOrder_ =
-      iConfig.existsAs<bool>("respectTrackOrder") ? iConfig.getParameter<bool>("respectTrackOrder") : false;
-
   // 2D-transverse pointing-angle constraint (V0 channels). Default off.
   doPointingConstraint_ = iConfig.existsAs<bool>("doPointingConstraint")
       ? iConfig.getParameter<bool>("doPointingConstraint") : false;
@@ -616,10 +607,6 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
   lumi = iEvent.luminosityBlock();
   event = iEvent.id().event();
 
-  const bool useFixedPairOrder = respectTrackOrder_ && trackOrigH->size() >= 2;
-  const auto firstTrack = trackOrigH->begin();
-  const auto secondTrack = useFixedPairOrder ? std::next(trackOrigH->begin()) : trackOrigH->end();
-
   genweight = 1.;
   if (doGen_) {
     genweight = genEventInfo->weight();
@@ -755,9 +742,6 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
   
   // loop over combinatorics of track pairs
   for (auto itrack = trackOrigH->begin(); itrack != trackOrigH->end(); ++itrack) {
-    if (useFixedPairOrder && itrack != firstTrack) {
-      break;
-    }
     if (itrack->isLooper()) {
       continue;
     }
@@ -804,30 +788,14 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
       }
     }
 
-    for (auto jtrack = trackOrigH->begin(); jtrack != trackOrigH->end(); ++jtrack) {
-      if (useFixedPairOrder && jtrack != secondTrack) {
-        continue;
-      }
-      if (jtrack == itrack) {
-        continue;
-      }
+    for (auto jtrack = itrack + 1; jtrack != trackOrigH->end(); ++jtrack) {
       if (jtrack->isLooper()) {
-        continue;
-      }
-      
-      if ((itrack->charge() + jtrack->charge()) != 0) {
         continue;
       }
 
       std::array<ROOT::Math::PxPyPzMVector, 2> mutrkarr;
       mutrkarr[0] = ROOT::Math::PxPyPzMVector(itrack->px(), itrack->py(), itrack->pz(), trackMass[0]);
       mutrkarr[1] = ROOT::Math::PxPyPzMVector(jtrack->px(), jtrack->py(), jtrack->pz(), trackMass[1]);
-
-      const double rawPairMass = (mutrkarr[0] + mutrkarr[1]).mass();
-      if (rawPairMass < minPairMass_ || rawPairMass > maxPairMass_) {
-        continue;
-      }
-      
 
       const reco::Candidate *mu1gen = nullptr;
       double drmin1 = 0.1;
