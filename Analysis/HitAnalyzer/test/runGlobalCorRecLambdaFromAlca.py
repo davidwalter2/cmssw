@@ -45,7 +45,6 @@ process.load('Analysis.HitAnalyzer.ResidualGlobalCorrectionMakerTwoTrackProtonPi
 process.globalCorLambda = process.globalCorLambda.clone(
     src = 'selectedLambdaTracks',
     useIdealGeometry = False,
-    respectTrackOrder = True,         # track[0]=proton, track[1]=pion
     outprefix = 'globalcor_lambda',
 )
 

@@ -38,9 +38,6 @@ globalCorD0 = cms.EDProducer(
     daughterMass2=cms.double(0.139570),
     daughterMass1Err=cms.double(1e-6),
     daughterMass2Err=cms.double(1e-6),
-    minPairMass=cms.double(1.70),
-    maxPairMass=cms.double(2.00),
-    respectTrackOrder=cms.bool(True),           # asymmetric: track[0]=kaon, track[1]=pion
     corFiles=cms.vstring(),
     MagneticFieldLabel=cms.string(''),
     outprefix=cms.untracked.string('globalcor_d0')

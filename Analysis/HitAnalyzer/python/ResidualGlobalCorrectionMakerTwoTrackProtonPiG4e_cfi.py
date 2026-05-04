@@ -45,9 +45,6 @@ globalCorLambda = cms.EDProducer(
     daughterMass2 = cms.double(0.139570),
     daughterMass1Err = cms.double(1.e-6),
     daughterMass2Err = cms.double(1.e-6),
-    minPairMass = cms.double(1.05),               # Lambda window
-    maxPairMass = cms.double(1.18),
-    respectTrackOrder = cms.bool(True),           # asymmetric: track[0]=proton, track[1]=pion
     corFiles = cms.vstring(),
     MagneticFieldLabel = cms.string(''),
     outprefix = cms.untracked.string('globalcor_lambda'),
