@@ -15,12 +15,11 @@ process.load('TrackPropagation.Geant4e.geantRefit_cff')
 
 process.maxEvents = cms.untracked.PSet(input=cms.untracked.int32(-1))
 
-# Use the existing 8h-test ALCARECO output as input. Edit this to point at
-# whichever TkAlKsToPiPi.root you want to ntuplise.
+# Edit this to point at whichever TkAlKsToPiPi.root you want to ntuplise.
 process.source = cms.Source(
     'PoolSource',
     fileNames=cms.untracked.vstring(
-        'file:/work/submit/david_w/ZMass/test_output_8h/TkAlKsToPiPi_8h.root'
+        'file:/work/submit/david_w/ZMass/test_output_multifile/TkAlKsToPiPi.root'
     )
 )
 

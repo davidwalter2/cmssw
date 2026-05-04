@@ -7,6 +7,10 @@ import FWCore.ParameterSet.Config as cms
 globalCorKs = cms.EDProducer(
     'ResidualGlobalCorrectionMakerTwoTrackG4e',
     src = cms.InputTag('ALCARECOTkAlKsToPiPi'),
+    dedxSourceTracks   = cms.InputTag('ALCARECOTkAlKsToPiPi'),
+    dedxHarmonic2      = cms.InputTag('ALCARECOTkAlKsToPiPiDeDxHarmonic2'),
+    dedxPixelHarmonic2 = cms.InputTag('ALCARECOTkAlKsToPiPiDeDxPixelHarmonic2'),
+    dedxAllHarmonic2   = cms.InputTag('ALCARECOTkAlKsToPiPiDeDxAllHarmonic2'),
     fitFromGenParms = cms.bool(False),
     fitFromSimParms = cms.bool(False),
     fillTrackTree = cms.bool(True),

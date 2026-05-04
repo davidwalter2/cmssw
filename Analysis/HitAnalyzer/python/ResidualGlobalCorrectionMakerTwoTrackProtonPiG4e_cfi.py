@@ -10,6 +10,10 @@ import FWCore.ParameterSet.Config as cms
 globalCorLambda = cms.EDProducer(
     'ResidualGlobalCorrectionMakerTwoTrackG4e',
     src = cms.InputTag('ALCARECOTkAlLambdaToProtonPi'),
+    dedxSourceTracks   = cms.InputTag('ALCARECOTkAlLambdaToProtonPi'),
+    dedxHarmonic2      = cms.InputTag('ALCARECOTkAlLambdaToProtonPiDeDxHarmonic2'),
+    dedxPixelHarmonic2 = cms.InputTag('ALCARECOTkAlLambdaToProtonPiDeDxPixelHarmonic2'),
+    dedxAllHarmonic2   = cms.InputTag('ALCARECOTkAlLambdaToProtonPiDeDxAllHarmonic2'),
     fitFromGenParms = cms.bool(False),
     fitFromSimParms = cms.bool(False),
     fillTrackTree = cms.bool(True),

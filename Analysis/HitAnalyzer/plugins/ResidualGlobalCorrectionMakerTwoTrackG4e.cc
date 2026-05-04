@@ -19,6 +19,7 @@
 #include "RecoVertex/KinematicFit/interface/CombinedKinematicConstraint.h"
 #include "DataFormats/MuonReco/interface/Muon.h"
 #include "DataFormats/Math/interface/deltaR.h"
+#include "DataFormats/Common/interface/ValueMap.h"
 
 #include "Math/Vector4Dfwd.h"
 
@@ -195,7 +196,37 @@ private:
 
   bool Muplus_highpurity;
   bool Muminus_highpurity;
-  
+
+  // Track-level charges of the two daughters at idxplus/idxminus. The
+  // names "plus"/"minus" are misleading for V0 channels (idxplus=0 and
+  // idxminus=1 are hardcoded, so for KS this is the V0CandidateProducer
+  // pair iteration order, not the actual charge); these branches expose
+  // the true daughter charges so downstream plotting can split by charge.
+  int Muplus_charge;
+  int Muminus_charge;
+
+  // Per-track dE/dx scalar estimators (Harmonic2 strip and pixel-only),
+  // projected onto the ALCARECO selected-track collection by
+  // DeDxValueMapProjector in the skim. The CVH input here is typically the
+  // V0CandidateProducer output (deep-copied subset of the ALCARECO tracks),
+  // so the ValueMaps are keyed on a *different* collection (the ALCARECO
+  // one). We re-key per-track via the surviving TrackExtraRef.key(): both
+  // the ALCARECO collection and the V0CandidateProducer output preserve
+  // the original generalTracks-extras key, so a key-equality scan finds
+  // the matching ALCARECO index for the ValueMap lookup.
+  // Filled only when all three InputTags are configured (`readDeDx_`).
+  bool readDeDx_;
+  edm::EDGetTokenT<reco::TrackCollection> dedxSourceTracksToken_;
+  edm::EDGetTokenT<edm::ValueMap<float>> dedxHarmonic2Token_;
+  edm::EDGetTokenT<edm::ValueMap<float>> dedxPixelHarmonic2Token_;
+  edm::EDGetTokenT<edm::ValueMap<float>> dedxAllHarmonic2Token_;
+  float Muplus_dedxHarmonic2;
+  float Muplus_dedxPixelHarmonic2;
+  float Muplus_dedxAllHarmonic2;
+  float Muminus_dedxHarmonic2;
+  float Muminus_dedxPixelHarmonic2;
+  float Muminus_dedxAllHarmonic2;
+
   bool Muplus_isMuon;
   bool Muplus_muonLoose;
   bool Muplus_muonMedium;
@@ -261,6 +292,23 @@ ResidualGlobalCorrectionMakerTwoTrackG4e::ResidualGlobalCorrectionMakerTwoTrackG
   // cosThetaXY > 0.998 cut converted to a 1-sigma soft constraint.
   pointingSigma_ = iConfig.existsAs<double>("pointingSigma")
       ? iConfig.getParameter<double>("pointingSigma") : 1.e-3;
+
+  // Optional per-track dE/dx ValueMaps (Harmonic2 strip + pixel-only),
+  // projected onto the ALCARECO selected-track collection by
+  // DeDxValueMapProjector. All three of `dedxSourceTracks` (the ALCARECO
+  // collection the ValueMaps are keyed on), `dedxHarmonic2`, and
+  // `dedxPixelHarmonic2` must be set to enable the lookup; legacy
+  // J/psi / Upsilon runners that don't set them get default-off.
+  readDeDx_ = iConfig.existsAs<edm::InputTag>("dedxSourceTracks") &&
+              iConfig.existsAs<edm::InputTag>("dedxHarmonic2") &&
+              iConfig.existsAs<edm::InputTag>("dedxPixelHarmonic2") &&
+              iConfig.existsAs<edm::InputTag>("dedxAllHarmonic2");
+  if (readDeDx_) {
+    dedxSourceTracksToken_   = consumes<reco::TrackCollection>(iConfig.getParameter<edm::InputTag>("dedxSourceTracks"));
+    dedxHarmonic2Token_      = consumes<edm::ValueMap<float>>(iConfig.getParameter<edm::InputTag>("dedxHarmonic2"));
+    dedxPixelHarmonic2Token_ = consumes<edm::ValueMap<float>>(iConfig.getParameter<edm::InputTag>("dedxPixelHarmonic2"));
+    dedxAllHarmonic2Token_   = mayConsume<edm::ValueMap<float>>(iConfig.getParameter<edm::InputTag>("dedxAllHarmonic2"));
+  }
 
   doL1Trigger_ = iConfig.existsAs<bool>("doL1Trigger") ? iConfig.getParameter<bool>("doL1Trigger") : false;
   if (doL1Trigger_) {
@@ -404,6 +452,18 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::beginStream(edm::StreamID streami
     tree->Branch("Muplus_highpurity", &Muplus_highpurity);
     tree->Branch("Muminus_highpurity", &Muminus_highpurity);
 
+    tree->Branch("Muplus_charge", &Muplus_charge);
+    tree->Branch("Muminus_charge", &Muminus_charge);
+
+    if (readDeDx_) {
+      tree->Branch("Muplus_dedxHarmonic2",       &Muplus_dedxHarmonic2);
+      tree->Branch("Muplus_dedxPixelHarmonic2",  &Muplus_dedxPixelHarmonic2);
+      tree->Branch("Muplus_dedxAllHarmonic2",    &Muplus_dedxAllHarmonic2);
+      tree->Branch("Muminus_dedxHarmonic2",      &Muminus_dedxHarmonic2);
+      tree->Branch("Muminus_dedxPixelHarmonic2", &Muminus_dedxPixelHarmonic2);
+      tree->Branch("Muminus_dedxAllHarmonic2",   &Muminus_dedxAllHarmonic2);
+    }
+
     tree->Branch("Muplus_isMuon", &Muplus_isMuon);
     tree->Branch("Muplus_muonLoose", &Muplus_muonLoose);
     tree->Branch("Muplus_muonMedium", &Muplus_muonMedium);
@@ -454,6 +514,17 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
   Handle<reco::TrackCollection> trackOrigH;
   iEvent.getByToken(inputTrackOrig_, trackOrigH);
+
+  Handle<reco::TrackCollection>   dedxSourceTracksH;
+  Handle<edm::ValueMap<float>> dedxHarmonic2H;
+  Handle<edm::ValueMap<float>> dedxPixelHarmonic2H;
+  Handle<edm::ValueMap<float>> dedxAllHarmonic2H;
+  if (readDeDx_) {
+    iEvent.getByToken(dedxSourceTracksToken_,   dedxSourceTracksH);
+    iEvent.getByToken(dedxHarmonic2Token_,      dedxHarmonic2H);
+    iEvent.getByToken(dedxPixelHarmonic2Token_, dedxPixelHarmonic2H);
+    iEvent.getByToken(dedxAllHarmonic2Token_,   dedxAllHarmonic2H);
+  }
 
 
   // loop over gen particles
@@ -2453,6 +2524,34 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           
           Muplus_highpurity = highpurityarr[idxplus];
           Muminus_highpurity = highpurityarr[idxminus];
+
+          Muplus_charge = muchargearr[idxplus];
+          Muminus_charge = muchargearr[idxminus];
+
+          if (readDeDx_) {
+            // Find each fit track's index in the ALCARECO source collection by
+            // matching the surviving TrackExtraRef.key() (which both the
+            // ALCARECO and the V0CandidateProducer output preserve from the
+            // original generalTracks-extras). NaN if not found.
+            auto lookup = [&](const reco::Track& tk, float& outH, float& outP, float& outA) {
+              const auto key = tk.extra().key();
+              for (size_t k = 0; k < dedxSourceTracksH->size(); ++k) {
+                if ((*dedxSourceTracksH)[k].extra().key() == key) {
+                  const edm::Ref<reco::TrackCollection> r(dedxSourceTracksH, k);
+                  outH = (*dedxHarmonic2H)[r];
+                  outP = (*dedxPixelHarmonic2H)[r];
+                  outA = (*dedxAllHarmonic2H)[r];
+                  return;
+                }
+              }
+              outH = std::numeric_limits<float>::quiet_NaN();
+              outP = std::numeric_limits<float>::quiet_NaN();
+              outA = std::numeric_limits<float>::quiet_NaN();
+            };
+            const std::array<reco::TrackCollection::const_iterator, 2> tkIts = {{ itrack, jtrack }};
+            lookup(*tkIts[idxplus],  Muplus_dedxHarmonic2,  Muplus_dedxPixelHarmonic2,  Muplus_dedxAllHarmonic2);
+            lookup(*tkIts[idxminus], Muminus_dedxHarmonic2, Muminus_dedxPixelHarmonic2, Muminus_dedxAllHarmonic2);
+          }
 
           const ROOT::Math::PxPyPzMVector mompluskin(outparts[idxplus]->currentState().globalMomentum().x(),
                                                             outparts[idxplus]->currentState().globalMomentum().y(),

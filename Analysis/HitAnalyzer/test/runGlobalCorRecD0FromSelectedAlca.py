@@ -18,7 +18,7 @@ process.maxEvents = cms.untracked.PSet(input=cms.untracked.int32(-1))
 process.source = cms.Source(
     'PoolSource',
     fileNames=cms.untracked.vstring(
-        'file:/work/submit/emanca/zmass/ALCArequest/CMSSW_10_6_17_patch1/src/Alignment/CommonAlignmentProducer/test/TkAlDstToD0Pi.root'
+        'file:/work/submit/david_w/ZMass/test_output_multifile/TkAlDstToD0Pi.root'
     )
 )
 
