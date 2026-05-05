@@ -10,9 +10,10 @@ KsToPiPiCandidateProducer = cms.EDProducer(
     tracks   = cms.InputTag('ALCARECOTkAlKsToPiPi'),
     beamSpot = cms.InputTag('offlineBeamSpot'),
     # mass hypotheses
-    daughterMass1 = cms.double(0.139570),     # pi+
-    daughterMass2 = cms.double(0.139570),     # pi-
-    daughterMassErr = cms.double(1.e-6),
+    daughterMass1 = cms.double(0.13957039),     # pi+
+    daughterMass2 = cms.double(0.13957039),     # pi-
+    daughterMass1Err = cms.double(0.00000018),  # PDG pion mass uncertainty
+    daughterMass2Err = cms.double(0.00000018),
     tryBothAssignments = cms.bool(False),     # symmetric: nothing to swap
     expectedV0Mass = cms.double(0.497611),    # KS PDG mass
     # Post-fit V0 mass window: KS PDG +/-60 MeV. Tightened from the previous

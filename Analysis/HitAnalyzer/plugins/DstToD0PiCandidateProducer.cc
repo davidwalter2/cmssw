@@ -184,6 +184,15 @@ void DstToD0PiCandidateProducer::produce(edm::Event& iEvent, const edm::EventSet
   if (tracks.isValid() && tracks->size() >= 3) {
     for (unsigned int iK = 0; iK < tracks->size(); ++iK) {
       const reco::Track* kaon = &(*tracks)[iK];
+      // K and D0 pion are written to the output collection and refit
+      // downstream by the CVH; loopers are dropped at the input stage so the
+      // CVH propagator never has to handle them. The soft pion is only used
+      // here for the D* mass / charge tag and is not in the output, so its
+      // looper status is left as-is (the dM cut downstream filters mis-
+      // measured soft pions on its own).
+      if (kaon->isLooper()) {
+        continue;
+      }
       const int kaonCharge = kaon->charge();
 
       for (unsigned int iPi = 0; iPi < tracks->size(); ++iPi) {
@@ -192,6 +201,9 @@ void DstToD0PiCandidateProducer::produce(edm::Event& iEvent, const edm::EventSet
         }
 
         const reco::Track* pion = &(*tracks)[iPi];
+        if (pion->isLooper()) {
+          continue;
+        }
         if (pion->charge() != -kaonCharge) {
           continue;
         }

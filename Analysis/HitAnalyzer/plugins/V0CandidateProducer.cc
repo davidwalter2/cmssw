@@ -90,7 +90,8 @@ private:
   // mass hypotheses
   double daughterMass1_;
   double daughterMass2_;
-  double daughterMassErr_;
+  double daughterMass1Err_;
+  double daughterMass2Err_;
   bool tryBothAssignments_;
   double expectedV0Mass_;
 
@@ -109,6 +110,15 @@ private:
   // charge filter
   bool applyChargeFilter_;
   int targetCharge_;
+
+  // K_S veto: when enabled (typically only for the Lambda channel), reject a
+  // candidate whose two daughter tracks, evaluated under the (pi, pi) mass
+  // hypothesis, give an invariant mass within +/- ksVetoWindow_ of the K_S
+  // PDG mass. Suppresses real K_S contamination of the Lambda sample.
+  bool applyKsVeto_;
+  double ksVetoMass_;
+  double ksVetoWindow_;
+  double ksVetoPionMass_;
 };
 
 V0CandidateProducer::V0CandidateProducer(const edm::ParameterSet& iConfig)
@@ -116,7 +126,18 @@ V0CandidateProducer::V0CandidateProducer(const edm::ParameterSet& iConfig)
       beamSpotToken_(consumes<reco::BeamSpot>(iConfig.getParameter<edm::InputTag>("beamSpot"))),
       daughterMass1_(iConfig.getParameter<double>("daughterMass1")),
       daughterMass2_(iConfig.getParameter<double>("daughterMass2")),
-      daughterMassErr_(iConfig.existsAs<double>("daughterMassErr") ? iConfig.getParameter<double>("daughterMassErr") : 1.e-6),
+      // Per-daughter mass uncertainties (PDG). Fall back to the legacy
+      // single-value `daughterMassErr` for back-compatibility, then to a
+      // small non-zero default so the kinematic fit doesn't refuse a
+      // singular mass-error matrix.
+      daughterMass1Err_(iConfig.existsAs<double>("daughterMass1Err")
+          ? iConfig.getParameter<double>("daughterMass1Err")
+          : (iConfig.existsAs<double>("daughterMassErr")
+              ? iConfig.getParameter<double>("daughterMassErr") : 1.e-6)),
+      daughterMass2Err_(iConfig.existsAs<double>("daughterMass2Err")
+          ? iConfig.getParameter<double>("daughterMass2Err")
+          : (iConfig.existsAs<double>("daughterMassErr")
+              ? iConfig.getParameter<double>("daughterMassErr") : 1.e-6)),
       tryBothAssignments_(iConfig.getParameter<bool>("tryBothAssignments")),
       expectedV0Mass_(iConfig.getParameter<double>("expectedV0Mass")),
       minV0Mass_(iConfig.getParameter<double>("minV0Mass")),
@@ -126,7 +147,18 @@ V0CandidateProducer::V0CandidateProducer(const edm::ParameterSet& iConfig)
       LxyOverSigmaMin_(iConfig.getParameter<double>("LxyOverSigmaMin")),
       minTrackPt_(iConfig.getParameter<double>("minTrackPt")),
       applyChargeFilter_(iConfig.getParameter<bool>("applyChargeFilter")),
-      targetCharge_(iConfig.getParameter<int>("charge")) {
+      targetCharge_(iConfig.getParameter<int>("charge")),
+      // K_S veto: defaults are off / sensible PDG values, so existing cfis
+      // (e.g. the K_S producer itself) keep their current behaviour unless
+      // they explicitly opt in.
+      applyKsVeto_(iConfig.existsAs<bool>("applyKsVeto")
+          ? iConfig.getParameter<bool>("applyKsVeto") : false),
+      ksVetoMass_(iConfig.existsAs<double>("ksVetoMass")
+          ? iConfig.getParameter<double>("ksVetoMass") : 0.497611),
+      ksVetoWindow_(iConfig.existsAs<double>("ksVetoWindow")
+          ? iConfig.getParameter<double>("ksVetoWindow") : 0.010),
+      ksVetoPionMass_(iConfig.existsAs<double>("ksVetoPionMass")
+          ? iConfig.getParameter<double>("ksVetoPionMass") : 0.13957039) {
   produces<reco::TrackCollection>();
 }
 
@@ -154,7 +186,11 @@ RefCountedKinematicTree V0CandidateProducer::fitV0(const edm::EventSetup& iSetup
   KinematicParticleFactoryFromTransientTrack particleFactory;
   std::vector<RefCountedKinematicParticle> parts;
   float chi = 0.f, ndf = 0.f;
-  float me1 = daughterMassErr_, me2 = daughterMassErr_;
+  // mass-error pairing follows the mass pairing: m1 always carries
+  // daughterMass1Err_, m2 always carries daughterMass2Err_, regardless of
+  // which input track (t1 or t2) was assigned which mass.
+  float me1 = daughterMass1Err_;
+  float me2 = daughterMass2Err_;
   parts.push_back(particleFactory.particle(tt1, m1, chi, ndf, me1));
   parts.push_back(particleFactory.particle(tt2, m2, chi, ndf, me2));
   KinematicParticleVertexFitter fitter;
@@ -205,6 +241,21 @@ void V0CandidateProducer::produce(edm::Event& iEvent, const edm::EventSetup& iSe
 
   // helper: try one fit, apply all cuts, and push a CandidateSummary on success
   auto tryOne = [&](const reco::Track& tA, double mA, const reco::Track& tB, double mB) {
+    // Optional K_S veto, evaluated up-front from the raw track 3-momenta
+    // (pi+pi-) so that vetoed candidates skip the kinematic fit entirely.
+    if (applyKsVeto_) {
+      const double mpi = ksVetoPionMass_;
+      const double EA = std::sqrt(tA.p() * tA.p() + mpi * mpi);
+      const double EB = std::sqrt(tB.p() * tB.p() + mpi * mpi);
+      const double pxsum = tA.px() + tB.px();
+      const double pysum = tA.py() + tB.py();
+      const double pzsum = tA.pz() + tB.pz();
+      const double m2 = (EA + EB) * (EA + EB) - (pxsum * pxsum + pysum * pysum + pzsum * pzsum);
+      if (m2 > 0.) {
+        const double mpp = std::sqrt(m2);
+        if (std::fabs(mpp - ksVetoMass_) < ksVetoWindow_) return;
+      }
+    }
     RefCountedKinematicTree tree = fitV0(iSetup, tA, mA, tB, mB);
     FitQuality q = fitQuality(tree);
     if (!q.isGood) return;
@@ -226,9 +277,11 @@ void V0CandidateProducer::produce(edm::Event& iEvent, const edm::EventSetup& iSe
 
   for (unsigned int i = 0; i < tracks->size(); ++i) {
     const reco::Track& t1 = (*tracks)[i];
+    if (t1.isLooper()) continue;
     if (t1.pt() < minTrackPt_) continue;
     for (unsigned int j = i + 1; j < tracks->size(); ++j) {
       const reco::Track& t2 = (*tracks)[j];
+      if (t2.isLooper()) continue;
       if (t2.pt() < minTrackPt_) continue;
       if (applyChargeFilter_ && (t1.charge() + t2.charge() != targetCharge_)) continue;
 
