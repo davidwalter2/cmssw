@@ -14,9 +14,10 @@ LambdaToProtonPiCandidateProducer = cms.EDProducer(
     tracks   = cms.InputTag('ALCARECOTkAlLambdaToProtonPi'),
     beamSpot = cms.InputTag('offlineBeamSpot'),
     # mass hypotheses (track[0] = baryon, track[1] = pion)
-    daughterMass1 = cms.double(0.938272),     # proton (or anti-proton)
-    daughterMass2 = cms.double(0.139570),     # pion
-    daughterMassErr = cms.double(1.e-6),
+    daughterMass1 = cms.double(0.93827208943),     # proton (or anti-proton)
+    daughterMass2 = cms.double(0.13957039),        # pion
+    daughterMass1Err = cms.double(0.00000000029),  # PDG proton mass uncertainty
+    daughterMass2Err = cms.double(0.00000018),     # PDG pion   mass uncertainty
     tryBothAssignments = cms.bool(True),      # asymmetric: disambiguate per pair
     expectedV0Mass = cms.double(1.115683),    # Lambda PDG mass
     # Post-fit V0 mass window: asymmetric around the Lambda PDG mass
@@ -33,4 +34,12 @@ LambdaToProtonPiCandidateProducer = cms.EDProducer(
     # opposite-sign requirement
     applyChargeFilter = cms.bool(True),
     charge            = cms.int32(0),
+    # K_S veto: reject Lambda candidates whose two daughter tracks under the
+    # (pi+, pi-) hypothesis fall within +/-10 MeV of the K_S PDG mass.
+    # Removes real K_S contamination of the Lambda sample (most prominent at
+    # low Lambda pT, where the wrong-mass-hypothesis K_S mass falls inside
+    # the Lambda window).
+    applyKsVeto   = cms.bool(True),
+    ksVetoMass    = cms.double(0.497611),
+    ksVetoWindow  = cms.double(0.010),
 )
