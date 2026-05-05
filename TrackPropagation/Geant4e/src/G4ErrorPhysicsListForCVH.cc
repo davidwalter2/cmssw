@@ -94,8 +94,13 @@ void G4ErrorPhysicsListForCVH::ConstructParticle() {
   G4PionPlus::PionPlusDefinition();
   G4PionMinus::PionMinusDefinition();
 
-  // proton
+  // K+/-  -- needed for D0 -> K pi (CVH ntuplizer kaon hypothesis)
+  G4KaonPlus::KaonPlusDefinition();
+  G4KaonMinus::KaonMinusDefinition();
+
+  // proton / anti-proton  -- anti_proton needed for Lambda-bar daughters
   G4Proton::ProtonDefinition();
+  G4AntiProton::AntiProtonDefinition();
 }
 
 //------------------------------------------------------------------------

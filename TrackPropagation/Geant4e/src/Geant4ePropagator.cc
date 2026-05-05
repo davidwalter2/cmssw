@@ -84,6 +84,21 @@ Geant4ePropagator::Geant4ePropagator(
  */
 Geant4ePropagator::~Geant4ePropagator() {
   LogDebug("Geant4e") << "Geant4ePropagator::~Geant4ePropagator()" << std::endl;
+  // One-line summary of propagateGenericWithJacobianAltD failures over the
+  // lifetime of this propagator. Counters are zero unless the function was
+  // called (CVH ntuplizer use case).
+  if (propTotalCalls_ > 0ULL) {
+    const unsigned long long fail_total =
+        propFailCounts_[0] + propFailCounts_[1] + propFailCounts_[2];
+    std::cout << "Geant4ePropagator::propagateGenericWithJacobianAltD summary"
+              << "  calls="        << propTotalCalls_
+              << "  failures="     << fail_total
+              << " (" << (100. * fail_total / propTotalCalls_) << "% )"
+              << "   exit1[plimit]=" << propFailCounts_[0]
+              << "   exit2[ierr]="   << propFailCounts_[1]
+              << "   exit3[maxlen]=" << propFailCounts_[2]
+              << std::endl;
+  }
 
   // don't close the g4 Geometry here, because the propagator might have been
   // cloned
@@ -517,7 +532,8 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
                                                     double dxi,
                                                     double dms,
                                                     double dioni,
-                                                    double pforced) const {
+                                                    double pforced,
+                                                    const std::string &particleNameOverride) const {
   using namespace Eigen;
 
   const G4Field *field = G4TransportationManager::GetTransportationManager()->GetFieldManager()->GetDetectorField();
@@ -576,10 +592,23 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
 
   const double charge = ftsStart[6];
 
+  // bookkeeping: count every entry to this function
+  ++propTotalCalls_;
+
   // Set the mode of propagation according to the propagation direction
   G4ErrorMode mode = G4ErrorMode_PropForwards;
-  if (!configurePropagation(mode, pDest, cmsInitPos, cmsInitMom))
+  if (!configurePropagation(mode, pDest, cmsInitPos, cmsInitMom)) {
+    ++propFailCounts_[0];
+    std::cout << "Geant4e fail[plimit]"
+              << "  p="        << cmsInitMom.mag()
+              << "  plimit="   << plimit_
+              << "  charge="   << charge
+              << "  particle=" << (particleNameOverride.empty()
+                                       ? generateParticleName(static_cast<int>(charge))
+                                       : particleNameOverride)
+              << std::endl;
     return retDefault();
+  }
 
   // re-check propagation direction chosen in case of AnyDirection
   if (mode == G4ErrorMode_PropBackwards && !flipped) {
@@ -602,7 +631,15 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
     G4ErrorPropagatorData::GetErrorPropagatorData()->SetStage(G4ErrorStage_Deflation);
   }
 
-  G4ErrorFreeTrajState g4eTrajState(generateParticleName(charge), g4InitPos, g4InitMom, g4error);
+  // Per-call particle-name override (used by the V0 CVH ntuplizer to
+  // propagate pions / protons / kaons rather than muons). Empty string =
+  // use the propagator's stored particle name (default "mu+"/"mu-"). The
+  // override string must already include any +/- sign (or be a baryon name
+  // like "proton" / "anti_proton") since it is passed to G4 verbatim.
+  const std::string g4ParticleName = particleNameOverride.empty()
+                                         ? generateParticleName(charge)
+                                         : particleNameOverride;
+  G4ErrorFreeTrajState g4eTrajState(g4ParticleName, g4InitPos, g4InitMom, g4error);
   LogDebug("Geant4e") << "G4e -  Traj. State: " << (g4eTrajState);
 
   //////////////////////////////
@@ -666,6 +703,20 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
 
     if (ierr != 0) {
       // propagation failed, return invalid track state
+      ++propFailCounts_[1];
+      std::cout << "Geant4e fail[ierr=" << ierr << "]"
+                << "  pT="     << cmsInitMom.perp()
+                << "  eta="    << cmsInitMom.eta()
+                << "  phi="    << cmsInitMom.phi()
+                << "  charge=" << charge
+                << "  r0="     << std::hypot(ftsStart[0], ftsStart[1])
+                << "  z0="     << ftsStart[2]
+                << "  surf_r=" << std::hypot(pDest.position().x(), pDest.position().y())
+                << "  surf_z=" << pDest.position().z()
+                << "  iter="   << iterations
+                << "  pathLen="<< finalPathLength
+                << "  particle=" << g4ParticleName
+                << std::endl;
       return retDefault();
     }
 
@@ -741,6 +792,21 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
                           << std::endl;
 
       // reached maximum path length, bail out
+      ++propFailCounts_[2];
+      std::cout << "Geant4e fail[maxlen]"
+                << "  iter="     << iterations
+                << "  pathLen="  << finalPathLength
+                << "  pT="       << cmsInitMom.perp()
+                << "  eta="      << cmsInitMom.eta()
+                << "  phi="      << cmsInitMom.phi()
+                << "  charge="   << charge
+                << "  r0="       << std::hypot(ftsStart[0], ftsStart[1])
+                << "  z0="       << ftsStart[2]
+                << "  surf_r="   << std::hypot(pDest.position().x(), pDest.position().y())
+                << "  surf_z="   << pDest.position().z()
+                << "  particle=" << g4ParticleName
+                << std::endl;
+
       return retDefault();
     }
 

@@ -62,6 +62,13 @@ public:
 
   const MagneticField *magneticField() const override { return theField; }
 
+  // Optional `particleNameOverride` selects the Geant4 particle hypothesis
+  // for this propagation step (e.g. "pi+", "pi-", "kaon+", "kaon-",
+  // "proton", "anti_proton"). Empty string falls back to the propagator's
+  // default `theParticleName` (set in the constructor; "mu" → "mu+"/"mu-").
+  // Used by the V0 CVH ntuplizer so pion / proton / kaon daughters are
+  // propagated with the correct dE/dx and energy-loss fluctuation rather
+  // than as muons.
   std::tuple<bool,
              Eigen::Matrix<double, 7, 1>,
              Eigen::Matrix<double, 5, 5>,
@@ -77,7 +84,8 @@ public:
                                    double dxi = 0.,
                                    double dms = 0.,
                                    double dioni = 0.,
-                                   double pforced = -1.) const;
+                                   double pforced = -1.,
+                                   const std::string &particleNameOverride = std::string()) const;
 
   static void CalculateEffectiveZandA(const G4Material *mate, G4double &effZ, G4double &effA);
 
@@ -92,6 +100,12 @@ private:
 
   // Name of the particle whose properties will be used in the propagation
   std::string theParticleName;
+
+  // Per-exit-point failure counters for propagateGenericWithJacobianAltD.
+  // Indices: 0 = configurePropagation (p < plimit), 1 = Geant4 step ierr != 0,
+  // 2 = max path length / max iterations. Dumped from the destructor.
+  mutable std::array<unsigned long long, 3> propFailCounts_{{0ULL, 0ULL, 0ULL}};
+  mutable unsigned long long propTotalCalls_{0ULL};
 
   // The Geant4e manager. Does the real propagation
   G4ErrorPropagatorManager *theG4eManager;
