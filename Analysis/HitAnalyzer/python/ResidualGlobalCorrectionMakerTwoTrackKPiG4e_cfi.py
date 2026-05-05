@@ -33,11 +33,14 @@ globalCorD0 = cms.EDProducer(
     doVtxConstraint=cms.bool(False),
     doMassConstraint=cms.bool(False),
     massConstraint=cms.double(1.86483),
-    massConstraintWidth=cms.double(1e-5),
+    massConstraintWidth=cms.double(1.605e-12),  # natural width Gamma = hbar/tau (D0), GeV
     daughterMass1=cms.double(0.493677),
-    daughterMass2=cms.double(0.139570),
-    daughterMass1Err=cms.double(1e-6),
-    daughterMass2Err=cms.double(1e-6),
+    daughterMass2=cms.double(0.13957039),
+    daughterMass1Err=cms.double(0.000016),
+    daughterMass2Err=cms.double(0.00000018),
+    # Geant4 particle base for the per-call propagator override.
+    daughterParticleName1=cms.string("kaon"),
+    daughterParticleName2=cms.string("pi"),
     corFiles=cms.vstring(),
     MagneticFieldLabel=cms.string(''),
     outprefix=cms.untracked.string('globalcor_d0')

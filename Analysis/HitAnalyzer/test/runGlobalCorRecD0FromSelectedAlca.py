@@ -13,6 +13,13 @@ process.load('Configuration.StandardSequences.GeometrySimDB_cff')
 process.load('TrackingTools.TransientTrack.TransientTrackBuilder_cfi')
 process.load('TrackPropagation.Geant4e.geantRefit_cff')
 
+# Override the Geant4e propagator's momentum threshold (default 0.5 GeV) so
+# low-pT D0 daughter pions are not rejected at the `plimit` exit. About 70%
+# of CVH propagation failures on the V0 channels came from this cut;
+# lowering it to 0.05 GeV recovers them while staying above the regime
+# where Geant4 step-finding becomes unreliable.
+process.Geant4ePropagator.PropagationPtotLimit = cms.double(0.05)
+
 process.maxEvents = cms.untracked.PSet(input=cms.untracked.int32(-1))
 
 process.source = cms.Source(

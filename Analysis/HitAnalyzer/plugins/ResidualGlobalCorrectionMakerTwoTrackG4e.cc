@@ -57,6 +57,15 @@ private:
   double daughterMass1Err_;
   double daughterMass2Err_;
 
+  // Geant4-particle base names per daughter slot (used to build the per-call
+  // particle-name override passed to the Geant4e propagator). Empty string
+  // = fall back to the propagator's default (muon). Recognised bases:
+  //   "mu", "pi", "kaon"   --> "<base>+" / "<base>-"
+  //   "proton"             --> "proton"  / "anti_proton"
+  //   "e"                  --> "e+" / "e-"
+  std::string daughterParticleName1_;
+  std::string daughterParticleName2_;
+
   // Optional 2D-transverse pointing-angle constraint on the V0 (KS, Lambda):
   // requires the V0 momentum direction in xy to coincide with the flight
   // vector from the beamspot to the secondary vertex. Default off, so the
@@ -271,11 +280,18 @@ ResidualGlobalCorrectionMakerTwoTrackG4e::ResidualGlobalCorrectionMakerTwoTrackG
   // J/psi/Upsilon configuration where the cfi simply doesn't specify them.
   // Override (e.g. to kaon+pion for D*, pion+pion for KS, proton+pion for
   // Lambda) via the channel-specific cfi.
-  constexpr double mmu = 0.1056583745;
+  constexpr double mmu = 0.1056583755;
+  constexpr double mmuerr = 0.0000000023;
   daughterMass1_ = iConfig.existsAs<double>("daughterMass1") ? iConfig.getParameter<double>("daughterMass1") : mmu;
   daughterMass2_ = iConfig.existsAs<double>("daughterMass2") ? iConfig.getParameter<double>("daughterMass2") : mmu;
-  daughterMass1Err_ = iConfig.existsAs<double>("daughterMass1Err") ? iConfig.getParameter<double>("daughterMass1Err") : 1.e-6;
-  daughterMass2Err_ = iConfig.existsAs<double>("daughterMass2Err") ? iConfig.getParameter<double>("daughterMass2Err") : 1.e-6;
+  daughterMass1Err_ = iConfig.existsAs<double>("daughterMass1Err") ? iConfig.getParameter<double>("daughterMass1Err") : mmuerr;
+  daughterMass2Err_ = iConfig.existsAs<double>("daughterMass2Err") ? iConfig.getParameter<double>("daughterMass2Err") : mmuerr;
+  // Per-daughter Geant4 particle-name base (empty = use propagator default
+  // "mu"). Channel cfis can override: e.g. "pi", "proton", "kaon".
+  daughterParticleName1_ = iConfig.existsAs<std::string>("daughterParticleName1")
+      ? iConfig.getParameter<std::string>("daughterParticleName1") : std::string();
+  daughterParticleName2_ = iConfig.existsAs<std::string>("daughterParticleName2")
+      ? iConfig.getParameter<std::string>("daughterParticleName2") : std::string();
   // 2D-transverse pointing-angle constraint (V0 channels). Default off.
   doPointingConstraint_ = iConfig.existsAs<bool>("doPointingConstraint")
       ? iConfig.getParameter<bool>("doPointingConstraint") : false;
@@ -319,6 +335,11 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::beginStream(edm::StreamID streami
   ResidualGlobalCorrectionMakerBase::beginStream(streamid);
   
   if (fillTrackTree_) {
+    // From CVH refit (no mass constraint): per-track parameters at the
+    // joint two-track PCA from the GBL/Geant4e fit. Dimuon kinematics are
+    // the sum of the per-track 4-vectors. Vertex (x, y, z) and signed
+    // displacement d come from the joint-PCA state vector statepcaupd
+    // (sign of d is tied to the charge of track[0]).
     tree->Branch("Jpsi_d", &Jpsi_d);
     tree->Branch("Jpsi_x", &Jpsi_x);
     tree->Branch("Jpsi_y", &Jpsi_y);
@@ -327,17 +348,22 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::beginStream(edm::StreamID streami
     tree->Branch("Jpsi_eta", &Jpsi_eta);
     tree->Branch("Jpsi_phi", &Jpsi_phi);
     tree->Branch("Jpsi_mass", &Jpsi_mass);
-    
+    // Per-event dimuon-mass uncertainty propagated from the CVH covariance.
     tree->Branch("Jpsi_sigmamass", &Jpsi_sigmamass);
-    
+
     tree->Branch("Muplus_pt", &Muplus_pt);
     tree->Branch("Muplus_eta", &Muplus_eta);
     tree->Branch("Muplus_phi", &Muplus_phi);
-    
+
     tree->Branch("Muminus_pt", &Muminus_pt);
     tree->Branch("Muminus_eta", &Muminus_eta);
     tree->Branch("Muminus_phi", &Muminus_phi);
-    
+
+    // From CMSSW KinematicParticleVertexFitter (no mass constraint),
+    // run on the post-CVH per-track states. This is the standard CMSSW
+    // kinematic vertex fit -- distinct from the CVH/GBL refit above --
+    // and provides a vertex-constrained per-particle 4-momentum at the
+    // fitted decay vertex. Used as a cross-check of the CVH state.
     tree->Branch("Jpsikin_x", &Jpsikin_x);
     tree->Branch("Jpsikin_y", &Jpsikin_y);
     tree->Branch("Jpsikin_z", &Jpsikin_z);
@@ -354,6 +380,11 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::beginStream(edm::StreamID streami
     tree->Branch("Muminuskin_eta", &Muminuskin_eta);
     tree->Branch("Muminuskin_phi", &Muminuskin_phi);
     
+    // From the raw input tracks, before any refit: per-track 4-momenta
+    // are built from the input track px/py/pz and the daughter mass
+    // hypothesis (trackMass[0], trackMass[1] from the channel cfi).
+    // The dimu mass is just the 4-vector sum -- no vertex or mass
+    // constraint applied. Useful as a no-fit reference / sanity check.
     tree->Branch("Jpsitrk_pt", &Jpsitrk_pt);
     tree->Branch("Jpsitrk_eta", &Jpsitrk_eta);
     tree->Branch("Jpsitrk_phi", &Jpsitrk_phi);
@@ -367,6 +398,11 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::beginStream(edm::StreamID streami
     tree->Branch("Muminustrk_eta", &Muminustrk_eta);
     tree->Branch("Muminustrk_phi", &Muminustrk_phi);
     
+    // From CVH refit WITH mass constraint: same content as the no-suffix
+    // Jpsi/Muplus/Muminus block above, but for the icons==1 pass where a
+    // dimuon-mass-constraint chi^2 term is added to the GBL fit. Only
+    // filled when doMassConstraint=True is set on the channel cfi
+    // (currently False for KS, Lambda, D0; True for Jpsi).
     tree->Branch("Jpsicons_d", &Jpsicons_d);
     tree->Branch("Jpsicons_x", &Jpsicons_x);
     tree->Branch("Jpsicons_y", &Jpsicons_y);
@@ -375,15 +411,20 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::beginStream(edm::StreamID streami
     tree->Branch("Jpsicons_eta", &Jpsicons_eta);
     tree->Branch("Jpsicons_phi", &Jpsicons_phi);
     tree->Branch("Jpsicons_mass", &Jpsicons_mass);
-    
+
     tree->Branch("Mupluscons_pt", &Mupluscons_pt);
     tree->Branch("Mupluscons_eta", &Mupluscons_eta);
     tree->Branch("Mupluscons_phi", &Mupluscons_phi);
-    
+
     tree->Branch("Muminuscons_pt", &Muminuscons_pt);
     tree->Branch("Muminuscons_eta", &Muminuscons_eta);
     tree->Branch("Muminuscons_phi", &Muminuscons_phi);
     
+    // From CMSSW KinematicConstrainedVertexFitter (with a TwoTrackMass
+    // constraint) on the post-CVH per-track states. As above, distinct
+    // from the CVH cons block: this is the standard CMSSW kinematic
+    // vertex fit with the dimuon mass constrained to the channel's
+    // expectedMass. Only filled when doMassConstraint=True.
     tree->Branch("Jpsikincons_x", &Jpsikincons_x);
     tree->Branch("Jpsikincons_y", &Jpsikincons_y);
     tree->Branch("Jpsikincons_z", &Jpsikincons_z);
@@ -400,6 +441,9 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::beginStream(edm::StreamID streami
     tree->Branch("Muminuskincons_eta", &Muminuskincons_eta);
     tree->Branch("Muminuskincons_phi", &Muminuskincons_phi);
     
+    // Generator-level (MC truth, only filled when doGen_=True).
+    // Mu*gen_dr = deltaR matching distance between the gen-muon and the
+    // reco track (cut at 0.1 in the lookup; -1 if no match).
     tree->Branch("Jpsigen_x", &Jpsigen_x);
     tree->Branch("Jpsigen_y", &Jpsigen_y);
     tree->Branch("Jpsigen_z", &Jpsigen_z);
@@ -407,11 +451,11 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::beginStream(edm::StreamID streami
     tree->Branch("Jpsigen_eta", &Jpsigen_eta);
     tree->Branch("Jpsigen_phi", &Jpsigen_phi);
     tree->Branch("Jpsigen_mass", &Jpsigen_mass);
-    
+
     tree->Branch("Muplusgen_pt", &Muplusgen_pt);
     tree->Branch("Muplusgen_eta", &Muplusgen_eta);
     tree->Branch("Muplusgen_phi", &Muplusgen_phi);
-    
+
     tree->Branch("Muminusgen_pt", &Muminusgen_pt);
     tree->Branch("Muminusgen_eta", &Muminusgen_eta);
     tree->Branch("Muminusgen_phi", &Muminusgen_phi);
@@ -419,21 +463,35 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::beginStream(edm::StreamID streami
     tree->Branch("Muplusgen_dr", &Muplusgen_dr);
     tree->Branch("Muminusgen_dr", &Muminusgen_dr);
     
+    // Per-track reference parameters at PCA (3-vector: q/pT, lambda, phi)
+    // and Jacobians of those parameters and of the dimuon mass with
+    // respect to the global correction parameters (alignment, B-field,
+    // material). Used to re-apply updated calibrations downstream
+    // without re-running the CVH fit. fillJac_ controls the (large)
+    // Jacobian branches.
     tree->Branch("Muplus_refParms", Muplus_refParms.data(), "Muplus_refParms[3]/F");
     tree->Branch("Muminus_refParms", Muminus_refParms.data(), "Muminus_refParms[3]/F");
-    
+
     if (fillJac_) {
       tree->Branch("Muplus_jacRef", &Muplus_jacRef);
       tree->Branch("Muminus_jacRef", &Muminus_jacRef);
       tree->Branch("Jpsi_jacMass", &Jpsi_jacMass);
     }
     
+    // Per-track hit-content counters (from the original reco::Track)
+    // and quality flag.
+    //   nhits                = total rec-hits on track
+    //   nvalid               = valid (non-rejected) hits
+    //   nvalidpixel          = subset on pixel detectors
+    //   nmatchedvalid        = valid hits compatible with the CVH fit
+    //   nambiguousmatchedvalid = valid hits with multiple compatible matches
+    //   highpurity           = passes the standard high-purity track selection
     tree->Branch("Muplus_nhits", &Muplus_nhits);
     tree->Branch("Muplus_nvalid", &Muplus_nvalid);
     tree->Branch("Muplus_nvalidpixel", &Muplus_nvalidpixel);
     tree->Branch("Muplus_nmatchedvalid", &Muplus_nmatchedvalid);
     tree->Branch("Muplus_nambiguousmatchedvalid", &Muplus_nambiguousmatchedvalid);
-    
+
     tree->Branch("Muminus_nhits", &Muminus_nhits);
     tree->Branch("Muminus_nvalid", &Muminus_nvalid);
     tree->Branch("Muminus_nvalidpixel", &Muminus_nvalidpixel);
@@ -443,9 +501,15 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::beginStream(edm::StreamID streami
     tree->Branch("Muplus_highpurity", &Muplus_highpurity);
     tree->Branch("Muminus_highpurity", &Muminus_highpurity);
 
+    // Per-track charge.
     tree->Branch("Muplus_charge", &Muplus_charge);
     tree->Branch("Muminus_charge", &Muminus_charge);
 
+    // Per-track dE/dx Harmonic-2 truncated estimators projected from
+    // ALCARECO via DeDxValueMapProjector (re-keyed onto the selected
+    // track collection). Three flavours: strip-only, pixel-only, and
+    // joint strip+pixel. Optional via the readDeDx_ knob; values are
+    // NaN if the corresponding ValueMap is not present in the input.
     if (readDeDx_) {
       tree->Branch("Muplus_dedxHarmonic2",       &Muplus_dedxHarmonic2);
       tree->Branch("Muplus_dedxPixelHarmonic2",  &Muplus_dedxPixelHarmonic2);
@@ -455,6 +519,16 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::beginStream(edm::StreamID streami
       tree->Branch("Muminus_dedxAllHarmonic2",   &Muminus_dedxAllHarmonic2);
     }
 
+    // Muon-ID flags from a reco::Muon match against the track:
+    //   isMuon           = a reco::Muon was found pointing at this track
+    //   muonLoose/Medium/Tight = standard CMS muon-ID working points
+    //   muonIsPF         = particle-flow identified
+    //   muonIsTracker    = has a tracker-only segment
+    //   muonIsGlobal     = has a global (tracker+muon-system) fit
+    //   muonIsStandalone = has a stand-alone muon-system fit
+    //   muonInnerTrackBest = the matched reco::Muon's innerTrack is
+    //                        the same as the input track (best-track
+    //                        pointer comparison)
     tree->Branch("Muplus_isMuon", &Muplus_isMuon);
     tree->Branch("Muplus_muonLoose", &Muplus_muonLoose);
     tree->Branch("Muplus_muonMedium", &Muplus_muonMedium);
@@ -475,6 +549,19 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::beginStream(edm::StreamID streami
     tree->Branch("Muminus_muonIsStandalone", &Muminus_muonIsStandalone);
     tree->Branch("Muminus_muonInnerTrackBest", &Muminus_muonInnerTrackBest);
 
+    // CVH fit-convergence diagnostics.
+    //   edmval_cons0  = -delta(chi^2) at the last GBL iteration of the
+    //                   icons==0 (no-mass-constraint) pass; estimated
+    //                   distance to the chi^2 minimum
+    //   niter_cons0   = number of iterations to convergence in that pass
+    //   dmassconvval, dinvmasssqconvval = bias on the dimuon mass and
+    //                   on 1/mass^2 induced by the GBL convergence at
+    //                   finite EDM (used downstream as a kernel-based
+    //                   correction of the lineshape mean)
+    //   *_cons0       = same quantities recorded at the icons==0 pass
+    //                   (no-mass-constraint), versus the unsuffixed
+    //                   value from the final pass (icons==1 with mass
+    //                   constraint, or icons==0 if no constraint)
     tree->Branch("edmval_cons0", &edmval_cons0);
     tree->Branch("niter_cons0", &niter_cons0);
 
@@ -483,6 +570,9 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::beginStream(edm::StreamID streami
     tree->Branch("dmassconvval_cons0", &dmassconvval_cons0);
     tree->Branch("dinvmasssqconvval_cons0", &dinvmasssqconvval_cons0);
 
+    // L1 trigger decisions: one boolean per configured l1Triggers_
+    // path (from the channel cfi). Used downstream to re-weight or
+    // categorise events by trigger.
     for (std::size_t itrig = 0; itrig < l1Triggers_.size(); ++itrig) {
       tree->Branch(l1Triggers_[itrig].c_str(), &l1TriggerDecisions_[itrig]);
     }
@@ -1145,7 +1235,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
         const std::vector<RefCountedKinematicParticle> outparts = kinTree->finalStateParticles();
 //         std::array<Matrix<double, 7, 1>, 2> refftsarr = {{ outparts[0]->currentState().freeTrajectoryState(),
 //                                                           outparts[1]->currentState().freeTrajectoryState() }};
-              
+        // reference FreeTrajectoryState array (refftsarr)
         std::array<Matrix<double, 7, 1>, 2> refftsarr;
         
         if (fitFromGenParms_ && mu0gen != nullptr && mu1gen != nullptr) {
@@ -1267,7 +1357,22 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             
             Matrix<double, 7, 1> &refFts = refftsarr[id];
             auto &hits = hitsarr[id];
-            
+
+            // Build the per-track Geant4 particle name once: the propagator
+            // uses the right particle hypothesis (pion / kaon / proton /
+            // ...) instead of the muon default. Empty base name -> empty
+            // override -> propagator falls back to its constructor default.
+            const std::string& baseName = (id == 0 ? daughterParticleName1_ : daughterParticleName2_);
+            std::string g4ParticleName;
+            if (!baseName.empty()) {
+              const double tcharge = refftsarr[id][6];
+              if (baseName == "proton") {
+                g4ParticleName = (tcharge > 0.) ? "proton" : "anti_proton";
+              } else {
+                g4ParticleName = baseName + (tcharge > 0. ? "+" : "-");
+              }
+            }
+
             std::vector<Matrix<double, 7, 1>> &layerStates = layerStatesarr[id];
                       
             trackstateidxarr[id] = trackstateidx;
@@ -1447,9 +1552,10 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               
               const GloballyPositioned<double> &surface = surfacemapD_.at(hit->geographicalId());
               
-              auto propresult = g4prop->propagateGenericWithJacobianAltD(updtsos, surface, dbetaval, dxival);
+              auto propresult = g4prop->propagateGenericWithJacobianAltD(updtsos, surface, dbetaval, dxival,
+                                                                          0., 0., -1., g4ParticleName);
               if (!std::get<0>(propresult)) {
-                std::cout << "Abort: Propagation Failed!" << std::endl;
+                std::cout << "ResidualGlobalCorrectionMakerTwoTrackG4e ### Abort: Propagation Failed!" << std::endl;
                 valid = false;
                 break;
               }
@@ -1925,7 +2031,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             dinvmasssqconvval_cons0 = dmassconvinvsq;
           }
           
-          // add mass constraint to gbl fit
+          // add mass constraint to General Broken Lines (GBL) fit
           if (icons > 0) {
             //TODO simplify this to treat the 6 parameters contiguously (now that they are contiguous in the original vector)
 

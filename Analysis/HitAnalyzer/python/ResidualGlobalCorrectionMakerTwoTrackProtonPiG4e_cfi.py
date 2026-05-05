@@ -40,11 +40,14 @@ globalCorLambda = cms.EDProducer(
     doVtxConstraint = cms.bool(False),
     doMassConstraint = cms.bool(False),
     massConstraint = cms.double(1.115683),        # Lambda mass
-    massConstraintWidth = cms.double(1.e-5),
-    daughterMass1 = cms.double(0.938272),              # proton (in track[0] slot)
-    daughterMass2 = cms.double(0.139570),
-    daughterMass1Err = cms.double(1.e-6),
-    daughterMass2Err = cms.double(1.e-6),
+    massConstraintWidth = cms.double(2.502e-15),  # natural width Gamma = hbar/tau (Lambda), GeV
+    daughterMass1 = cms.double(0.93827208943),              # proton (in track[0] slot)
+    daughterMass2 = cms.double(0.13957039),
+    daughterMass1Err = cms.double(0.00000000029),
+    daughterMass2Err = cms.double(0.00000018),
+    # Geant4 particle base for the per-call propagator override.
+    daughterParticleName1 = cms.string("proton"),
+    daughterParticleName2 = cms.string("pi"),
     corFiles = cms.vstring(),
     MagneticFieldLabel = cms.string(''),
     outprefix = cms.untracked.string('globalcor_lambda'),

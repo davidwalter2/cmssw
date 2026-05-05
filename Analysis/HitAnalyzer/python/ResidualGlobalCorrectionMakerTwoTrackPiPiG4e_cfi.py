@@ -37,11 +37,15 @@ globalCorKs = cms.EDProducer(
     doVtxConstraint = cms.bool(False),
     doMassConstraint = cms.bool(False),
     massConstraint = cms.double(0.497611),       # KS mass
-    massConstraintWidth = cms.double(1.e-5),
-    daughterMass1 = cms.double(0.139570),              # both daughters: pion
-    daughterMass2 = cms.double(0.139570),
-    daughterMass1Err = cms.double(1.e-6),
-    daughterMass2Err = cms.double(1.e-6),
+    massConstraintWidth = cms.double(7.351e-15),  # natural width Gamma = hbar/tau (KS), GeV
+    daughterMass1 = cms.double(0.13957039),              # both daughters: pion
+    daughterMass2 = cms.double(0.13957039),
+    daughterMass1Err = cms.double(0.00000018),
+    daughterMass2Err = cms.double(0.00000018),
+    # Geant4 particle base for the per-call propagator override (avoids
+    # treating the daughters as muons inside Geant4e).
+    daughterParticleName1 = cms.string("pi"),
+    daughterParticleName2 = cms.string("pi"),
     corFiles = cms.vstring(),
     MagneticFieldLabel = cms.string(''),
     outprefix = cms.untracked.string('globalcor_ks'),
