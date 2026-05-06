@@ -139,6 +139,20 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   corFiles_ = iConfig.getParameter<std::vector<std::string>>("corFiles");
   fieldlabel_ = iConfig.getParameter<std::string>("MagneticFieldLabel");
 
+  // Scalar-potential B-field correction parameters.
+  scalarPotentialLmax_ = iConfig.getParameter<unsigned int>("scalarPotentialLmax");
+  for (const std::string &lm : iConfig.getParameter<std::vector<std::string>>("scalarPotentialExtra")) {
+    // accept "L,M" form
+    const auto comma = lm.find(',');
+    if (comma == std::string::npos) {
+      throw cms::Exception("Configuration") << "scalarPotentialExtra entry must be 'L,M', got '" << lm << "'";
+    }
+    const int L = std::stoi(lm.substr(0, comma));
+    const int M = std::stoi(lm.substr(comma + 1));
+    scalarPotentialExtra_.emplace_back(L, M);
+  }
+  fieldCorrection_ = std::make_unique<ana_hitanalyzer::ScalarPotentialFieldCorrection>(scalarPotentialLmax_, scalarPotentialExtra_);
+
 
   inputBs_ = consumes<reco::BeamSpot>(edm::InputTag("offlineBeamSpot"));
 
@@ -467,8 +481,9 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
         parmset.emplace(1, det->geographicalId());
       }
 
-      // bfield and material parameters are associated to glued detids where applicable
-      parmset.emplace(6, parmdetid);
+      // material parameter is per-module (glued detid where applicable). The
+      // B-field block has been replaced with a global scalar-potential
+      // expansion — see fieldCorrection_->appendParmsetEntries below.
       parmset.emplace(7, parmdetid);
       
       if (doRes_) {
@@ -487,11 +502,15 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
         //ionization resolution parameter associated to glued detids where applicable
         parmset.emplace(11, parmdetid);
       }
-      
-      
+
+
     }
   }
-  
+
+  // Register global scalar-potential B-field modes as sentinel parmset
+  // entries (parmtype = ParmTypeBfieldGlobal, DetId(modeIdx)).
+  fieldCorrection_->appendParmsetEntries(parmset);
+
 //   const unsigned int netabins = 48;
 //   const unsigned int nphibins = 36;
 //   if (hetaphi == nullptr) {
@@ -602,8 +621,30 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       iidx = globalidx;
       parmtype = key.first;
       
-      if (true) {
-      
+      // Sentinel parmtype-14 entries are global scalar-potential modes —
+      // they have no geometry, so skip the per-module geometry / runtree
+      // bookkeeping for them.
+      const bool isGlobalBfieldMode =
+          (parmtype == ana_hitanalyzer::ScalarPotentialFieldCorrection::ParmTypeBfieldGlobal);
+
+      if (isGlobalBfieldMode) {
+        rawdetid = key.second.rawId();
+        subdet = -99;
+        layer = -99;
+        stereo = -99;
+        glued = 0;
+        x = 0.; y = 0.; z = 0.;
+        eta = 0.; phi = 0.; rho = 0.;
+        xi = 0.;
+        bx = 0.; by = 0.; bz = 0.;
+        bradial = 0.; baxial = 0.; b0 = 0.; b0trivial = 0.;
+        nx = 0.; ny = 0.; nz = 0.;
+        lxx = 0.; lxy = 0.; lxz = 0.;
+        lyx = 0.; lyy = 0.; lyz = 0.;
+        dx = 0.; dy = 0.; dz = 0.; dtheta = 0.;
+      }
+      else if (true) {
+
         const DetId& detid = key.second;
         const GeomDet* det = globalGeometry->idToDet(detid);
         
@@ -795,6 +836,10 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
     unsigned int nglobal = detidparms.size();
   //   std::sort(detidparms.begin(), detidparms.end());
     std::cout << "nglobalparms = " << detidparms.size() << std::endl;
+
+    // Resolve scalar-potential basis global indices now that detidparms is built.
+    fieldCorrection_->resolveGlobalIndices(detidparms);
+    std::cout << "scalar-potential field correction: " << fieldCorrection_->nModes() << " modes" << std::endl;
     
     //initialize gradient
     if (!gradagg.size()) {
@@ -1137,11 +1182,13 @@ void ResidualGlobalCorrectionMakerBase::fillDescriptions(edm::ConfigurationDescr
 }
 
 
-Matrix<double, 5, 6> ResidualGlobalCorrectionMakerBase::hybrid2curvJacobianD(const Matrix<double, 7, 1> &state, const MagneticField *field, double dBz) const {
-  
-  const GlobalPoint pos(state[0], state[1], state[2]);  
+Matrix<double, 5, 6> ResidualGlobalCorrectionMakerBase::hybrid2curvJacobianD(const Matrix<double, 7, 1> &state, const MagneticField *field, const Eigen::Vector3d &dB) const {
+
+  const GlobalPoint pos(state[0], state[1], state[2]);
   const GlobalVector &bfield = field->inInverseGeV(pos);
-  const Matrix<double, 3, 1> Bv(bfield.x(), bfield.y(), double(bfield.z()) + 2.99792458e-3*dBz);
+  const Matrix<double, 3, 1> Bv =
+      Matrix<double, 3, 1>(bfield.x(), bfield.y(), bfield.z())
+      + MagneticField::kTeslaToInvGeV * dB;
   
   const double q = state[6];
   
@@ -1338,11 +1385,13 @@ Matrix<double, 5, 1> ResidualGlobalCorrectionMakerBase::cart2pca(const Matrix<do
 
 }
 
-Matrix<double, 5, 5> ResidualGlobalCorrectionMakerBase::pca2curvJacobianD(const Matrix<double, 7, 1> &state, const MagneticField *field, const reco::BeamSpot &bs,  double dBz) const {
+Matrix<double, 5, 5> ResidualGlobalCorrectionMakerBase::pca2curvJacobianD(const Matrix<double, 7, 1> &state, const MagneticField *field, const reco::BeamSpot &bs, const Eigen::Vector3d &dB) const {
 
   const GlobalPoint pos(state[0], state[1], state[2]);
   const GlobalVector &bfield = field->inInverseGeV(pos);
-  const Matrix<double, 3, 1> Bv(bfield.x(), bfield.y(), double(bfield.z()) + 2.99792458e-3*dBz);
+  const Matrix<double, 3, 1> Bv =
+      Matrix<double, 3, 1>(bfield.x(), bfield.y(), bfield.z())
+      + MagneticField::kTeslaToInvGeV * dB;
 
   const double x0bs = bs.x0();
   const double y0bs = bs.y0();
@@ -1734,15 +1783,19 @@ Matrix<double, 10, 1> ResidualGlobalCorrectionMakerBase::twoTrackCart2pca(const 
   return res;
 }
 
-Matrix<double, 10, 10> ResidualGlobalCorrectionMakerBase::twoTrackPca2curvJacobianD(const Matrix<double, 7, 1> &state0, const Matrix<double, 7, 1> &state1, const MagneticField *field, double dBz0, double dBz1) const {
+Matrix<double, 10, 10> ResidualGlobalCorrectionMakerBase::twoTrackPca2curvJacobianD(const Matrix<double, 7, 1> &state0, const Matrix<double, 7, 1> &state1, const MagneticField *field, const Eigen::Vector3d &dB0, const Eigen::Vector3d &dB1) const {
 
   const GlobalPoint posa(state0[0], state0[1], state0[2]);
   const GlobalVector &bfielda = field->inInverseGeV(posa);
-  const Matrix<double, 3, 1> Bva(bfielda.x(), bfielda.y(), double(bfielda.z()) + 2.99792458e-3*dBz0);
+  const Matrix<double, 3, 1> Bva =
+      Matrix<double, 3, 1>(bfielda.x(), bfielda.y(), bfielda.z())
+      + MagneticField::kTeslaToInvGeV * dB0;
 
   const GlobalPoint posb(state1[0], state1[1], state1[2]);
   const GlobalVector &bfieldb = field->inInverseGeV(posb);
-  const Matrix<double, 3, 1> Bvb(bfieldb.x(), bfieldb.y(), double(bfieldb.z()) + 2.99792458e-3*dBz1);
+  const Matrix<double, 3, 1> Bvb =
+      Matrix<double, 3, 1>(bfieldb.x(), bfieldb.y(), bfieldb.z())
+      + MagneticField::kTeslaToInvGeV * dB1;
 
   const Matrix<double, 3, 1> Wa0 = state0.segment<3>(3).normalized();
   const double Wa0x = Wa0[0];
@@ -2203,12 +2256,14 @@ Matrix<double, 10, 10> ResidualGlobalCorrectionMakerBase::twoTrackPca2curvJacobi
   return res;
 }
 
-Matrix<double, 5, 5> ResidualGlobalCorrectionMakerBase::curv2localJacobianAltelossD(const Matrix<double, 7, 1> &state, const MagneticField *field, const GloballyPositioned<double> &surface, double dEdx, double mass, double dBz) const {
-  
-  
-  const GlobalPoint pos(state[0], state[1], state[2]);  
+Matrix<double, 5, 5> ResidualGlobalCorrectionMakerBase::curv2localJacobianAltelossD(const Matrix<double, 7, 1> &state, const MagneticField *field, const GloballyPositioned<double> &surface, double dEdx, double mass, const Eigen::Vector3d &dB) const {
+
+
+  const GlobalPoint pos(state[0], state[1], state[2]);
   const GlobalVector &bfield = field->inInverseGeV(pos);
-  const Matrix<double, 3, 1> Bv(bfield.x(), bfield.y(), double(bfield.z()) + 2.99792458e-3*dBz);
+  const Matrix<double, 3, 1> Bv =
+      Matrix<double, 3, 1>(bfield.x(), bfield.y(), bfield.z())
+      + MagneticField::kTeslaToInvGeV * dB;
   
   const double q = state[6];
   
@@ -2377,12 +2432,14 @@ Matrix<double, 5, 5> ResidualGlobalCorrectionMakerBase::curv2localJacobianAltelo
                                               
 }
 
-Matrix<double, 5, 5> ResidualGlobalCorrectionMakerBase::curv2localhybridJacobianAltelossD(const Matrix<double, 7, 1> &state, const MagneticField *field, const GloballyPositioned<double> &surface, double dEdx, double mass, double dBz) const {
+Matrix<double, 5, 5> ResidualGlobalCorrectionMakerBase::curv2localhybridJacobianAltelossD(const Matrix<double, 7, 1> &state, const MagneticField *field, const GloballyPositioned<double> &surface, double dEdx, double mass, const Eigen::Vector3d &dB) const {
 
 
   const GlobalPoint pos(state[0], state[1], state[2]);
   const GlobalVector &bfield = field->inInverseGeV(pos);
-  const Matrix<double, 3, 1> Bv(bfield.x(), bfield.y(), double(bfield.z()) + 2.99792458e-3*dBz);
+  const Matrix<double, 3, 1> Bv =
+      Matrix<double, 3, 1>(bfield.x(), bfield.y(), bfield.z())
+      + MagneticField::kTeslaToInvGeV * dB;
 
   const double q = state[6];
 
@@ -2521,12 +2578,14 @@ Matrix<double, 5, 5> ResidualGlobalCorrectionMakerBase::curv2localhybridJacobian
 
 }
 
-Matrix<double, 5, 11> ResidualGlobalCorrectionMakerBase::curv2localJacobianAlignmentD(const Matrix<double, 7, 1> &state, const MagneticField *field, const GloballyPositioned<double> &surface, double dEdx, double mass, double dBz) const {
+Matrix<double, 5, 11> ResidualGlobalCorrectionMakerBase::curv2localJacobianAlignmentD(const Matrix<double, 7, 1> &state, const MagneticField *field, const GloballyPositioned<double> &surface, double dEdx, double mass, const Eigen::Vector3d &dB) const {
 
 
   const GlobalPoint pos(state[0], state[1], state[2]);
   const GlobalVector &bfield = field->inInverseGeV(pos);
-  const Matrix<double, 3, 1> Bv(bfield.x(), bfield.y(), double(bfield.z()) + 2.99792458e-3*dBz);
+  const Matrix<double, 3, 1> Bv =
+      Matrix<double, 3, 1>(bfield.x(), bfield.y(), bfield.z())
+      + MagneticField::kTeslaToInvGeV * dB;
 
   const double q = state[6];
 

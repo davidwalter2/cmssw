@@ -518,22 +518,22 @@ std::pair<TrajectoryStateOnSurface, double> Geant4ePropagator::propagateGeneric(
   std::tuple<bool, Eigen::Matrix<double, 7, 1>, Eigen::Matrix<double, 5, 5>, Eigen::Matrix<double, 5, 7>, double, Eigen::Matrix<double, 5, 5>, Eigen::Matrix<double, 5, 5>, double, double> 
   Geant4ePropagator::propagateGenericWithJacobianAltD(
     const Eigen::Matrix<double, 7, 1> &ftsStart,
-    const GloballyPositioned<double> &pDest, 
-    double dBz, 
-    double dxi, 
-    double dms, 
-    double dioni, 
+    const GloballyPositioned<double> &pDest,
+    const Eigen::Vector3d &dB,
+    double dxi,
+    double dms,
+    double dioni,
     double pforced,
     const std::string& particleNameOverride
   ) const {
-                          
+
   using namespace Eigen;
 
   const G4Field *field = G4TransportationManager::GetTransportationManager()->GetFieldManager()->GetDetectorField();
   //FIXME check thread safety of this
   sim::Field *cmsField = const_cast<sim::Field*>(static_cast<const sim::Field*>(field));
-  
-  cmsField->SetOffset(0., 0., dBz);
+
+  cmsField->SetOffset(dB.x(), dB.y(), dB.z());
   cmsField->SetMaterialOffset(dxi);
 //   cmsField->SetMaterialOffset(std::log(1e-6));
 //   cmsField->SetMaterialOffset(std::log(1e-10));
@@ -795,7 +795,7 @@ std::pair<TrajectoryStateOnSurface, double> Geant4ePropagator::propagateGeneric(
     
 //     std::cout << "thisPathLength = " << thisPathLength << std::endl;
 //     const Matrix<double, 5, 7> transportJac = transportJacobian(statepre, thisPathLength, dEdx, mass);
-    const Matrix<double, 5, 7> transportJac = transportJacobianBzD(statepre, thisPathLength, dEdx, mass, dBz);
+    const Matrix<double, 5, 7> transportJac = transportJacobianBzD(statepre, thisPathLength, dEdx, mass, dB);
     
 //     const Matrix<double, 5, 7> transportJacAlt = transportJacobianD(statepre, thisPathLength, dEdx, mass);
     
@@ -1960,21 +1960,27 @@ void Geant4ePropagator::CalculateEffectiveZandA(const G4Material* mate,
   }
 }
 
-Eigen::Matrix<double, 5, 7> Geant4ePropagator::transportJacobianBzD(const Eigen::Matrix<double, 7, 1> &start, double s, double dEdx, double mass, double dBz) const {
-  
+Eigen::Matrix<double, 5, 7> Geant4ePropagator::transportJacobianBzD(const Eigen::Matrix<double, 7, 1> &start, double s, double dEdx, double mass, const Eigen::Vector3d &dB) const {
+
   if (s==0.) {
     Eigen::Matrix<double, 5, 7> res;
     res.leftCols<5>() = Eigen::Matrix<double, 5, 5>::Identity();
     res.rightCols<2>() = Eigen::Matrix<double, 5, 2>::Zero();
     return res;
   }
-  
-  const GlobalPoint pos(start[0], start[1], start[2]);  
+
+  const GlobalPoint pos(start[0], start[1], start[2]);
   const GlobalVector &bfield = theField->inInverseGeV(pos);
-  
-  const double Bx = bfield.x();
-  const double By = bfield.y();
-  const double Bz = bfield.z() + 2.99792458e-3*dBz;
+
+  // Apply the 3D field offset (Tesla) so the integrated trajectory uses the
+  // corrected field. kTeslaToInvGeV converts dB (Tesla) to the inInverseGeV
+  // units in which `bfield` is already expressed. The transport-Jacobian
+  // column at index 5 below remains the d/dBz derivative (SymPy-generated);
+  // per-mode chain-rule scaling is applied by the caller for scalar-potential
+  // modes.
+  const double Bx = bfield.x() + MagneticField::kTeslaToInvGeV*dB.x();
+  const double By = bfield.y() + MagneticField::kTeslaToInvGeV*dB.y();
+  const double Bz = bfield.z() + MagneticField::kTeslaToInvGeV*dB.z();
   
   const double M0x = start[0];
   const double M0y = start[1];
@@ -2342,7 +2348,7 @@ Eigen::Matrix<double, 5, 7> Geant4ePropagator::transportJacobianBzD(const Eigen:
   res(4,5) = dytdBz;
   res(4,6) = dytdxi;
 
-  res.col(5) *= 2.99792458e-3;
+  res.col(5) *= MagneticField::kTeslaToInvGeV;
   
   return res;
 

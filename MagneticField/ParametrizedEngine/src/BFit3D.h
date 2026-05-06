@@ -2,7 +2,7 @@
 #define BFit3D_h
 
 #include <iostream>
-#include "HarmBasis3DCyl.h"
+#include "MagneticField/ParametrizedEngine/interface/HarmBasis3DCyl.h"
 
 //_______________________________________________________________________________
 namespace magfieldparam {

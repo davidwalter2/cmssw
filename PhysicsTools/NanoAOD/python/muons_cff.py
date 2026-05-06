@@ -147,6 +147,8 @@ trackrefit = cms.EDProducer('ResidualGlobalCorrectionMakerG4e',
                                    useIdealGeometry = cms.bool(False),
                                    corFiles = cms.vstring(),
                                    MagneticFieldLabel = cms.string(""),
+                                   scalarPotentialLmax = cms.uint32(5),
+                                   scalarPotentialExtra = cms.vstring(),
 )
 
 trackrefitideal = cms.EDProducer('ResidualGlobalCorrectionMakerG4e',
@@ -169,6 +171,8 @@ trackrefitideal = cms.EDProducer('ResidualGlobalCorrectionMakerG4e',
                                    useIdealGeometry = cms.bool(True),
                                    corFiles = cms.vstring(),
                                    MagneticFieldLabel = cms.string(""),
+                                   scalarPotentialLmax = cms.uint32(5),
+                                   scalarPotentialExtra = cms.vstring(),
 )
 
 mergedGlobalIdxs = cms.EDProducer("GlobalIdxProducer",

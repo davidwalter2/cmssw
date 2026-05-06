@@ -41,5 +41,8 @@ globalCorD0 = cms.EDProducer(
     daughterParticleName2=cms.string("pi"),
     corFiles=cms.vstring(),
     MagneticFieldLabel=cms.string(''),
+    # Scalar-potential B-field correction (replaces the per-module dBz block).
+    scalarPotentialLmax=cms.uint32(5),
+    scalarPotentialExtra=cms.vstring(),
     outprefix=cms.untracked.string('globalcor_d0')
 )

@@ -132,6 +132,8 @@ process.globalCor = cms.EDProducer(
     corFiles=cms.vstring(),
     triggers=cms.vstring(*onia["triggers"]),
     MagneticFieldLabel=cms.string(""),
+    scalarPotentialLmax=cms.uint32(5),
+    scalarPotentialExtra=cms.vstring(),
     outprefix=cms.untracked.string("globalcor"),
 )
 

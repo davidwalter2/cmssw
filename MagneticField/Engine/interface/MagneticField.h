@@ -32,6 +32,11 @@ class MagneticField
   /// Field value ad specified global point, in Tesla
   virtual GlobalVector inTesla (const GlobalPoint& gp) const = 0;
 
+  /// Conversion factor from B-field in Tesla to inverse-GeV units
+  /// (= c / (GeV/Tesla/cm)). Use this whenever a Tesla-valued shift dB has
+  /// to be added to a field already in inInverseGeV() units.
+  static constexpr double kTeslaToInvGeV = 2.99792458e-3;
+
   /// Field value ad specified global point, in KGauss
   GlobalVector inKGauss(const GlobalPoint& gp) const  {
     return inTesla(gp) * 10.F;
@@ -39,7 +44,7 @@ class MagneticField
 
   /// Field value ad specified global point, in 1/Gev
   GlobalVector inInverseGeV(const GlobalPoint& gp) const {
-    return inTesla(gp) * 2.99792458e-3F;
+    return inTesla(gp) * float(kTeslaToInvGeV);
   }
 
   /// True if the point is within the region where the concrete field

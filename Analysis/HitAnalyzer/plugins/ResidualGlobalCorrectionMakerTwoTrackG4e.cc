@@ -1162,7 +1162,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 //       const unsigned int nparsAlignment = 2*nvalid + nvalidalign2d;
 //       const unsigned int nparsAlignment = 6*nvalid;
       const unsigned int nparsAlignment = 5*nvalid + nvalidalign2d;
-      const unsigned int nparsBfield = nhits;
+      const unsigned int nFieldModes = fieldCorrection_->nModes();
+      const unsigned int nparsBfield = nhits * nFieldModes;
       const unsigned int nparsEloss = nhits;
 //       const unsigned int nparsEloss = nhits + 2;
       const unsigned int npars = nparsAlignment + nparsBfield + nparsEloss;
@@ -1331,24 +1332,16 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           
   //         std::cout << "firsthitshared = " << firsthitshared << std::endl;
           
-          double dbetavalref = 0.;
-          std::array<double, 2> dbetavalrefarr;
+          // Per-track 3D field correction at each track's PCA reference point,
+          // from the scalar-potential expansion. Replaces the old per-module
+          // dBz lookup at the first hit's parmdetid.
+          std::array<Eigen::Vector3d, 2> dBrefarr;
           for (unsigned int id = 0; id < 2; ++id) {
-              auto &hits = hitsarr[id];
-              auto const& hit = hits[0];
-              
-              const uint32_t gluedid = trackerTopology->glued(hit->det()->geographicalId());
-              const bool isglued = gluedid != 0;
-              const DetId parmdetid = isglued ? DetId(gluedid) : hit->geographicalId();
-
-              const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(6, parmdetid));                
-              
-              const double dbetaval = corparms_[bfieldglobalidx];
-              dbetavalref += 0.5*dbetaval;
-              dbetavalrefarr[id] = dbetaval;
+              const GlobalPoint refPos(refftsarr[id][0], refftsarr[id][1], refftsarr[id][2]);
+              dBrefarr[id] = fieldCorrection_->getCorrectionAt(refPos, corparms_);
           }
 
-          const Matrix<double, 10, 10> twotrackpca2curvref = twoTrackPca2curvJacobianD(refftsarr[0], refftsarr[1], field, dbetavalrefarr[0], dbetavalrefarr[1]);
+          const Matrix<double, 10, 10> twotrackpca2curvref = twoTrackPca2curvJacobianD(refftsarr[0], refftsarr[1], field, dBrefarr[0], dBrefarr[1]);
 
           
           for (unsigned int id = 0; id < 2; ++id) {
@@ -1536,30 +1529,36 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
               const DetId aligndetid = alignGlued_ ? parmdetid : hit->geographicalId();
 
-              const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(6, parmdetid));                
               const unsigned int elossglobalidx = detidparms.at(std::make_pair(7, parmdetid));
-              
-              const double dbetaval = corparms_[bfieldglobalidx];
+
+              // 3D field correction at the propagation start. dBzPerMode gives
+              // the per-mode Bz basis values for the chain-rule scaling of the
+              // transport-Jacobian dBz column.
+              const GlobalPoint propStartPos(updtsos[0], updtsos[1], updtsos[2]);
+              const Eigen::Vector3d dB = fieldCorrection_->getCorrectionAt(propStartPos, corparms_);
+              std::vector<double> dBzPerMode;
+              fieldCorrection_->getBzBasisAt(propStartPos, dBzPerMode);
+
               const double dxival = corparms_[elossglobalidx];
-              
+
               const GloballyPositioned<double> &surface = surfacemapD_.at(hit->geographicalId());
-              
-              auto propresult = g4prop->propagateGenericWithJacobianAltD(updtsos, surface, dbetaval, dxival,
+
+              auto propresult = g4prop->propagateGenericWithJacobianAltD(updtsos, surface, dB, dxival,
                                                                           0., 0., -1., g4PartName);
               if (!std::get<0>(propresult)) {
                 std::cout << "ResidualGlobalCorrectionMakerTwoTrackG4e ### Abort: Propagation Failed!" << std::endl;
                 valid = false;
                 break;
               }
-              
-              
+
+
               updtsos = std::get<1>(propresult);
               const Matrix<double, 5, 5> Qcurv = std::get<2>(propresult);
               const Matrix<double, 5, 7> FdFm = std::get<3>(propresult);
               const double dEdxlast = std::get<4>(propresult);
-              
+
               const Matrix<double, 5, 5> Hm =
-                  curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, trackMass[id], dbetaval);
+                  curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, trackMass[id], dB);
               
               const Matrix<double, 6, 1> localparmsprop = globalToLocal(updtsos, surface);
 
@@ -1576,7 +1575,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                   
                   Matrix<double, 7, 1>& oldtsos = layerStates[ihit];
                   const Matrix<double, 5, 5> Hold =
-                      curv2localJacobianAltelossD(oldtsos, field, surface, dEdxlast, trackMass[id], dbetaval);
+                      curv2localJacobianAltelossD(oldtsos, field, surface, dEdxlast, trackMass[id], dB);
                   const Matrix<double, 5, 1> dxlocal = Hold*dxfull.segment<5>(trackstateidx + 5*ihit);
 
                   localparms = globalToLocal(oldtsos, surface);
@@ -1592,10 +1591,10 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               }
 
               // curvilinear to local jacobian
-              // const Matrix<double, 5, 5> &Hp = dolocalupdate ? curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, mmu, dbetaval) : Hm;
+              // const Matrix<double, 5, 5> &Hp = dolocalupdate ? curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, mmu, dB) : Hm;
               Matrix<double, 5, 5> Hp = Hm;
               if (dolocalupdate) {
-                Hp = curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, trackMass[id], dbetaval);
+                Hp = curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, trackMass[id], dB);
               }
               
               // const Matrix<double, 5, 5> &Q = dolocalupdate ? Hm*Qcurv*Hm.transpose() : Qcurv;
@@ -1607,14 +1606,23 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
               const Matrix<double, 5, 5> Qinv = Q.inverse();
 
+              // Build the per-hit field+eloss Jacobian: nFieldModes columns
+              // (FdFm.col(5) scaled per-mode by ∂Bz/∂c_i at the propagation
+              // start) plus 1 column for d/dxi (FdFm.col(6) unchanged).
+              const unsigned int nlocalbfield = nFieldModes;
+              const unsigned int nlocaleloss = 1;
+              const unsigned int nlocalparms = nlocalbfield + nlocaleloss;
+
+              Matrix<double, 5, Dynamic> dStateDparams(5, nlocalparms);
+              for (unsigned int imode = 0; imode < nlocalbfield; ++imode) {
+                dStateDparams.col(imode) = FdFm.col(5) * dBzPerMode[imode];
+              }
+              dStateDparams.col(nlocalbfield) = FdFm.col(6);
+
               if (ihit == 0) {
                 constexpr unsigned int nvtxstate = 10;
                 constexpr unsigned int nlocalstate = 5;
-                constexpr unsigned int nlocalbfield = 1;
-                constexpr unsigned int nlocaleloss = 1;
-                constexpr unsigned int nlocalparms = nlocalbfield + nlocaleloss;
-
-                constexpr unsigned int nlocal = nvtxstate + nlocalstate + nlocalparms;
+                const unsigned int nlocal = nvtxstate + nlocalstate + nlocalparms;
 
                 constexpr unsigned int localvtxidx = 0;
                 constexpr unsigned int localstateidx = localvtxidx + nvtxstate;
@@ -1626,24 +1634,24 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
                 const unsigned int vtxjacidx = 5*id;
 
-                Matrix<double, 5, nlocal> Fprop;
+                Matrix<double, 5, Dynamic> Fprop(5, nlocal);
                 if (dolocalupdate) {
                   Fprop.middleCols<nvtxstate>(localvtxidx) = -Hm*FdFm.leftCols<5>()*twotrackpca2curvref.middleRows<5>(vtxjacidx);
                   Fprop.middleCols<nlocalstate>(localstateidx) = Hp;
-                  Fprop.middleCols<nlocalparms>(localparmidx) = -Hm*FdFm.rightCols<2>();
+                  Fprop.middleCols(localparmidx, nlocalparms) = -Hm * dStateDparams;
                 }
                 else {
                   Fprop.middleCols<nvtxstate>(localvtxidx) = -FdFm.leftCols<5>()*twotrackpca2curvref.middleRows<5>(vtxjacidx);
                   Fprop.middleCols<nlocalstate>(localstateidx) = Matrix<double, nlocalstate, nlocalstate>::Identity();
-                  Fprop.middleCols<nlocalparms>(localparmidx) = -FdFm.rightCols<2>();
+                  Fprop.middleCols(localparmidx, nlocalparms) = -dStateDparams;
                 }
 
                 const double propchisq = dx0.transpose()*Qinv*dx0;
-                const Matrix<double, nlocal, 1> propgrad = 2.*Fprop.transpose()*Qinv*dx0;
-                const Matrix<double, nlocal, nlocal> prophess = 2.*Fprop.transpose()*Qinv*Fprop;
+                const VectorXd propgrad = 2.*Fprop.transpose()*Qinv*dx0;
+                const MatrixXd prophess = 2.*Fprop.transpose()*Qinv*Fprop;
 
-                constexpr std::array<unsigned int, 3> localsizes = {{ nvtxstate, nlocalstate, nlocalparms }};
-                constexpr std::array<unsigned int, 3> localidxs = {{ localvtxidx, localstateidx, localparmidx }};
+                const std::array<unsigned int, 3> localsizes = {{ nvtxstate, nlocalstate, nlocalparms }};
+                const std::array<unsigned int, 3> localidxs = {{ localvtxidx, localstateidx, localparmidx }};
                 const std::array<unsigned int, 3> fullidxs = {{ fullvtxidx, fullstateidx, fullparmidx }};
 
                 chisq0val += propchisq;
@@ -1657,11 +1665,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               }
               else {
                 constexpr unsigned int nlocalstate = 10;
-                constexpr unsigned int nlocalbfield = 1;
-                constexpr unsigned int nlocaleloss = 1;
-                constexpr unsigned int nlocalparms = nlocalbfield + nlocaleloss;
-
-                constexpr unsigned int nlocal = nlocalstate + nlocalparms;
+                const unsigned int nlocal = nlocalstate + nlocalparms;
 
                 constexpr unsigned int localstateidx = 0;
                 constexpr unsigned int localparmidx = localstateidx + nlocalstate;
@@ -1669,24 +1673,24 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                 const unsigned int fullstateidx = trackstateidx + 5*(ihit - 1);
                 const unsigned int fullparmidx = nstateparms + parmidx;
 
-                Matrix<double, 5, nlocal> Fprop;
+                Matrix<double, 5, Dynamic> Fprop(5, nlocal);
                 if (dolocalupdate) {
                   Fprop.leftCols<5>() = -Hm*FdFm.leftCols<5>();
                   Fprop.middleCols<5>(5) = Hp;
-                  Fprop.middleCols<nlocalparms>(localparmidx) = -Hm*FdFm.rightCols<2>();
+                  Fprop.middleCols(localparmidx, nlocalparms) = -Hm * dStateDparams;
                 }
                 else {
                   Fprop.leftCols<5>() = -FdFm.leftCols<5>();
                   Fprop.middleCols<5>(5) = Matrix<double, 5, 5>::Identity();
-                  Fprop.middleCols<nlocalparms>(localparmidx) = -FdFm.rightCols<2>();
+                  Fprop.middleCols(localparmidx, nlocalparms) = -dStateDparams;
                 }
 
                 const double propchisq = dx0.transpose()*Qinv*dx0;
-                const Matrix<double, nlocal, 1> propgrad = 2.*Fprop.transpose()*Qinv*dx0;
-                const Matrix<double, nlocal, nlocal> prophess = 2.*Fprop.transpose()*Qinv*Fprop;
+                const VectorXd propgrad = 2.*Fprop.transpose()*Qinv*dx0;
+                const MatrixXd prophess = 2.*Fprop.transpose()*Qinv*Fprop;
 
-                constexpr std::array<unsigned int, 2> localsizes = {{ nlocalstate, nlocalparms }};
-                constexpr std::array<unsigned int, 2> localidxs = {{ localstateidx, localparmidx }};
+                const std::array<unsigned int, 2> localsizes = {{ nlocalstate, nlocalparms }};
+                const std::array<unsigned int, 2> localidxs = {{ localstateidx, localparmidx }};
                 const std::array<unsigned int, 2> fullidxs = {{ fullstateidx, fullparmidx }};
 
                 chisq0val += propchisq;
@@ -1700,11 +1704,10 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
               }
 
-              globalidxv[parmidx] = bfieldglobalidx;
-              parmidx++;
-
-              globalidxv[parmidx] = elossglobalidx;
-              parmidx++;
+              for (unsigned int imode = 0; imode < nlocalbfield; ++imode) {
+                globalidxv[parmidx++] = fieldCorrection_->basisGlobalIdx(imode);
+              }
+              globalidxv[parmidx++] = elossglobalidx;
 
               if (hit->isValid()) {
 

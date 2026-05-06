@@ -2,7 +2,7 @@
 #define rz_harm_poly_h
 
 #include <cmath>
-#include "poly2d_base.h"
+#include "MagneticField/ParametrizedEngine/interface/poly2d_base.h"
 
 /////////////////////////////////////////////////////////////////////////////////
 //                                                                             //

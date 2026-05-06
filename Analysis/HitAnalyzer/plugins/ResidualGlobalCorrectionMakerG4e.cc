@@ -738,7 +738,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     nValidPixelHitsFinal = 0;
     
     const unsigned int nparsAlignment = 5*nvalid + nvalidalign2d;
-    const unsigned int nparsBfield = nhits;
+    const unsigned int nFieldModes = fieldCorrection_->nModes();
+    const unsigned int nparsBfield = nhits * nFieldModes;
     const unsigned int nparsEloss = nhits;
 //     const unsigned int nparsRes = nhits + nvalid + nvalidpixel;
     const unsigned int nparsRes = dores ? 2*nhits + nvalid + nvalidpixel : 0;
@@ -1275,12 +1276,18 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         const DetId parmdetid = isglued ? DetId(gluedid) : hit->geographicalId();
         const DetId aligndetid = alignGlued_ ? parmdetid : hit->geographicalId();
         
-        const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(6, propdetid));
         const unsigned int elossglobalidx = detidparms.at(std::make_pair(7, propdetid));
         const unsigned int msglobalidx = dores ? detidparms.at(std::make_pair(10, propdetid)) : 0;
         const unsigned int ioniglobalidx = dores ? detidparms.at(std::make_pair(11, propdetid)) : 0;
-        
-        const double dbetaval = corparms_[bfieldglobalidx];
+
+        // 3D field correction at the start of the propagation step. dBzPerMode
+        // gives the per-mode Bz basis values at the same point, used as the
+        // chain-rule scaling for the transport-Jacobian dBz column.
+        const GlobalPoint propStartPos(updtsos[0], updtsos[1], updtsos[2]);
+        const Eigen::Vector3d dB = fieldCorrection_->getCorrectionAt(propStartPos, corparms_);
+        std::vector<double> dBzPerMode;
+        fieldCorrection_->getBzBasisAt(propStartPos, dBzPerMode);
+
         const double dxival = corparms_[elossglobalidx];
         const double dmsval = dores ? corparms_[msglobalidx] : dxival;
         const double dionival = dores ? corparms_[ioniglobalidx] : dxival;
@@ -1325,8 +1332,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         // auto const &propresult = g4prop->propagateGenericWithJacobianAltD(propfromtsos, surface, dbetaval, dxival, dradval);
         
         auto const &propresult = simhitdebug
-            ? g4prop->propagateGenericWithJacobianAltD(propfromtsos, surface, dbetaval, dxival, dmsval, dionival, -1., g4PartName)
-            : g4prop->propagateGenericWithJacobianAltD(updtsos,      surface, dbetaval, dxival, dmsval, dionival, -1., g4PartName);
+            ? g4prop->propagateGenericWithJacobianAltD(propfromtsos, surface, dB, dxival, dmsval, dionival, -1., g4PartName)
+            : g4prop->propagateGenericWithJacobianAltD(updtsos,      surface, dB, dxival, dmsval, dionival, -1., g4PartName);
 
 
         if (simhitdebug && simhit) {
@@ -1380,7 +1387,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           Qtot = Qcurv;
         }
 
-        const Matrix<double, 5, 5> Hm = curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, trackmass, dbetaval);
+        const Matrix<double, 5, 5> Hm = curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, trackmass, dB);
         
         
         const float enext = simhit == nullptr ? -99. : std::sqrt(std::pow(simhit->pabs(), 2) + trackmass*trackmass) - 0.5*simhit->energyLoss();        
@@ -1430,7 +1437,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           updtsos[6] = genpart->charge();
 
           if (false) {
-            auto const &propresultsim = g4prop->propagateGenericWithJacobianAltD(updtsos, surface, dbetaval, dxival, dmsval, dionival, -1., g4PartName);
+            auto const &propresultsim = g4prop->propagateGenericWithJacobianAltD(updtsos, surface, dB, dxival, dmsval, dionival, -1., g4PartName);
 
             if (!std::get<0>(propresultsim)) {
               std::cout << "Abort: Sim state Propagation Failed!" << std::endl;
@@ -1457,7 +1464,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             //save current parameters
 
             Matrix<double, 7, 1>& oldtsos = layerStates[ihit];
-            const Matrix<double, 5, 5> Hold = curv2localJacobianAltelossD(oldtsos, field, surface, dEdxlast, trackmass, dbetaval);
+            const Matrix<double, 5, 5> Hold = curv2localJacobianAltelossD(oldtsos, field, surface, dEdxlast, trackmass, dB);
             const Matrix<double, 5, 1> dxlocal = Hold*dxfull.segment<5>(5*(ihit+1));
 
             localparms = globalToLocal(oldtsos, surface);
@@ -1500,7 +1507,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           simtsos[6] = genpart->charge();          
           
           auto const &surfacealign = surfacemapD_.at(hit->geographicalId());
-          auto const &propresultsalign = g4prop->propagateGenericWithJacobianAltD(simtsos, surfacealign, dbetaval, dxival, dmsval, dionival, -1., g4PartName);
+          auto const &propresultsalign = g4prop->propagateGenericWithJacobianAltD(simtsos, surfacealign, dB, dxival, dmsval, dionival, -1., g4PartName);
 
           if (!std::get<0>(propresultsalign)) {
             std::cout << "WARNING propagation for alignment failed!\n";
@@ -1518,7 +1525,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         Matrix<double, 5, 5> Hp = Hm;
         
         if (dolocalupdate) {
-          Hp = curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, trackmass, dbetaval);
+          Hp = curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, trackmass, dB);
         }
 
         Matrix<double, 5, 5> Q = Qcurv;
@@ -1538,30 +1545,42 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         {
           constexpr unsigned int nlocalcons = 5;
           constexpr unsigned int nlocalstateparms = 5;
-          constexpr unsigned int nlocalbfield = 1;
+          // Field block expands to nFieldModes columns (one per scalar-potential
+          // mode), each scaled by its Bz basis value at the propagation start.
+          const unsigned int nlocalbfield = nFieldModes;
           constexpr unsigned int nlocaleloss = 1;
-          constexpr unsigned int nlocalparms = nlocalbfield + nlocaleloss;
+          const unsigned int nlocalparms = nlocalbfield + nlocaleloss;
 
           const unsigned int fullstateidx = 5*ihit;
           const unsigned int fullparmidx = iparm;
 
           rfull.segment<nlocalcons>(icons) = dx0;
-          
+
+          // Build the 5 x nlocalparms field+eloss Jacobian: nFieldModes columns
+          // are FdFm.col(5) (the d/dBz column from transportJacobianBzD) scaled
+          // by each mode's Bz basis value at the propagation start; the last
+          // column is the unchanged d/dxi column FdFm.col(6).
+          Matrix<double, 5, Dynamic> dStateDparams(5, nlocalparms);
+          for (unsigned int imode = 0; imode < nlocalbfield; ++imode) {
+            dStateDparams.col(imode) = FdFm.col(5) * dBzPerMode[imode];
+          }
+          dStateDparams.col(nlocalbfield) = FdFm.col(6);
+
           if (dolocalupdate) {
             Ffull.block<nlocalcons, nlocalstateparms>(icons, fullstateidx) = -Hm*FdFm.leftCols<nlocalstateparms>();
             Ffull.block<nlocalcons, nlocalstateparms>(icons, fullstateidx + nlocalstateparms) = Hp;
-            Jfull.block<nlocalcons, nlocalparms>(icons, fullparmidx) = -Hm*FdFm.rightCols<nlocalparms>();
+            Jfull.block(icons, fullparmidx, nlocalcons, nlocalparms) = -Hm * dStateDparams;
           }
           else {
             Ffull.block<nlocalcons, nlocalstateparms>(icons, fullstateidx) = -FdFm.leftCols<nlocalstateparms>();
             Ffull.block<nlocalcons, nlocalstateparms>(icons, fullstateidx + nlocalstateparms) = Matrix<double, nlocalcons, nlocalstateparms>::Identity();
-            Jfull.block<nlocalcons, nlocalparms>(icons, fullparmidx) = -FdFm.rightCols<nlocalparms>();
+            Jfull.block(icons, fullparmidx, nlocalcons, nlocalparms) = -dStateDparams;
           }
-          
+
           Vinvfull.block<nlocalcons, nlocalcons>(icons, icons) = Qinv;
 //           Vinvfullalt.block<nlocalcons, nlocalcons>(icons, icons) = Qinv;
           Vinvfullalt.block<nlocalcons, nlocalcons>(icons, icons) = (Q - 0.1*dQMS).inverse();
-          
+
           if (dores) {
             std::vector<Triplet<double>> coeffs;
             for (unsigned int irow = 0; irow < nlocalcons; ++irow) {
@@ -1571,8 +1590,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             }
             SparseMatrix<double> &dV = dVs.emplace_back(ncons, ncons);
             dV.setFromTriplets(coeffs.begin(), coeffs.end());
-            // MS resolution parameter is decoupled from energy loss
-            residxs.push_back(iparm + 2);
+            // MS resolution parameter slot sits right after the bfield block
+            // and the eloss slot.
+            residxs.push_back(iparm + nlocalbfield + 1);
           }
 
           if (dores) {
@@ -1584,25 +1604,25 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             }
             SparseMatrix<double> &dV = dVs.emplace_back(ncons, ncons);
             dV.setFromTriplets(coeffs.begin(), coeffs.end());
-            // energy loss resolution parameter is decoupled from the energy loss mean value
-            residxs.push_back(iparm + 3);
+            // Ionization resolution slot is the second-after-eloss; offset is
+            // bfield block + eloss + msres (= nlocalbfield + 2).
+            residxs.push_back(iparm + nlocalbfield + 2);
           }
 
-          
+
           icons += nlocalcons;
 
-          globalidxv[iparm] = bfieldglobalidx;
-          iparm++;
+          // One slot per scalar-potential mode, sharing the same global index
+          // across all hits (the idxmap collapses these in the final Jacobian).
+          for (unsigned int imode = 0; imode < nlocalbfield; ++imode) {
+            globalidxv[iparm++] = fieldCorrection_->basisGlobalIdx(imode);
+          }
 
-          globalidxv[iparm] = elossglobalidx;
-          iparm++;
+          globalidxv[iparm++] = elossglobalidx;
 
           if (dores) {
-            globalidxv[iparm] = msglobalidx;
-            iparm++;
-            
-            globalidxv[iparm] = ioniglobalidx;
-            iparm++;
+            globalidxv[iparm++] = msglobalidx;
+            globalidxv[iparm++] = ioniglobalidx;
           }
         }
 
@@ -2156,7 +2176,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                     simtsos[5] = simglobalmom.z();
                     simtsos[6] = genpart->charge();
 
-                    auto propresultsim = g4prop->propagateGenericWithJacobianAltD(simtsos, surface, dbetaval, dxival, 0., 0., -1., g4PartName);
+                    auto propresultsim = g4prop->propagateGenericWithJacobianAltD(simtsos, surface, dB, dxival, 0., 0., -1., g4PartName);
 
                     if (std::get<0>(propresultsim)) {
                       simtsos = std::get<1>(propresultsim);

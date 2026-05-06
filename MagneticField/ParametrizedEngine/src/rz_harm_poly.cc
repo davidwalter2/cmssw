@@ -1,5 +1,5 @@
 #include <typeinfo>
-#include "rz_harm_poly.h"
+#include "MagneticField/ParametrizedEngine/interface/rz_harm_poly.h"
 #include <cstdlib>
 
 using namespace magfieldparam;
