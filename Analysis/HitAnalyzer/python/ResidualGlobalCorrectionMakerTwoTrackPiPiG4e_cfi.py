@@ -38,12 +38,9 @@ globalCorKs = cms.EDProducer(
     doMassConstraint = cms.bool(False),
     massConstraint = cms.double(0.497611),       # KS mass
     massConstraintWidth = cms.double(7.351e-15),  # natural width Gamma = hbar/tau (KS), GeV
-    daughterMass1 = cms.double(0.13957039),              # both daughters: pion
-    daughterMass2 = cms.double(0.13957039),
-    daughterMass1Err = cms.double(0.00000018),
-    daughterMass2Err = cms.double(0.00000018),
-    # Geant4 particle base for the per-call propagator override (avoids
-    # treating the daughters as muons inside Geant4e).
+    # Per-daughter Geant4 particle base. Mass + mass uncertainty are
+    # looked up from the PDG table in
+    # Analysis/HitAnalyzer/interface/ParticleProperties.h .
     daughterParticleName1 = cms.string("pi"),
     daughterParticleName2 = cms.string("pi"),
     corFiles = cms.vstring(),

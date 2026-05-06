@@ -1,5 +1,6 @@
 #include "ResidualGlobalCorrectionMakerBase.h"
 #include "MagneticFieldOffset.h"
+#include "Analysis/HitAnalyzer/interface/ParticleProperties.h"
 
 // required for Transient Tracks
 #include "TrackingTools/TransientTrack/interface/TransientTrack.h"
@@ -276,22 +277,21 @@ ResidualGlobalCorrectionMakerTwoTrackG4e::ResidualGlobalCorrectionMakerTwoTrackG
   doMassConstraint_ = iConfig.getParameter<bool>("doMassConstraint");
   massConstraint_ = iConfig.getParameter<double>("massConstraint");
   massConstraintWidth_ = iConfig.getParameter<double>("massConstraintWidth");
-  // Per-daughter masses default to the muon mass to preserve the legacy
-  // J/psi/Upsilon configuration where the cfi simply doesn't specify them.
-  // Override (e.g. to kaon+pion for D*, pion+pion for KS, proton+pion for
-  // Lambda) via the channel-specific cfi.
-  constexpr double mmu = 0.1056583755;
-  constexpr double mmuerr = 0.0000000023;
-  daughterMass1_ = iConfig.existsAs<double>("daughterMass1") ? iConfig.getParameter<double>("daughterMass1") : mmu;
-  daughterMass2_ = iConfig.existsAs<double>("daughterMass2") ? iConfig.getParameter<double>("daughterMass2") : mmu;
-  daughterMass1Err_ = iConfig.existsAs<double>("daughterMass1Err") ? iConfig.getParameter<double>("daughterMass1Err") : mmuerr;
-  daughterMass2Err_ = iConfig.existsAs<double>("daughterMass2Err") ? iConfig.getParameter<double>("daughterMass2Err") : mmuerr;
-  // Per-daughter Geant4 particle-name base (empty = use propagator default
-  // "mu"). Channel cfis can override: e.g. "pi", "proton", "kaon".
+  // Per-daughter Geant4 particle-name base. Channel cfis specify this
+  // (e.g. "pi", "proton", "kaon") and the corresponding mass + mass
+  // uncertainty are looked up from a single PDG table in
+  // Analysis/HitAnalyzer/interface/ParticleProperties.h. Default empty
+  // -> falls back to muon (legacy J/psi/Upsilon configuration).
   daughterParticleName1_ = iConfig.existsAs<std::string>("daughterParticleName1")
-      ? iConfig.getParameter<std::string>("daughterParticleName1") : std::string();
+      ? iConfig.getParameter<std::string>("daughterParticleName1") : std::string("mu");
   daughterParticleName2_ = iConfig.existsAs<std::string>("daughterParticleName2")
-      ? iConfig.getParameter<std::string>("daughterParticleName2") : std::string();
+      ? iConfig.getParameter<std::string>("daughterParticleName2") : std::string("mu");
+  const auto props1 = ana_hitanalyzer::getParticleProperties(daughterParticleName1_);
+  const auto props2 = ana_hitanalyzer::getParticleProperties(daughterParticleName2_);
+  daughterMass1_    = props1.mass;
+  daughterMass2_    = props2.mass;
+  daughterMass1Err_ = props1.massErr;
+  daughterMass2Err_ = props2.massErr;
   // 2D-transverse pointing-angle constraint (V0 channels). Default off.
   doPointingConstraint_ = iConfig.existsAs<bool>("doPointingConstraint")
       ? iConfig.getParameter<bool>("doPointingConstraint") : false;
@@ -1360,18 +1360,10 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
             // Build the per-track Geant4 particle name once: the propagator
             // uses the right particle hypothesis (pion / kaon / proton /
-            // ...) instead of the muon default. Empty base name -> empty
-            // override -> propagator falls back to its constructor default.
+            // ...) instead of the muon default. Naming logic shared with
+            // the single-track ntuplizer via the base-class helper.
             const std::string& baseName = (id == 0 ? daughterParticleName1_ : daughterParticleName2_);
-            std::string g4ParticleName;
-            if (!baseName.empty()) {
-              const double tcharge = refftsarr[id][6];
-              if (baseName == "proton") {
-                g4ParticleName = (tcharge > 0.) ? "proton" : "anti_proton";
-              } else {
-                g4ParticleName = baseName + (tcharge > 0. ? "+" : "-");
-              }
-            }
+            const std::string g4PartName = ana_hitanalyzer::g4ParticleName(baseName, static_cast<int>(refftsarr[id][6]));
 
             std::vector<Matrix<double, 7, 1>> &layerStates = layerStatesarr[id];
                       
@@ -1553,7 +1545,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               const GloballyPositioned<double> &surface = surfacemapD_.at(hit->geographicalId());
               
               auto propresult = g4prop->propagateGenericWithJacobianAltD(updtsos, surface, dbetaval, dxival,
-                                                                          0., 0., -1., g4ParticleName);
+                                                                          0., 0., -1., g4PartName);
               if (!std::get<0>(propresult)) {
                 std::cout << "ResidualGlobalCorrectionMakerTwoTrackG4e ### Abort: Propagation Failed!" << std::endl;
                 valid = false;

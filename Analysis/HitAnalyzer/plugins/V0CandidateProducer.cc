@@ -40,6 +40,8 @@
 #include "RecoVertex/KinematicFitPrimitives/interface/KinematicVertex.h"
 #include "RecoVertex/KinematicFitPrimitives/interface/RefCountedKinematicParticle.h"
 #include "RecoVertex/KinematicFitPrimitives/interface/RefCountedKinematicTree.h"
+
+#include "Analysis/HitAnalyzer/interface/ParticleProperties.h"
 #include "TMath.h"
 #include "TrackingTools/Records/interface/TransientTrackRecord.h"
 #include "TrackingTools/TransientTrack/interface/TransientTrackBuilder.h"
@@ -124,20 +126,18 @@ private:
 V0CandidateProducer::V0CandidateProducer(const edm::ParameterSet& iConfig)
     : trackToken_(consumes<reco::TrackCollection>(iConfig.getParameter<edm::InputTag>("tracks"))),
       beamSpotToken_(consumes<reco::BeamSpot>(iConfig.getParameter<edm::InputTag>("beamSpot"))),
-      daughterMass1_(iConfig.getParameter<double>("daughterMass1")),
-      daughterMass2_(iConfig.getParameter<double>("daughterMass2")),
-      // Per-daughter mass uncertainties (PDG). Fall back to the legacy
-      // single-value `daughterMassErr` for back-compatibility, then to a
-      // small non-zero default so the kinematic fit doesn't refuse a
-      // singular mass-error matrix.
-      daughterMass1Err_(iConfig.existsAs<double>("daughterMass1Err")
-          ? iConfig.getParameter<double>("daughterMass1Err")
-          : (iConfig.existsAs<double>("daughterMassErr")
-              ? iConfig.getParameter<double>("daughterMassErr") : 1.e-6)),
-      daughterMass2Err_(iConfig.existsAs<double>("daughterMass2Err")
-          ? iConfig.getParameter<double>("daughterMass2Err")
-          : (iConfig.existsAs<double>("daughterMassErr")
-              ? iConfig.getParameter<double>("daughterMassErr") : 1.e-6)),
+      // Per-daughter mass + mass uncertainty are looked up from the
+      // PDG table in Analysis/HitAnalyzer/interface/ParticleProperties.h
+      // using the cfi-supplied `daughterParticleName1/2` ("pi", "kaon",
+      // "proton", ...). Single source of truth for daughter properties.
+      daughterMass1_(ana_hitanalyzer::getParticleProperties(
+          iConfig.getParameter<std::string>("daughterParticleName1")).mass),
+      daughterMass2_(ana_hitanalyzer::getParticleProperties(
+          iConfig.getParameter<std::string>("daughterParticleName2")).mass),
+      daughterMass1Err_(ana_hitanalyzer::getParticleProperties(
+          iConfig.getParameter<std::string>("daughterParticleName1")).massErr),
+      daughterMass2Err_(ana_hitanalyzer::getParticleProperties(
+          iConfig.getParameter<std::string>("daughterParticleName2")).massErr),
       tryBothAssignments_(iConfig.getParameter<bool>("tryBothAssignments")),
       expectedV0Mass_(iConfig.getParameter<double>("expectedV0Mass")),
       minV0Mass_(iConfig.getParameter<double>("minV0Mass")),
