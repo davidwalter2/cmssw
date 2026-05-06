@@ -528,7 +528,7 @@ std::tuple<bool,
            double>
 Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 7, 1> &ftsStart,
                                                     const GloballyPositioned<double> &pDest,
-                                                    double dBz,
+                                                    const Eigen::Vector3d &dB,
                                                     double dxi,
                                                     double dms,
                                                     double dioni,
@@ -540,7 +540,7 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
   //FIXME check thread safety of this
   sim::Field *cmsField = const_cast<sim::Field *>(static_cast<const sim::Field *>(field));
 
-  cmsField->SetOffset(0., 0., dBz);
+  cmsField->SetOffset(dB.x(), dB.y(), dB.z());
   cmsField->SetMaterialOffset(dxi);
 
   auto retDefault = [cmsField]() {
@@ -731,7 +731,7 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
       dEdxlast = dEdx;
     }
 
-    const Matrix<double, 5, 7> transportJac = transportJacobianBzD(statepre, thisPathLength, dEdx, mass, dBz);
+    const Matrix<double, 5, 7> transportJac = transportJacobianBzD(statepre, thisPathLength, dEdx, mass, dB);
 
     // transport contribution to error
     g4errorEnd = (transportJac.leftCols<5>() * g4errorEnd * transportJac.leftCols<5>().transpose()).eval();
@@ -1160,7 +1160,7 @@ void Geant4ePropagator::CalculateEffectiveZandA(const G4Material *mate, G4double
 }
 
 Eigen::Matrix<double, 5, 7> Geant4ePropagator::transportJacobianBzD(
-    const Eigen::Matrix<double, 7, 1> &start, double s, double dEdx, double mass, double dBz) const {
+    const Eigen::Matrix<double, 7, 1> &start, double s, double dEdx, double mass, const Eigen::Vector3d &dB) const {
   if (s == 0.) {
     Eigen::Matrix<double, 5, 7> res;
     res.leftCols<5>() = Eigen::Matrix<double, 5, 5>::Identity();
@@ -1171,9 +1171,16 @@ Eigen::Matrix<double, 5, 7> Geant4ePropagator::transportJacobianBzD(
   const GlobalPoint pos(start[0], start[1], start[2]);
   const GlobalVector &bfield = theField->inInverseGeV(pos);
 
-  const double Bx = bfield.x();
-  const double By = bfield.y();
-  const double Bz = bfield.z() + 2.99792458e-3 * dBz;
+  // Apply the 3D field offset (Tesla) so the integrated trajectory uses the
+  // corrected field. kTeslaToInvGeV converts dB (Tesla) to the inInverseGeV
+  // units in which `bfield` is already expressed. The transport-Jacobian
+  // column at index 5 below remains the d/dBz derivative (SymPy-generated);
+  // per-mode chain-rule scaling is applied by the caller for scalar-potential
+  // modes.
+  const double Bx = bfield.x() + MagneticField::kTeslaToInvGeV * dB.x();
+  const double By = bfield.y() + MagneticField::kTeslaToInvGeV * dB.y();
+  const double Bz = bfield.z() + MagneticField::kTeslaToInvGeV * dB.z();
+
 
   const double M0x = start[0];
   const double M0y = start[1];
@@ -1574,7 +1581,7 @@ Eigen::Matrix<double, 5, 7> Geant4ePropagator::transportJacobianBzD(
   res(4, 5) = dytdBz;
   res(4, 6) = dytdxi;
 
-  res.col(5) *= 2.99792458e-3;
+  res.col(5) *= MagneticField::kTeslaToInvGeV;
 
   return res;
 }

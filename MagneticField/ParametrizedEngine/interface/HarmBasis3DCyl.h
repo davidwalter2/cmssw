@@ -1,7 +1,7 @@
 #ifndef HarmBasis3DCyl_h
 #define HarmBasis3DCyl_h
 
-#include "rz_harm_poly.h"
+#include "MagneticField/ParametrizedEngine/interface/rz_harm_poly.h"
 
 namespace magfieldparam {
 

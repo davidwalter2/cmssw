@@ -4,7 +4,7 @@
 //                                                                             //
 /////////////////////////////////////////////////////////////////////////////////
 
-#include "HarmBasis3DCyl.h"
+#include "MagneticField/ParametrizedEngine/interface/HarmBasis3DCyl.h"
 
 using namespace magfieldparam;
 

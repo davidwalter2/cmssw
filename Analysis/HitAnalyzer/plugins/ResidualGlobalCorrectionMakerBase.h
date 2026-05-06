@@ -92,6 +92,9 @@
 // #include "../interface/OffsetMagneticField.h"
 // #include "../interface/ParmInfo.h"
 
+#include "Analysis/HitAnalyzer/interface/ScalarPotentialFieldCorrection.h"
+#include "FWCore/Utilities/interface/Exception.h"
+
 
 #include "TFile.h"
 #include "TTree.h"
@@ -186,21 +189,21 @@ protected:
 
   Matrix<double, 7, 1> localToGlobal(const Matrix<double, 6, 1> &localstate, const GloballyPositioned<double> &surface) const;
 
-  Matrix<double, 5, 5> curv2localJacobianAltelossD(const Matrix<double, 7, 1> &state, const MagneticField *field, const GloballyPositioned<double> &surface, double dEdx, double mass, double dBz = 0.) const;
-  
-  Matrix<double, 5, 5> curv2localhybridJacobianAltelossD(const Matrix<double, 7, 1> &state, const MagneticField *field, const GloballyPositioned<double> &surface, double dEdx, double mass, double dBz = 0.) const;
+  Matrix<double, 5, 5> curv2localJacobianAltelossD(const Matrix<double, 7, 1> &state, const MagneticField *field, const GloballyPositioned<double> &surface, double dEdx, double mass, const Eigen::Vector3d &dB = Eigen::Vector3d::Zero()) const;
 
-  Matrix<double, 5, 11> curv2localJacobianAlignmentD(const Matrix<double, 7, 1> &state, const MagneticField *field, const GloballyPositioned<double> &surface, double dEdx, double mass, double dBz = 0.) const;
+  Matrix<double, 5, 5> curv2localhybridJacobianAltelossD(const Matrix<double, 7, 1> &state, const MagneticField *field, const GloballyPositioned<double> &surface, double dEdx, double mass, const Eigen::Vector3d &dB = Eigen::Vector3d::Zero()) const;
+
+  Matrix<double, 5, 11> curv2localJacobianAlignmentD(const Matrix<double, 7, 1> &state, const MagneticField *field, const GloballyPositioned<double> &surface, double dEdx, double mass, const Eigen::Vector3d &dB = Eigen::Vector3d::Zero()) const;
 
   Matrix<double, 6, 5> curv2cartJacobianAltD(const Matrix<double, 7, 1> &state) const;
-  
-  Matrix<double, 5, 6> hybrid2curvJacobianD(const Matrix<double, 7, 1> &state, const MagneticField *field, double dBz = 0.) const;
+
+  Matrix<double, 5, 6> hybrid2curvJacobianD(const Matrix<double, 7, 1> &state, const MagneticField *field, const Eigen::Vector3d &dB = Eigen::Vector3d::Zero()) const;
 
   Matrix<double, 7, 1> pca2cart(const Matrix<double, 5, 1> &statepca, const reco::BeamSpot &bs) const;
 
   Matrix<double, 5, 1> cart2pca(const Matrix<double, 7, 1> &state, const reco::BeamSpot &bs) const;
 
-  Matrix<double, 5, 5> pca2curvJacobianD(const Matrix<double, 7, 1> &state, const MagneticField *field, const reco::BeamSpot &bs, double dBz = 0.) const;
+  Matrix<double, 5, 5> pca2curvJacobianD(const Matrix<double, 7, 1> &state, const MagneticField *field, const reco::BeamSpot &bs, const Eigen::Vector3d &dB = Eigen::Vector3d::Zero()) const;
 
   Matrix<double, 6, 5> pca2cartJacobianD(const Matrix<double, 7, 1> &state, const reco::BeamSpot &bs) const;
 
@@ -208,7 +211,7 @@ protected:
 
   Matrix<double, 10, 1> twoTrackCart2pca(const Matrix<double, 7, 1> &state0, const Matrix<double, 7, 1> &state1) const;
 
-  Matrix<double, 10, 10> twoTrackPca2curvJacobianD(const Matrix<double, 7, 1> &state0, const Matrix<double, 7, 1> &state1, const MagneticField *field, double dBz0 = 0., double dBz1 = 0.) const;
+  Matrix<double, 10, 10> twoTrackPca2curvJacobianD(const Matrix<double, 7, 1> &state0, const Matrix<double, 7, 1> &state1, const MagneticField *field, const Eigen::Vector3d &dB0 = Eigen::Vector3d::Zero(), const Eigen::Vector3d &dB1 = Eigen::Vector3d::Zero()) const;
 
 
 //   Matrix<double, 10, 1> twoTrackCart2pcaJacobianD(const Matrix<double, 7, 1> &state0, const Matrix<double, 7, 1> &state 1, const MagneticField *field, const reco::BeamSpot &bs, double dBz0 = 0., double dBz1 = 0.);
@@ -450,6 +453,12 @@ protected:
   
   bool doRes_ = false;
   bool useIdealGeometry_ = false;
+
+  // Scalar-potential B-field correction. Replaces the per-module dBz block
+  // with ~50 spherical-harmonic coefficients of the magnetic scalar potential.
+  unsigned int scalarPotentialLmax_ = 5;
+  std::vector<std::pair<int, int>> scalarPotentialExtra_;
+  std::unique_ptr<ana_hitanalyzer::ScalarPotentialFieldCorrection> fieldCorrection_;
   
   float dxpxb1;
   float dypxb1;

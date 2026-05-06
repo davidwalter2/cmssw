@@ -45,5 +45,11 @@ globalCorKs = cms.EDProducer(
     daughterParticleName2 = cms.string("pi"),
     corFiles = cms.vstring(),
     MagneticFieldLabel = cms.string(''),
+    # Scalar-potential B-field correction (replaces the per-module dBz block).
+    # All (L, M) modes with L in [1, scalarPotentialLmax] are active. Add extra
+    # high-L low-|M| modes via 'L,M' strings in scalarPotentialExtra (e.g.
+    # ['6,1'] for the 50-mode prescription).
+    scalarPotentialLmax = cms.uint32(5),
+    scalarPotentialExtra = cms.vstring(),
     outprefix = cms.untracked.string('globalcor_ks'),
 )
