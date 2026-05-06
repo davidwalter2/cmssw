@@ -3,9 +3,10 @@ import FWCore.ParameterSet.Config as cms
 DstToD0PiCandidateProducer = cms.EDProducer(
     'DstToD0PiCandidateProducer',
     src=cms.InputTag('ALCARECOTkAlDstToD0Pi'),
-    kaonMass=cms.double(0.493677),
-    pionMass=cms.double(0.139570),
-    softPionMass=cms.double(0.139570),
+    # Daughter masses (K, D0-pion, soft-pion) are looked up by name from
+    # the PDG table in Analysis/HitAnalyzer/interface/ParticleProperties.h .
+    # The candidate producer uses kaon + pion + pion (soft) hard-coded for
+    # this channel, so no cfi parameter is needed here.
     # Mass windows harmonized with the Stage-1 AlignmentThreeBodyDecayTrackSelector
     # cuts in ALCARECOTkAlDstToD0Pi_cff.py (CMSSW_10_6_17_patch1) so step-2 does
     # not re-admit configurations the ALCARECO already rejected.

@@ -41,11 +41,9 @@ globalCorLambda = cms.EDProducer(
     doMassConstraint = cms.bool(False),
     massConstraint = cms.double(1.115683),        # Lambda mass
     massConstraintWidth = cms.double(2.502e-15),  # natural width Gamma = hbar/tau (Lambda), GeV
-    daughterMass1 = cms.double(0.93827208943),              # proton (in track[0] slot)
-    daughterMass2 = cms.double(0.13957039),
-    daughterMass1Err = cms.double(0.00000000029),
-    daughterMass2Err = cms.double(0.00000018),
-    # Geant4 particle base for the per-call propagator override.
+    # Per-daughter Geant4 particle base (track[0] = baryon = proton).
+    # Mass + mass uncertainty are looked up from the PDG table in
+    # Analysis/HitAnalyzer/interface/ParticleProperties.h .
     daughterParticleName1 = cms.string("proton"),
     daughterParticleName2 = cms.string("pi"),
     corFiles = cms.vstring(),

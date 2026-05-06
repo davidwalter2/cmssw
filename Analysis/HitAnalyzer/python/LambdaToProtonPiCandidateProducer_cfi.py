@@ -13,11 +13,11 @@ LambdaToProtonPiCandidateProducer = cms.EDProducer(
     # inputs
     tracks   = cms.InputTag('ALCARECOTkAlLambdaToProtonPi'),
     beamSpot = cms.InputTag('offlineBeamSpot'),
-    # mass hypotheses (track[0] = baryon, track[1] = pion)
-    daughterMass1 = cms.double(0.93827208943),     # proton (or anti-proton)
-    daughterMass2 = cms.double(0.13957039),        # pion
-    daughterMass1Err = cms.double(0.00000000029),  # PDG proton mass uncertainty
-    daughterMass2Err = cms.double(0.00000018),     # PDG pion   mass uncertainty
+    # Daughter Geant4 particle base (track[0] = proton, track[1] = pion).
+    # Mass + mass uncertainty are looked up from the PDG table in
+    # Analysis/HitAnalyzer/interface/ParticleProperties.h .
+    daughterParticleName1 = cms.string("proton"),
+    daughterParticleName2 = cms.string("pi"),
     tryBothAssignments = cms.bool(True),      # asymmetric: disambiguate per pair
     expectedV0Mass = cms.double(1.115683),    # Lambda PDG mass
     # Post-fit V0 mass window: asymmetric around the Lambda PDG mass

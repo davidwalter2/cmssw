@@ -17,6 +17,8 @@
 #include "RecoVertex/KinematicFitPrimitives/interface/KinematicVertex.h"
 #include "RecoVertex/KinematicFitPrimitives/interface/RefCountedKinematicParticle.h"
 #include "RecoVertex/KinematicFitPrimitives/interface/RefCountedKinematicTree.h"
+
+#include "Analysis/HitAnalyzer/interface/ParticleProperties.h"
 #include "TMath.h"
 #include "TrackingTools/Records/interface/TransientTrackRecord.h"
 #include "TrackingTools/TransientTrack/interface/TransientTrackBuilder.h"
@@ -70,11 +72,14 @@ private:
 
 DstToD0PiCandidateProducer::DstToD0PiCandidateProducer(const edm::ParameterSet& iConfig)
     : trackToken_(consumes<reco::TrackCollection>(iConfig.getParameter<edm::InputTag>("src"))),
-      kaonMass_(iConfig.getParameter<double>("kaonMass")),
-      pionMass_(iConfig.getParameter<double>("pionMass")),
-      softPionMass_(iConfig.getParameter<double>("softPionMass")),
-      kaonMassErr_(1.e-6),
-      pionMassErr_(1.e-6),
+      // Kaon / pion masses + mass uncertainties looked up from the PDG
+      // table (Analysis/HitAnalyzer/interface/ParticleProperties.h).
+      // Single source of truth for daughter-particle properties.
+      kaonMass_   (ana_hitanalyzer::getParticleProperties("kaon").mass),
+      pionMass_   (ana_hitanalyzer::getParticleProperties("pi").mass),
+      softPionMass_(ana_hitanalyzer::getParticleProperties("pi").mass),
+      kaonMassErr_(ana_hitanalyzer::getParticleProperties("kaon").massErr),
+      pionMassErr_(ana_hitanalyzer::getParticleProperties("pi").massErr),
       minD0Mass_(iConfig.getParameter<double>("minD0Mass")),
       maxD0Mass_(iConfig.getParameter<double>("maxD0Mass")),
       minDstMass_(iConfig.getParameter<double>("minDstMass")),

@@ -1,6 +1,7 @@
 #include "ResidualGlobalCorrectionMakerBase.h"
 #include "DataFormats/MuonReco/interface/Muon.h"
 #include "TrackPropagation/Geant4e/interface/Geant4ePropagator.h"
+#include "Analysis/HitAnalyzer/interface/ParticleProperties.h"
 
 
 #include "DataFormats/PatCandidates/interface/Muon.h"
@@ -79,6 +80,13 @@ private:
 
   SiStripClusterInfo siStripClusterInfo_;
 
+  // Track mass + Geant4 particle base name used in the refit. Defaults
+  // preserve the legacy J/psi/Upsilon (muon) configuration; channel cfis
+  // can override to study e.g. pions, kaons, protons through the
+  // single-track refit.
+  double trackMass_;
+  std::string trackParticleName_;
+
 };
 
 
@@ -90,6 +98,14 @@ ResidualGlobalCorrectionMakerG4e::ResidualGlobalCorrectionMakerG4e(const edm::Pa
 {
 
 //   inputAssoc_ = consumes<edm::Association<reco::TrackExtraCollection>>(edm::InputTag("muonReducedTrackExtras"));
+
+  // Geant4 particle base name. Default = muon (legacy J/psi/Upsilon
+  // configuration). Override via the cfi to e.g. "pi", "kaon", "proton"
+  // to study other species. Mass is looked up from a single PDG table
+  // in Analysis/HitAnalyzer/interface/ParticleProperties.h .
+  trackParticleName_ = iConfig.existsAs<std::string>("trackParticleName")
+      ? iConfig.getParameter<std::string>("trackParticleName") : std::string("mu");
+  trackMass_ = ana_hitanalyzer::getParticleProperties(trackParticleName_).mass;
 
   outputCorPt_ = produces<edm::ValueMap<float>>("corPt");
   outputCorEta_ = produces<edm::ValueMap<float>>("corEta");
@@ -310,7 +326,10 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   const Geant4ePropagator *g4prop = dynamic_cast<const Geant4ePropagator*>(thePropagator.product());
   const MagneticField* field = thePropagator->magneticField();
   
-  constexpr double mmu = 0.1056583745;
+  // Track mass for energy / Jacobian calculations -- read from cfi
+  // (default = muon mass for J/psi/Upsilon back-compat). Renamed from
+  // the previous local `constexpr double trackmass = 0.1056583745;`.
+  const double trackmass = trackMass_;
 
   Handle<reco::BeamSpot> bsH;
   iEvent.getByToken(inputBs_, bsH);
@@ -393,6 +412,10 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   for (unsigned int itrack = 0; itrack < trackOrigH->size(); ++itrack) {
     const reco::Track &track = (*trackOrigH)[itrack];
     const reco::TrackRef trackref(trackOrigH, itrack);
+
+    // Build the per-track Geant4 particle-name override once. Naming logic
+    // shared with the two-track ntuplizer via the base-class helper.
+    const std::string g4PartName = ana_hitanalyzer::g4ParticleName(trackParticleName_, track.charge());
 
     const edm::Ref<std::vector<pat::Muon>> muonref = doMuonAssoc_ ? (*muonAssoc)[trackref] : edm::Ref<std::vector<pat::Muon>>();
 
@@ -1148,8 +1171,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
       Matrix<double, 5, 5> Qtot = Matrix<double, 5, 5>::Zero();
 
-      float e = genpart == nullptr ? -99. : std::sqrt(genpart->momentum().mag2() + mmu*mmu);
-      float epred = std::sqrt(refFts.segment<3>(3).squaredNorm() + mmu*mmu);
+      float e = genpart == nullptr ? -99. : std::sqrt(genpart->momentum().mag2() + trackmass*trackmass);
+      float epred = std::sqrt(refFts.segment<3>(3).squaredNorm() + trackmass*trackmass);
       
       
       if (bsConstraint_) {
@@ -1303,7 +1326,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         // auto const &propresult = g4prop->propagateGenericWithJacobianAltD(updtsos, surface, dbetaval, dxival, dradval);
         // auto const &propresult = g4prop->propagateGenericWithJacobianAltD(propfromtsos, surface, dbetaval, dxival, dradval);
         
-        auto const &propresult = simhitdebug ? g4prop->propagateGenericWithJacobianAltD(propfromtsos, surface, dbetaval, dxival, dmsval, dionival) : g4prop->propagateGenericWithJacobianAltD(updtsos, surface, dbetaval, dxival, dmsval, dionival);
+        auto const &propresult = simhitdebug
+            ? g4prop->propagateGenericWithJacobianAltD(propfromtsos, surface, dbetaval, dxival, dmsval, dionival, -1., g4PartName)
+            : g4prop->propagateGenericWithJacobianAltD(updtsos,      surface, dbetaval, dxival, dmsval, dionival, -1., g4PartName);
 
 
         if (simhitdebug && simhit) {
@@ -1357,11 +1382,11 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           Qtot = Qcurv;
         }
 
-        const Matrix<double, 5, 5> Hm = curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, mmu, dbetaval);
+        const Matrix<double, 5, 5> Hm = curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, trackmass, dbetaval);
         
         
-        const float enext = simhit == nullptr ? -99. : std::sqrt(std::pow(simhit->pabs(), 2) + mmu*mmu) - 0.5*simhit->energyLoss();        
-        const float eprednext = std::sqrt(updtsos.segment<3>(3).squaredNorm() + mmu*mmu);
+        const float enext = simhit == nullptr ? -99. : std::sqrt(std::pow(simhit->pabs(), 2) + trackmass*trackmass) - 0.5*simhit->energyLoss();        
+        const float eprednext = std::sqrt(updtsos.segment<3>(3).squaredNorm() + trackmass*trackmass);
         
         const float dEval = e > 0. && enext > 0. ? enext - e : -99.;
         const float dEpredval = eprednext - epred;
@@ -1407,7 +1432,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           updtsos[6] = genpart->charge();
 
           if (false) {
-            auto const &propresultsim = g4prop->propagateGenericWithJacobianAltD(updtsos, surface, dbetaval, dxival, dmsval, dionival);
+            auto const &propresultsim = g4prop->propagateGenericWithJacobianAltD(updtsos, surface, dbetaval, dxival, dmsval, dionival, -1., g4PartName);
 
             if (!std::get<0>(propresultsim)) {
               std::cout << "Abort: Sim state Propagation Failed!" << std::endl;
@@ -1434,7 +1459,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             //save current parameters
 
             Matrix<double, 7, 1>& oldtsos = layerStates[ihit];
-            const Matrix<double, 5, 5> Hold = curv2localJacobianAltelossD(oldtsos, field, surface, dEdxlast, mmu, dbetaval);
+            const Matrix<double, 5, 5> Hold = curv2localJacobianAltelossD(oldtsos, field, surface, dEdxlast, trackmass, dbetaval);
             const Matrix<double, 5, 1> dxlocal = Hold*dxfull.segment<5>(5*(ihit+1));
 
             localparms = globalToLocal(oldtsos, surface);
@@ -1477,7 +1502,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           simtsos[6] = genpart->charge();          
           
           auto const &surfacealign = surfacemapD_.at(hit->geographicalId());
-          auto const &propresultsalign = g4prop->propagateGenericWithJacobianAltD(simtsos, surfacealign, dbetaval, dxival, dmsval, dionival);
+          auto const &propresultsalign = g4prop->propagateGenericWithJacobianAltD(simtsos, surfacealign, dbetaval, dxival, dmsval, dionival, -1., g4PartName);
 
           if (!std::get<0>(propresultsalign)) {
             std::cout << "WARNING propagation for alignment failed!\n";
@@ -1495,7 +1520,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         Matrix<double, 5, 5> Hp = Hm;
         
         if (dolocalupdate) {
-          Hp = curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, mmu, dbetaval);
+          Hp = curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, trackmass, dbetaval);
         }
 
         Matrix<double, 5, 5> Q = Qcurv;
@@ -2094,9 +2119,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                   
                   auto const momsim = simhit->momentumAtEntry();
 
-                  const double eentry = std::sqrt(std::pow(simhit->pabs(), 2) + mmu*mmu);
+                  const double eentry = std::sqrt(std::pow(simhit->pabs(), 2) + trackmass*trackmass);
                   const double emid = eentry - 0.5*simhit->energyLoss();
-                  const double simqopval = genpart->charge()/std::sqrt(emid*emid - mmu*mmu);
+                  const double simqopval = genpart->charge()/std::sqrt(emid*emid - trackmass*trackmass);
 //                   std::cout << "eloss = " << simhit->energyLoss() << std::endl;
                   
                   // "hybrid state" trying to adjust for entry point -> midpoint
@@ -2132,7 +2157,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                     simtsos[5] = simglobalmom.z();
                     simtsos[6] = genpart->charge();
 
-                    auto propresultsim = g4prop->propagateGenericWithJacobianAltD(simtsos, surface, dbetaval, dxival);
+                    auto propresultsim = g4prop->propagateGenericWithJacobianAltD(simtsos, surface, dbetaval, dxival, 0., 0., -1., g4PartName);
 
                     if (std::get<0>(propresultsim)) {
                       simtsos = std::get<1>(propresultsim);
