@@ -121,8 +121,11 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   inputTrackOrig_ = consumes<reco::TrackCollection>(edm::InputTag(iConfig.getParameter<edm::InputTag>("src")));
 
   // Optional persisted-candidate input (stage-1 ALCAReco *Resonances).
-  // Default is empty -> stage-2 falls back to the j>i track-pair loop.
-  inputCandidatesTag_ = iConfig.getParameter<edm::InputTag>("srcCandidates");
+  // If the cfi omits srcCandidates or sets it to an empty InputTag, stage-2
+  // falls back to the legacy j>i track-pair loop over `src`.
+  inputCandidatesTag_ = iConfig.existsAs<edm::InputTag>("srcCandidates")
+      ? iConfig.getParameter<edm::InputTag>("srcCandidates")
+      : edm::InputTag();
   if (!inputCandidatesTag_.label().empty()) {
     inputCandidates_ = consumes<reco::VertexCompositeCandidateCollection>(inputCandidatesTag_);
   }
@@ -246,7 +249,13 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
   if (fillTrackTree_) {
     tree = new TTree("tree","");
     const int basketSize = 4*1024*1024;
-    tree->SetAutoFlush(0);
+    // Disable in-job AutoSave (was crashing inside TTree::Streamer at the
+    // 300 MB threshold for fillGrads_=true). Tree is still written at Close.
+    tree->SetAutoSave(0);
+    // Periodic basket flush by accumulated bytes keeps the slow-filling
+    // scalar baskets from sitting in RAM for the whole job, capping peak
+    // memory near ~1.5 GB even for 800 k-event runs.
+    tree->SetAutoFlush(-100 * 1024 * 1024);
     
     tree->Branch("nParms", &nParms, basketSize);
 //     tree->Branch("globalidxv", globalidxv.data(), "globalidxv[nParms]/i", basketSize);
