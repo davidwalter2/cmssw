@@ -27,31 +27,57 @@ ALCARECOTkAlZMuMuRelCombIsoMuons = Alignment.CommonAlignmentProducer.TkAlMuonSel
     src = 'ALCARECOTkAlZMuMuGoodMuons'
 )
 
-import Alignment.CommonAlignmentProducer.AlignmentTrackSelector_cfi
-ALCARECOTkAlZMuMu = Alignment.CommonAlignmentProducer.AlignmentTrackSelector_cfi.AlignmentTrackSelector.clone()
-ALCARECOTkAlZMuMu.filter = True ##do not store empty events
+# Z candidates from all opposite-charge muon-track pairs in the mass window.
+# V0-pattern pre-stage that replaces the legacy in-selector pairing.
+ALCARECOTkAlZMuMuCandidates = cms.EDProducer('TwoBodyDecayCandidateProducer',
+    src     = cms.InputTag('generalTracks'),
+    muonSrc = cms.InputTag('ALCARECOTkAlZMuMuRelCombIsoMuons'),
+    minMass        = cms.double(65.0),
+    maxMass        = cms.double(115.0),
+    daughterMass   = cms.double(0.105),
+    daughterPdgId  = cms.int32(13),
+    motherPdgId    = cms.int32(23),    ## Z
+    applyChargeFilter      = cms.bool(True),
+    charge                 = cms.int32(0),
+    useUnsignedCharge      = cms.bool(True),
+    applyAcoplanarityFilter = cms.bool(False),
+    acoplanarDistance      = cms.double(1.0),
+)
 
-ALCARECOTkAlZMuMu.applyBasicCuts = True
-ALCARECOTkAlZMuMu.ptMin = 15.0 ##GeV
-ALCARECOTkAlZMuMu.etaMin = -3.5
-ALCARECOTkAlZMuMu.etaMax = 3.5
-ALCARECOTkAlZMuMu.nHitMin = 0
+ALCARECOTkAlZMuMuTracks = cms.EDProducer('V0DaughterTrackProducer',
+    src = cms.InputTag('ALCARECOTkAlZMuMuCandidates'),
+)
 
-ALCARECOTkAlZMuMu.GlobalSelector.muonSource = 'ALCARECOTkAlZMuMuRelCombIsoMuons'
-# Isolation is shifted to the muon preselection, and then applied intrinsically if applyGlobalMuonFilter = True
-ALCARECOTkAlZMuMu.GlobalSelector.applyIsolationtest = False
-ALCARECOTkAlZMuMu.GlobalSelector.applyGlobalMuonFilter = True
+import Alignment.CommonAlignmentProducer.AlignmentTrackSelectorWithIndexMap_cfi
+ALCARECOTkAlZMuMu = Alignment.CommonAlignmentProducer.AlignmentTrackSelectorWithIndexMap_cfi.AlignmentTrackSelectorWithIndexMap.clone(
+    src = cms.InputTag('ALCARECOTkAlZMuMuTracks'),
+    filter = True, ##do not store empty events
+    applyBasicCuts = True,
+    ptMin  = 15.0, ##GeV
+    etaMin = -3.5,
+    etaMax = 3.5,
+    nHitMin = 0,
+)
+ALCARECOTkAlZMuMu.GlobalSelector.applyGlobalMuonFilter = False
+ALCARECOTkAlZMuMu.GlobalSelector.applyIsolationtest    = False
 
-ALCARECOTkAlZMuMu.TwoBodyDecaySelector.applyMassrangeFilter = True
-ALCARECOTkAlZMuMu.TwoBodyDecaySelector.minXMass = 65.0 ##GeV
-ALCARECOTkAlZMuMu.TwoBodyDecaySelector.maxXMass = 115.0 ##GeV
-ALCARECOTkAlZMuMu.TwoBodyDecaySelector.daughterMass = 0.105 ##GeV (Muons)
-ALCARECOTkAlZMuMu.TwoBodyDecaySelector.applyChargeFilter = True
-ALCARECOTkAlZMuMu.TwoBodyDecaySelector.charge = 0
-ALCARECOTkAlZMuMu.TwoBodyDecaySelector.applyAcoplanarityFilter = False
-ALCARECOTkAlZMuMu.TwoBodyDecaySelector.numberOfCandidates = 1
+ALCARECOTkAlZMuMuResonances = cms.EDProducer('VertexCompositeCandidateRemapper',
+    srcCandidates      = cms.InputTag('ALCARECOTkAlZMuMuCandidates'),
+    selectedTracks     = cms.InputTag('ALCARECOTkAlZMuMu'),
+    intermediateTracks = cms.InputTag('ALCARECOTkAlZMuMuTracks'),
+    originalIndexMap   = cms.InputTag('ALCARECOTkAlZMuMu', 'originalIndex'),
+)
 
-seqALCARECOTkAlZMuMu = cms.Sequence(ALCARECOTkAlZMuMuHLT+ALCARECOTkAlZMuMuDCSFilter+ALCARECOTkAlZMuMuGoodMuons+ALCARECOTkAlZMuMuRelCombIsoMuons+ALCARECOTkAlZMuMu)
+seqALCARECOTkAlZMuMu = cms.Sequence(
+    ALCARECOTkAlZMuMuHLT +
+    ALCARECOTkAlZMuMuDCSFilter +
+    ALCARECOTkAlZMuMuGoodMuons +
+    ALCARECOTkAlZMuMuRelCombIsoMuons +
+    ALCARECOTkAlZMuMuCandidates +
+    ALCARECOTkAlZMuMuTracks +
+    ALCARECOTkAlZMuMu +
+    ALCARECOTkAlZMuMuResonances
+)
 
 ## customizations for the pp_on_AA eras
 from Configuration.Eras.Modifier_pp_on_XeXe_2017_cff import pp_on_XeXe_2017

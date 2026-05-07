@@ -15,6 +15,7 @@ OutALCARECOTkAlLambdaToProtonPi_noDrop = cms.PSet(
     ),
     outputCommands = cms.untracked.vstring(
         'keep *_ALCARECOTkAlLambdaToProtonPi_*_*',                      ## V0 daughter tracks + extras + hits + clusters
+        'keep *_ALCARECOTkAlLambdaToProtonPiResonances_*_*',            ## Lambda candidates with daughter refs into the cloned tracks
         'keep *_ALCARECOTkAlLambdaToProtonPiDeDxHarmonic2_*_*',         ## per-track dE/dx Harmonic2 (strip)
         'keep *_ALCARECOTkAlLambdaToProtonPiDeDxPixelHarmonic2_*_*',    ## per-track dE/dx Harmonic2 (pixel-only)
         'keep *_ALCARECOTkAlLambdaToProtonPiDeDxAllHarmonic2_*_*',      ## per-track dE/dx Harmonic2-truncated (strip+pixel joint)

@@ -40,8 +40,8 @@ ALCARECOTkAlLambdaToProtonPiV0Tracks = cms.EDProducer('V0DaughterTrackProducer',
 # passed V0Producer's tighter post-fit mass cut so re-pairing the tracks here
 # would be redundant and could spuriously reject candidates due to small
 # post-fit vs raw mass shifts.
-import Alignment.CommonAlignmentProducer.AlignmentTrackSelector_cfi
-ALCARECOTkAlLambdaToProtonPi = Alignment.CommonAlignmentProducer.AlignmentTrackSelector_cfi.AlignmentTrackSelector.clone(
+import Alignment.CommonAlignmentProducer.AlignmentTrackSelectorWithIndexMap_cfi
+ALCARECOTkAlLambdaToProtonPi = Alignment.CommonAlignmentProducer.AlignmentTrackSelectorWithIndexMap_cfi.AlignmentTrackSelectorWithIndexMap.clone(
     src = cms.InputTag('ALCARECOTkAlLambdaToProtonPiV0Tracks'),
     filter = True,
     applyBasicCuts = True,
@@ -60,9 +60,11 @@ ALCARECOTkAlLambdaToProtonPi.GlobalSelector.applyIsolationtest    = False
 # generalTracks-keyed value.
 from Alignment.CommonAlignmentProducer.alcaDedxJointEstimator_cfi import alcaDedxJointEstimator
 ALCARECOTkAlLambdaToProtonPiDeDxHarmonic2 = cms.EDProducer('DeDxValueMapProjector',
-    selectedTracks = cms.InputTag('ALCARECOTkAlLambdaToProtonPi'),
-    sourceTracks   = cms.InputTag('generalTracks'),
-    sourceValueMap = cms.InputTag('dedxHarmonic2'),
+    selectedTracks     = cms.InputTag('ALCARECOTkAlLambdaToProtonPi'),
+    intermediateTracks = cms.InputTag('ALCARECOTkAlLambdaToProtonPiV0Tracks'),
+    sourceTracks       = cms.InputTag('generalTracks'),
+    sourceValueMap     = cms.InputTag('dedxHarmonic2'),
+    originalIndexMap   = cms.InputTag('ALCARECOTkAlLambdaToProtonPi', 'originalIndex'),
 )
 ALCARECOTkAlLambdaToProtonPiDeDxPixelHarmonic2 = ALCARECOTkAlLambdaToProtonPiDeDxHarmonic2.clone(
     sourceValueMap = cms.InputTag('dedxPixelHarmonic2'),
@@ -71,12 +73,26 @@ ALCARECOTkAlLambdaToProtonPiDeDxAllHarmonic2 = ALCARECOTkAlLambdaToProtonPiDeDxH
     sourceValueMap = cms.InputTag('alcaDedxJointEstimator'),
 )
 
+# Re-key the V0 candidate collection's daughter TrackRefs onto the cloned
+# AlignmentTrackSelector output so downstream consumers can navigate
+# candidate -> daughter -> track without dereferencing generalTracks.
+# Candidates whose daughters were dropped by AlignmentTrackSelector are
+# silently removed. Drives off the AlignmentTrackSelectorWithIndexMapModule
+# side-channel ValueMap of source-track indices.
+ALCARECOTkAlLambdaToProtonPiResonances = cms.EDProducer('VertexCompositeCandidateRemapper',
+    srcCandidates      = cms.InputTag('ALCARECOTkAlV0Candidates', 'Lambda'),
+    selectedTracks     = cms.InputTag('ALCARECOTkAlLambdaToProtonPi'),
+    intermediateTracks = cms.InputTag('ALCARECOTkAlLambdaToProtonPiV0Tracks'),
+    originalIndexMap   = cms.InputTag('ALCARECOTkAlLambdaToProtonPi', 'originalIndex'),
+)
+
 seqALCARECOTkAlLambdaToProtonPi = cms.Sequence(
     ALCARECOTkAlLambdaToProtonPiDCSFilter +
     ALCARECOTkAlV0Candidates +
     ALCARECOTkAlLambdaToProtonPiV0Filter +
     ALCARECOTkAlLambdaToProtonPiV0Tracks +
     ALCARECOTkAlLambdaToProtonPi +
+    ALCARECOTkAlLambdaToProtonPiResonances +
     alcaDedxJointEstimator +
     ALCARECOTkAlLambdaToProtonPiDeDxHarmonic2 +
     ALCARECOTkAlLambdaToProtonPiDeDxPixelHarmonic2 +

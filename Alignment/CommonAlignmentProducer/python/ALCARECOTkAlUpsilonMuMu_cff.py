@@ -29,32 +29,57 @@ ALCARECOTkAlUpsilonMuMuRelCombIsoMuons = Alignment.CommonAlignmentProducer.TkAlM
 
 )
 
-import Alignment.CommonAlignmentProducer.AlignmentTrackSelector_cfi
-ALCARECOTkAlUpsilonMuMu = Alignment.CommonAlignmentProducer.AlignmentTrackSelector_cfi.AlignmentTrackSelector.clone()
-ALCARECOTkAlUpsilonMuMu.filter = True ##do not store empty events
+# Upsilon candidates from all opposite-charge muon-track pairs in the mass
+# window. V0-pattern pre-stage that replaces the legacy in-selector pairing.
+ALCARECOTkAlUpsilonMuMuCandidates = cms.EDProducer('TwoBodyDecayCandidateProducer',
+    src     = cms.InputTag('generalTracks'),
+    muonSrc = cms.InputTag('ALCARECOTkAlUpsilonMuMuRelCombIsoMuons'),
+    minMass        = cms.double(8.9),
+    maxMass        = cms.double(9.9),
+    daughterMass   = cms.double(0.105),
+    daughterPdgId  = cms.int32(13),
+    motherPdgId    = cms.int32(553),   ## Upsilon(1S)
+    applyChargeFilter      = cms.bool(True),
+    charge                 = cms.int32(0),
+    useUnsignedCharge      = cms.bool(True),
+    applyAcoplanarityFilter = cms.bool(False),
+    acoplanarDistance      = cms.double(1.0),
+)
 
-ALCARECOTkAlUpsilonMuMu.applyBasicCuts = True
-ALCARECOTkAlUpsilonMuMu.ptMin = 3. ##GeV
-ALCARECOTkAlUpsilonMuMu.etaMin = -3.5
-ALCARECOTkAlUpsilonMuMu.etaMax = 3.5
-ALCARECOTkAlUpsilonMuMu.nHitMin = 0
+ALCARECOTkAlUpsilonMuMuTracks = cms.EDProducer('V0DaughterTrackProducer',
+    src = cms.InputTag('ALCARECOTkAlUpsilonMuMuCandidates'),
+)
 
-ALCARECOTkAlUpsilonMuMu.GlobalSelector.muonSource = 'ALCARECOTkAlUpsilonMuMuRelCombIsoMuons'
-# Isolation is shifted to the muon preselection, and then applied intrinsically if applyGlobalMuonFilter = True
-ALCARECOTkAlUpsilonMuMu.GlobalSelector.applyIsolationtest = False
-ALCARECOTkAlUpsilonMuMu.GlobalSelector.applyGlobalMuonFilter = True
+import Alignment.CommonAlignmentProducer.AlignmentTrackSelectorWithIndexMap_cfi
+ALCARECOTkAlUpsilonMuMu = Alignment.CommonAlignmentProducer.AlignmentTrackSelectorWithIndexMap_cfi.AlignmentTrackSelectorWithIndexMap.clone(
+    src = cms.InputTag('ALCARECOTkAlUpsilonMuMuTracks'),
+    filter = True, ##do not store empty events
+    applyBasicCuts = True,
+    ptMin  = 3.,  ##GeV
+    etaMin = -3.5,
+    etaMax = 3.5,
+    nHitMin = 0,
+)
+ALCARECOTkAlUpsilonMuMu.GlobalSelector.applyGlobalMuonFilter = False
+ALCARECOTkAlUpsilonMuMu.GlobalSelector.applyIsolationtest    = False
 
-ALCARECOTkAlUpsilonMuMu.TwoBodyDecaySelector.applyMassrangeFilter = True
-ALCARECOTkAlUpsilonMuMu.TwoBodyDecaySelector.minXMass = 8.9 ##GeV
-ALCARECOTkAlUpsilonMuMu.TwoBodyDecaySelector.maxXMass = 9.9 ##GeV
-ALCARECOTkAlUpsilonMuMu.TwoBodyDecaySelector.daughterMass = 0.105 ##GeV (Muons)
-ALCARECOTkAlUpsilonMuMu.TwoBodyDecaySelector.applyChargeFilter = True
-ALCARECOTkAlUpsilonMuMu.TwoBodyDecaySelector.charge = 0
-ALCARECOTkAlUpsilonMuMu.TwoBodyDecaySelector.applyAcoplanarityFilter = False
-ALCARECOTkAlUpsilonMuMu.TwoBodyDecaySelector.acoplanarDistance = 1 ##radian
-ALCARECOTkAlUpsilonMuMu.TwoBodyDecaySelector.numberOfCandidates = 1	 
+ALCARECOTkAlUpsilonMuMuResonances = cms.EDProducer('VertexCompositeCandidateRemapper',
+    srcCandidates      = cms.InputTag('ALCARECOTkAlUpsilonMuMuCandidates'),
+    selectedTracks     = cms.InputTag('ALCARECOTkAlUpsilonMuMu'),
+    intermediateTracks = cms.InputTag('ALCARECOTkAlUpsilonMuMuTracks'),
+    originalIndexMap   = cms.InputTag('ALCARECOTkAlUpsilonMuMu', 'originalIndex'),
+)
 
-seqALCARECOTkAlUpsilonMuMu = cms.Sequence(ALCARECOTkAlUpsilonMuMuHLT+ALCARECOTkAlUpsilonMuMuDCSFilter+ALCARECOTkAlUpsilonMuMuGoodMuons+ALCARECOTkAlUpsilonMuMuRelCombIsoMuons+ALCARECOTkAlUpsilonMuMu)
+seqALCARECOTkAlUpsilonMuMu = cms.Sequence(
+    ALCARECOTkAlUpsilonMuMuHLT +
+    ALCARECOTkAlUpsilonMuMuDCSFilter +
+    ALCARECOTkAlUpsilonMuMuGoodMuons +
+    ALCARECOTkAlUpsilonMuMuRelCombIsoMuons +
+    ALCARECOTkAlUpsilonMuMuCandidates +
+    ALCARECOTkAlUpsilonMuMuTracks +
+    ALCARECOTkAlUpsilonMuMu +
+    ALCARECOTkAlUpsilonMuMuResonances
+)
 
 ## customizations for the pp_on_AA eras
 from Configuration.Eras.Modifier_pp_on_XeXe_2017_cff import pp_on_XeXe_2017

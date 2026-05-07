@@ -5,8 +5,9 @@ OutALCARECOTkAlUpsilonMuMu_noDrop = cms.PSet(
     SelectEvents = cms.untracked.PSet(
         SelectEvents = cms.vstring('pathALCARECOTkAlUpsilonMuMu')
     ),
-    outputCommands = cms.untracked.vstring( 
-        'keep *_ALCARECOTkAlUpsilonMuMu_*_*', 
+    outputCommands = cms.untracked.vstring(
+        'keep *_ALCARECOTkAlUpsilonMuMu_*_*',                  ## daughter tracks + extras + hits + clusters
+        'keep *_ALCARECOTkAlUpsilonMuMuResonances_*_*',        ## Upsilon candidates with daughter refs into the cloned tracks
         'keep L1AcceptBunchCrossings_*_*_*',
         'keep L1GlobalTriggerReadoutRecord_gtDigis_*_*',
         'keep *_TriggerResults_*_*',

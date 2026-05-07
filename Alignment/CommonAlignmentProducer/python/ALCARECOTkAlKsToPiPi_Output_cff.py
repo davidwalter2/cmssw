@@ -15,6 +15,7 @@ OutALCARECOTkAlKsToPiPi_noDrop = cms.PSet(
     ),
     outputCommands = cms.untracked.vstring(
         'keep *_ALCARECOTkAlKsToPiPi_*_*',                       ## V0 daughter tracks + extras + hits + clusters
+        'keep *_ALCARECOTkAlKsToPiPiResonances_*_*',             ## KS candidates with daughter refs into the cloned tracks
         'keep *_ALCARECOTkAlKsToPiPiDeDxHarmonic2_*_*',          ## per-track dE/dx Harmonic2 (strip)
         'keep *_ALCARECOTkAlKsToPiPiDeDxPixelHarmonic2_*_*',     ## per-track dE/dx Harmonic2 (pixel-only)
         'keep *_ALCARECOTkAlKsToPiPiDeDxAllHarmonic2_*_*',       ## per-track dE/dx Harmonic2-truncated (strip+pixel joint)

@@ -9,8 +9,8 @@ ALCARECOTkAlDstToD0PiDCSFilter = DPGAnalysis.Skims.skim_detstatus_cfi.dcsstatus.
     DebugOn = cms.untracked.bool(False)
 )
 
-import Alignment.CommonAlignmentProducer.AlignmentTrackSelector_cfi
-ALCARECOTkAlDstToD0Pi = Alignment.CommonAlignmentProducer.AlignmentTrackSelector_cfi.AlignmentTrackSelector.clone()
+import Alignment.CommonAlignmentProducer.AlignmentTrackSelectorWithIndexMap_cfi
+ALCARECOTkAlDstToD0Pi = Alignment.CommonAlignmentProducer.AlignmentTrackSelectorWithIndexMap_cfi.AlignmentTrackSelectorWithIndexMap.clone()
 ALCARECOTkAlDstToD0Pi.filter = True
 ALCARECOTkAlDstToD0Pi.src = 'generalTracks'
 
@@ -47,9 +47,11 @@ ALCARECOTkAlDstToD0Pi.ThreeBodyDecaySelector.numberOfCandidates = 1
 # generalTracks-keyed value.
 from Alignment.CommonAlignmentProducer.alcaDedxJointEstimator_cfi import alcaDedxJointEstimator
 ALCARECOTkAlDstToD0PiDeDxHarmonic2 = cms.EDProducer('DeDxValueMapProjector',
-    selectedTracks = cms.InputTag('ALCARECOTkAlDstToD0Pi'),
-    sourceTracks   = cms.InputTag('generalTracks'),
-    sourceValueMap = cms.InputTag('dedxHarmonic2'),
+    selectedTracks     = cms.InputTag('ALCARECOTkAlDstToD0Pi'),
+    intermediateTracks = cms.InputTag('generalTracks'),  # selector took generalTracks directly
+    sourceTracks       = cms.InputTag('generalTracks'),
+    sourceValueMap     = cms.InputTag('dedxHarmonic2'),
+    originalIndexMap   = cms.InputTag('ALCARECOTkAlDstToD0Pi', 'originalIndex'),
 )
 ALCARECOTkAlDstToD0PiDeDxPixelHarmonic2 = ALCARECOTkAlDstToD0PiDeDxHarmonic2.clone(
     sourceValueMap = cms.InputTag('dedxPixelHarmonic2'),

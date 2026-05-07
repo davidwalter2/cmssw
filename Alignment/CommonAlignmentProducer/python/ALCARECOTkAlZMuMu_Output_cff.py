@@ -6,7 +6,8 @@ OutALCARECOTkAlZMuMu_noDrop = cms.PSet(
         SelectEvents = cms.vstring('pathALCARECOTkAlZMuMu')
     ),
     outputCommands = cms.untracked.vstring(
-        'keep *_ALCARECOTkAlZMuMu_*_*', 
+        'keep *_ALCARECOTkAlZMuMu_*_*',                  ## daughter tracks + extras + hits + clusters
+        'keep *_ALCARECOTkAlZMuMuResonances_*_*',        ## Z candidates with daughter refs into the cloned tracks
         'keep L1AcceptBunchCrossings_*_*_*',
         'keep L1GlobalTriggerReadoutRecord_gtDigis_*_*',
         'keep *_TriggerResults_*_*',
