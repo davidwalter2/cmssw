@@ -3,6 +3,13 @@ import FWCore.ParameterSet.Config as cms
 globalCorD0 = cms.EDProducer(
     'ResidualGlobalCorrectionMakerTwoTrackG4e',
     src=cms.InputTag('ALCARECOTkAlDstToD0Pi'),
+    # Default fast path: persisted D* candidates (positive-charge-first
+    # convention; daughter[0] = K, daughter[1] = pi from D0). See PiPi
+    # cfi for details. Requires stage-1 to provide the *Resonances
+    # collection (ThreeBodyDecayCandidateProducer + remapper); leave the
+    # legacy in-selector pair-finding chain disabled at stage-1 for this
+    # to apply.
+    srcCandidates=cms.InputTag('ALCARECOTkAlDstToD0PiResonances'),
     dedxSourceTracks  =cms.InputTag('ALCARECOTkAlDstToD0Pi'),
     dedxHarmonic2     =cms.InputTag('ALCARECOTkAlDstToD0PiDeDxHarmonic2'),
     dedxPixelHarmonic2=cms.InputTag('ALCARECOTkAlDstToD0PiDeDxPixelHarmonic2'),

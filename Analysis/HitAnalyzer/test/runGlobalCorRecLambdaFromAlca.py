@@ -34,23 +34,11 @@ process.options = cms.untracked.PSet(
     numberOfStreams=cms.untracked.uint32(0)
 )
 
-# Step-2 V0 candidate finder: re-pairs the deduplicated daughter tracks,
-# applies V0Producer-like cuts, tries both (p,pi) and (pi,p) assignments per
-# pair, picks the assignment closer to m_Lambda, then keeps the best candidate
-# per event in (proton-track, pion-track) order.
-process.load('Analysis.HitAnalyzer.LambdaToProtonPiCandidateProducer_cfi')
-process.selectedLambdaTracks = process.LambdaToProtonPiCandidateProducer.clone(
-    tracks = cms.InputTag('ALCARECOTkAlLambdaToProtonPi'),
-    # other parameters (mass hypotheses, tryBothAssignments, V0 mass window,
-    # cosThetaXYMin, LxyOverSigmaMin) are taken from the cfi defaults
-    # (V0Producer-style: Lambda PDG +/-50 MeV, cosThetaXY > 0.998,
-    # Lxy/sigma > 15).
-)
-
-# CVH 2-track refit + flat tree, Lambda configuration (proton + pion).
+# CVH 2-track refit + flat tree, Lambda configuration (proton + pion). The
+# cfi defaults srcCandidates to ALCARECOTkAlLambdaToProtonPiResonances (the
+# persisted candidate collection from stage-1's VertexCompositeCandidateRemapper).
 process.load('Analysis.HitAnalyzer.ResidualGlobalCorrectionMakerTwoTrackProtonPiG4e_cfi')
 process.globalCorLambda = process.globalCorLambda.clone(
-    src = 'selectedLambdaTracks',
     useIdealGeometry = False,
     outprefix = 'globalcor_lambda',
 )
@@ -70,6 +58,5 @@ process.XMLFromDBSource.label = cms.string('Extended')
 process.p = cms.Path(
     process.geopro *
     process.offlineBeamSpot *
-    process.selectedLambdaTracks *
     process.globalCorLambda
 )

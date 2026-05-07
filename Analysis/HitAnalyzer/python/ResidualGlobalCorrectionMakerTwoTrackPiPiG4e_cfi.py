@@ -7,6 +7,12 @@ import FWCore.ParameterSet.Config as cms
 globalCorKs = cms.EDProducer(
     'ResidualGlobalCorrectionMakerTwoTrackG4e',
     src = cms.InputTag('ALCARECOTkAlKsToPiPi'),
+    # Default fast path: read the persisted *Resonances candidates produced
+    # by VertexCompositeCandidateRemapper at stage-1. One tree row per
+    # candidate, no re-pairing. The ALCAReco track collection is still
+    # consumed (via `src`) for muon-matching and dE/dx lookups; daughter
+    # TrackRefs in the candidate already point at it.
+    srcCandidates = cms.InputTag('ALCARECOTkAlKsToPiPiResonances'),
     dedxSourceTracks   = cms.InputTag('ALCARECOTkAlKsToPiPi'),
     dedxHarmonic2      = cms.InputTag('ALCARECOTkAlKsToPiPiDeDxHarmonic2'),
     dedxPixelHarmonic2 = cms.InputTag('ALCARECOTkAlKsToPiPiDeDxPixelHarmonic2'),
