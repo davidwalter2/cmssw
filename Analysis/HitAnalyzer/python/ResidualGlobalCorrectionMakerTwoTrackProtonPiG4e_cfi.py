@@ -1,15 +1,20 @@
 import FWCore.ParameterSet.Config as cms
 
 # Configuration of the existing ResidualGlobalCorrectionMakerTwoTrackG4e
-# C++ class for Lambda0->p pi-: asymmetric, kaon position holds the proton.
+# C++ class for Lambda0->p pi-: asymmetric, slot 0 holds the proton.
 # The class itself is already mass-parameterised, so this is a pure
 # configuration clone (no new C++ needed). Track ordering matters --
-# track[0] gets daughterMass1, track[1] gets daughterMass2 -- so the upstream
-# V0CandidateProducer (with tryBothAssignments=True) is responsible for
-# emitting (proton-candidate, pion-candidate) in that order.
+# track[0] gets daughterMass1, track[1] gets daughterMass2 -- and is
+# guaranteed by V0Producer's convention (preserved through stage-1's
+# VertexCompositeCandidateRemapper): daughter(0) = baryon (p / pbar),
+# daughter(1) = pion.
 globalCorLambda = cms.EDProducer(
     'ResidualGlobalCorrectionMakerTwoTrackG4e',
     src = cms.InputTag('ALCARECOTkAlLambdaToProtonPi'),
+    # Default fast path: persisted Lambda candidates (positive-charge-first
+    # convention from V0Producer means daughter[0] = p / pbar, daughter[1] =
+    # pi). See PiPi cfi for details.
+    srcCandidates = cms.InputTag('ALCARECOTkAlLambdaToProtonPiResonances'),
     dedxSourceTracks   = cms.InputTag('ALCARECOTkAlLambdaToProtonPi'),
     dedxHarmonic2      = cms.InputTag('ALCARECOTkAlLambdaToProtonPiDeDxHarmonic2'),
     dedxPixelHarmonic2 = cms.InputTag('ALCARECOTkAlLambdaToProtonPiDeDxPixelHarmonic2'),

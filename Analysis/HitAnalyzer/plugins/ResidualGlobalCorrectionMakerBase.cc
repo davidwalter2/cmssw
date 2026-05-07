@@ -120,7 +120,13 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   
   inputTrackOrig_ = consumes<reco::TrackCollection>(edm::InputTag(iConfig.getParameter<edm::InputTag>("src")));
 
-  
+  // Optional persisted-candidate input (stage-1 ALCAReco *Resonances).
+  // Default is empty -> stage-2 falls back to the j>i track-pair loop.
+  inputCandidatesTag_ = iConfig.getParameter<edm::InputTag>("srcCandidates");
+  if (!inputCandidatesTag_.label().empty()) {
+    inputCandidates_ = consumes<reco::VertexCompositeCandidateCollection>(inputCandidatesTag_);
+  }
+
   fitFromGenParms_ = iConfig.getParameter<bool>("fitFromGenParms");
   fitFromSimParms_ = iConfig.getParameter<bool>("fitFromSimParms");
   fillTrackTree_ = iConfig.getParameter<bool>("fillTrackTree");

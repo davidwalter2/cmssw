@@ -1,3 +1,6 @@
+## Same as runGlobalCorRecKsFromAlca.py but pointing at the Charmonium-based
+## ALCAREco we generated in /ceph/.../charmonium_full/ for apples-to-apples
+## comparison with the J/psi variants (also from Charmonium).
 import FWCore.ParameterSet.Config as cms
 from Configuration.StandardSequences.Eras import eras
 from Configuration.AlCa.GlobalTag import GlobalTag
@@ -13,20 +16,13 @@ process.load('Configuration.StandardSequences.GeometrySimDB_cff')
 process.load('TrackingTools.TransientTrack.TransientTrackBuilder_cfi')
 process.load('TrackPropagation.Geant4e.geantRefit_cff')
 
-# Override the Geant4e propagator's momentum threshold (default 0.5 GeV) so
-# low-pT V0 daughters (KS pions can have p < 0.5 GeV) are not rejected at the
-# `plimit` exit. ~70% of CVH propagation failures on the V0 channels were
-# from this cut; lowering it to 0.05 GeV recovers them while staying above
-# the regime where Geant4 step-finding becomes unreliable.
 process.Geant4ePropagator.PropagationPtotLimit = cms.double(0.05)
-
 process.maxEvents = cms.untracked.PSet(input=cms.untracked.int32(-1))
 
-# Edit this to point at whichever TkAlKsToPiPi.root you want to ntuplise.
 process.source = cms.Source(
     'PoolSource',
     fileNames=cms.untracked.vstring(
-        'file:/work/submit/david_w/ZMass/test_output_multifile/TkAlKsToPiPi.root'
+        'file:/ceph/submit/data/user/d/david_w/ZMass/alcareco/260506_AllResonances_charmonium_100files/merged/TkAlKsToPiPi.root'
     )
 )
 
@@ -35,18 +31,12 @@ process.options = cms.untracked.PSet(
     numberOfStreams=cms.untracked.uint32(0)
 )
 
-# CVH 2-track refit + flat tree, KS configuration (both pions). The cfi
-# defaults srcCandidates to ALCARECOTkAlKsToPiPiResonances (the persisted
-# candidate collection from stage-1's VertexCompositeCandidateRemapper);
-# the CVH module iterates one tree row per candidate.
 process.load('Analysis.HitAnalyzer.ResidualGlobalCorrectionMakerTwoTrackPiPiG4e_cfi')
 process.globalCorKs = process.globalCorKs.clone(
     useIdealGeometry = False,
     outprefix = 'globalcor_ks',
 )
 
-# CVH base consumes offlineBeamSpot; ALCARECO does not keep it, so produce
-# a fresh one from the standard service.
 process.offlineBeamSpot = cms.EDProducer('BeamSpotProducer')
 
 process.GlobalTag = GlobalTag(process.GlobalTag, 'auto:run2_data', '')

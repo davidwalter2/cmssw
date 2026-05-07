@@ -13,6 +13,7 @@
 #include "FWCore/Framework/interface/MakerMacros.h"
 #include "DataFormats/TrackReco/interface/TrackFwd.h"
 #include "DataFormats/TrackReco/interface/Track.h"
+#include "DataFormats/Candidate/interface/VertexCompositeCandidateFwd.h"
 #include "DataFormats/TrackingRecHit/interface/TrackingRecHit.h"
 #include "DataFormats/TrackingRecHit/interface/TrackingRecHitFwd.h"
 #include "DataFormats/SiStripDetId/interface/SiStripDetId.h"
@@ -240,6 +241,13 @@ protected:
   
   edm::EDGetTokenT<reco::TrackCollection> inputTrack_;
   edm::EDGetTokenT<reco::TrackCollection> inputTrackOrig_;
+  // Optional fast-path: when srcCandidates is set, the per-pair iteration
+  // walks this VertexCompositeCandidateCollection (each candidate's two
+  // RecoChargedCandidate daughters) instead of doing a j>i outer-product
+  // over inputTrackOrig_. inputCandidatesTag_.label().empty() is the
+  // runtime switch.
+  edm::EDGetTokenT<reco::VertexCompositeCandidateCollection> inputCandidates_;
+  edm::InputTag inputCandidatesTag_;
   edm::EDGetTokenT<std::vector<int> > inputIndices_;
   edm::EDGetTokenT<reco::BeamSpot> inputBs_;
 //   edm::EDGetTokenT<std::vector<PSimHit>> inputSimHits_;
