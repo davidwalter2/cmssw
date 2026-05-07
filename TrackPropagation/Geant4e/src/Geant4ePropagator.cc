@@ -442,8 +442,7 @@ std::pair<TrajectoryStateOnSurface, double> Geant4ePropagator::propagateGeneric(
 
     finalPathLength += thisPathLength;
 
-    // if (std::fabs(finalPathLength) > 10000.0f)
-    if (std::fabs(finalPathLength) > 200.0f) {
+    if (std::fabs(finalPathLength) > 10000.0f) {
       LogDebug("Geant4e") << "ERROR: Quitting propagation: path length mega large" << std::endl;
       theG4eManager->GetPropagator()->InvokePostUserTrackingAction(g4eTrajState.GetG4Track());
       continuePropagation = false;
@@ -783,7 +782,7 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
 
     finalPathLength += thisPathLength;
 
-    if (std::fabs(finalPathLength) > 200.0f) {
+    if (std::fabs(finalPathLength) > 10000.0f) {
       LogDebug("Geant4e") << "ERROR: Quitting propagation: path length mega large" << std::endl;
       theG4eManager->GetPropagator()->InvokePostUserTrackingAction(g4eTrajState.GetG4Track());
       continuePropagation = false;
