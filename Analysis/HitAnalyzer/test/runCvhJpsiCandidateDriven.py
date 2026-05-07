@@ -1,3 +1,7 @@
+## CVH refit, candidate-driven fast path, J/psi -> mu+ mu-.
+## Reads the persisted ALCARECOTkAlJpsiMuMuResonances VertexCompositeCandidate
+## collection produced by the new stage-1 ALCAREco -- one tree row per
+## candidate, no track-pair re-combinatorics or stage-2 vertex pre-fit.
 import FWCore.ParameterSet.Config as cms
 from Configuration.StandardSequences.Eras import eras
 from Configuration.AlCa.GlobalTag import GlobalTag
@@ -13,40 +17,33 @@ process.load('Configuration.StandardSequences.GeometrySimDB_cff')
 process.load('TrackingTools.TransientTrack.TransientTrackBuilder_cfi')
 process.load('TrackPropagation.Geant4e.geantRefit_cff')
 
-# Override the Geant4e propagator's momentum threshold (default 0.5 GeV) so
-# low-pT V0 daughters (KS pions can have p < 0.5 GeV) are not rejected at the
-# `plimit` exit. ~70% of CVH propagation failures on the V0 channels were
-# from this cut; lowering it to 0.05 GeV recovers them while staying above
-# the regime where Geant4 step-finding becomes unreliable.
+# Match the V0 driver: lower the Geant4e momentum cutoff to recover
+# low-pT muons (J/psi muons can be soft).
 process.Geant4ePropagator.PropagationPtotLimit = cms.double(0.05)
 
 process.maxEvents = cms.untracked.PSet(input=cms.untracked.int32(-1))
 
-# Edit this to point at whichever TkAlKsToPiPi.root you want to ntuplise.
 process.source = cms.Source(
     'PoolSource',
     fileNames=cms.untracked.vstring(
-        'file:/work/submit/david_w/ZMass/test_output_multifile/TkAlKsToPiPi.root'
-    )
+        'file:/ceph/submit/data/user/d/david_w/ZMass/alcareco/260506_AllResonances_charmonium_full/TkAlJpsiMuMu.root'
+    ),
 )
 
 process.options = cms.untracked.PSet(
     numberOfThreads=cms.untracked.uint32(1),
-    numberOfStreams=cms.untracked.uint32(0)
+    numberOfStreams=cms.untracked.uint32(0),
 )
 
-# CVH 2-track refit + flat tree, KS configuration (both pions). The cfi
-# defaults srcCandidates to ALCARECOTkAlKsToPiPiResonances (the persisted
-# candidate collection from stage-1's VertexCompositeCandidateRemapper);
-# the CVH module iterates one tree row per candidate.
-process.load('Analysis.HitAnalyzer.ResidualGlobalCorrectionMakerTwoTrackPiPiG4e_cfi')
-process.globalCorKs = process.globalCorKs.clone(
+# CVH 2-track refit, candidate-driven. The cfi already sets
+# srcCandidates = ALCARECOTkAlJpsiMuMuResonances.
+process.load('Analysis.HitAnalyzer.ResidualGlobalCorrectionMakerTwoTrackJpsiMuMuG4e_cfi')
+process.globalCorJpsi = process.globalCorJpsi.clone(
     useIdealGeometry = False,
-    outprefix = 'globalcor_ks',
+    outprefix = 'globalcor_jpsi',
 )
 
-# CVH base consumes offlineBeamSpot; ALCARECO does not keep it, so produce
-# a fresh one from the standard service.
+# CVH base consumes offlineBeamSpot; ALCAREco doesn't keep it, so produce one.
 process.offlineBeamSpot = cms.EDProducer('BeamSpotProducer')
 
 process.GlobalTag = GlobalTag(process.GlobalTag, 'auto:run2_data', '')
@@ -62,5 +59,5 @@ process.XMLFromDBSource.label = cms.string('Extended')
 process.p = cms.Path(
     process.geopro *
     process.offlineBeamSpot *
-    process.globalCorKs
+    process.globalCorJpsi
 )

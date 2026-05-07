@@ -21,6 +21,8 @@
 #include "DataFormats/MuonReco/interface/Muon.h"
 #include "DataFormats/Math/interface/deltaR.h"
 #include "DataFormats/Common/interface/ValueMap.h"
+#include "DataFormats/Candidate/interface/VertexCompositeCandidate.h"
+#include "DataFormats/RecoCandidate/interface/RecoChargedCandidate.h"
 
 #include "Math/Vector4Dfwd.h"
 
@@ -205,23 +207,19 @@ private:
   bool Muminus_highpurity;
 
   // Track-level charges of the two daughters at idxplus/idxminus. The
-  // names "plus"/"minus" are misleading for V0 channels (idxplus=0 and
-  // idxminus=1 are hardcoded, so for KS this is the V0CandidateProducer
-  // pair iteration order, not the actual charge); these branches expose
-  // the true daughter charges so downstream plotting can split by charge.
+  // names "plus"/"minus" reflect the candidate-builder ordering convention
+  // (positive-charge first; daughter[0] = +q, daughter[1] = -q for opposite-
+  // sign pairs); these branches expose the actual track charges so
+  // downstream plotting can split by charge if needed.
   int Muplus_charge;
   int Muminus_charge;
 
-  // Per-track dE/dx scalar estimators (Harmonic2 strip and pixel-only),
+  // Per-track dE/dx scalar estimators (Harmonic2 strip / pixel / joint),
   // projected onto the ALCARECO selected-track collection by
-  // DeDxValueMapProjector in the skim. The CVH input here is typically the
-  // V0CandidateProducer output (deep-copied subset of the ALCARECO tracks),
-  // so the ValueMaps are keyed on a *different* collection (the ALCARECO
-  // one). We re-key per-track via the surviving TrackExtraRef.key(): both
-  // the ALCARECO collection and the V0CandidateProducer output preserve
-  // the original generalTracks-extras key, so a key-equality scan finds
-  // the matching ALCARECO index for the ValueMap lookup.
-  // Filled only when all three InputTags are configured (`readDeDx_`).
+  // DeDxValueMapProjector in the skim and looked up via the candidate's
+  // daughter TrackRef (which already points at the persisted ALCARECO
+  // collection). Filled only when all four dE/dx parameters are configured
+  // with non-empty InputTags (`readDeDx_`).
   bool readDeDx_;
   edm::EDGetTokenT<reco::TrackCollection> dedxSourceTracksToken_;
   edm::EDGetTokenT<edm::ValueMap<float>> dedxHarmonic2Token_;
@@ -311,10 +309,16 @@ ResidualGlobalCorrectionMakerTwoTrackG4e::ResidualGlobalCorrectionMakerTwoTrackG
   // collection the ValueMaps are keyed on), `dedxHarmonic2`, and
   // `dedxPixelHarmonic2` must be set to enable the lookup; legacy
   // J/psi / Upsilon runners that don't set them get default-off.
-  readDeDx_ = iConfig.existsAs<edm::InputTag>("dedxSourceTracks") &&
-              iConfig.existsAs<edm::InputTag>("dedxHarmonic2") &&
-              iConfig.existsAs<edm::InputTag>("dedxPixelHarmonic2") &&
-              iConfig.existsAs<edm::InputTag>("dedxAllHarmonic2");
+  // Require all four to be present AND have non-empty labels. An empty
+  // InputTag passes existsAs<> but fails at getByToken with ProductNotFound,
+  // so use the label as the gate -- letting dimuon configs declare the
+  // parameters as empty InputTag('') without enabling the lookup.
+  auto hasLabel = [&](const char* name) {
+    return iConfig.existsAs<edm::InputTag>(name) &&
+           !iConfig.getParameter<edm::InputTag>(name).label().empty();
+  };
+  readDeDx_ = hasLabel("dedxSourceTracks") && hasLabel("dedxHarmonic2") &&
+              hasLabel("dedxPixelHarmonic2") && hasLabel("dedxAllHarmonic2");
   if (readDeDx_) {
     dedxSourceTracksToken_   = consumes<reco::TrackCollection>(iConfig.getParameter<edm::InputTag>("dedxSourceTracks"));
     dedxHarmonic2Token_      = consumes<edm::ValueMap<float>>(iConfig.getParameter<edm::InputTag>("dedxHarmonic2"));
@@ -826,9 +830,36 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
     std::cout << l1DecisionStream.str() << std::endl;
   }
   
-  // loop over combinatorics of track pairs
-  for (auto itrack = trackOrigH->begin(); itrack != trackOrigH->end(); ++itrack) {
-    if (itrack->isLooper()) {
+  // Build the list of (i, j) Track* pairs the CVH refit will iterate.
+  // Fast path: when srcCandidates is configured, take each persisted
+  // VertexCompositeCandidate's two RecoChargedCandidate daughters (stage-1
+  // selection is trusted; no re-pairing or vertex pre-fit). Fallback: the
+  // legacy j>i outer-product over the input TrackCollection.
+  std::vector<std::array<const reco::Track*, 2>> trackPairs;
+  if (!inputCandidatesTag_.label().empty()) {
+    Handle<reco::VertexCompositeCandidateCollection> candH;
+    iEvent.getByToken(inputCandidates_, candH);
+    trackPairs.reserve(candH->size());
+    for (const auto& cand : *candH) {
+      if (cand.numberOfDaughters() < 2) continue;
+      const auto* d0 = dynamic_cast<const reco::RecoChargedCandidate*>(cand.daughter(0));
+      const auto* d1 = dynamic_cast<const reco::RecoChargedCandidate*>(cand.daughter(1));
+      if (!d0 || !d1 || d0->track().isNull() || d1->track().isNull()) continue;
+      trackPairs.push_back({{&*d0->track(), &*d1->track()}});
+    }
+  } else {
+    if (trackOrigH->size() >= 2) {
+      trackPairs.reserve(trackOrigH->size() * (trackOrigH->size() - 1) / 2);
+    }
+    for (auto itrack = trackOrigH->begin(); itrack != trackOrigH->end(); ++itrack)
+      for (auto jtrack = itrack + 1; jtrack != trackOrigH->end(); ++jtrack)
+        trackPairs.push_back({{&*itrack, &*jtrack}});
+  }
+
+  for (auto& trackPair : trackPairs) {
+    const reco::Track* itrack = trackPair[0];
+    const reco::Track* jtrack = trackPair[1];
+    if (itrack->isLooper() || jtrack->isLooper()) {
       continue;
     }
     
@@ -874,11 +905,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
       }
     }
 
-    for (auto jtrack = itrack + 1; jtrack != trackOrigH->end(); ++jtrack) {
-      if (jtrack->isLooper()) {
-        continue;
-      }
-
+    {
       std::array<ROOT::Math::PxPyPzMVector, 2> mutrkarr;
       mutrkarr[0] = ROOT::Math::PxPyPzMVector(itrack->px(), itrack->py(), itrack->pz(), trackMass[0]);
       mutrkarr[1] = ROOT::Math::PxPyPzMVector(jtrack->px(), jtrack->py(), jtrack->pz(), trackMass[1]);
@@ -2595,9 +2622,9 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
           if (readDeDx_) {
             // Find each fit track's index in the ALCARECO source collection by
-            // matching the surviving TrackExtraRef.key() (which both the
-            // ALCARECO and the V0CandidateProducer output preserve from the
-            // original generalTracks-extras). NaN if not found.
+            // matching the surviving TrackExtraRef.key() (preserved from the
+            // original generalTracks-extras through the ALCAReco cloning).
+            // NaN if not found.
             auto lookup = [&](const reco::Track& tk, float& outH, float& outP, float& outA) {
               const auto key = tk.extra().key();
               for (size_t k = 0; k < dedxSourceTracksH->size(); ++k) {
@@ -2613,7 +2640,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               outP = std::numeric_limits<float>::quiet_NaN();
               outA = std::numeric_limits<float>::quiet_NaN();
             };
-            const std::array<reco::TrackCollection::const_iterator, 2> tkIts = {{ itrack, jtrack }};
+            const std::array<const reco::Track*, 2> tkIts = {{ itrack, jtrack }};
             lookup(*tkIts[idxplus],  Muplus_dedxHarmonic2,  Muplus_dedxPixelHarmonic2,  Muplus_dedxAllHarmonic2);
             lookup(*tkIts[idxminus], Muminus_dedxHarmonic2, Muminus_dedxPixelHarmonic2, Muminus_dedxAllHarmonic2);
           }
