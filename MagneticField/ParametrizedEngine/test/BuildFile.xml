@@ -7,3 +7,8 @@
   <use name="MagneticField/ParametrizedEngine" source_only="1"/>
   <flags ALPAKA_BACKENDS="1"/>
 </bin>
+
+<bin name="testScalarPot3DEval" file="testScalarPot3DEval.cpp">
+  <use name="MagneticField/ParametrizedEngine"/>
+  <use name="DataFormats/GeometryVector"/>
+</bin>

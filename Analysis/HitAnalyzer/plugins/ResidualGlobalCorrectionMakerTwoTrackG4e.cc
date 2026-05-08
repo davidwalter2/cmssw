@@ -1635,7 +1635,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               //
               // The dBx/dBy columns of the 5x9 transport Jacobian (cols 5,6)
               // are unused here pending the Bx/By basis evaluators from
-              // MfsHarmonicEval (Phase A.0 of the absolute-field plan).
+              // ScalarPot3DEval (Phase A.0 of the absolute-field plan).
               const unsigned int nlocalbfield = nFieldModes;
               const unsigned int nlocaleloss = 1;
               const unsigned int nlocalparms = nlocalbfield + nlocaleloss;

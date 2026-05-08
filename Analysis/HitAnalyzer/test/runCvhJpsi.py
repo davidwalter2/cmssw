@@ -27,6 +27,13 @@ opts.register('useIdealGeometry', True, VarParsing.VarParsing.multiplicity.singl
 opts.register('goldenJson', '', VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string,
               'optional Golden JSON file to filter run/lumi pre-processing; empty = no filter')
+opts.register('useScalarPot3D', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'use the spherical-harmonic scalar-potential field (Phase A.1) '
+              'in the CVH refit instead of PolyFit3D')
+opts.register('scalarPot3DInitFile', '', VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.string,
+              'Phase-A.5 dump file for ScalarPot3D (required if useScalarPot3D=True)')
 opts.parseArguments()
 
 JPSI_TRIGGERS = [
@@ -140,8 +147,41 @@ process.globalCor = cms.EDProducer(
     corFiles=cms.vstring(),
     triggers=cms.vstring(*JPSI_TRIGGERS),
     MagneticFieldLabel=cms.string(""),
+    # Scalar-potential delta-correction block (parmtype-14). Required even
+    # when not using parmtype-14 in the global fit; the producer always
+    # constructs the basis evaluator and reads these params.
+    scalarPotentialLmax=cms.uint32(5),
+    scalarPotentialExtra=cms.vstring(),
     outprefix=cms.untracked.string("globalcor"),
 )
+
+# Bring up the labelled 3D field producer and rewire the consumers
+# present in this driver (geopro, Geant4ePropagator, and our
+# globalCor analyzer). By default uses PolyFit3D; flip
+# useScalarPot3D=True to swap in the scalar-potential model from
+# Phase A.1 of replicated-bouncing-cloud. Independent from
+# nano_cff.setup3DFieldForRefit (which assumes the full set of seven
+# CVH-side consumers from the NanoAOD configuration).
+if bool(opts.useScalarPot3D):
+    if not opts.scalarPot3DInitFile:
+        raise RuntimeError(
+            "useScalarPot3D=True requires scalarPot3DInitFile to point "
+            "at a Phase-A.5 dump file produced by mfs/dump_coeffs_for_cmssw.py")
+    from MagneticField.ParametrizedEngine.parametrizedMagneticField_ScalarPot3D_cfi \
+        import ParametrizedMagneticFieldProducer as ScalarPot3DMagneticFieldProducer
+    process.ScalarPot3DMagneticFieldProducer = ScalarPot3DMagneticFieldProducer.clone()
+    process.ScalarPot3DMagneticFieldProducer.parameters.InitFile = opts.scalarPot3DInitFile
+    fieldlabel = "ScalarPot3DMf"
+    process.ScalarPot3DMagneticFieldProducer.label = fieldlabel
+else:
+    from MagneticField.ParametrizedEngine.parametrizedMagneticField_PolyFit3D_cfi \
+        import ParametrizedMagneticFieldProducer as PolyFit3DMagneticFieldProducer
+    process.PolyFit3DMagneticFieldProducer = PolyFit3DMagneticFieldProducer
+    fieldlabel = "PolyFit3DMf"
+    process.PolyFit3DMagneticFieldProducer.label = fieldlabel
+process.geopro.MagneticFieldLabel = fieldlabel
+process.Geant4ePropagator.MagneticFieldLabel = fieldlabel
+process.globalCor.MagneticFieldLabel = cms.string(fieldlabel)
 
 process.reconstruction_step = cms.Path(
     process.hltFilter * process.geopro * process.offlineBeamSpot * process.globalCor

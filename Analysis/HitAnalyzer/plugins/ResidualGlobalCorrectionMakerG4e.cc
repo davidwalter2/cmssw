@@ -1565,7 +1565,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           //
           // The dBx/dBy columns of the 5x9 transport Jacobian (FdFm.col(5) and
           // FdFm.col(6)) are unused here pending the Bx/By basis evaluators
-          // from MfsHarmonicEval (Phase A.0 of the absolute-field plan).
+          // from ScalarPot3DEval (Phase A.0 of the absolute-field plan).
           Matrix<double, 5, Dynamic> dStateDparams(5, nlocalparms);
           for (unsigned int imode = 0; imode < nlocalbfield; ++imode) {
             dStateDparams.col(imode) = FdFm.col(7) * dBzPerMode[imode];
