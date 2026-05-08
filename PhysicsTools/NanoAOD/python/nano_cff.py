@@ -473,10 +473,43 @@ def nanoAOD_customizeData(process):
                                 )
 
     # load 3d field map and use it for g4e propagator, geant4 internals via geometry producer and a few other places related to the track refit
-    from MagneticField.ParametrizedEngine.parametrizedMagneticField_PolyFit3D_cfi import ParametrizedMagneticFieldProducer as PolyFit3DMagneticFieldProducer
-    process.PolyFit3DMagneticFieldProducer = PolyFit3DMagneticFieldProducer
-    fieldlabel = "PolyFit3DMf"
-    process.PolyFit3DMagneticFieldProducer.label = fieldlabel
+    setup3DFieldForRefit(process)
+
+    return process
+
+
+def setup3DFieldForRefit(process, useScalarPot3D=False, scalarPot3DInitFile=''):
+    """Bring up the labelled 3D-field producer used by the CVH refit and
+    point the seven CVH-side consumers at it.
+
+    By default uses PolyFit3D (the legacy/baseline parametrisation); set
+    useScalarPot3D=True to use the spherical-harmonic scalar-potential
+    model (Phase A.1 of replicated-bouncing-cloud). When useScalarPot3D
+    is True, scalarPot3DInitFile must be a valid path to a Phase-A.5
+    flat-text dump produced by mfs/dump_coeffs_for_cmssw.py.
+
+    This is a helper so both the NanoAOD production flow
+    (nanoAOD_customizeData) and the CVH test driver
+    (Analysis/HitAnalyzer/test/runCvhJpsi.py) can share one rewire path.
+    """
+    if useScalarPot3D:
+        if not scalarPot3DInitFile:
+            raise RuntimeError(
+                "setup3DFieldForRefit: useScalarPot3D=True requires "
+                "scalarPot3DInitFile to be set to a Phase-A.5 dump path")
+        from MagneticField.ParametrizedEngine.parametrizedMagneticField_ScalarPot3D_cfi \
+            import ParametrizedMagneticFieldProducer as ScalarPot3DMagneticFieldProducer
+        process.ScalarPot3DMagneticFieldProducer = ScalarPot3DMagneticFieldProducer.clone()
+        process.ScalarPot3DMagneticFieldProducer.parameters.InitFile = scalarPot3DInitFile
+        fieldlabel = "ScalarPot3DMf"
+        process.ScalarPot3DMagneticFieldProducer.label = fieldlabel
+    else:
+        from MagneticField.ParametrizedEngine.parametrizedMagneticField_PolyFit3D_cfi \
+            import ParametrizedMagneticFieldProducer as PolyFit3DMagneticFieldProducer
+        process.PolyFit3DMagneticFieldProducer = PolyFit3DMagneticFieldProducer
+        fieldlabel = "PolyFit3DMf"
+        process.PolyFit3DMagneticFieldProducer.label = fieldlabel
+
     process.geopro.MagneticFieldLabel = fieldlabel
     process.Geant4ePropagator.MagneticFieldLabel = fieldlabel
     process.stripCPEESProducer.MagneticFieldLabel = fieldlabel
@@ -484,8 +517,6 @@ def nanoAOD_customizeData(process):
     process.siPixelTemplateDBObjectESProducer.MagneticFieldLabel = fieldlabel
     process.templates.MagneticFieldLabel = fieldlabel
     process.trackrefit.MagneticFieldLabel = fieldlabel
-
-    return process
 
 def nanoAOD_customizeMC(process):
     process = nanoAOD_customizeCommon(process)

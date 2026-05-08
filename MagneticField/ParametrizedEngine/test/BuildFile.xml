@@ -1,0 +1,4 @@
+<bin name="testScalarPot3DEval" file="testScalarPot3DEval.cpp">
+  <use name="MagneticField/ParametrizedEngine"/>
+  <use name="DataFormats/GeometryVector"/>
+</bin>

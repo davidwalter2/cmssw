@@ -11,6 +11,7 @@
 #include "ParabolicParametrizedMagneticField.h"
 #include "PolyFit2DParametrizedMagneticField.h"
 #include "PolyFit3DParametrizedMagneticField.h"
+#include "ScalarPot3DMagneticField.h"
 
 #include "FWCore/Utilities/interface/Exception.h"
 
@@ -34,6 +35,10 @@ ParametrizedMagneticFieldFactory::get(string version, const ParameterSet& parame
   } else if (version=="PolyFit3D") {
     // V. Maroussov polynomial fit to mapping data
     std::auto_ptr<MagneticField> result( new PolyFit3DParametrizedMagneticField(parameters));
+    return result;
+  } else if (version=="ScalarPot3D") {
+    // Spherical-harmonic scalar-potential basis (mfs); Phase A.1
+    std::unique_ptr<MagneticField> result(new ScalarPot3DMagneticField(parameters));
     return result;
   } else if (version=="Parabolic"){
     // FIXME implement configurable parameters to be passed to ctor
