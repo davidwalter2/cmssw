@@ -1359,7 +1359,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         
         updtsos = std::get<1>(propresult);
         const Matrix<double, 5, 5> Qcurv = std::get<2>(propresult);
-        const Matrix<double, 5, 7> FdFmcurv = std::get<3>(propresult);
+        const Matrix<double, 5, 9> FdFmcurv = std::get<3>(propresult);
         const double dEdxlast = std::get<4>(propresult);
         const Matrix<double, 5, 5> dQMScurv = std::get<5>(propresult);
         const Matrix<double, 5, 5> dQIcurv = std::get<6>(propresult);
@@ -1367,7 +1367,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         const double deltaTotal = std::get<7>(propresult);
         const double wTotal = std::get<8>(propresult);
         
-        Matrix<double, 5, 7> FdFm = FdFmcurv;
+        Matrix<double, 5, 9> FdFm = FdFmcurv;
         if (ihit == 0) {
           // extra jacobian from reference state to curvilinear potentially needed
           FdFm.leftCols<5>() = FdFmcurv.leftCols<5>()*ref2curvjac;
@@ -1557,14 +1557,18 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           rfull.segment<nlocalcons>(icons) = dx0;
 
           // Build the 5 x nlocalparms field+eloss Jacobian: nFieldModes columns
-          // are FdFm.col(5) (the d/dBz column from transportJacobianBzD) scaled
-          // by each mode's Bz basis value at the propagation start; the last
-          // column is the unchanged d/dxi column FdFm.col(6).
+          // are FdFm.col(7) (the d/dBz column from transportJacobianBxByBzD)
+          // scaled by each mode's Bz basis value at the propagation start; the
+          // last column is the unchanged d/dxi column FdFm.col(8).
+          //
+          // The dBx/dBy columns of the 5x9 transport Jacobian (FdFm.col(5) and
+          // FdFm.col(6)) are unused here pending the Bx/By basis evaluators
+          // from MfsHarmonicEval (Phase A.0 of the absolute-field plan).
           Matrix<double, 5, Dynamic> dStateDparams(5, nlocalparms);
           for (unsigned int imode = 0; imode < nlocalbfield; ++imode) {
-            dStateDparams.col(imode) = FdFm.col(5) * dBzPerMode[imode];
+            dStateDparams.col(imode) = FdFm.col(7) * dBzPerMode[imode];
           }
-          dStateDparams.col(nlocalbfield) = FdFm.col(6);
+          dStateDparams.col(nlocalbfield) = FdFm.col(8);
 
           if (dolocalupdate) {
             Ffull.block<nlocalcons, nlocalstateparms>(icons, fullstateidx) = -Hm*FdFm.leftCols<nlocalstateparms>();

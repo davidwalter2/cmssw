@@ -95,10 +95,10 @@ public:
   // than as muons.
   // dB: 3-vector field offset (dBx, dBy, dBz) in Tesla applied to the field
   // along the propagation step. Replaces the older scalar dBz arg as part of
-  // the scalar-potential B-field correction. The transport Jacobian column
-  // for the field block is still computed only along Bz internally; per-mode
-  // chain-rule scaling for scalar-potential modes is applied by the caller.
-  std::tuple<bool, Eigen::Matrix<double, 7, 1>, Eigen::Matrix<double, 5, 5>, Eigen::Matrix<double, 5, 7>, double, Eigen::Matrix<double, 5, 5>, Eigen::Matrix<double, 5, 5>, double, double> propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 7, 1> &ftsStart,
+  // the scalar-potential B-field correction. The transport Jacobian exposes
+  // dBx, dBy, dBz columns (cols 5,6,7); chain-rule scaling for the
+  // scalar-potential modes is applied by the caller.
+  std::tuple<bool, Eigen::Matrix<double, 7, 1>, Eigen::Matrix<double, 5, 5>, Eigen::Matrix<double, 5, 9>, double, Eigen::Matrix<double, 5, 5>, Eigen::Matrix<double, 5, 5>, double, double> propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 7, 1> &ftsStart,
                                                                                 const GloballyPositioned<double> &pDest,
                                                                                 const Eigen::Vector3d &dB = Eigen::Vector3d::Zero(),
                                                                                 double dxi = 0.,
@@ -204,7 +204,7 @@ private:
 
   double computeErrorIoni(const G4Track* aTrack, double pforced = -1.) const;
     
-  Eigen::Matrix<double, 5, 7> transportJacobianBzD(const Eigen::Matrix<double, 7, 1> &start, double s, double dEdx, double mass, const Eigen::Vector3d &dB) const;
+  Eigen::Matrix<double, 5, 9> transportJacobianBxByBzD(const Eigen::Matrix<double, 7, 1> &start, double s, double dEdx, double mass, const Eigen::Vector3d &dB) const;
 
   G4UniversalFluctuationForExtrapolator *fluct = nullptr;
   G4WentzelVIModelCustom *msmodel = nullptr;

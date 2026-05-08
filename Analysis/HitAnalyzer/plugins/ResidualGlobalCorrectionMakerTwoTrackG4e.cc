@@ -1336,7 +1336,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 //             tree->SetBranchAddress("globalidxv", globalidxv.data());
 //           }
           
-          std::array<Matrix<double, 5, 7>, 2> FdFmrefarr;
+          std::array<Matrix<double, 5, 9>, 2> FdFmrefarr;
 //           std::array<unsigned int, 2> trackstateidxarr;
           std::array<unsigned int, 2> trackparmidxarr;
           
@@ -1581,7 +1581,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
               updtsos = std::get<1>(propresult);
               const Matrix<double, 5, 5> Qcurv = std::get<2>(propresult);
-              const Matrix<double, 5, 7> FdFm = std::get<3>(propresult);
+              const Matrix<double, 5, 9> FdFm = std::get<3>(propresult);
               const double dEdxlast = std::get<4>(propresult);
 
               const Matrix<double, 5, 5> Hm =
@@ -1634,17 +1634,21 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               const Matrix<double, 5, 5> Qinv = Q.inverse();
 
               // Build the per-hit field+eloss Jacobian: nFieldModes columns
-              // (FdFm.col(5) scaled per-mode by ∂Bz/∂c_i at the propagation
-              // start) plus 1 column for d/dxi (FdFm.col(6) unchanged).
+              // (FdFm.col(7) scaled per-mode by ∂Bz/∂c_i at the propagation
+              // start) plus 1 column for d/dxi (FdFm.col(8) unchanged).
+              //
+              // The dBx/dBy columns of the 5x9 transport Jacobian (cols 5,6)
+              // are unused here pending the Bx/By basis evaluators from
+              // MfsHarmonicEval (Phase A.0 of the absolute-field plan).
               const unsigned int nlocalbfield = nFieldModes;
               const unsigned int nlocaleloss = 1;
               const unsigned int nlocalparms = nlocalbfield + nlocaleloss;
 
               Matrix<double, 5, Dynamic> dStateDparams(5, nlocalparms);
               for (unsigned int imode = 0; imode < nlocalbfield; ++imode) {
-                dStateDparams.col(imode) = FdFm.col(5) * dBzPerMode[imode];
+                dStateDparams.col(imode) = FdFm.col(7) * dBzPerMode[imode];
               }
-              dStateDparams.col(nlocalbfield) = FdFm.col(6);
+              dStateDparams.col(nlocalbfield) = FdFm.col(8);
 
               if (ihit == 0) {
                 constexpr unsigned int nvtxstate = 10;
