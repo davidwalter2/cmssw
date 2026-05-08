@@ -252,10 +252,13 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
     // Disable in-job AutoSave (was crashing inside TTree::Streamer at the
     // 300 MB threshold for fillGrads_=true). Tree is still written at Close.
     tree->SetAutoSave(0);
-    // Periodic basket flush by accumulated bytes keeps the slow-filling
-    // scalar baskets from sitting in RAM for the whole job, capping peak
-    // memory near ~1.5 GB even for 800 k-event runs.
-    tree->SetAutoFlush(-100 * 1024 * 1024);
+    // Force AutoFlush by entry count, not byte threshold. ROOT 6.14
+    // converts SetAutoFlush(-N_bytes) to a fixed entry count at first
+    // fill, so a heavy hesspackedv tail can produce 100+ MB clusters
+    // even when -N was 100 MB. With 100 branches at ~4 MB basketSize,
+    // 200 entries / cluster ~ 20 MB peak, predictable independent of
+    // per-event size.
+    tree->SetAutoFlush(200);
     
     tree->Branch("nParms", &nParms, basketSize);
 //     tree->Branch("globalidxv", globalidxv.data(), "globalidxv[nParms]/i", basketSize);
