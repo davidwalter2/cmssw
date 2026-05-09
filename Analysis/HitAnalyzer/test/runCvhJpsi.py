@@ -37,6 +37,13 @@ opts.register('scalarPot3DInitFile', '', VarParsing.VarParsing.multiplicity.sing
               'Always required: the residual-correction maker uses it to register '
               'parmtype-14 modes and seed their initial coefficients. Also reused '
               'as the field producer init file when useScalarPot3D=True.')
+opts.register('runFDClosure', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'Phase B.5 numerical-FD closure of the per-mode chain rule '
+              '(debug; runs once on the first chain-rule site)')
+opts.register('epsilonFDClosure', 1e-4, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'eps for the B.5 FD closure (used as eps * dB_perMode for each test mode)')
 opts.parseArguments()
 if not opts.scalarPot3DInitFile:
     raise SystemExit(
@@ -157,6 +164,9 @@ process.globalCor = cms.EDProducer(
     # model). Initial coefficients + basis structure are loaded from a
     # Phase-A.5 dump file (mfs/dump_coeffs_for_cmssw.py output).
     scalarPotentialInitFile=cms.string(opts.scalarPot3DInitFile),
+    # Phase B.5 numerical-FD closure (debug only).
+    runFDClosure=cms.bool(bool(opts.runFDClosure)),
+    epsilonFDClosure=cms.double(float(opts.epsilonFDClosure)),
     outprefix=cms.untracked.string("globalcor"),
 )
 
