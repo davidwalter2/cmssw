@@ -2,3 +2,8 @@
   <use name="MagneticField/ParametrizedEngine"/>
   <use name="DataFormats/GeometryVector"/>
 </bin>
+
+<bin name="benchScalarPot3DEval" file="benchScalarPot3DEval.cpp">
+  <use name="MagneticField/ParametrizedEngine"/>
+  <use name="DataFormats/GeometryVector"/>
+</bin>
