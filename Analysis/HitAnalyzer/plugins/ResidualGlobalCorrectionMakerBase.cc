@@ -148,19 +148,19 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   corFiles_ = iConfig.getParameter<std::vector<std::string>>("corFiles");
   fieldlabel_ = iConfig.getParameter<std::string>("MagneticFieldLabel");
 
-  // Scalar-potential B-field correction parameters.
-  scalarPotentialLmax_ = iConfig.getParameter<unsigned int>("scalarPotentialLmax");
-  for (const std::string &lm : iConfig.getParameter<std::vector<std::string>>("scalarPotentialExtra")) {
-    // accept "L,M" form
-    const auto comma = lm.find(',');
-    if (comma == std::string::npos) {
-      throw cms::Exception("Configuration") << "scalarPotentialExtra entry must be 'L,M', got '" << lm << "'";
-    }
-    const int L = std::stoi(lm.substr(0, comma));
-    const int M = std::stoi(lm.substr(comma + 1));
-    scalarPotentialExtra_.emplace_back(L, M);
+  // Scalar-potential B-field correction: basis structure and initial
+  // coefficients are loaded from a Phase-A.5 dump file produced by
+  // mfs/dump_coeffs_for_cmssw.py. The basis (l_max, mode list, Schmidt
+  // convention) and the absolute-field starting point come from there;
+  // the global fit refines those coefficients through parmtype-14 modes.
+  scalarPotentialInitFile_ = iConfig.getParameter<std::string>("scalarPotentialInitFile");
+  if (scalarPotentialInitFile_.empty()) {
+    throw cms::Exception("Configuration")
+        << "ResidualGlobalCorrectionMakerBase: scalarPotentialInitFile cfi "
+           "parameter must be set to a Phase-A.5 dump file path";
   }
-  fieldCorrection_ = std::make_unique<ana_hitanalyzer::ScalarPotentialFieldCorrection>(scalarPotentialLmax_, scalarPotentialExtra_);
+  fieldCorrection_ = std::make_unique<ana_hitanalyzer::ScalarPotentialFieldCorrection>(
+      scalarPotentialInitFile_);
 
 
   inputBs_ = consumes<reco::BeamSpot>(edm::InputTag("offlineBeamSpot"));
@@ -266,10 +266,13 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
     // Disable in-job AutoSave (was crashing inside TTree::Streamer at the
     // 300 MB threshold for fillGrads_=true). Tree is still written at Close.
     tree->SetAutoSave(0);
-    // Periodic basket flush by accumulated bytes keeps the slow-filling
-    // scalar baskets from sitting in RAM for the whole job, capping peak
-    // memory near ~1.5 GB even for 800 k-event runs.
-    tree->SetAutoFlush(-100 * 1024 * 1024);
+    // Force AutoFlush by entry count, not byte threshold. ROOT 6.14
+    // converts SetAutoFlush(-N_bytes) to a fixed entry count at first
+    // fill, so a heavy hesspackedv tail can produce 100+ MB clusters
+    // even when -N was 100 MB. With 100 branches at ~4 MB basketSize,
+    // 200 entries / cluster ~ 20 MB peak, predictable independent of
+    // per-event size.
+    tree->SetAutoFlush(200);
     
     tree->Branch("nParms", &nParms, basketSize);
 //     tree->Branch("globalidxv", globalidxv.data(), "globalidxv[nParms]/i", basketSize);
@@ -865,6 +868,35 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
     corparmsIncremental_.assign(corFiles_.size(), std::vector<double>(parmset.size(), 0.));
     corparms_.assign(parmset.size(), 0.);
 
+    // Seed the parmtype-14 entries with the absolute initial coefficients
+    // from the dump file. corFiles entries for parmtype-14 are deltas-on-old-
+    // basis and don't translate cleanly to the new absolute-field paramset,
+    // so they are skipped on load (semantics deferred -- "Out of scope" in
+    // replicated-bouncing-cloud.md).
+    {
+      const auto& initCoeffs = fieldCorrection_->initCoeffs();
+      const unsigned int nFieldModes = fieldCorrection_->nModes();
+      assert(initCoeffs.size() == nFieldModes);
+      for (unsigned int imode = 0; imode < nFieldModes; ++imode) {
+        corparms_[fieldCorrection_->basisGlobalIdx(imode)] = initCoeffs[imode];
+      }
+      std::cout << "scalar-potential init: seeded " << nFieldModes
+                << " parmtype-14 modes from " << scalarPotentialInitFile_
+                << std::endl;
+    }
+
+    // Build a quick lookup of which global indices belong to parmtype-14
+    // (the scalar-potential block) so we can skip those entries when loading
+    // corFiles. The other parmtypes (per-module alignment, dxi, etc.) are
+    // accumulated as before.
+    std::vector<bool> isFieldGlobalIdx(parmset.size(), false);
+    {
+      const unsigned int nFieldModes = fieldCorrection_->nModes();
+      for (unsigned int imode = 0; imode < nFieldModes; ++imode) {
+        isFieldGlobalIdx[fieldCorrection_->basisGlobalIdx(imode)] = true;
+      }
+    }
+
     for (unsigned int iiter = 0; iiter < corFiles_.size(); ++iiter) {
       TFile *corfile = TFile::Open(corFiles_[iiter].c_str());
       TTree *cortree = (TTree*)corfile->Get("parmtree");
@@ -875,11 +907,20 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
 
       const unsigned int nparms = cortree->GetEntries();
       assert(nparms == parmset.size());
+      unsigned int nSkippedField = 0;
       for (unsigned int iparm = 0; iparm < nparms; ++iparm) {
         cortree->GetEntry(iparm);
         corparmsIncremental_[iiter][iparm] = val;
+        if (isFieldGlobalIdx[iparm]) {
+          // parmtype-14: ignore (init file already seeded the absolute value).
+          ++nSkippedField;
+          continue;
+        }
         corparms_[iparm] += val;
       }
+      std::cout << "corFile " << iiter << ": loaded " << nparms
+                << " entries, skipped " << nSkippedField
+                << " parmtype-14 (B-field absolute) entries" << std::endl;
 
       corfile->Close();
     }

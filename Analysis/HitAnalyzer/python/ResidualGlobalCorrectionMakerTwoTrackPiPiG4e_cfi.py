@@ -51,11 +51,10 @@ globalCorKs = cms.EDProducer(
     daughterParticleName2 = cms.string("pi"),
     corFiles = cms.vstring(),
     MagneticFieldLabel = cms.string(''),
-    # Scalar-potential B-field correction (replaces the per-module dBz block).
-    # All (L, M) modes with L in [1, scalarPotentialLmax] are active. Add extra
-    # high-L low-|M| modes via 'L,M' strings in scalarPotentialExtra (e.g.
-    # ['6,1'] for the 50-mode prescription).
-    scalarPotentialLmax = cms.uint32(5),
-    scalarPotentialExtra = cms.vstring(),
+    # Scalar-potential B-field correction (absolute-field model). Path to a
+    # Phase-A.5 dump file produced by mfs/dump_coeffs_for_cmssw.py; the basis
+    # structure (l_max, mode list, Schmidt convention) and the initial
+    # coefficients come from the file.
+    scalarPotentialInitFile = cms.string(''),
     outprefix = cms.untracked.string('globalcor_ks'),
 )

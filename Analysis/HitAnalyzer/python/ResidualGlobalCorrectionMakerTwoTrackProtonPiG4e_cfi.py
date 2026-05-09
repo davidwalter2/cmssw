@@ -53,8 +53,8 @@ globalCorLambda = cms.EDProducer(
     daughterParticleName2 = cms.string("pi"),
     corFiles = cms.vstring(),
     MagneticFieldLabel = cms.string(''),
-    # Scalar-potential B-field correction (replaces the per-module dBz block).
-    scalarPotentialLmax = cms.uint32(5),
-    scalarPotentialExtra = cms.vstring(),
+    # Scalar-potential B-field correction (absolute-field model); path to a
+    # Phase-A.5 dump file produced by mfs/dump_coeffs_for_cmssw.py.
+    scalarPotentialInitFile = cms.string(''),
     outprefix = cms.untracked.string('globalcor_lambda'),
 )

@@ -133,8 +133,9 @@ process.globalCor = cms.EDProducer(
     corFiles=cms.vstring(),
     triggers=cms.vstring(*onia["triggers"]),
     MagneticFieldLabel=cms.string(""),
-    scalarPotentialLmax=cms.uint32(5),
-    scalarPotentialExtra=cms.vstring(),
+    # Scalar-potential B-field correction: path to a Phase-A.5 dump file
+    # (override on the command line for production runs).
+    scalarPotentialInitFile=cms.string(""),
     outprefix=cms.untracked.string("globalcor"),
 )
 
