@@ -1282,12 +1282,15 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         const unsigned int msglobalidx = dores ? detidparms.at(std::make_pair(10, propdetid)) : 0;
         const unsigned int ioniglobalidx = dores ? detidparms.at(std::make_pair(11, propdetid)) : 0;
 
-        // 3D field correction at the start of the propagation step. dBzPerMode
-        // gives the per-mode Bz basis values at the same point, used as the
-        // chain-rule scaling for the transport-Jacobian dBz column.
+        // 3D field correction at the start of the propagation step. The
+        // per-mode (Bx, By, Bz) basis values at the same point feed the
+        // chain-rule scaling for the transport-Jacobian dBx/dBy/dBz columns
+        // (cols 5,6,7 of the 5x9 transportJacobianBxByBzD).
         const GlobalPoint propStartPos(updtsos[0], updtsos[1], updtsos[2]);
         const Eigen::Vector3d dB = fieldCorrection_->getCorrectionAt(propStartPos, corparms_);
-        std::vector<double> dBzPerMode;
+        std::vector<double> dBxPerMode, dByPerMode, dBzPerMode;
+        fieldCorrection_->getBxBasisAt(propStartPos, dBxPerMode);
+        fieldCorrection_->getByBasisAt(propStartPos, dByPerMode);
         fieldCorrection_->getBzBasisAt(propStartPos, dBzPerMode);
 
         const double dxival = corparms_[elossglobalidx];
@@ -1558,17 +1561,15 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
           rfull.segment<nlocalcons>(icons) = dx0;
 
-          // Build the 5 x nlocalparms field+eloss Jacobian: nFieldModes columns
-          // are FdFm.col(7) (the d/dBz column from transportJacobianBxByBzD)
-          // scaled by each mode's Bz basis value at the propagation start; the
-          // last column is the unchanged d/dxi column FdFm.col(8).
-          //
-          // The dBx/dBy columns of the 5x9 transport Jacobian (FdFm.col(5) and
-          // FdFm.col(6)) are unused here pending the Bx/By basis evaluators
-          // from ScalarPot3DEval (Phase A.0 of the absolute-field plan).
+          // Build the 5 x nlocalparms field+eloss Jacobian: per-mode columns
+          // sum the dBx, dBy, dBz transport-Jacobian columns scaled by each
+          // mode's Bx/By/Bz basis values at the propagation start; the last
+          // column is the unchanged d/dxi column FdFm.col(8).
           Matrix<double, 5, Dynamic> dStateDparams(5, nlocalparms);
           for (unsigned int imode = 0; imode < nlocalbfield; ++imode) {
-            dStateDparams.col(imode) = FdFm.col(7) * dBzPerMode[imode];
+            dStateDparams.col(imode) = FdFm.col(5) * dBxPerMode[imode]
+                                     + FdFm.col(6) * dByPerMode[imode]
+                                     + FdFm.col(7) * dBzPerMode[imode];
           }
           dStateDparams.col(nlocalbfield) = FdFm.col(8);
 

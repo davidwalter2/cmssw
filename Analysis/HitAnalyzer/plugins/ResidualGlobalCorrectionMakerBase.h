@@ -463,9 +463,9 @@ protected:
   bool useIdealGeometry_ = false;
 
   // Scalar-potential B-field correction. Replaces the per-module dBz block
-  // with ~50 spherical-harmonic coefficients of the magnetic scalar potential.
-  unsigned int scalarPotentialLmax_ = 5;
-  std::vector<std::pair<int, int>> scalarPotentialExtra_;
+  // with the spherical-harmonic coefficients of the magnetic scalar potential
+  // loaded from a Phase-A.5 dump file (mfs/dump_coeffs_for_cmssw.py).
+  std::string scalarPotentialInitFile_;
   std::unique_ptr<ana_hitanalyzer::ScalarPotentialFieldCorrection> fieldCorrection_;
   
   float dxpxb1;

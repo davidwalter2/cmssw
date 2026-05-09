@@ -33,8 +33,14 @@ opts.register('useScalarPot3D', False, VarParsing.VarParsing.multiplicity.single
               'in the CVH refit instead of PolyFit3D')
 opts.register('scalarPot3DInitFile', '', VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string,
-              'Phase-A.5 dump file for ScalarPot3D (required if useScalarPot3D=True)')
+              'Phase-A.5 dump file produced by mfs/dump_coeffs_for_cmssw.py. '
+              'Always required: the residual-correction maker uses it to register '
+              'parmtype-14 modes and seed their initial coefficients. Also reused '
+              'as the field producer init file when useScalarPot3D=True.')
 opts.parseArguments()
+if not opts.scalarPot3DInitFile:
+    raise SystemExit(
+        "scalarPot3DInitFile=<path> is required (Phase-A.5 dump file)")
 
 JPSI_TRIGGERS = [
     "HLT_Dimuon0_Jpsi_Muon",
@@ -147,11 +153,10 @@ process.globalCor = cms.EDProducer(
     corFiles=cms.vstring(),
     triggers=cms.vstring(*JPSI_TRIGGERS),
     MagneticFieldLabel=cms.string(""),
-    # Scalar-potential delta-correction block (parmtype-14). Required even
-    # when not using parmtype-14 in the global fit; the producer always
-    # constructs the basis evaluator and reads these params.
-    scalarPotentialLmax=cms.uint32(5),
-    scalarPotentialExtra=cms.vstring(),
+    # Scalar-potential B-field correction (parmtype-14, absolute-field
+    # model). Initial coefficients + basis structure are loaded from a
+    # Phase-A.5 dump file (mfs/dump_coeffs_for_cmssw.py output).
+    scalarPotentialInitFile=cms.string(opts.scalarPot3DInitFile),
     outprefix=cms.untracked.string("globalcor"),
 )
 
