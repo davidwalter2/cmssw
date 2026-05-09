@@ -171,102 +171,113 @@ ScalarPot3DEval::ScalarPot3DEval(const std::string& dump_path) {
 }
 
 // ---------------------------------------------------------------------------
-// Per-mode basis evaluation: fills bz, br, bphi (each resized to nModes()).
-// One Plm table built per call (size (l_max+1)^2), shared across all modes.
+// Build the per-call geometry cache: trig table cos/sin(m*phi), Plm table at
+// cos theta, and the Rn_pow[k] = (R/r_scale)^k power table (k=0..l_max).
+// All three are O(l_max) work, so the per-mode loop pays no std::pow cost.
 // ---------------------------------------------------------------------------
-void ScalarPot3DEval::evaluateBasisAt(const GlobalPoint& gp,
-                                      std::vector<double>& bz,
-                                      std::vector<double>& br,
-                                      std::vector<double>& bphi) const {
+void ScalarPot3DEval::fillGeomCache(const GlobalPoint& gp,
+                                    GeomCache& g) const {
+  const double x = gp.x();
+  const double y = gp.y();
+  const double zshift = gp.z() - z0_;
+  g.r = std::sqrt(x * x + y * y);
+  g.R = std::sqrt(g.r * g.r + zshift * zshift);
+
+  const double phi = std::atan2(y, x);
+  g.cphi = std::cos(phi);
+  g.sphi = std::sin(phi);
+
+  g.cosm.resize(l_max_ + 1);
+  g.sinm.resize(l_max_ + 1);
+  for (unsigned int m = 0; m <= l_max_; ++m) {
+    g.cosm[m] = std::cos(static_cast<double>(m) * phi);
+    g.sinm[m] = std::sin(static_cast<double>(m) * phi);
+  }
+
+  if (g.R > 0.0) {
+    g.cos_t = zshift / g.R;
+    g.sin_t = g.r / g.R;
+  } else {
+    g.cos_t = (zshift >= 0.0 ? 1.0 : -1.0);
+    g.sin_t = 0.0;
+  }
+  compute_plm_table(g.cos_t, l_max_, g.plm);
+
+  // (R/r_scale)^k built by repeated multiply: 1 division + l_max
+  // multiplies, replacing the std::pow call inside each mode's loop body.
+  g.Rn_pow.resize(l_max_ + 1);
+  g.Rn_pow[0] = 1.0;
+  if (l_max_ >= 1) {
+    const double Rn = g.R / r_scale_;
+    for (unsigned int k = 1; k <= l_max_; ++k) {
+      g.Rn_pow[k] = g.Rn_pow[k - 1] * Rn;
+    }
+  }
+}
+
+void ScalarPot3DEval::evaluateBasisFromCache(const GeomCache& g,
+                                             std::vector<double>& bz,
+                                             std::vector<double>& br,
+                                             std::vector<double>& bphi) const {
   const unsigned int N = nModes();
   bz.assign(N, 0.0);
   br.assign(N, 0.0);
   bphi.assign(N, 0.0);
 
-  const double x = gp.x();
-  const double y = gp.y();
-  const double zshift = gp.z() - z0_;
-  const double r = std::sqrt(x * x + y * y);
-  const double R = std::sqrt(r * r + zshift * zshift);
-
-  // Trig table for cos(m*phi), sin(m*phi); m up to l_max_
-  const double phi = std::atan2(y, x);
-  std::vector<double> cosm(l_max_ + 1), sinm(l_max_ + 1);
-  for (unsigned int m = 0; m <= l_max_; ++m) {
-    cosm[m] = std::cos(static_cast<double>(m) * phi);
-    sinm[m] = std::sin(static_cast<double>(m) * phi);
-  }
-
-  // Plm table at cos θ = z/R; on-axis fall-back z>0 -> +1, z<0 -> -1, R=0 -> +1
-  double cos_t, sin_t;
-  if (R > 0.0) {
-    cos_t = zshift / R;
-    sin_t = r / R;
-  } else {
-    cos_t = (zshift >= 0.0 ? 1.0 : -1.0);
-    sin_t = 0.0;
-  }
-  std::vector<double> plm;
-  compute_plm_table(cos_t, l_max_, plm);
+  const double inv_rscale = 1.0 / r_scale_;
+  const double inv_sin_t = (g.sin_t > 1e-12) ? 1.0 / g.sin_t : 0.0;
+  const double inv_r = (g.r > 1e-12) ? 1.0 / g.r : 0.0;
 
   for (unsigned int i = 0; i < N; ++i) {
     const Param& p = params_[i];
     const unsigned int l = p.l;
     const unsigned int m = p.m;
-    const char cs = p.cs;
     const double S = schmidt_[i];
 
     if (l == 0) continue;  // gauge mode, all components zero
 
-    // (R/r_scale)^(l-1) / r_scale
-    double R_pow;
-    if (l == 1) {
-      R_pow = 1.0 / r_scale_;
-    } else {
-      const double Rn = R / r_scale_;
-      R_pow = (R > 0.0) ? std::pow(Rn, static_cast<double>(l - 1)) / r_scale_
-                        : 0.0;
-    }
+    // (R/r_scale)^(l-1) / r_scale  -- table lookup, no std::pow
+    const double R_pow = g.Rn_pow[l - 1] * inv_rscale;
+    const double R_l   = g.Rn_pow[l];
 
-    const double phi_factor = (cs == 'c' ? cosm[m] : sinm[m]);
+    const double phi_factor = (p.cs == 'c' ? g.cosm[m] : g.sinm[m]);
 
-    // ---------- Bz ----------
-    // (l+m) R^{l-1}/r_scale * P_{l-1}^m(cos θ) * phi_factor
-    // P_{l-1}^m: undefined when l=0 (already skipped); ok for l>=1.
+    // ---------- Bz: (l+m) R^{l-1}/r_scale * P_{l-1}^m * phi_factor ---------
     double plm_lm1 = 0.0;
-    if (l >= 1 && m <= l - 1) {
-      plm_lm1 = plm[plm_index(l - 1, m, l_max_)];
+    if (m <= l - 1) {
+      plm_lm1 = g.plm[plm_index(l - 1, m, l_max_)];
     }
     bz[i] = static_cast<double>(l + m) * R_pow * plm_lm1 * phi_factor * S;
 
-    // ---------- Br ----------
-    // R^{l-1}/r_scale * [l Plm - cos θ (l+m) P_{l-1}^m] / sin θ * phi_factor
+    // ---------- Br: R^{l-1}/r_scale * [l Plm - cos*(l+m)*Pl-1m] / sin -----
     double plm_l = 0.0;
     if (m <= l) {
-      plm_l = plm[plm_index(l, m, l_max_)];
+      plm_l = g.plm[plm_index(l, m, l_max_)];
     }
-    const double numerator = static_cast<double>(l) * plm_l
-                           - cos_t * static_cast<double>(l + m) * plm_lm1;
-    if (sin_t > 1e-12) {
-      br[i] = R_pow * numerator / sin_t * phi_factor * S;
-    } else {
-      br[i] = 0.0;  // L'Hôpital on axis (numerator → 0 too)
-    }
+    if (g.sin_t > 1e-12) {
+      const double numerator = static_cast<double>(l) * plm_l
+                             - g.cos_t * static_cast<double>(l + m) * plm_lm1;
+      br[i] = R_pow * numerator * inv_sin_t * phi_factor * S;
+    }  // else br[i] stays 0 (L'Hopital on axis)
 
-    // ---------- Bphi ----------
-    // (m/r) (R/r_scale)^l * P_l^m(cos θ) * (∓sin | +cos)(m φ) * S
-    // = m/r * (R/r_scale)^l * Plm * phi_dphi
-    if (m == 0) {
-      bphi[i] = 0.0;
-    } else if (r > 1e-12) {
-      const double Rn = R / r_scale_;
-      const double R_l = (R > 0.0) ? std::pow(Rn, static_cast<double>(l)) : 0.0;
-      const double phi_dphi = (cs == 'c' ? -sinm[m] : cosm[m]);
-      bphi[i] = static_cast<double>(m) / r * R_l * plm_l * phi_dphi * S;
-    } else {
-      bphi[i] = 0.0;  // r=0 axis: ~r^(m-1), m>=1 gives 0
-    }
+    // ---------- Bphi: (m/r) (R/r_scale)^l * P_l^m * (∓sin|+cos)(m phi) ----
+    if (m > 0 && g.r > 1e-12) {
+      const double phi_dphi = (p.cs == 'c' ? -g.sinm[m] : g.cosm[m]);
+      bphi[i] = static_cast<double>(m) * inv_r * R_l * plm_l * phi_dphi * S;
+    }  // else bphi[i] stays 0
   }
+}
+
+// ---------------------------------------------------------------------------
+// Per-mode basis evaluation (public): fills bz, br, bphi vectors at gp.
+// ---------------------------------------------------------------------------
+void ScalarPot3DEval::evaluateBasisAt(const GlobalPoint& gp,
+                                      std::vector<double>& bz,
+                                      std::vector<double>& br,
+                                      std::vector<double>& bphi) const {
+  GeomCache g;
+  fillGeomCache(gp, g);
+  evaluateBasisFromCache(g, bz, br, bphi);
 }
 
 // ---------------------------------------------------------------------------
@@ -320,6 +331,11 @@ void ScalarPot3DEval::getByBasisAt(const GlobalPoint& gp,
 
 // ---------------------------------------------------------------------------
 // Aggregate field at gp = Σ c_i × basis_i, returned as GlobalVector (Tesla).
+// Hot path during Geant4 stepping — accumulates in three scalars rather
+// than allocating per-mode bz/br/bphi vectors and summing them in a
+// second pass. Geometry tables (Plm, Rn_pow, trig) are built once via
+// fillGeomCache; the per-mode body is one fused multiply-add per
+// component.
 // ---------------------------------------------------------------------------
 GlobalVector ScalarPot3DEval::evaluateAbsoluteAt(
     const GlobalPoint& gp, const std::vector<double>& corparms) const {
@@ -330,22 +346,52 @@ GlobalVector ScalarPot3DEval::evaluateAbsoluteAt(
                              + " != nModes() " + std::to_string(N));
   }
 
-  std::vector<double> bz, br, bphi;
-  evaluateBasisAt(gp, bz, br, bphi);
+  GeomCache g;
+  fillGeomCache(gp, g);
+
+  const double inv_rscale = 1.0 / r_scale_;
+  const double inv_sin_t  = (g.sin_t > 1e-12) ? 1.0 / g.sin_t : 0.0;
+  const double inv_r      = (g.r     > 1e-12) ? 1.0 / g.r     : 0.0;
 
   double sumBz = 0.0, sumBr = 0.0, sumBphi = 0.0;
   for (unsigned int i = 0; i < N; ++i) {
-    const double c = corparms[i];
-    sumBz   += c * bz[i];
-    sumBr   += c * br[i];
-    sumBphi += c * bphi[i];
+    const Param& p = params_[i];
+    const unsigned int l = p.l;
+    if (l == 0) continue;
+    const unsigned int m = p.m;
+
+    // Coefficient absorbs both the user value and the Schmidt factor in
+    // one multiply (saves one per mode).
+    const double c = corparms[i] * schmidt_[i];
+    if (c == 0.0) continue;
+
+    const double R_pow = g.Rn_pow[l - 1] * inv_rscale;  // R^{l-1}/r_scale
+    const double R_l   = g.Rn_pow[l];                   // R^l (for Bphi)
+
+    const double phi_factor = (p.cs == 'c' ? g.cosm[m] : g.sinm[m]);
+
+    const double plm_lm1 = (m <= l - 1) ? g.plm[plm_index(l - 1, m, l_max_)] : 0.0;
+    const double plm_l   = (m <= l)     ? g.plm[plm_index(l,     m, l_max_)] : 0.0;
+
+    // Bz
+    sumBz += c * static_cast<double>(l + m) * R_pow * plm_lm1 * phi_factor;
+
+    // Br (zero on axis by L'Hopital; numerator vanishes there too)
+    if (g.sin_t > 1e-12) {
+      const double numerator = static_cast<double>(l) * plm_l
+                             - g.cos_t * static_cast<double>(l + m) * plm_lm1;
+      sumBr += c * R_pow * numerator * inv_sin_t * phi_factor;
+    }
+
+    // Bphi (zero on axis: Plm ~ sin^m, m>=1 -> 0; m=0 -> dPhi/dphi=0)
+    if (m > 0 && g.r > 1e-12) {
+      const double phi_dphi = (p.cs == 'c' ? -g.sinm[m] : g.cosm[m]);
+      sumBphi += c * static_cast<double>(m) * inv_r * R_l * plm_l * phi_dphi;
+    }
   }
 
-  const double phi = std::atan2(gp.y(), gp.x());
-  const double cphi = std::cos(phi);
-  const double sphi = std::sin(phi);
-  const double Bx = sumBr * cphi - sumBphi * sphi;
-  const double By = sumBr * sphi + sumBphi * cphi;
+  const double Bx = sumBr * g.cphi - sumBphi * g.sphi;
+  const double By = sumBr * g.sphi + sumBphi * g.cphi;
   return GlobalVector(Bx, By, sumBz);
 }
 

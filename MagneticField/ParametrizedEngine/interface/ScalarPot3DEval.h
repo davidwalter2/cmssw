@@ -86,6 +86,33 @@ public:
   const std::vector<Param>& params() const { return params_; }
 
 private:
+  // Per-call cache filled once at the top of evaluateBasisAt /
+  // evaluateAbsoluteAt; reused by the per-mode loop. Keeping the
+  // tables off the hot path means one std::pow chain per query
+  // instead of 2*nModes() std::pow calls, and a single trig table
+  // per query rather than per-component recomputation.
+  struct GeomCache {
+    double R = 0.0;       // sphere radius (cm)
+    double r = 0.0;       // cylindrical radius (cm)
+    double cos_t = 0.0;   // z/R
+    double sin_t = 0.0;   // r/R
+    double cphi = 0.0;    // cos(phi), for cyl->cart projection
+    double sphi = 0.0;    // sin(phi)
+    std::vector<double> cosm;     // cos(m*phi), m=0..l_max
+    std::vector<double> sinm;     // sin(m*phi), m=0..l_max
+    std::vector<double> Rn_pow;   // (R/r_scale)^k, k=0..l_max
+    std::vector<double> plm;      // (l_max+1)^2 entries
+  };
+
+  void fillGeomCache(const GlobalPoint& gp, GeomCache& g) const;
+
+  // Per-mode evaluation given a filled cache. Writes into pre-resized
+  // bz/br/bphi (or aggregated counters for the fast path).
+  void evaluateBasisFromCache(const GeomCache& g,
+                              std::vector<double>& bz,
+                              std::vector<double>& br,
+                              std::vector<double>& bphi) const;
+
   // Header.
   unsigned int l_max_   = 0;
   double r_scale_       = 1.0;
