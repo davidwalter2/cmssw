@@ -467,6 +467,13 @@ protected:
   // loaded from a Phase-A.5 dump file (mfs/dump_coeffs_for_cmssw.py).
   std::string scalarPotentialInitFile_;
   std::unique_ptr<ana_hitanalyzer::ScalarPotentialFieldCorrection> fieldCorrection_;
+
+  // Phase B.5 numerical-FD closure (debug only; one-shot per job).
+  bool runFDClosure_ = false;
+  double epsilonFDClosure_ = 1e-4;
+  // mutable so the per-job "did the test" flag can be set inside
+  // analyze() without making the whole maker non-const.
+  mutable bool didFDClosure_ = false;
   
   float dxpxb1;
   float dypxb1;

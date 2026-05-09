@@ -33,6 +33,7 @@
 #include "CondFormats/DataRecord/interface/L1GtTriggerMenuRcd.h"
 #include "CondFormats/L1TObjects/interface/L1GtTriggerMenu.h"
 
+#include <iomanip>
 #include <iostream>
 #include <limits>
 #include <sstream>
@@ -1569,6 +1570,10 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
               const GloballyPositioned<double> &surface = surfacemapD_.at(hit->geographicalId());
 
+              // Save input state so the B.5 FD-closure can re-propagate
+              // from the same point with a perturbed dB.
+              const Eigen::Matrix<double, 7, 1> propInputState = updtsos;
+
               auto propresult = g4prop->propagateGenericWithJacobianAltD(updtsos, surface, dB, dxival,
                                                                           0., 0., -1., g4PartName);
               if (!std::get<0>(propresult)) {
@@ -1648,6 +1653,111 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                                          + FdFm.col(7) * dBzPerMode[imode];
               }
               dStateDparams.col(nlocalbfield) = FdFm.col(8);
+
+              // ----- Phase B.5 numerical-FD closure (debug) ---------------
+              // FDs only the basis-invariant curvilinear components
+              // (qop, lambda, phi) -- those can be derived directly from
+              // the global-cartesian 7-vector (px, py, pz, q) without
+              // knowing the surface's local frame; (xt, yt) need a
+              // surface-dependent transformation we don't reconstruct here.
+              //
+              // For each mode i we use a per-mode eps_i scaled so that
+              // eps_i * ||dB_basis_i|| equals epsilonFDClosure_ (treat as a
+              // target dB-perturbation magnitude in Tesla). Modes with
+              // basis amplitude below 1e-15 at the test point are skipped
+              // (analytic prediction is FP-noise; FD can't resolve).
+              // Tests the 10 modes with the largest basis amplitude at this
+              // point so the FD signal is well-conditioned across mode
+              // counts. Runs once per job.
+              if (runFDClosure_ && !didFDClosure_ && nlocalbfield > 0) {
+                auto qopLamPhi = [](const Eigen::Matrix<double, 7, 1>& s) {
+                  const double px = s(3), py = s(4), pz = s(5), q = s(6);
+                  const double pT = std::sqrt(px * px + py * py);
+                  const double pmag = std::sqrt(pT * pT + pz * pz);
+                  Eigen::Vector3d v;
+                  v(0) = q / pmag;             // qop
+                  v(1) = std::atan2(pz, pT);   // lambda
+                  v(2) = std::atan2(py, px);   // phi
+                  return v;
+                };
+                const Eigen::Vector3d cNom = qopLamPhi(updtsos);
+                const double dBtarget = epsilonFDClosure_;  // target dB |Tesla|
+                // Rank modes by basis amplitude (sqrt(dBx^2+dBy^2+dBz^2)).
+                std::vector<std::pair<double, unsigned int>> sorted;
+                sorted.reserve(nlocalbfield);
+                for (unsigned int i = 0; i < nlocalbfield; ++i) {
+                  const double a = std::sqrt(dBxPerMode[i] * dBxPerMode[i]
+                                             + dByPerMode[i] * dByPerMode[i]
+                                             + dBzPerMode[i] * dBzPerMode[i]);
+                  sorted.emplace_back(a, i);
+                }
+                std::sort(sorted.begin(), sorted.end(),
+                          std::greater<std::pair<double, unsigned int>>());
+                const unsigned int nTest = std::min<unsigned int>(10u, nlocalbfield);
+                std::cout << "===== Phase B.5 numerical-FD closure ====="
+                          << "  nFieldModes=" << nlocalbfield
+                          << "  testing top-" << nTest << " modes by basis amplitude"
+                          << "  dB_target=" << dBtarget << " T"
+                          << "  comparing (qop, lambda, phi)" << std::endl;
+                std::cout << std::scientific << std::setprecision(4);
+                double worstRel = 0.0;
+                for (unsigned int j = 0; j < nTest; ++j) {
+                  const double basisAmp = sorted[j].first;
+                  const unsigned int imode = sorted[j].second;
+                  if (basisAmp < 1e-15) {
+                    std::cout << "  mode " << imode
+                              << " (rank " << j << ", basis=" << basisAmp
+                              << "): below floor, skip" << std::endl;
+                    continue;
+                  }
+                  const double eps = dBtarget / basisAmp;
+                  const Eigen::Vector3d dBpert(
+                      dB(0) + eps * dBxPerMode[imode],
+                      dB(1) + eps * dByPerMode[imode],
+                      dB(2) + eps * dBzPerMode[imode]);
+                  auto pertResult = g4prop->propagateGenericWithJacobianAltD(
+                      propInputState, surface, dBpert, dxival,
+                      0., 0., -1., g4PartName);
+                  if (!std::get<0>(pertResult)) {
+                    std::cout << "  mode " << imode << ": pert prop failed" << std::endl;
+                    continue;
+                  }
+                  const Eigen::Vector3d cPert = qopLamPhi(std::get<1>(pertResult));
+                  const Eigen::Vector3d dCFD = (cPert - cNom) / eps;
+                  // dStateDparams cols 0..2 are (qop, lambda, phi) of the
+                  // 5-component curvilinear state.
+                  const Eigen::Vector3d dCAn = dStateDparams.col(imode).head<3>();
+                  Eigen::Vector3d rel;
+                  for (int k = 0; k < 3; ++k) {
+                    // qop is conserved under uniform-dB perturbation in
+                    // helix transport (no eloss coupling here), so the
+                    // analytic dCAn(0) is identically zero up to FP-noise
+                    // (~1e-11). FD also lands at FP noise. Both small =
+                    // skip the comparison; relative diff is meaningless.
+                    constexpr double FP_FLOOR = 1e-10;
+                    if (std::abs(dCAn(k)) < FP_FLOOR &&
+                        std::abs(dCFD(k)) < FP_FLOOR) {
+                      rel(k) = 0.0;
+                      continue;
+                    }
+                    const double scale = std::max(std::abs(dCAn(k)), 1e-30);
+                    rel(k) = std::abs(dCFD(k) - dCAn(k)) / scale;
+                    if (rel(k) > worstRel) worstRel = rel(k);
+                  }
+                  std::cout << "  mode " << imode << " (rank " << j
+                            << ", basis=" << basisAmp << ", eps=" << eps << ")"
+                            << "  rel(qop,lam,phi)=[" << rel.transpose() << "]"
+                            << std::endl;
+                  std::cout << "      FD=[" << dCFD.transpose() << "]"
+                            << "  an=[" << dCAn.transpose() << "]" << std::endl;
+                }
+                std::cout << "===== B.5 FD closure: worst rel = " << worstRel
+                          << " over top-" << nTest << " modes ====="
+                          << std::endl;
+                std::cout.unsetf(std::ios_base::floatfield);
+                didFDClosure_ = true;
+              }
+              // ------------------------------------------------------------
 
               if (ihit == 0) {
                 constexpr unsigned int nvtxstate = 10;

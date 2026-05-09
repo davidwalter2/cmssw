@@ -165,6 +165,11 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   fieldCorrection_ = std::make_unique<ana_hitanalyzer::ScalarPotentialFieldCorrection>(
       scalarPotentialInitFile_);
 
+  // Phase B.5 numerical-FD closure flags (debug; both makers honour them).
+  runFDClosure_ = iConfig.existsAs<bool>("runFDClosure")
+      ? iConfig.getParameter<bool>("runFDClosure") : false;
+  epsilonFDClosure_ = iConfig.existsAs<double>("epsilonFDClosure")
+      ? iConfig.getParameter<double>("epsilonFDClosure") : 1e-4;
   inputBs_ = consumes<reco::BeamSpot>(edm::InputTag("offlineBeamSpot"));
 
   

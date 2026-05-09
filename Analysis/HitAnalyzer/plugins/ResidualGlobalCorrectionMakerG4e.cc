@@ -11,6 +11,9 @@
 
 #include <Eigen/Sparse>
 
+#include <iomanip>
+#include <iostream>
+
 #include "TRandom.h"
 
 #include "Geometry/CommonTopologies/interface/TrapezoidalStripTopology.h"
@@ -1332,10 +1335,15 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         }
 
 //         std::cout << "iiter = " << iiter << " ihit = " << ihit << " updtsos:\n" << updtsos << std::endl;
-        
+
         // auto const &propresult = g4prop->propagateGenericWithJacobianAltD(updtsos, surface, dbetaval, dxival, dradval);
         // auto const &propresult = g4prop->propagateGenericWithJacobianAltD(propfromtsos, surface, dbetaval, dxival, dradval);
-        
+
+        // Save the input state so the FD closure block (B.5) can re-run
+        // the propagation with a perturbed dB starting from the same point.
+        const Eigen::Matrix<double, 7, 1> propInputState =
+            simhitdebug ? propfromtsos : updtsos;
+
         auto const &propresult = simhitdebug
             ? g4prop->propagateGenericWithJacobianAltD(propfromtsos, surface, dB, dxival, dmsval, dionival, -1., g4PartName)
             : g4prop->propagateGenericWithJacobianAltD(updtsos,      surface, dB, dxival, dmsval, dionival, -1., g4PartName);
@@ -1572,6 +1580,61 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                                      + FdFm.col(7) * dBzPerMode[imode];
           }
           dStateDparams.col(nlocalbfield) = FdFm.col(8);
+
+          // ----- Phase B.5 numerical-FD closure (debug only) ----------------
+          // Validates the analytic Bx/By/Bz chain rule by perturbing dB at the
+          // propagation start by epsilon * (dBxPerMode[i], dByPerMode[i],
+          // dBzPerMode[i]) for the first few modes, re-propagating, and
+          // finite-differencing the 5-component endpoint state. Compares
+          // against dStateDparams.col(imode). Runs once per job at the first
+          // chain-rule site that has nlocalbfield > 0.
+          if (runFDClosure_ && !didFDClosure_ && nlocalbfield > 0) {
+            const Matrix<double, 5, 1> stateNom =
+                Eigen::Matrix<double, 5, 1>(updtsos.head<5>());
+            const double eps = epsilonFDClosure_;
+            const unsigned int nTest = std::min<unsigned int>(10u, nlocalbfield);
+            std::cout << "===== Phase B.5 numerical-FD closure ====="
+                      << "  nFieldModes=" << nlocalbfield
+                      << "  testing " << nTest << " modes"
+                      << "  eps=" << eps << std::endl;
+            std::cout << std::scientific << std::setprecision(4);
+            double worstRel = 0.0;
+            for (unsigned int imode = 0; imode < nTest; ++imode) {
+              const Eigen::Vector3d dBpert(
+                  dB(0) + eps * dBxPerMode[imode],
+                  dB(1) + eps * dByPerMode[imode],
+                  dB(2) + eps * dBzPerMode[imode]);
+              auto pertResult = g4prop->propagateGenericWithJacobianAltD(
+                  propInputState, surface, dBpert, dxival,
+                  dmsval, dionival, -1., g4PartName);
+              if (!std::get<0>(pertResult)) {
+                std::cout << "  mode " << imode
+                          << ": perturbed propagation failed" << std::endl;
+                continue;
+              }
+              const Matrix<double, 5, 1> statePert =
+                  Eigen::Matrix<double, 5, 1>(std::get<1>(pertResult).head<5>());
+              const Matrix<double, 5, 1> dStateFD = (statePert - stateNom) / eps;
+              const Matrix<double, 5, 1> dStateAn = dStateDparams.col(imode);
+              Matrix<double, 5, 1> rel;
+              for (int k = 0; k < 5; ++k) {
+                const double scale = std::max(std::abs(dStateAn(k)), 1e-30);
+                rel(k) = std::abs(dStateFD(k) - dStateAn(k)) / scale;
+                if (rel(k) > worstRel) worstRel = rel(k);
+              }
+              std::cout << "  mode " << imode
+                        << "  max|FD-an|/|an| = " << rel.maxCoeff()
+                        << "  FD=[" << dStateFD.transpose() << "]"
+                        << "  an=[" << dStateAn.transpose() << "]"
+                        << std::endl;
+            }
+            std::cout << "===== B.5 FD closure: worst rel = " << worstRel
+                      << " over " << nTest << " modes ====="
+                      << std::endl;
+            std::cout.unsetf(std::ios_base::floatfield);
+            didFDClosure_ = true;
+          }
+          // ------------------------------------------------------------------
 
           if (dolocalupdate) {
             Ffull.block<nlocalcons, nlocalstateparms>(icons, fullstateidx) = -Hm*FdFm.leftCols<nlocalstateparms>();
