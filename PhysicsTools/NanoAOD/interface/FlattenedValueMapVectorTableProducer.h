@@ -95,9 +95,9 @@ class FlattenedValueMapVectorTableProducer : public edm::stream::EDProducer<> {
                 const auto& results = readVals(*vmap, objs, sizes);
                 if (i == 0)
                     intvectab = std::make_unique<nanoaod::FlatTable>(results.size(), this->name_+"_IntVals", false, false);
-                intvectab->addColumn<int>(intNames_[i], results, intDocs_[i], nanoaod::FlatTable::IntColumn, intPrecisions_[i]);
+                intvectab->addColumn<int>(intNames_[i], results, intDocs_[i], intPrecisions_[i]);
             }
-            intsizetab->template addColumn<int>("IntCounts", sizes, "Number of entries per object", nanoaod::FlatTable::IntColumn, countPrecision_);
+            intsizetab->template addColumn<int>("IntCounts", sizes, "Number of entries per object", countPrecision_);
             std::fill(sizes.begin(), sizes.end(), 0);
             for (size_t i = 0; i < floatVecMaps_.size(); i++) {
                 edm::Handle<edm::ValueMap<std::vector<float>>> vmap;
@@ -105,9 +105,9 @@ class FlattenedValueMapVectorTableProducer : public edm::stream::EDProducer<> {
                 const auto& results = readVals(*vmap, objs, sizes);
                 if (i == 0)
                     floatvectab = std::make_unique<nanoaod::FlatTable>(results.size(), this->name_+"_FloatVals", false, false);
-                floatvectab->addColumn<float>(floatNames_[i], results, floatDocs_[i], nanoaod::FlatTable::FloatColumn, floatPrecisions_[i]);
+                floatvectab->addColumn<float>(floatNames_[i], results, floatDocs_[i], floatPrecisions_[i]);
             }
-            floatsizetab->template addColumn<int>("FloatCounts", sizes, "Number of entries per object", nanoaod::FlatTable::IntColumn, countPrecision_);
+            floatsizetab->template addColumn<int>("FloatCounts", sizes, "Number of entries per object", countPrecision_);
 
 
             intsizetab->setDoc(doc_);

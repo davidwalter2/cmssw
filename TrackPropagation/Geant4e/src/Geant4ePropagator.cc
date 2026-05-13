@@ -38,6 +38,7 @@
 
 // CLHEP
 #include <CLHEP/Units/SystemOfUnits.h>
+#include "G4SystemOfUnits.hh"
 
 #include "TrackingTools/AnalyticalJacobians/interface/JacobianCurvilinearToLocal.h"
 #include "TrackingTools/TrajectoryParametrization/interface/CurvilinearTrajectoryParameters.h"
