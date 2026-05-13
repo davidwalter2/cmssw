@@ -131,7 +131,13 @@ private:
   G4int nbins;
   G4int nmat = 0;
 
-  G4bool splineFlag = false;
+  // Restore G4 10.4 behaviour: cubic-spline interpolation of the dE/dx /
+  // range / inverse-range tables used by the CVH refit. In G4 10.4 the WMass
+  // fork queried G4EmParameters::Instance()->Spline() which defaulted to
+  // true; that getter was removed in G4 11.x with a class-level default of
+  // false. The W mass calibration was tuned against spline-interpolated
+  // tables, so keep that behaviour here.
+  G4bool splineFlag = true;
   G4bool ionOnly;
 };
 
