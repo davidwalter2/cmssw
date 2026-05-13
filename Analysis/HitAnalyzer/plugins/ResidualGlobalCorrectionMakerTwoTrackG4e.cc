@@ -195,15 +195,21 @@ private:
   
   float dmassconvval_cons0 = 0.;
   float dinvmasssqconvval_cons0 = 0.;
-  
-//   std::vector<float> hessv;
-  
 
-  
+//   std::vector<float> hessv;
+
+  edm::ESGetToken<TransientTrackingRecHitBuilder, TransientRecHitRecord> ttrhToken_;
+  edm::ESGetToken<Propagator, TrackingComponentsRecord> g4ePropToken_;
+  edm::ESGetToken<TransientTrackBuilder, TransientTrackRecord> transTrackBuilderToken_;
+
 };
 
 
-ResidualGlobalCorrectionMakerTwoTrackG4e::ResidualGlobalCorrectionMakerTwoTrackG4e(const edm::ParameterSet &iConfig) : ResidualGlobalCorrectionMakerBase(iConfig) 
+ResidualGlobalCorrectionMakerTwoTrackG4e::ResidualGlobalCorrectionMakerTwoTrackG4e(const edm::ParameterSet &iConfig)
+    : ResidualGlobalCorrectionMakerBase(iConfig),
+      ttrhToken_(esConsumes(edm::ESInputTag("", "WithAngleAndTemplate"))),
+      g4ePropToken_(esConsumes(edm::ESInputTag("", "Geant4ePropagator"))),
+      transTrackBuilderToken_(esConsumes(edm::ESInputTag("", "TransientTrackBuilder")))
 {
   doVtxConstraint_ = iConfig.getParameter<bool>("doVtxConstraint");
   doMassConstraint_ = iConfig.getParameter<bool>("doMassConstraint");
@@ -390,18 +396,10 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
   // loop over gen particles
 
-  edm::ESHandle<GlobalTrackingGeometry> globalGeometry;
-  iSetup.get<GlobalTrackingGeometryRecord>().get(globalGeometry);
-    
-  edm::ESHandle<TrackerTopology> trackerTopology;
-  iSetup.get<TrackerTopologyRcd>().get(trackerTopology);
-  
-  
-  edm::ESHandle<TransientTrackingRecHitBuilder> ttrh;
-  iSetup.get<TransientRecHitRecord>().get("WithAngleAndTemplate",ttrh);
-  
-  ESHandle<Propagator> thePropagator;
-  iSetup.get<TrackingComponentsRecord>().get("Geant4ePropagator", thePropagator);
+  auto globalGeometry = iSetup.getHandle(globalGeometryToken_);
+  auto trackerTopology = iSetup.getHandle(trackerTopologyToken_);
+  auto ttrh = iSetup.getHandle(ttrhToken_);
+  auto thePropagator = iSetup.getHandle(g4ePropToken_);
 
   const MagneticField* field = thePropagator->magneticField();
   const Geant4ePropagator *g4prop = dynamic_cast<const Geant4ePropagator*>(thePropagator.product());
@@ -442,8 +440,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
   KFUpdator updator;
   TkClonerImpl const& cloner = static_cast<TkTransientTrackingRecHitBuilder const *>(ttrh.product())->cloner();
   
-  edm::ESHandle<TransientTrackBuilder> TTBuilder;
-  iSetup.get<TransientTrackRecord>().get("TransientTrackBuilder", TTBuilder);
+  auto TTBuilder = iSetup.getHandle(transTrackBuilderToken_);
   KinematicParticleFactoryFromTransientTrack pFactory;
 
   Handle<reco::BeamSpot> bsH;

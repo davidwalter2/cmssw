@@ -109,15 +109,18 @@
 // constructors and destructor
 //
 ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::ParameterSet &iConfig)
-
+    : globalGeometryToken_(esConsumes<edm::Transition::BeginRun>()),
+      trackerGeomIdealToken_(esConsumes<edm::Transition::BeginRun>(edm::ESInputTag("", "idealForDigi"))),
+      trackerTopologyToken_(esConsumes<edm::Transition::BeginRun>()),
+      magfieldToken_(esConsumes<edm::Transition::BeginRun>())
 {
   //now do what ever initialization is needed
 //   inputTraj_ = consumes<std::vector<Trajectory>>(edm::InputTag("TrackRefitter"));
 //   inputTrack_ = consumes<TrajTrackAssociationCollection>(edm::InputTag("TrackRefitter"));
 //   inputTrack_ = consumes<reco::TrackCollection>(edm::InputTag("TrackRefitter"));
 //   inputIndices_ = consumes<std::vector<int> >(edm::InputTag("TrackRefitter"));
-  
-  
+
+
   inputTrackOrig_ = consumes<reco::TrackCollection>(edm::InputTag(iConfig.getParameter<edm::InputTag>("src")));
 
   
@@ -332,23 +335,19 @@ void
 ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup const& es)
 {
   
-  edm::ESHandle<GlobalTrackingGeometry> globalGeometryNominal;
-  es.get<GlobalTrackingGeometryRecord>().get(globalGeometryNominal);
-  
-  edm::ESHandle<TrackerGeometry> globalGeometryIdeal;
-  es.get<TrackerDigiGeometryRecord>().get("idealForDigi", globalGeometryIdeal);
-  
+  auto globalGeometryNominal = es.getHandle(globalGeometryToken_);
+
+  auto globalGeometryIdeal = es.getHandle(trackerGeomIdealToken_);
+
   const TrackingGeometry *globalGeometry = useIdealGeometry_ ? static_cast<const TrackingGeometry*>(globalGeometryIdeal.product()) : static_cast<const TrackingGeometry*>(globalGeometryNominal.product());
-  
-  edm::ESHandle<TrackerTopology> trackerTopology;
-  es.get<TrackerTopologyRcd>().get(trackerTopology);
-  
+
+  auto trackerTopology = es.getHandle(trackerTopologyToken_);
+
 //   edm::ESHandle<Propagator> thePropagator;
 //   es.get<TrackingComponentsRecord>().get("RungeKuttaTrackerPropagator", thePropagator);
 //   const MagneticField* field = thePropagator->magneticField();
 
-  edm::ESHandle<MagneticField> magfield;
-  es.get<IdealMagneticFieldRecord>().get(magfield);
+  auto magfield = es.getHandle(magfieldToken_);
   auto field = magfield.product();
 
   constexpr bool dofieldtest = false;

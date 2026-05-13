@@ -21,6 +21,9 @@
 
 #include "Geometry/CommonDetUnit/interface/GlobalTrackingGeometry.h"
 #include "Geometry/Records/interface/GlobalTrackingGeometryRecord.h"
+#include "Geometry/TrackerGeometryBuilder/interface/TrackerGeometry.h"
+#include "Geometry/Records/interface/TrackerDigiGeometryRecord.h"
+#include "Geometry/Records/interface/TrackerTopologyRcd.h"
 #include "DataFormats/SiPixelDetId/interface/PXFDetId.h"
 #include "DataFormats/SiPixelDetId/interface/PXBDetId.h"
 #include "DataFormats/TrackerCommon/interface/TrackerTopology.h"
@@ -259,6 +262,11 @@ protected:
   std::vector<std::string> triggers_;
   std::vector<std::size_t> triggerIdxs_;
   std::vector<int> triggerDecisions_;
+
+  edm::ESGetToken<GlobalTrackingGeometry, GlobalTrackingGeometryRecord> globalGeometryToken_;
+  edm::ESGetToken<TrackerGeometry, TrackerDigiGeometryRecord> trackerGeomIdealToken_;
+  edm::ESGetToken<TrackerTopology, TrackerTopologyRcd> trackerTopologyToken_;
+  edm::ESGetToken<MagneticField, IdealMagneticFieldRecord> magfieldToken_;
   
   
   std::vector<std::string> corFiles_;

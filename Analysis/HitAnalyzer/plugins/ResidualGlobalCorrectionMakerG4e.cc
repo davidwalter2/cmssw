@@ -74,12 +74,21 @@ private:
   edm::EDPutTokenT<edm::ValueMap<std::vector<float>>> outputJacRef_;
   edm::EDPutTokenT<edm::ValueMap<std::vector<float>>> outputMomCov_;
 
+  edm::ESGetToken<TransientTrackingRecHitBuilder, TransientRecHitRecord> ttrhToken_;
+  edm::ESGetToken<Propagator, TrackingComponentsRecord> g4ePropToken_;
+
+  SiStripClusterInfo siStripClusterInfo_;
+
 };
 
 
-ResidualGlobalCorrectionMakerG4e::ResidualGlobalCorrectionMakerG4e(const edm::ParameterSet &iConfig) : ResidualGlobalCorrectionMakerBase(iConfig) 
+ResidualGlobalCorrectionMakerG4e::ResidualGlobalCorrectionMakerG4e(const edm::ParameterSet &iConfig)
+    : ResidualGlobalCorrectionMakerBase(iConfig),
+      ttrhToken_(esConsumes(edm::ESInputTag("", "WithAngleAndTemplate"))),
+      g4ePropToken_(esConsumes(edm::ESInputTag("", "Geant4ePropagator"))),
+      siStripClusterInfo_(consumesCollector())
 {
-  
+
 //   inputAssoc_ = consumes<edm::Association<reco::TrackExtraCollection>>(edm::InputTag("muonReducedTrackExtras"));
 
   outputCorPt_ = produces<edm::ValueMap<float>>("corPt");
@@ -94,7 +103,6 @@ ResidualGlobalCorrectionMakerG4e::ResidualGlobalCorrectionMakerG4e(const edm::Pa
 
   outputJacRef_ = produces<edm::ValueMap<std::vector<float>>>("jacRef");
   outputMomCov_ = produces<edm::ValueMap<std::vector<float>>>("momCov");
-  
 }
 
 void ResidualGlobalCorrectionMakerG4e::beginStream(edm::StreamID streamid)
@@ -281,7 +289,8 @@ void ResidualGlobalCorrectionMakerG4e::beginStream(edm::StreamID streamid)
 // ------------ method called for each event  ------------
 void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::EventSetup &iSetup)
 {
-  
+  siStripClusterInfo_.initEvent(iSetup);
+
   const bool dogen = fitFromGenParms_;
   const bool dolocalupdate = fitFromSimParms_;
   // const bool dolocalupdate = true;
@@ -293,17 +302,10 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   Handle<reco::TrackCollection> trackOrigH;
   iEvent.getByToken(inputTrackOrig_, trackOrigH);
 
-  edm::ESHandle<GlobalTrackingGeometry> globalGeometry;
-  iSetup.get<GlobalTrackingGeometryRecord>().get(globalGeometry);
-
-  edm::ESHandle<TrackerTopology> trackerTopology;
-  iSetup.get<TrackerTopologyRcd>().get(trackerTopology);
-  
-  edm::ESHandle<TransientTrackingRecHitBuilder> ttrh;
-  iSetup.get<TransientRecHitRecord>().get("WithAngleAndTemplate",ttrh);
-  
-  ESHandle<Propagator> thePropagator;
-  iSetup.get<TrackingComponentsRecord>().get("Geant4ePropagator", thePropagator);
+  auto globalGeometry = iSetup.getHandle(globalGeometryToken_);
+  auto trackerTopology = iSetup.getHandle(trackerTopologyToken_);
+  auto ttrh = iSetup.getHandle(ttrhToken_);
+  auto thePropagator = iSetup.getHandle(g4ePropToken_);
   
   const Geant4ePropagator *g4prop = dynamic_cast<const Geant4ePropagator*>(thePropagator.product());
   const MagneticField* field = thePropagator->magneticField();
@@ -2026,8 +2028,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               else {
                 const StripTopology* striptopology = dynamic_cast<const StripTopology*>(&(tkhit->det()->topology()));
                 const SiStripCluster& cluster = *tkhit->cluster_strip();
-  //               siStripClusterInfo_.setCluster(cluster, preciseHit->geographicalId().rawId());
-                SiStripClusterInfo clusterInfo = SiStripClusterInfo(cluster, iSetup, preciseHit->geographicalId().rawId());
+                siStripClusterInfo_.setCluster(cluster, preciseHit->geographicalId().rawId());
                 clusterSize.push_back(cluster.amplitudes().size());
                 clusterSizeX.push_back(cluster.amplitudes().size());
                 clusterSizeY.push_back(1);
@@ -2035,7 +2036,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                 clusterChargeBin.push_back(-99);
                 clusterOnEdge.push_back(-99);
                 clusterProbXY.push_back(-99.);
-                clusterSN.push_back(clusterInfo.signalOverNoise());
+                clusterSN.push_back(siStripClusterInfo_.signalOverNoise());
 
 
                 const uint16_t firstStrip = cluster.firstStrip();
@@ -2215,7 +2216,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       assert(iparm == npars);
       
 //       Fsparse = Ffull.rightCols(nstatefree).sparseView();
-      Fsparse = Ffull(Eigen::all, freestateidxs).sparseView();
+      Fsparse = Ffull(Eigen::placeholders::all, freestateidxs).sparseView();
       Vinvsparse = Vinvfull.sparseView();
       
       VinvF = Vinvsparse*Fsparse;
@@ -2513,7 +2514,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     
     dxdparms = MatrixXd::Zero(nparsfinal, nstateparms);
     
-    dxdparms(Eigen::all, freestateidxs) = -Cinvd.solve(VinvF.transpose()*Jsparse).transpose();
+    dxdparms(Eigen::placeholders::all, freestateidxs) = -Cinvd.solve(VinvF.transpose()*Jsparse).transpose();
     
     
     //additional contributions from resolution variations
@@ -2706,7 +2707,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 //     hess += hesscross + hesscross.transpose();
 
     //TODO deduplicate with above
-    dxdparms(Eigen::all, freestateidxs) += Cinvd.solve(FtVinv*dVRrsparse).transpose();
+    dxdparms(Eigen::placeholders::all, freestateidxs) += Cinvd.solve(FtVinv*dVRrsparse).transpose();
     
 //     if (!dogen) {
 //     //TODO deduplicate with above
