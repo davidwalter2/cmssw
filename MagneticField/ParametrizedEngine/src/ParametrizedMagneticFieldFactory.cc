@@ -10,7 +10,6 @@
 #include "OAEParametrizedMagneticField.h"
 #include "ParabolicParametrizedMagneticField.h"
 #include "PolyFit2DParametrizedMagneticField.h"
-#include "PolyFit3DParametrizedMagneticField.h"
 
 #include "FWCore/Utilities/interface/Exception.h"
 
@@ -31,8 +30,7 @@ std::unique_ptr<MagneticField> ParametrizedMagneticFieldFactory::get(string vers
     return result;
   } else if (version == "PolyFit3D") {
     // V. Maroussov polynomial fit to mapping data
-    std::unique_ptr<MagneticField> result(new PolyFit3DParametrizedMagneticField(parameters));
-    return result;
+    throw cms::Exception("InvalidParameter") << "PolyFit3D is not supported anymore";
   } else if (version == "Parabolic") {
     // FIXME implement configurable parameters to be passed to ctor
     //   vector<double> params =  parameters.getParameter<vdouble>("parameters");
