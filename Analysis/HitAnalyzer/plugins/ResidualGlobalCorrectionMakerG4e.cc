@@ -321,8 +321,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   Handle<reco::TrackCollection> trackOrigH;
   iEvent.getByToken(inputTrackOrig_, trackOrigH);
 
-  auto globalGeometry = iSetup.getHandle(globalGeometryToken_);
-  auto trackerTopology = iSetup.getHandle(trackerTopologyToken_);
+  auto globalGeometry = iSetup.getHandle(globalGeometryEventToken_);
+  auto trackerTopology = iSetup.getHandle(trackerTopologyEventToken_);
   auto ttrh = iSetup.getHandle(ttrhToken_);
   auto thePropagator = iSetup.getHandle(g4ePropToken_);
   

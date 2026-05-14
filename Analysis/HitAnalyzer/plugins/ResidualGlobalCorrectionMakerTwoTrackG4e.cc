@@ -622,8 +622,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
   // loop over gen particles
 
-  auto globalGeometry = iSetup.getHandle(globalGeometryToken_);
-  auto trackerTopology = iSetup.getHandle(trackerTopologyToken_);
+  auto globalGeometry = iSetup.getHandle(globalGeometryEventToken_);
+  auto trackerTopology = iSetup.getHandle(trackerTopologyEventToken_);
   auto ttrh = iSetup.getHandle(ttrhToken_);
   auto thePropagator = iSetup.getHandle(g4ePropToken_);
 

@@ -278,6 +278,11 @@ protected:
   edm::ESGetToken<TrackerGeometry, TrackerDigiGeometryRecord> trackerGeomIdealToken_;
   edm::ESGetToken<TrackerTopology, TrackerTopologyRcd> trackerTopologyToken_;
   edm::ESGetToken<MagneticField, IdealMagneticFieldRecord> magfieldToken_;
+  // Event-transition tokens used by derived classes' produce() (Phase 2
+  // residual makers query the geometry / topology per event). The
+  // BeginRun-scoped tokens above serve beginRun() in this base class.
+  edm::ESGetToken<GlobalTrackingGeometry, GlobalTrackingGeometryRecord> globalGeometryEventToken_;
+  edm::ESGetToken<TrackerTopology, TrackerTopologyRcd> trackerTopologyEventToken_;
   
   
   std::vector<std::string> corFiles_;

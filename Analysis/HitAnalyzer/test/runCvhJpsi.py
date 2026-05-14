@@ -192,6 +192,11 @@ fieldlabel = "ScalarPot3DMf"
 process.ScalarPot3DMagneticFieldProducer.label = fieldlabel
 process.geopro.MagneticFieldLabel = fieldlabel
 process.Geant4ePropagator.MagneticFieldLabel = fieldlabel
+# Activate the CVH-specific propagator path: instantiates the custom fluct
+# (G4UniversalFluctuationForExtrapolator) + msmodel (G4WentzelVIModelForCVH)
+# and routes their table pointers via SetParticleAndCharge. Without this,
+# computeErrorIoni dereferences a null fluct->table on the first event.
+process.Geant4ePropagator.ForCVH = cms.bool(True)
 process.globalCor.MagneticFieldLabel = cms.string(fieldlabel)
 
 process.reconstruction_step = cms.Path(

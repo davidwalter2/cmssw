@@ -112,7 +112,9 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
     : globalGeometryToken_(esConsumes<edm::Transition::BeginRun>()),
       trackerGeomIdealToken_(esConsumes<edm::Transition::BeginRun>(edm::ESInputTag("", "idealForDigi"))),
       trackerTopologyToken_(esConsumes<edm::Transition::BeginRun>()),
-      magfieldToken_(esConsumes<edm::Transition::BeginRun>())
+      magfieldToken_(esConsumes<edm::Transition::BeginRun>()),
+      globalGeometryEventToken_(esConsumes()),
+      trackerTopologyEventToken_(esConsumes())
 {
   //now do what ever initialization is needed
 // inputTraj_ = consumes<std::vector<Trajectory>>(edm::InputTag("TrackRefitter"));
