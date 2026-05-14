@@ -27,27 +27,27 @@ opts.register('useIdealGeometry', True, VarParsing.VarParsing.multiplicity.singl
 opts.register('goldenJson', '', VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string,
               'optional Golden JSON file to filter run/lumi pre-processing; empty = no filter')
-opts.register('useScalarPot3D', False, VarParsing.VarParsing.multiplicity.singleton,
+opts.register('useScalarPot3D', True, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
-              'use the spherical-harmonic scalar-potential field (Phase A.1) '
-              'in the CVH refit instead of PolyFit3D')
+              'use the spherical-harmonic scalar-potential field  '
+              'in the CVH refit (default; only model supported in this port)')
 opts.register('scalarPot3DInitFile', '', VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string,
-              'Phase-A.5 dump file produced by mfs/dump_coeffs_for_cmssw.py. '
+              'coefficient dump file produced by mfs/dump_coeffs_for_cmssw.py. '
               'Always required: the residual-correction maker uses it to register '
               'parmtype-14 modes and seed their initial coefficients. Also reused '
               'as the field producer init file when useScalarPot3D=True.')
 opts.register('runFDClosure', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
-              'Phase B.5 numerical-FD closure of the per-mode chain rule '
+              'Numerical-FD closure of the per-mode chain rule '
               '(debug; runs once on the first chain-rule site)')
 opts.register('epsilonFDClosure', 1e-4, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.float,
-              'eps for the B.5 FD closure (used as eps * dB_perMode for each test mode)')
+              'eps for the FD closure (used as eps * dB_perMode for each test mode)')
 opts.parseArguments()
 if not opts.scalarPot3DInitFile:
     raise SystemExit(
-        "scalarPot3DInitFile=<path> is required (Phase-A.5 dump file)")
+        "scalarPot3DInitFile=<path> is required (coefficient dump file)")
 
 JPSI_TRIGGERS = [
     "HLT_Dimuon0_Jpsi_Muon",
@@ -162,9 +162,9 @@ process.globalCor = cms.EDProducer(
     MagneticFieldLabel=cms.string(""),
     # Scalar-potential B-field correction (parmtype-14, absolute-field
     # model). Initial coefficients + basis structure are loaded from a
-    # Phase-A.5 dump file (mfs/dump_coeffs_for_cmssw.py output).
+    # coefficient dump file (mfs/dump_coeffs_for_cmssw.py output).
     scalarPotentialInitFile=cms.string(opts.scalarPot3DInitFile),
-    # Phase B.5 numerical-FD closure (debug only).
+    # Numerical-FD closure (debug only).
     runFDClosure=cms.bool(bool(opts.runFDClosure)),
     epsilonFDClosure=cms.double(float(opts.epsilonFDClosure)),
     outprefix=cms.untracked.string("globalcor"),
@@ -172,28 +172,24 @@ process.globalCor = cms.EDProducer(
 
 # Bring up the labelled 3D field producer and rewire the consumers
 # present in this driver (geopro, Geant4ePropagator, and our
-# globalCor analyzer). By default uses PolyFit3D; flip
-# useScalarPot3D=True to swap in the scalar-potential model from
-# Phase A.1 of replicated-bouncing-cloud. Independent from
+# globalCor analyzer). Uses the scalar-potential ScalarPot3D model
+# from scalar-potential field model. Independent from
 # nano_cff.setup3DFieldForRefit (which assumes the full set of seven
 # CVH-side consumers from the NanoAOD configuration).
-if bool(opts.useScalarPot3D):
-    if not opts.scalarPot3DInitFile:
-        raise RuntimeError(
-            "useScalarPot3D=True requires scalarPot3DInitFile to point "
-            "at a Phase-A.5 dump file produced by mfs/dump_coeffs_for_cmssw.py")
-    from MagneticField.ParametrizedEngine.parametrizedMagneticField_ScalarPot3D_cfi \
-        import ParametrizedMagneticFieldProducer as ScalarPot3DMagneticFieldProducer
-    process.ScalarPot3DMagneticFieldProducer = ScalarPot3DMagneticFieldProducer.clone()
-    process.ScalarPot3DMagneticFieldProducer.parameters.InitFile = opts.scalarPot3DInitFile
-    fieldlabel = "ScalarPot3DMf"
-    process.ScalarPot3DMagneticFieldProducer.label = fieldlabel
-else:
-    from MagneticField.ParametrizedEngine.parametrizedMagneticField_PolyFit3D_cfi \
-        import ParametrizedMagneticFieldProducer as PolyFit3DMagneticFieldProducer
-    process.PolyFit3DMagneticFieldProducer = PolyFit3DMagneticFieldProducer
-    fieldlabel = "PolyFit3DMf"
-    process.PolyFit3DMagneticFieldProducer.label = fieldlabel
+if not opts.useScalarPot3D:
+    raise RuntimeError(
+        "useScalarPot3D=False is no longer supported; the legacy non-thread-safe "
+        "wrapper class is not part of this port. Use the ScalarPot3D model.")
+if not opts.scalarPot3DInitFile:
+    raise RuntimeError(
+        "useScalarPot3D=True requires scalarPot3DInitFile to point "
+        "at a coefficient dump file produced by mfs/dump_coeffs_for_cmssw.py")
+from MagneticField.ParametrizedEngine.parametrizedMagneticField_ScalarPot3D_cfi \
+    import ParametrizedMagneticFieldProducer as ScalarPot3DMagneticFieldProducer
+process.ScalarPot3DMagneticFieldProducer = ScalarPot3DMagneticFieldProducer.clone()
+process.ScalarPot3DMagneticFieldProducer.parameters.InitFile = opts.scalarPot3DInitFile
+fieldlabel = "ScalarPot3DMf"
+process.ScalarPot3DMagneticFieldProducer.label = fieldlabel
 process.geopro.MagneticFieldLabel = fieldlabel
 process.Geant4ePropagator.MagneticFieldLabel = fieldlabel
 process.globalCor.MagneticFieldLabel = cms.string(fieldlabel)

@@ -115,10 +115,10 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
       magfieldToken_(esConsumes<edm::Transition::BeginRun>())
 {
   //now do what ever initialization is needed
-//   inputTraj_ = consumes<std::vector<Trajectory>>(edm::InputTag("TrackRefitter"));
-//   inputTrack_ = consumes<TrajTrackAssociationCollection>(edm::InputTag("TrackRefitter"));
-//   inputTrack_ = consumes<reco::TrackCollection>(edm::InputTag("TrackRefitter"));
-//   inputIndices_ = consumes<std::vector<int> >(edm::InputTag("TrackRefitter"));
+// inputTraj_ = consumes<std::vector<Trajectory>>(edm::InputTag("TrackRefitter"));
+// inputTrack_ = consumes<TrajTrackAssociationCollection>(edm::InputTag("TrackRefitter"));
+// inputTrack_ = consumes<reco::TrackCollection>(edm::InputTag("TrackRefitter"));
+// inputIndices_ = consumes<std::vector<int> >(edm::InputTag("TrackRefitter"));
 
 
   inputTrackOrig_ = consumes<reco::TrackCollection>(edm::InputTag(iConfig.getParameter<edm::InputTag>("src")));
@@ -152,7 +152,7 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   fieldlabel_ = iConfig.getParameter<std::string>("MagneticFieldLabel");
 
   // Scalar-potential B-field correction: basis structure and initial
-  // coefficients are loaded from a Phase-A.5 dump file produced by
+  // coefficients are loaded from a coefficient dump file produced by
   // mfs/dump_coeffs_for_cmssw.py. The basis (l_max, mode list, Schmidt
   // convention) and the absolute-field starting point come from there;
   // the global fit refines those coefficients through parmtype-14 modes.
@@ -160,12 +160,12 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   if (scalarPotentialInitFile_.empty()) {
     throw cms::Exception("Configuration")
         << "ResidualGlobalCorrectionMakerBase: scalarPotentialInitFile cfi "
-           "parameter must be set to a Phase-A.5 dump file path";
+           "parameter must be set to a coefficient dump file path";
   }
   fieldCorrection_ = std::make_unique<ana_hitanalyzer::ScalarPotentialFieldCorrection>(
       scalarPotentialInitFile_);
 
-  // Phase B.5 numerical-FD closure flags (debug; both makers honour them).
+  // Numerical-FD closure flags (debug; both makers honour them).
   runFDClosure_ = iConfig.existsAs<bool>("runFDClosure")
       ? iConfig.getParameter<bool>("runFDClosure") : false;
   epsilonFDClosure_ = iConfig.existsAs<double>("epsilonFDClosure")
@@ -174,8 +174,8 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
 
   
   if (doGen_) {
-//     GenParticlesToken_ = consumes<std::vector<reco::GenParticle>>(edm::InputTag("genParticles"));
-//     GenParticlesToken_ = consumes<edm::View<reco::Candidate>>(edm::InputTag("genParticles"));
+// GenParticlesToken_ = consumes<std::vector<reco::GenParticle>>(edm::InputTag("genParticles"));
+// GenParticlesToken_ = consumes<edm::View<reco::Candidate>>(edm::InputTag("genParticles"));
     GenParticlesToken_ = consumes<edm::View<reco::Candidate>>(iConfig.getParameter<edm::InputTag>("genParticles"));
     genXyz0Token_ = consumes<math::XYZPointF>(edm::InputTag("genParticles","xyz0"));
     genEventInfoToken_ = consumes<GenEventInfoProduct>(edm::InputTag("generator"));
@@ -185,7 +185,7 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   if (doSim_) {
     genParticlesBarcodeToken_ = consumes<std::vector<int>>(edm::InputTag("genParticles"));
 
-//     inputSimHits_ = consumes<std::vector<PSimHit>>(edm::InputTag("g4SimHits","TrackerHitsTECLowTof"));
+// inputSimHits_ = consumes<std::vector<PSimHit>>(edm::InputTag("g4SimHits","TrackerHitsTECLowTof"));
     std::vector<std::string> labels;
     labels.push_back("TrackerHitsPixelBarrelLowTof");
     labels.push_back("TrackerHitsPixelEndcapLowTof");
@@ -202,7 +202,7 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   }
   
   if (doMuons_) {
-//     inputMuons_ = consumes<reco::MuonCollection>(edm::InputTag(iConfig.getParameter<edm::InputTag>("muons")));
+// inputMuons_ = consumes<reco::MuonCollection>(edm::InputTag(iConfig.getParameter<edm::InputTag>("muons")));
     inputMuons_ = consumes<edm::View<reco::Muon>>(edm::InputTag(iConfig.getParameter<edm::InputTag>("muons")));
   }
   
@@ -222,16 +222,16 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   }
 
 
-//   fout = new TFile("trackTreeGrads.root", "RECREATE");
-//   fout = new TFile("trackTreeGradsdebug.root", "RECREATE");
-//   fout = new TFile("trackTreeGrads.root", "RECREATE");
+// fout = new TFile("trackTreeGrads.root", "RECREATE");
+// fout = new TFile("trackTreeGradsdebug.root", "RECREATE");
+// fout = new TFile("trackTreeGrads.root", "RECREATE");
   //TODO this needs a newer root version
-//   fout->SetCompressionAlgorithm(ROOT::kLZ4);
-//   fout->SetCompressionLevel(3);
+// fout->SetCompressionAlgorithm(ROOT::kLZ4);
+// fout->SetCompressionLevel(3);
   
-//   edm::Service<TgFileService> fs;
+// edm::Service<TgFileService> fs;
   
-//   tree = new TTree("tree", "tree");
+// tree = new TTree("tree", "tree");
   
 
   outprefix = iConfig.getUntrackedParameter<std::string>("outprefix", "globalcor");
@@ -250,21 +250,21 @@ ResidualGlobalCorrectionMakerBase::~ResidualGlobalCorrectionMakerBase()
 //
 
 
-// ------------ method called once each job just before starting event loop  ------------
+// ------------ method called once each job just before starting event loop ------------
 void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
 {
   if (fillTrackTree_ || fillRunTree_) {
     std::stringstream filenamestream;
-//     filenamestream << "globalcor_" << streamid.value() << ".root";
+// filenamestream << "globalcor_" << streamid.value() << ".root";
     filenamestream << outprefix << "_" << streamid.value() << ".root";
     // std::cout << "file is: " << filenamestream.str().c_str() << std::endl;
     fout = new TFile(filenamestream.str().c_str(), "RECREATE");
     // std::cout << "filename is: " << fout->GetName() << std::endl;
   }
   
-//   runtree = new TTree("runtree","");
-//   gradtree = fs->make<TTree>("gradtree","");
-//   hesstree = fs->make<TTree>("hesstree","");
+// runtree = new TTree("runtree","");
+// gradtree = fs->make<TTree>("gradtree","");
+// hesstree = fs->make<TTree>("hesstree","");
   
   
   if (fillTrackTree_) {
@@ -282,7 +282,7 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
     tree->SetAutoFlush(200);
     
     tree->Branch("nParms", &nParms, basketSize);
-//     tree->Branch("globalidxv", globalidxv.data(), "globalidxv[nParms]/i", basketSize);
+// tree->Branch("globalidxv", globalidxv.data(), "globalidxv[nParms]/i", basketSize);
     tree->Branch("globalidxv", &globalidxvfinal, basketSize);
     
     if (fillJac_) {
@@ -329,45 +329,45 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
 
 }
 
-// ------------ method called once each job just after ending the event loop  ------------
+// ------------ method called once each job just after ending the event loop ------------
 void ResidualGlobalCorrectionMakerBase::endStream()
 {
   if (fout != nullptr) {
 
     fout->cd();
 
-  //   TTree *gradtree = new TTree("gradtree","");
-  //   unsigned int idx;
-  //   double gradval;
-  //   gradtree->Branch("idx",&idx);
-  //   gradtree->Branch("gradval",&gradval);
-  //   for (unsigned int i=0; i<gradagg.size(); ++i) {
-  //     idx = i;
-  //     gradval = gradagg[i];
-  //     gradtree->Fill();
-  //   }
+  // TTree *gradtree = new TTree("gradtree","");
+  // unsigned int idx;
+  // double gradval;
+  // gradtree->Branch("idx",&idx);
+  // gradtree->Branch("gradval",&gradval);
+  // for (unsigned int i=0; i<gradagg.size(); ++i) {
+  // idx = i;
+  // gradval = gradagg[i];
+  // gradtree->Fill();
+  // }
   //
-  //   TTree *hesstree = new TTree("hesstree","");
-  //   unsigned int iidx;
-  //   unsigned int jidx;
-  //   double hessval;
-  //   hesstree->Branch("iidx",&iidx);
-  //   hesstree->Branch("jidx",&jidx);
-  //   hesstree->Branch("hessval",&hessval);
+  // TTree *hesstree = new TTree("hesstree","");
+  // unsigned int iidx;
+  // unsigned int jidx;
+  // double hessval;
+  // hesstree->Branch("iidx",&iidx);
+  // hesstree->Branch("jidx",&jidx);
+  // hesstree->Branch("hessval",&hessval);
   //
-  //   for (auto const& item : hessaggsparse) {
-  //     iidx = item.first.first;
-  //     jidx = item.first.second;
-  //     hessval = item.second;
-  //     hesstree->Fill();
-  //   }
+  // for (auto const& item : hessaggsparse) {
+  // iidx = item.first.first;
+  // jidx = item.first.second;
+  // hessval = item.second;
+  // hesstree->Fill();
+  // }
 
     fout->Write();
     fout->Close();
   }
 }
 
-// ------------ method called when starting to processes a run  ------------
+// ------------ method called when starting to processes a run ------------
 
 void 
 ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup const& es)
@@ -381,9 +381,9 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
 
   auto trackerTopology = es.getHandle(trackerTopologyToken_);
 
-//   edm::ESHandle<Propagator> thePropagator;
-//   es.get<TrackingComponentsRecord>().get("RungeKuttaTrackerPropagator", thePropagator);
-//   const MagneticField* field = thePropagator->magneticField();
+// edm::ESHandle<Propagator> thePropagator;
+// es.get<TrackingComponentsRecord>().get("RungeKuttaTrackerPropagator", thePropagator);
+// const MagneticField* field = thePropagator->magneticField();
 
   auto magfield = es.getHandle(magfieldToken_);
   auto field = magfield.product();
@@ -452,9 +452,9 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
     }
     if (GeomDetEnumerators::isTracker(det->subDetector())) {
       
-//       std::cout << "detid: " << det->geographicalId().rawId() << std::endl;
+// std::cout << "detid: " << det->geographicalId().rawId() << std::endl;
       
-//       std::cout << "detid: " << det->geographicalId().rawId() << " subdet: " << det->subDetector() << " isStereo: " << trackerTopology->isStereo(det->geographicalId()) << " isRphi: " << trackerTopology->isRPhi(det->geographicalId()) << " glued: " << trackerTopology->glued(det->geographicalId()) << " stack: " << trackerTopology->stack(det->geographicalId()) << " upper: " << trackerTopology->upper(det->geographicalId()) << " lower: " << trackerTopology->lower(det->geographicalId()) << " partner: " << trackerTopology->partnerDetId(det->geographicalId()).rawId() <<" xi: " << det->surface().mediumProperties().xi() << std::endl;
+// std::cout << "detid: " << det->geographicalId().rawId() << " subdet: " << det->subDetector() << " isStereo: " << trackerTopology->isStereo(det->geographicalId()) << " isRphi: " << trackerTopology->isRPhi(det->geographicalId()) << " glued: " << trackerTopology->glued(det->geographicalId()) << " stack: " << trackerTopology->stack(det->geographicalId()) << " upper: " << trackerTopology->upper(det->geographicalId()) << " lower: " << trackerTopology->lower(det->geographicalId()) << " partner: " << trackerTopology->partnerDetId(det->geographicalId()).rawId() <<" xi: " << det->surface().mediumProperties().xi() << std::endl;
 
       const bool ispixel = GeomDetEnumerators::isTrackerPixel(det->subDetector());
       const bool isendcap = GeomDetEnumerators::isEndcap(det->subDetector());
@@ -465,31 +465,31 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       
       const DetId aligndetid = alignGlued_ ? parmdetid : det->geographicalId();
 
-//       const uint32_t gluedid = trackerTopology->glued(det->geographicalId());
-//       const bool isglued = gluedid != 0;
-// //       const bool align2d = ispixel || isglued || isendcap;      
-//       const DetId parmdetid = isglued ? DetId(gluedid) : det->geographicalId();
+// const uint32_t gluedid = trackerTopology->glued(det->geographicalId());
+// const bool isglued = gluedid != 0;
+// // const bool align2d = ispixel || isglued || isendcap; 
+// const DetId parmdetid = isglued ? DetId(gluedid) : det->geographicalId();
       
       const bool align2d = ispixel || isendcap;
       // const bool align2d = ispixel || isendcap || (alignGlued_ && isglued);
-//       const bool align2d = true;
-//       const bool align2d = ispixel;
-//       const bool align2d = false;
-//       const bool align2d = isendcap && !ispixel;
+// const bool align2d = true;
+// const bool align2d = ispixel;
+// const bool align2d = false;
+// const bool align2d = isendcap && !ispixel;
 
       
       //always have parameters for local x alignment, in-plane rotation, bfield, and e-loss
-//       parmset.emplace(0, det->geographicalId());
-// //       parmset.emplace(1, det->geographicalId());
-//       parmset.emplace(2, det->geographicalId());
-//       parmset.emplace(3, det->geographicalId());
-//       parmset.emplace(4, det->geographicalId());
-//       parmset.emplace(5, det->geographicalId());
+// parmset.emplace(0, det->geographicalId());
+// // parmset.emplace(1, det->geographicalId());
+// parmset.emplace(2, det->geographicalId());
+// parmset.emplace(3, det->geographicalId());
+// parmset.emplace(4, det->geographicalId());
+// parmset.emplace(5, det->geographicalId());
 //
-//       if (align2d) {
-//         //local y alignment parameters only for pixels and wedge modules
-//         parmset.emplace(1, det->geographicalId());
-//       }
+// if (align2d) {
+// //local y alignment parameters only for pixels and wedge modules
+// parmset.emplace(1, det->geographicalId());
+// }
 
       parmset.emplace(0, det->geographicalId());
       parmset.emplace(2, aligndetid);
@@ -532,18 +532,18 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
   // entries (parmtype = ParmTypeBfieldGlobal, DetId(modeIdx)).
   fieldCorrection_->appendParmsetEntries(parmset);
 
-//   const unsigned int netabins = 48;
-//   const unsigned int nphibins = 36;
-//   if (hetaphi == nullptr) {
-//     hetaphi = new TH2D("hetaphi", "", netabins, -2.4, 2.4, nphibins, -M_PI, M_PI);
-//   }
-//   
-//   for (unsigned int ibin = 0; ibin < (netabins + 2); ++ibin) {
-//     for (unsigned int jbin = 1; jbin < (nphibins + 1); ++jbin) {
-//       const unsigned int bin = hetaphi->GetBin(ibin, jbin);
-//       parmset.emplace(8, bin);
-//     }
-//   }
+// const unsigned int netabins = 48;
+// const unsigned int nphibins = 36;
+// if (hetaphi == nullptr) {
+// hetaphi = new TH2D("hetaphi", "", netabins, -2.4, 2.4, nphibins, -M_PI, M_PI);
+// }
+// 
+// for (unsigned int ibin = 0; ibin < (netabins + 2); ++ibin) {
+// for (unsigned int jbin = 1; jbin < (nphibins + 1); ++jbin) {
+// const unsigned int bin = hetaphi->GetBin(ibin, jbin);
+// parmset.emplace(8, bin);
+// }
+// }
 
   
   if (detidparms.empty()) {
@@ -591,9 +591,9 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
 
 
 
-  //   assert(0);
+  // assert(0);
     if (fillRunTree_) {
-    //   TFile *runfout = new TFile("trackTreeGradsParmInfo.root", "RECREATE");
+    // TFile *runfout = new TFile("trackTreeGradsParmInfo.root", "RECREATE");
       fout->cd();
       runtree = new TTree("runtree", "");
 
@@ -636,7 +636,7 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
     
     unsigned int globalidx = 0;
     for (const auto& key: parmset) {
-//       std::cout << "parmtype = " << key.first << " detid = " << key.second.rawId() << std::endl;
+// std::cout << "parmtype = " << key.first << " detid = " << key.second.rawId() << std::endl;
       
       //fill info
       iidx = globalidx;
@@ -691,18 +691,18 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
         const double dtheta = std::acos(xglob.dot(xglobIdeal));
         
         
-    //     if (detid.rawId() == 302122272) {
-    //       std::cout << "width: " << det->surface().bounds().width() << std::endl;
-    //       std::cout << "length: " << det->surface().bounds().length() << std::endl;
-    //       std::cout << "thickness: " << det->surface().bounds().thickness() << std::endl;
-    //     }
+    // if (detid.rawId() == 302122272) {
+    // std::cout << "width: " << det->surface().bounds().width() << std::endl;
+    // std::cout << "length: " << det->surface().bounds().length() << std::endl;
+    // std::cout << "thickness: " << det->surface().bounds().thickness() << std::endl;
+    // }
         
         layer = 0;
         stereo = 0;
         glued = !det->isLeaf();
         
-    //     int subdet = det->subDetector();
-    //     float eta = det->surface().position().eta();
+    // int subdet = det->subDetector();
+    // float eta = det->surface().position().eta();
 
         if (det->subDetector() == GeomDetEnumerators::PixelBarrel)
         {
@@ -716,15 +716,15 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
         }
         else if (det->subDetector() == GeomDetEnumerators::TIB)
         {
-    //       TIBDetId detid(det->geographicalId());
-    //       layer = detid.layer();
+    // TIBDetId detid(det->geographicalId());
+    // layer = detid.layer();
           layer = trackerTopology->tibLayer(det->geographicalId());
           stereo = trackerTopology->isStereo(det->geographicalId());
         }
         else if (det->subDetector() == GeomDetEnumerators::TOB)
         {
-    //       TOBDetId detid(det->geographicalId());
-    //       layer = detid.layer();
+    // TOBDetId detid(det->geographicalId());
+    // layer = detid.layer();
           layer = trackerTopology->tobLayer(det->geographicalId());
           stereo = trackerTopology->isStereo(det->geographicalId());
         }
@@ -738,24 +738,24 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
         }
         else if (det->subDetector() == GeomDetEnumerators::TEC)
         {
-    //       TECDetId detid(det->geographicalId());
-    //       layer = -1 * (detid.side() == 1) * detid.wheel() + (detid.side() == 2) * detid.wheel();
+    // TECDetId detid(det->geographicalId());
+    // layer = -1 * (detid.side() == 1) * detid.wheel() + (detid.side() == 2) * detid.wheel();
           unsigned int side = trackerTopology->tecSide(detid);
           unsigned int wheel = trackerTopology->tecWheel(detid);
           layer = -1 * (side == 1) * wheel + (side == 2) * wheel;
           stereo = trackerTopology->isStereo(det->geographicalId());
         }
         
-    //     ParmInfo parminfo;
-    //     parminfo.parmtype = key.first;
-    //     parminfo.subdet = det->subDetector();
-    //     parminfo.layer = layer;
-    //     parminfo.x = det->surface().position().x();
-    //     parminfo.y = det->surface().position().y();
-    //     parminfo.z = det->surface().position().z();
-    //     parminfo.eta = det->surface().position().eta();
-    //     parminfo.phi = det->surface().position().phi();
-    //     parminfo.rho = det->surface().position().perp();
+    // ParmInfo parminfo;
+    // parminfo.parmtype = key.first;
+    // parminfo.subdet = det->subDetector();
+    // parminfo.layer = layer;
+    // parminfo.x = det->surface().position().x();
+    // parminfo.y = det->surface().position().y();
+    // parminfo.z = det->surface().position().z();
+    // parminfo.eta = det->surface().position().eta();
+    // parminfo.phi = det->surface().position().phi();
+    // parminfo.rho = det->surface().position().perp();
 
 
         rawdetid = detid;
@@ -769,9 +769,9 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
         rho = det->surface().position().perp();
         xi = det->surface().mediumProperties().xi();
         
-//         nx = det->surface().normalVector().x();
-//         ny = det->surface().normalVector().y();
-//         nz = det->surface().normalVector().z();
+// nx = det->surface().normalVector().x();
+// ny = det->surface().normalVector().y();
+// nz = det->surface().normalVector().z();
 
         const LocalVector lx(1.,0.,0.);
         const LocalVector ly(0.,1.,0.);
@@ -851,11 +851,11 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       }
     }
     
-  //   runfout->Write();
-  //   runfout->Close();
+  // runfout->Write();
+  // runfout->Close();
     
     unsigned int nglobal = detidparms.size();
-  //   std::sort(detidparms.begin(), detidparms.end());
+  // std::sort(detidparms.begin(), detidparms.end());
     std::cout << "nglobalparms = " << detidparms.size() << std::endl;
 
     // Resolve scalar-potential basis global indices now that detidparms is built.
@@ -875,7 +875,7 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
     // from the dump file. corFiles entries for parmtype-14 are deltas-on-old-
     // basis and don't translate cleanly to the new absolute-field paramset,
     // so they are skipped on load (semantics deferred -- "Out of scope" in
-    // replicated-bouncing-cloud.md).
+    // ).
     {
       const auto& initCoeffs = fieldCorrection_->initCoeffs();
       const unsigned int nFieldModes = fieldCorrection_->nModes();
@@ -950,7 +950,7 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
 
   // fill map of modified surfaces with results of previous iteration if applicable
   for (const GeomDet* det : globalGeometry->detUnits()) {
-//   for (const GeomDet* det : globalGeometryIdeal->detUnits()) {
+// for (const GeomDet* det : globalGeometryIdeal->detUnits()) {
     if (!det) {
       continue;
     }
@@ -1048,34 +1048,34 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
 
 
 // GloballyPositioned<double> ResidualGlobalCorrectionMakerBase::surfaceToDouble(const Surface &surface) const {
-//   Point3DBase<double, GlobalTag> pos = surface.position();
-//   //re-orthogonalize
-//   Matrix<double, 3, 3> rot;
-//   rot << surface.rotation().xx(), surface.rotation().xy(), surface.rotation().xz(),
-//           surface.rotation().yx(), surface.rotation().yy(), surface.rotation().yz(),
-//           surface.rotation().zx(), surface.rotation().zy(), surface.rotation().zz();
-//           
-// //       std::cout << "rot check pre:" << std::endl;
-// //       std::cout << rot.transpose()*rot << std::endl;
-//         
-//   for (unsigned int i = 0; i < 3; ++i) {
-//     for (unsigned int j = 0; j < i; ++j) {
-//       rot.row(i) = (rot.row(i) - (rot.row(i)*rot.row(j).transpose())[0]/rot.row(j).squaredNorm()*rot.row(j)).eval();
-//     }
-//   }
-//   for (unsigned int i = 0; i < 3; ++i) {
-//       rot.row(i) = (rot.row(i)/rot.row(i).norm()).eval();
-//   }
-//   
-// //       std::cout << "rot check post:" << std::endl;
-// //       std::cout << rot.transpose()*rot << std::endl;
-//   
-//   const TkRotation<double> tkrot(rot(0,0), rot(0,1), rot(0,2),
-//                                   rot(1,0), rot(1,1), rot(1,2),
-//                                   rot(2,0), rot(2,1), rot(2,2));
-//   
-//   
-//   return GloballyPositioned<double>(pos, tkrot);
+// Point3DBase<double, GlobalTag> pos = surface.position();
+// //re-orthogonalize
+// Matrix<double, 3, 3> rot;
+// rot << surface.rotation().xx(), surface.rotation().xy(), surface.rotation().xz(),
+// surface.rotation().yx(), surface.rotation().yy(), surface.rotation().yz(),
+// surface.rotation().zx(), surface.rotation().zy(), surface.rotation().zz();
+// 
+// // std::cout << "rot check pre:" << std::endl;
+// // std::cout << rot.transpose()*rot << std::endl;
+// 
+// for (unsigned int i = 0; i < 3; ++i) {
+// for (unsigned int j = 0; j < i; ++j) {
+// rot.row(i) = (rot.row(i) - (rot.row(i)*rot.row(j).transpose())[0]/rot.row(j).squaredNorm()*rot.row(j)).eval();
+// }
+// }
+// for (unsigned int i = 0; i < 3; ++i) {
+// rot.row(i) = (rot.row(i)/rot.row(i).norm()).eval();
+// }
+// 
+// // std::cout << "rot check post:" << std::endl;
+// // std::cout << rot.transpose()*rot << std::endl;
+// 
+// const TkRotation<double> tkrot(rot(0,0), rot(0,1), rot(0,2),
+// rot(1,0), rot(1,1), rot(1,2),
+// rot(2,0), rot(2,1), rot(2,2));
+// 
+// 
+// return GloballyPositioned<double>(pos, tkrot);
 // }
 
 
@@ -1161,7 +1161,7 @@ void ResidualGlobalCorrectionMakerBase::applyAlignment(GloballyPositioned<double
 
     surface.move(dxglobal);
 
-    // order is arbitrary since these angles are implicitly derived under an assumption of infinitesimal rotations.  The ambiguity will be sorted out as part of the iteration process
+    // order is arbitrary since these angles are implicitly derived under an assumption of infinitesimal rotations. The ambiguity will be sorted out as part of the iteration process
     surface.rotate(rx);
     surface.rotate(ry);
     surface.rotate(rz);
@@ -1230,7 +1230,7 @@ Matrix<double, 7, 1> ResidualGlobalCorrectionMakerBase::localToGlobal(const Matr
 
 }
 
-// ------------ method fills 'descriptions' with the allowed parameters for the module  ------------
+// ------------ method fills 'descriptions' with the allowed parameters for the module ------------
 void ResidualGlobalCorrectionMakerBase::fillDescriptions(edm::ConfigurationDescriptions &descriptions)
 {
   //The following says we do not know what parameters are allowed so do no validation
@@ -2340,20 +2340,20 @@ Matrix<double, 5, 5> ResidualGlobalCorrectionMakerBase::curv2localJacobianAltelo
   const Vector3DBase<double, LocalTag> lz(0.,0.,1.);
   const Point3DBase<double, LocalTag> l0(0., 0., 0.);
   
-//   const Vector3DBase<double, GlobalTag> I1 = surface.toGlobal<double>(lz);
-//   const Vector3DBase<double, GlobalTag> J1 = surface.toGlobal<double>(lx);
-//   const Vector3DBase<double, GlobalTag> K1 = surface.toGlobal<double>(ly);  
-//   const Point3DBase<double, GlobalTag> r1 = surface.toGlobal<double>(l0);
+// const Vector3DBase<double, GlobalTag> I1 = surface.toGlobal<double>(lz);
+// const Vector3DBase<double, GlobalTag> J1 = surface.toGlobal<double>(lx);
+// const Vector3DBase<double, GlobalTag> K1 = surface.toGlobal<double>(ly); 
+// const Point3DBase<double, GlobalTag> r1 = surface.toGlobal<double>(l0);
   
   const Vector3DBase<double, GlobalTag> I1 = surface.toGlobal(lz);
   const Vector3DBase<double, GlobalTag> J1 = surface.toGlobal(lx);
   const Vector3DBase<double, GlobalTag> K1 = surface.toGlobal(ly);  
   const Point3DBase<double, GlobalTag> r1 = surface.toGlobal(l0);
   
-//   const Vector3DBase<double, GlobalTag> I1 = toGlobal(surface, lz);
-//   const Vector3DBase<double, GlobalTag> J1 = toGlobal(surface, lx);
-//   const Vector3DBase<double, GlobalTag> K1 = toGlobal(surface, ly);  
-//   const Point3DBase<double, GlobalTag> r1 = toGlobal(surface, l0);
+// const Vector3DBase<double, GlobalTag> I1 = toGlobal(surface, lz);
+// const Vector3DBase<double, GlobalTag> J1 = toGlobal(surface, lx);
+// const Vector3DBase<double, GlobalTag> K1 = toGlobal(surface, ly); 
+// const Point3DBase<double, GlobalTag> r1 = toGlobal(surface, l0);
   
   const double Ix1 = I1.x();
   const double Iy1 = I1.y();
@@ -2516,20 +2516,20 @@ Matrix<double, 5, 5> ResidualGlobalCorrectionMakerBase::curv2localhybridJacobian
   const Vector3DBase<double, LocalTag> lz(0.,0.,1.);
   const Point3DBase<double, LocalTag> l0(0., 0., 0.);
 
-//   const Vector3DBase<double, GlobalTag> I1 = surface.toGlobal<double>(lz);
-//   const Vector3DBase<double, GlobalTag> J1 = surface.toGlobal<double>(lx);
-//   const Vector3DBase<double, GlobalTag> K1 = surface.toGlobal<double>(ly);
-//   const Point3DBase<double, GlobalTag> r1 = surface.toGlobal<double>(l0);
+// const Vector3DBase<double, GlobalTag> I1 = surface.toGlobal<double>(lz);
+// const Vector3DBase<double, GlobalTag> J1 = surface.toGlobal<double>(lx);
+// const Vector3DBase<double, GlobalTag> K1 = surface.toGlobal<double>(ly);
+// const Point3DBase<double, GlobalTag> r1 = surface.toGlobal<double>(l0);
 
   const Vector3DBase<double, GlobalTag> I1 = surface.toGlobal(lz);
   const Vector3DBase<double, GlobalTag> J1 = surface.toGlobal(lx);
   const Vector3DBase<double, GlobalTag> K1 = surface.toGlobal(ly);
   const Point3DBase<double, GlobalTag> r1 = surface.toGlobal(l0);
 
-//   const Vector3DBase<double, GlobalTag> I1 = toGlobal(surface, lz);
-//   const Vector3DBase<double, GlobalTag> J1 = toGlobal(surface, lx);
-//   const Vector3DBase<double, GlobalTag> K1 = toGlobal(surface, ly);
-//   const Point3DBase<double, GlobalTag> r1 = toGlobal(surface, l0);
+// const Vector3DBase<double, GlobalTag> I1 = toGlobal(surface, lz);
+// const Vector3DBase<double, GlobalTag> J1 = toGlobal(surface, lx);
+// const Vector3DBase<double, GlobalTag> K1 = toGlobal(surface, ly);
+// const Point3DBase<double, GlobalTag> r1 = toGlobal(surface, l0);
 
   const double Ix1 = I1.x();
   const double Iy1 = I1.y();
@@ -2666,20 +2666,20 @@ Matrix<double, 5, 11> ResidualGlobalCorrectionMakerBase::curv2localJacobianAlign
   const Vector3DBase<double, LocalTag> lz(0.,0.,1.);
   const Point3DBase<double, LocalTag> l0(0., 0., 0.);
 
-//   const Vector3DBase<double, GlobalTag> I1 = surface.toGlobal<double>(lz);
-//   const Vector3DBase<double, GlobalTag> J1 = surface.toGlobal<double>(lx);
-//   const Vector3DBase<double, GlobalTag> K1 = surface.toGlobal<double>(ly);
-//   const Point3DBase<double, GlobalTag> r1 = surface.toGlobal<double>(l0);
+// const Vector3DBase<double, GlobalTag> I1 = surface.toGlobal<double>(lz);
+// const Vector3DBase<double, GlobalTag> J1 = surface.toGlobal<double>(lx);
+// const Vector3DBase<double, GlobalTag> K1 = surface.toGlobal<double>(ly);
+// const Point3DBase<double, GlobalTag> r1 = surface.toGlobal<double>(l0);
 
   const Vector3DBase<double, GlobalTag> I1 = surface.toGlobal(lz);
   const Vector3DBase<double, GlobalTag> J1 = surface.toGlobal(lx);
   const Vector3DBase<double, GlobalTag> K1 = surface.toGlobal(ly);
   const Point3DBase<double, GlobalTag> r1 = surface.toGlobal(l0);
 
-//   const Vector3DBase<double, GlobalTag> I1 = toGlobal(surface, lz);
-//   const Vector3DBase<double, GlobalTag> J1 = toGlobal(surface, lx);
-//   const Vector3DBase<double, GlobalTag> K1 = toGlobal(surface, ly);
-//   const Point3DBase<double, GlobalTag> r1 = toGlobal(surface, l0);
+// const Vector3DBase<double, GlobalTag> I1 = toGlobal(surface, lz);
+// const Vector3DBase<double, GlobalTag> J1 = toGlobal(surface, lx);
+// const Vector3DBase<double, GlobalTag> K1 = toGlobal(surface, ly);
+// const Point3DBase<double, GlobalTag> r1 = toGlobal(surface, l0);
 
   const double Ix1 = I1.x();
   const double Iy1 = I1.y();
@@ -3018,14 +3018,14 @@ Matrix<double, 2, 1> ResidualGlobalCorrectionMakerBase::localPositionConvolution
   const double yt = 0.;
 
   // curvilinear parameters
-//   const CurvilinearTrajectoryParameters curv(tsos.globalPosition(), tsos.globalMomentum(), tsos.charge());
-//   const double qop = curv.Qbp();
-//   const double lam = curv.lambda();
-//   const double phi = curv.phi();
-//   const double xt = curv.xT();
-//   const double yt = curv.yT();
-//   const double xt = 0.;
-//   const double yt = 0.;
+// const CurvilinearTrajectoryParameters curv(tsos.globalPosition(), tsos.globalMomentum(), tsos.charge());
+// const double qop = curv.Qbp();
+// const double lam = curv.lambda();
+// const double phi = curv.phi();
+// const double xt = curv.xT();
+// const double yt = curv.yT();
+// const double xt = 0.;
+// const double yt = 0.;
 
   const Matrix<double, 3, 1> p0(state[3], state[4], state[5]);
   const Matrix<double, 3, 1> W0 = p0.normalized();
@@ -3034,20 +3034,20 @@ Matrix<double, 2, 1> ResidualGlobalCorrectionMakerBase::localPositionConvolution
   const Matrix<double, 3, 1> U0 = zhat.cross(W0).normalized();
   const Matrix<double, 3, 1> V0 = W0.cross(U0);
 
-//   std::cout << "U0" << std::endl;
-//   std::cout << U0 << std::endl;
-//   std::cout << "V0" << std::endl;
-//   std::cout << V0 << std::endl;
+// std::cout << "U0" << std::endl;
+// std::cout << U0 << std::endl;
+// std::cout << "V0" << std::endl;
+// std::cout << V0 << std::endl;
 
-//   const Matrix<double, 3, 1> x0alt = xt*U0 + yt*V0;
-//   std::cout << "global pos" << std::endl;
-//   std::cout << tsos.globalPosition() << std::endl;
-//   std::cout << "x0alt" << std::endl;
-//   std::cout << x0alt << std::endl;
-//   std::cout << "xt" << std::endl;
-//   std::cout << xt << std::endl;
-//   std::cout << "yt" << std::endl;
-//   std::cout << yt << std::endl;
+// const Matrix<double, 3, 1> x0alt = xt*U0 + yt*V0;
+// std::cout << "global pos" << std::endl;
+// std::cout << tsos.globalPosition() << std::endl;
+// std::cout << "x0alt" << std::endl;
+// std::cout << x0alt << std::endl;
+// std::cout << "xt" << std::endl;
+// std::cout << xt << std::endl;
+// std::cout << "yt" << std::endl;
+// std::cout << yt << std::endl;
 
   const Vector3DBase<double, LocalTag> lx(1.,0.,0.);
   const Vector3DBase<double, LocalTag> ly(0.,1.,0.);
@@ -3061,7 +3061,7 @@ Matrix<double, 2, 1> ResidualGlobalCorrectionMakerBase::localPositionConvolution
 
   const double Ux = U0[0];
   const double Uy = U0[1];
-//   const double Uz = U0[2];
+// const double Uz = U0[2];
 
   const double Vx = V0[0];
   const double Vy = V0[1];
@@ -3413,7 +3413,7 @@ Matrix<double, 1, 6> ResidualGlobalCorrectionMakerBase::massJacobianAltD(const M
   res(0,4) = dmdlam1;
   res(0,5) = dmdphi1;
   
-//   std::cout << "massJacobianAlt m = " << m << std::endl;
+// std::cout << "massJacobianAlt m = " << m << std::endl;
 
 
 
@@ -3669,7 +3669,7 @@ Matrix<double, 1, 6> ResidualGlobalCorrectionMakerBase::massinvsqJacobianAltD(co
   res(0,4) = dminvsqdlam1;
   res(0,5) = dminvsqdphi1;
   
-//   std::cout << "massJacobianAlt m = " << m << std::endl;
+// std::cout << "massJacobianAlt m = " << m << std::endl;
 
 
 

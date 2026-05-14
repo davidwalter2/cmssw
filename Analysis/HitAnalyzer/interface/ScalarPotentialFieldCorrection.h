@@ -5,7 +5,7 @@
 // magfieldparam::ScalarPot3DEval. Replaces the per-module dBz parameter
 // with a global block of spherical-harmonic coefficients of the magnetic
 // scalar potential. The basis structure (l_max, mode list, Schmidt
-// convention) is loaded from a Phase-A.5 dump file produced by
+// convention) is loaded from a coefficient dump file produced by
 // mfs/dump_coeffs_for_cmssw.py.
 //
 // Sentinel parmset key: (parmtype = ParmTypeBfieldGlobal, DetId(modeIdx)).
@@ -30,7 +30,7 @@ public:
   // Sentinel parmtype for global B-field block in (parmtype, DetId) keys.
   static constexpr int ParmTypeBfieldGlobal = 14;
 
-  // Construct from a Phase-A.5 dump file (path produced by
+  // Construct from a coefficient dump file (path produced by
   // mfs/dump_coeffs_for_cmssw.py). The file determines the basis
   // structure and supplies the initial coefficients (initCoeffs()).
   explicit ScalarPotentialFieldCorrection(const std::string& dumpPath);

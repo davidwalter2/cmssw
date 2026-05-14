@@ -15,7 +15,7 @@ from FWCore.ParameterSet.VarParsing import VarParsing
 
 opts = VarParsing('analysis')
 opts.register('initFile', '', VarParsing.multiplicity.singleton, VarParsing.varType.string,
-              'Phase-A.5 dump file path (required)')
+              'coefficient dump file path (required)')
 opts.parseArguments()
 if not opts.initFile:
     raise SystemExit("initFile=<path> is required")
@@ -30,7 +30,7 @@ process.MessageLogger = cms.Service("MessageLogger",
 process.source = cms.Source("EmptySource")
 process.maxEvents = cms.untracked.PSet(input = cms.untracked.int32(1))
 
-# Load our cfi.  Override label="" so the standard `IdealMagneticFieldRecord`
+# Load our cfi. Override label="" so the standard `IdealMagneticFieldRecord`
 # accessor (no label) returns our field.
 process.load('MagneticField.ParametrizedEngine.parametrizedMagneticField_ScalarPot3D_cfi')
 process.ParametrizedMagneticFieldProducer.label = ''
@@ -41,8 +41,8 @@ process.ParametrizedMagneticFieldProducer.parameters.InitFile = opts.initFile
 import os, tempfile
 points = [
     (0.0,    0.0,   0.0),     # origin
-    (50.0,   30.0,  100.0),   # inside tracker, matches A.0 canonical
-    (76.207, -69.251, 12.435),# inside tracker, matches A.0 row 1
+    (50.0,   30.0,  100.0),   # inside tracker, canonical
+    (76.207, -69.251, 12.435),# inside tracker, row 1
     (200.0,  100.0,  250.0),  # near tracker edge
     (350.0,  0.0,    0.0),    # outside validity sphere -> expect (0,0,0)
 ]

@@ -33,13 +33,13 @@ std::unique_ptr<MagneticField> ParametrizedMagneticFieldFactory::get(string vers
     // V. Maroussov polynomial fit to mapping data
     throw cms::Exception("InvalidParameter") << "PolyFit3D is not supported anymore";
   } else if (version == "ScalarPot3D") {
-    // Spherical-harmonic scalar-potential basis (mfs); Phase A.1
+    // Spherical-harmonic scalar-potential basis (mfs)
     std::unique_ptr<MagneticField> result(new ScalarPot3DMagneticField(parameters));
     return result;
   } else if (version == "Parabolic") {
     // FIXME implement configurable parameters to be passed to ctor
-    //   vector<double> params =  parameters.getParameter<vdouble>("parameters");
-    //   std::unique_ptr<MagneticField> result( new ParabolicParametrizedMagneticField(params));
+    // vector<double> params = parameters.getParameter<vdouble>("parameters");
+    // std::unique_ptr<MagneticField> result( new ParabolicParametrizedMagneticField(params));
     std::unique_ptr<MagneticField> result(new ParabolicParametrizedMagneticField());
     return result;
   } else {

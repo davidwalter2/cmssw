@@ -52,7 +52,7 @@ globalCorKs = cms.EDProducer(
     corFiles = cms.vstring(),
     MagneticFieldLabel = cms.string(''),
     # Scalar-potential B-field correction (absolute-field model). Path to a
-    # Phase-A.5 dump file produced by mfs/dump_coeffs_for_cmssw.py; the basis
+    # coefficient dump file produced by mfs/dump_coeffs_for_cmssw.py; the basis
     # structure (l_max, mode list, Schmidt convention) and the initial
     # coefficients come from the file.
     scalarPotentialInitFile = cms.string(''),

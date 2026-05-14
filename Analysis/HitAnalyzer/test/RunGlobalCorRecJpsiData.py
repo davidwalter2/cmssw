@@ -133,28 +133,19 @@ process.globalCor = cms.EDProducer(
     corFiles=cms.vstring(),
     triggers=cms.vstring(*onia["triggers"]),
     MagneticFieldLabel=cms.string(""),
-    # Scalar-potential B-field correction: path to a Phase-A.5 dump file
+    # Scalar-potential B-field correction: path to a coefficient dump file
     # (override on the command line for production runs).
     scalarPotentialInitFile=cms.string(""),
     outprefix=cms.untracked.string("globalcor"),
 )
 
 if DO_3D_FIELDMAP:
-    from MagneticField.ParametrizedEngine.parametrizedMagneticField_PolyFit3D_cfi import (
-        ParametrizedMagneticFieldProducer as PolyFit3DMagneticFieldProducer,
+    # 3D field map for the CVH refit is provided by the spherical-harmonic
+    # ScalarPot3D ESProducer (configured separately via runCvhJpsi.py).
+    raise RuntimeError(
+        "DO_3D_FIELDMAP=True is not supported in this cfg; use runCvhJpsi.py "
+        "with --use-scalarpot3d to enable the ScalarPot3D field map."
     )
-
-    process.PolyFit3DMagneticFieldProducer = PolyFit3DMagneticFieldProducer
-    fieldlabel = "PolyFit3DMf"
-    process.PolyFit3DMagneticFieldProducer.label = fieldlabel
-    process.geopro.MagneticFieldLabel = fieldlabel
-    process.Geant4ePropagator.MagneticFieldLabel = fieldlabel
-    process.stripCPEESProducer.MagneticFieldLabel = fieldlabel
-    process.StripCPEfromTrackAngleESProducer.MagneticFieldLabel = fieldlabel
-    process.siPixelTemplateDBObjectESProducer.MagneticFieldLabel = fieldlabel
-    process.templates.MagneticFieldLabel = fieldlabel
-    process.TransientTrackBuilderESProducer.MagneticFieldLabel = fieldlabel
-    process.globalCor.MagneticFieldLabel = fieldlabel
 
 process.reconstruction_step = cms.Path(process.geopro * process.offlineBeamSpot * process.globalCor)
 process.schedule = cms.Schedule(process.reconstruction_step)

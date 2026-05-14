@@ -175,7 +175,7 @@ public:
 protected:
   
   virtual void beginStream(edm::StreamID) override;
-//   virtual void analyze(const edm::Event &, const edm::EventSetup &) override;
+// virtual void analyze(const edm::Event &, const edm::EventSetup &) override;
   virtual void endStream() override;
 
   virtual void beginRun(edm::Run const&, edm::EventSetup const&) override;
@@ -215,7 +215,7 @@ protected:
   Matrix<double, 10, 10> twoTrackPca2curvJacobianD(const Matrix<double, 7, 1> &state0, const Matrix<double, 7, 1> &state1, const MagneticField *field, const Eigen::Vector3d &dB0 = Eigen::Vector3d::Zero(), const Eigen::Vector3d &dB1 = Eigen::Vector3d::Zero()) const;
 
 
-//   Matrix<double, 10, 1> twoTrackCart2pcaJacobianD(const Matrix<double, 7, 1> &state0, const Matrix<double, 7, 1> &state 1, const MagneticField *field, const reco::BeamSpot &bs, double dBz0 = 0., double dBz1 = 0.);
+// Matrix<double, 10, 1> twoTrackCart2pcaJacobianD(const Matrix<double, 7, 1> &state0, const Matrix<double, 7, 1> &state 1, const MagneticField *field, const reco::BeamSpot &bs, double dBz0 = 0., double dBz1 = 0.);
 
   Matrix<double, 2, 1> localPositionConvolutionD(const Matrix<double, 7, 1>& state, const Matrix<double, 5, 5> &curvcov, const GloballyPositioned<double> &surface) const;
 
@@ -236,12 +236,12 @@ protected:
 
   // ----------member data ---------------------------
   edm::EDGetTokenT<std::vector<Trajectory>> inputTraj_;
-//   edm::EDGetTokenT<std::vector<reco::GenParticle>> GenParticlesToken_;
+// edm::EDGetTokenT<std::vector<reco::GenParticle>> GenParticlesToken_;
   edm::EDGetTokenT<edm::View<reco::Candidate>> GenParticlesToken_;
   edm::EDGetTokenT<math::XYZPointF> genXyz0Token_;
   edm::EDGetTokenT<GenEventInfoProduct> genEventInfoToken_;
   edm::EDGetTokenT<std::vector<int>> genParticlesBarcodeToken_;
-//   edm::EDGetTokenT<TrajTrackAssociationCollection> inputTrack_;
+// edm::EDGetTokenT<TrajTrackAssociationCollection> inputTrack_;
   
   edm::EDGetTokenT<std::vector<PileupSummaryInfo>> pileupSummaryToken_;
   
@@ -256,11 +256,11 @@ protected:
   edm::InputTag inputCandidatesTag_;
   edm::EDGetTokenT<std::vector<int> > inputIndices_;
   edm::EDGetTokenT<reco::BeamSpot> inputBs_;
-//   edm::EDGetTokenT<std::vector<PSimHit>> inputSimHits_;
+// edm::EDGetTokenT<std::vector<PSimHit>> inputSimHits_;
   std::vector<edm::EDGetTokenT<std::vector<PSimHit>>> inputSimHits_;
   edm::EDGetTokenT<std::vector<SimTrack>> inputSimTracks_;
   
-//   edm::EDGetTokenT<reco::MuonCollection> inputMuons_;
+// edm::EDGetTokenT<reco::MuonCollection> inputMuons_;
   edm::EDGetTokenT<edm::View<reco::Muon>> inputMuons_;
   edm::EDGetTokenT<int> inputGeometry_;
 
@@ -282,14 +282,14 @@ protected:
   
   std::vector<std::string> corFiles_;
   
-//   SiStripClusterInfo siStripClusterInfo_;
+// SiStripClusterInfo siStripClusterInfo_;
 
   
   TFile *fout = nullptr;
   TTree *tree = nullptr;
-//   TTree *runtree;
-//   TTree *gradtree;
-//   TTree *hesstree;
+// TTree *runtree;
+// TTree *gradtree;
+// TTree *hesstree;
 
   float trackEta;
   float trackPhi;
@@ -462,13 +462,18 @@ protected:
   bool doRes_ = false;
   bool useIdealGeometry_ = false;
 
+  // Label of the magnetic field ESProducer the CVH refit should consume
+  // (e.g. "ScalarPot3DMf"). Routed to the residual-makers via the cfi
+  // MagneticFieldLabel parameter.
+  std::string fieldlabel_;
+
   // Scalar-potential B-field correction. Replaces the per-module dBz block
   // with the spherical-harmonic coefficients of the magnetic scalar potential
-  // loaded from a Phase-A.5 dump file (mfs/dump_coeffs_for_cmssw.py).
+  // loaded from a coefficient dump file (mfs/dump_coeffs_for_cmssw.py).
   std::string scalarPotentialInitFile_;
   std::unique_ptr<ana_hitanalyzer::ScalarPotentialFieldCorrection> fieldCorrection_;
 
-  // Phase B.5 numerical-FD closure (debug only; one-shot per job).
+  // Numerical-FD closure (debug only; one-shot per job).
   bool runFDClosure_ = false;
   double epsilonFDClosure_ = 1e-4;
   // mutable so the per-job "did the test" flag can be set inside
@@ -532,7 +537,7 @@ protected:
 
   std::string outprefix;
   
-//   bool filledRunTree_;
+// bool filledRunTree_;
   
 };
 

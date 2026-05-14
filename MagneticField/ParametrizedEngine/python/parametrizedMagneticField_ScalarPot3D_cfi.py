@@ -1,11 +1,10 @@
 """ESSource + ESProducer config for the spherical-harmonic
-scalar-potential B-field model (Phase A.1 of replicated-bouncing-cloud).
+scalar-potential B-field model .
 
-Mirrors `parametrizedMagneticField_PolyFit3D_cfi.py` -- registers a
-labelled `IdealMagneticFieldRecord` so CVH-side consumers can be
-redirected via `MagneticFieldLabel = 'ScalarPot3DMf'`.
+Registers a labelled `IdealMagneticFieldRecord` so CVH-side consumers
+can be redirected via `MagneticFieldLabel = 'ScalarPot3DMf'`.
 
-Usage in nano_cff.py / runCvhJpsi.py (analogous to PolyFit3D):
+Usage in nano_cff.py / runCvhJpsi.py:
 
     from MagneticField.ParametrizedEngine.parametrizedMagneticField_ScalarPot3D_cfi \\
         import ParametrizedMagneticFieldProducer as ScalarPot3DMagneticFieldProducer
@@ -27,12 +26,12 @@ idealMagneticFieldRecordSource = cms.ESSource("EmptyESSource",
 ParametrizedMagneticFieldProducer = cms.ESProducer("ParametrizedMagneticFieldProducer",
     version = cms.string('ScalarPot3D'),
     parameters = cms.PSet(
-        # Path to a Phase-A.5 dump file produced by mfs/dump_coeffs_for_cmssw.py.
+        # Path to a coefficient dump file produced by mfs/dump_coeffs_for_cmssw.py.
         # Required (cannot be empty).
         InitFile = cms.string(''),
         # Sphere radius (cm) outside which inTesla returns zero.
         # The default 320 cm matches the typical mfs fit domain
-        # (sphere320: r<290, |z|<316, R<320).  A.2 will replace this
+        # (sphere320: r<290, |z|<316, R<320). a future update will replace this
         # hard cutoff with a C^1 cosine blend to the underlying CMSSW
         # volume-based field.
         ValidityRadius = cms.double(320.0),

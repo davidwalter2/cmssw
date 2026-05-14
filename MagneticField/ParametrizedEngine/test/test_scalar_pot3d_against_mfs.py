@@ -23,7 +23,7 @@ import harmonic_basis as hb
 
 
 def parse_dump(path):
-    """Read the Phase-A.5 flat-text dump and return (params, coeffs, header)."""
+    """Read the coefficient dump and return (params, coeffs, header)."""
     header = {}
     params = []
     coeffs = []
@@ -97,7 +97,7 @@ def main():
     # Relative tolerance is loose because high-(l,m) basis modes can
     # legitimately produce values very near zero (e.g. P_{l-1}^m=0 for m>l-1
     # in Br) where FP noise gets amplified into a large relative error,
-    # while the absolute discrepancy is still at the ulp level.  The pair
+    # while the absolute discrepancy is still at the ulp level. The pair
     # of tolerances is generous enough to absorb that noise while still
     # catching algorithmic bugs (which manifest as O(1) relative errors).
     ap.add_argument('--rtol', type=float, default=1e-5,

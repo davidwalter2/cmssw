@@ -17,9 +17,3 @@
   <use name="MagneticField/ParametrizedEngine"/>
   <use name="DataFormats/GeometryVector"/>
 </bin>
-
-<bin name="benchPolyFit3D" file="benchPolyFit3D.cpp">
-  <use name="MagneticField/ParametrizedEngine"/>
-  <use name="DataFormats/GeometryVector"/>
-  <use name="FWCore/ParameterSet"/>
-</bin>

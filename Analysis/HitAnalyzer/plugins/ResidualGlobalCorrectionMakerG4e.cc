@@ -26,7 +26,7 @@ public:
   explicit ResidualGlobalCorrectionMakerG4e(const edm::ParameterSet &);
   ~ResidualGlobalCorrectionMakerG4e() {}
 
-//   static void fillDescriptions(edm::ConfigurationDescriptions &descriptions);
+// static void fillDescriptions(edm::ConfigurationDescriptions &descriptions);
 
 private:
   
@@ -100,7 +100,7 @@ ResidualGlobalCorrectionMakerG4e::ResidualGlobalCorrectionMakerG4e(const edm::Pa
       siStripClusterInfo_(consumesCollector())
 {
 
-//   inputAssoc_ = consumes<edm::Association<reco::TrackExtraCollection>>(edm::InputTag("muonReducedTrackExtras"));
+// inputAssoc_ = consumes<edm::Association<reco::TrackExtraCollection>>(edm::InputTag("muonReducedTrackExtras"));
 
   // Geant4 particle base name. Default = muon (legacy J/psi/Upsilon
   // configuration). Override via the cfi to e.g. "pi", "kaon", "proton"
@@ -138,8 +138,8 @@ void ResidualGlobalCorrectionMakerG4e::beginStream(edm::StreamID streamid)
     tree->Branch("trackCharge", &trackCharge, basketSize);
     tree->Branch("trackQopErr", &trackQopErr);
     //workaround for older ROOT version inability to store std::array automatically
-  //   tree->Branch("trackOrigParms", trackOrigParms.data(), "trackOrigParms[5]/F", basketSize);
-  //   tree->Branch("trackOrigCov", trackOrigCov.data(), "trackOrigCov[25]/F", basketSize);
+  // tree->Branch("trackOrigParms", trackOrigParms.data(), "trackOrigParms[5]/F", basketSize);
+  // tree->Branch("trackOrigCov", trackOrigCov.data(), "trackOrigCov[25]/F", basketSize);
     tree->Branch("trackParms", trackParms.data(), "trackParms[5]/F", basketSize);
     tree->Branch("trackCov", trackCov.data(), "trackCov[25]/F", basketSize);
     
@@ -147,8 +147,8 @@ void ResidualGlobalCorrectionMakerG4e::beginStream(edm::StreamID streamid)
 
     tree->Branch("refParms_iter0", refParms_iter0.data(), "refParms_iter0[5]/F", basketSize);
     tree->Branch("refCov_iter0", refCov_iter0.data(), "refCov_iter0[25]/F", basketSize);
-  //   tree->Branch("refParms_iter2", refParms_iter2.data(), "refParms_iter2[5]/F", basketSize);
-  //   tree->Branch("refCov_iter2", refCov_iter2.data(), "refCov_iter2[25]/F", basketSize);  
+  // tree->Branch("refParms_iter2", refParms_iter2.data(), "refParms_iter2[5]/F", basketSize);
+  // tree->Branch("refCov_iter2", refCov_iter2.data(), "refCov_iter2[25]/F", basketSize); 
     
     tree->Branch("refParms", refParms.data(), "refParms[5]/F", basketSize);
     tree->Branch("refCov", refCov.data(), "refCov[25]/F", basketSize);
@@ -183,13 +183,13 @@ void ResidualGlobalCorrectionMakerG4e::beginStream(edm::StreamID streamid)
     tree->Branch("E", &E);
     tree->Branch("Epred", &Epred);
     
-//     tree->Branch("outPt", &outPt);
-//     tree->Branch("outEta", &outEta);
-//     tree->Branch("outPhi", &outPhi);
-//     
-//     tree->Branch("outPtStart", &outPtStart);
-//     tree->Branch("outEtaStart", &outEtaStart);
-//     tree->Branch("outPhiStart", &outPhiStart);
+// tree->Branch("outPt", &outPt);
+// tree->Branch("outEta", &outEta);
+// tree->Branch("outPhi", &outPhi);
+// 
+// tree->Branch("outPtStart", &outPtStart);
+// tree->Branch("outEtaStart", &outEtaStart);
+// tree->Branch("outPhiStart", &outPhiStart);
 
     tree->Branch("muonPt", &muonPt);
     tree->Branch("muonLoose", &muonLoose);
@@ -305,7 +305,7 @@ void ResidualGlobalCorrectionMakerG4e::beginStream(edm::StreamID streamid)
 }
 
 
-// ------------ method called for each event  ------------
+// ------------ method called for each event ------------
 void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::EventSetup &iSetup)
 {
   siStripClusterInfo_.initEvent(iSetup);
@@ -411,7 +411,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     momCovV.assign(muonAssoc->ref()->size(), std::vector<float>());
   }
 
-//   for (const reco::Track &track : *trackOrigH) {
+// for (const reco::Track &track : *trackOrigH) {
   for (unsigned int itrack = 0; itrack < trackOrigH->size(); ++itrack) {
     const reco::Track &track = (*trackOrigH)[itrack];
     const reco::TrackRef trackref(trackOrigH, itrack);
@@ -437,9 +437,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     trackPtErr = track.ptError();
     trackQopErr = track.qoverpError();
 
-//     if (abs(trackEta) > 0.1) {
-//       continue;
-//     }
+// if (abs(trackEta) > 0.1) {
+// continue;
+// }
 
     trackHighPurity = track.quality(reco::TrackBase::highPurity);
     
@@ -453,7 +453,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     Map<Vector5f>(trackParms.data()) = Map<const Vector5d>(tkparms.Array()).cast<float>();
     Map<Matrix<float, 5, 5, RowMajor> >(trackCov.data()).triangularView<Upper>() = Map<const Matrix<double, 5, 5, RowMajor> >(tkcov.Array()).cast<float>().triangularView<Upper>();
     
-//     std::cout << "track charge: " << track.charge() << " trackorig charge " << trackOrig.charge() << "inner state charge " << tms.back().updatedState().charge() << std::endl;
+// std::cout << "track charge: " << track.charge() << " trackorig charge " << trackOrig.charge() << "inner state charge " << tms.back().updatedState().charge() << std::endl;
     
     const reco::Candidate* genpart = nullptr;
     
@@ -527,7 +527,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       }
     }
     
-//     std::cout << "genPt = " << genPt << " genEta = " << genEta << " genPhi = " << genPhi << " genCharge = " << genCharge << " genX = " << genX << " genY = " << genY << " genZ = " << genZ << std::endl;
+// std::cout << "genPt = " << genPt << " genEta = " << genEta << " genPhi = " << genPhi << " genCharge = " << genCharge << " genX = " << genX << " genY = " << genY << " genZ = " << genZ << std::endl;
     
     if (requireGen_ && genpart == nullptr) {
       continue;
@@ -587,20 +587,20 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     TransientTrackingRecHit::RecHitContainer hits;
     hits.reserve(track.recHitsSize());
 
-//     std::cout << "track: algo = " << track.algo() << " originalAlgo = " << track.originalAlgo() << std::endl;
+// std::cout << "track: algo = " << track.algo() << " originalAlgo = " << track.originalAlgo() << std::endl;
 //
 //
-//     if (track.seedDirection() == oppositeToMomentum) {
-// //       std::cout << "track with oppositeToMomentum: algo = " << track.algo() << " originalAlgo = " << track.originalAlgo() << std::endl;
-//       std::cout << "track with oppositeToMomentum:" << std::endl;
-//     }
+// if (track.seedDirection() == oppositeToMomentum) {
+// // std::cout << "track with oppositeToMomentum: algo = " << track.algo() << " originalAlgo = " << track.originalAlgo() << std::endl;
+// std::cout << "track with oppositeToMomentum:" << std::endl;
+// }
 
 
     
     for (auto it = track.recHitsBegin(); it != track.recHitsEnd(); ++it) {
-//       if (track.seedDirection() == oppositeToMomentum) {
-//         std::cout << "det = " << (*it)->geographicalId().det() << std::endl;
-//       }
+// if (track.seedDirection() == oppositeToMomentum) {
+// std::cout << "det = " << (*it)->geographicalId().det() << std::endl;
+// }
 
 
       if ((*it)->geographicalId().det() != DetId::Tracker) {
@@ -610,13 +610,13 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       const GeomDet* detectorG = globalGeometry->idToDet((*it)->geographicalId());
       const GluedGeomDet* detglued = dynamic_cast<const GluedGeomDet*>(detectorG);
       
-//       if (track.seedDirection() == oppositeToMomentum) {
-//         std::cout << "position mag = " << detectorG->surface().position().mag() << std::endl;
-//       }
+// if (track.seedDirection() == oppositeToMomentum) {
+// std::cout << "position mag = " << detectorG->surface().position().mag() << std::endl;
+// }
 
       // split matched invalid hits
       if (detglued != nullptr && !(*it)->isValid()) {
-//         bool order = detglued->stereoDet()->surface().position().mag() > detglued->monoDet()->surface().position().mag();
+// bool order = detglued->stereoDet()->surface().position().mag() > detglued->monoDet()->surface().position().mag();
         
         const auto stereopos = detglued->stereoDet()->surface().position();
         const auto monopos = detglued->monoDet()->surface().position();
@@ -631,9 +631,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         const GeomDetUnit* detinner = order ? detglued->monoDet() : detglued->stereoDet();
         const GeomDetUnit* detouter = order ? detglued->stereoDet() : detglued->monoDet();
 
-//         std::cout << "splitting matched hit, inner = " << detinner->geographicalId().rawId() <<" outer = " << detouter->geographicalId().rawId() << std::endl;
+// std::cout << "splitting matched hit, inner = " << detinner->geographicalId().rawId() <<" outer = " << detouter->geographicalId().rawId() << std::endl;
         if (hits.size() > 0) {
-//           std::cout << "previous = " << hits.back()->geographicalId().rawId() << std::endl;
+// std::cout << "previous = " << hits.back()->geographicalId().rawId() << std::endl;
           const bool duplicate = detinner->geographicalId() == hits.back()->geographicalId() || detouter->geographicalId() == hits.back()->geographicalId();
 
           if (duplicate) {
@@ -648,7 +648,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       else {
         // apply hit quality criteria
         const bool ispixel = GeomDetEnumerators::isTrackerPixel(detectorG->subDetector());
-//         bool hitquality = true;
+// bool hitquality = true;
         bool hitquality = false;
         if (applyHitQuality_ && (*it)->isValid()) {
           const TrackerSingleRecHit* tkhit = dynamic_cast<const TrackerSingleRecHit*>(*it);
@@ -660,7 +660,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             assert(pixhit != nullptr);
             
             hitquality = !pixhit->isOnEdge() && cluster.sizeX() > 1;
-//             hitquality = false;
+// hitquality = false;
           }
           else {
             assert(tkhit->cluster_strip().isNonnull());
@@ -675,7 +675,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             const bool isstereo = trackerTopology->isStereo((*it)->geographicalId());
             
             hitquality = true;
-//             hitquality = false;
+// hitquality = false;
             // hitquality = !isstereo;
           }
           
@@ -722,7 +722,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         
         const bool align2d = detidparms.count(std::make_pair(1, hit->geographicalId()));
         // const bool align2d = detidparms.count(std::make_pair(1, aligndetid));
-//         
+// 
         if (align2d) {
           nvalidalign2d += 1;
         }
@@ -746,7 +746,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     const unsigned int nFieldModes = fieldCorrection_->nModes();
     const unsigned int nparsBfield = nhits * nFieldModes;
     const unsigned int nparsEloss = nhits;
-//     const unsigned int nparsRes = nhits + nvalid + nvalidpixel;
+// const unsigned int nparsRes = nhits + nvalid + nvalidpixel;
     const unsigned int nparsRes = dores ? 2*nhits + nvalid + nvalidpixel : 0;
     const unsigned int npars = nparsAlignment + nparsBfield + nparsEloss + nparsRes;
     
@@ -767,11 +767,11 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     }
 
     // if (dogen) {
-    //   for (unsigned int istate = 0; istate < nstateparms; ++istate) {
-    //     if (istate % 5 == 0) {
-    //       freestatemask[istate] = false;
-    //     }
-    //   }
+    // for (unsigned int istate = 0; istate < nstateparms; ++istate) {
+    // if (istate % 5 == 0) {
+    // freestatemask[istate] = false;
+    // }
+    // }
     // }
     
     std::vector<Eigen::Index> freestateidxs;
@@ -804,7 +804,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     MatrixXd dxdparms;
     VectorXd grad;
     MatrixXd hess;
-//     LDLT<MatrixXd> Cinvd;
+// LDLT<MatrixXd> Cinvd;
     MatrixXd covfull = MatrixXd::Zero(nstateparms, nstateparms);
     
     VectorXd rfull;
@@ -919,7 +919,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         std::cout<< "iter " << iiter << std::endl;
       }
 
-//       std::cout<< "iter " << iiter << std::endl;
+// std::cout<< "iter " << iiter << std::endl;
             
       hitidxv.clear();
       hitidxv.reserve(nvalid);
@@ -1243,7 +1243,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       
       
       for (unsigned int ihit = 0; ihit < hits.size(); ++ihit) {
-//         std::cout << "iiter = " << iiter << " ihit " << ihit << std::endl;
+// std::cout << "iiter = " << iiter << " ihit " << ihit << std::endl;
 
         auto const& hit = hits[ihit];
         
@@ -1269,7 +1269,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           sourceParms = zdotpos*localpos.z() > 0.;
         }
 
-//         std::cout << "ihit = " << ihit << " sourceParms = " << sourceParms << std::endl;
+// std::cout << "ihit = " << ihit << " sourceParms = " << sourceParms << std::endl;
 
         auto const& prophit = sourceParms ? hits[ihit - 1] : hit;
         const uint32_t gluedidprop = trackerTopology->glued(prophit->geographicalId());
@@ -1334,12 +1334,12 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           surface.move(dglobal);
         }
 
-//         std::cout << "iiter = " << iiter << " ihit = " << ihit << " updtsos:\n" << updtsos << std::endl;
+// std::cout << "iiter = " << iiter << " ihit = " << ihit << " updtsos:\n" << updtsos << std::endl;
 
         // auto const &propresult = g4prop->propagateGenericWithJacobianAltD(updtsos, surface, dbetaval, dxival, dradval);
         // auto const &propresult = g4prop->propagateGenericWithJacobianAltD(propfromtsos, surface, dbetaval, dxival, dradval);
 
-        // Save the input state so the FD closure block (B.5) can re-run
+        // Save the input state so the FD closure block can re-run
         // the propagation with a perturbed dB starting from the same point.
         const Eigen::Matrix<double, 7, 1> propInputState =
             simhitdebug ? propfromtsos : updtsos;
@@ -1376,7 +1376,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         const double dEdxlast = std::get<4>(propresult);
         const Matrix<double, 5, 5> dQMScurv = std::get<5>(propresult);
         const Matrix<double, 5, 5> dQIcurv = std::get<6>(propresult);
-//         const Matrix<double, 5, 5> dQcurv = Qcurv;
+// const Matrix<double, 5, 5> dQcurv = Qcurv;
         const double deltaTotal = std::get<7>(propresult);
         const double wTotal = std::get<8>(propresult);
         
@@ -1389,8 +1389,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
         // propfromtsos = updtsos;
 
-//         //zero energy loss contribution
-//         FdFm.rightCols<1>() *= 0.;
+// //zero energy loss contribution
+// FdFm.rightCols<1>() *= 0.;
 
 
         Qtot = (FdFmcurv.leftCols<5>()*Qtot*FdFmcurv.leftCols<5>().transpose()).eval();
@@ -1581,7 +1581,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           }
           dStateDparams.col(nlocalbfield) = FdFm.col(8);
 
-          // ----- Phase B.5 numerical-FD closure (debug only) ----------------
+          // ----- Numerical-FD closure (debug only) ----------------
           // Validates the analytic Bx/By/Bz chain rule by perturbing dB at the
           // propagation start by epsilon * (dBxPerMode[i], dByPerMode[i],
           // dBzPerMode[i]) for the first few modes, re-propagating, and
@@ -1593,7 +1593,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                 Eigen::Matrix<double, 5, 1>(updtsos.head<5>());
             const double eps = epsilonFDClosure_;
             const unsigned int nTest = std::min<unsigned int>(10u, nlocalbfield);
-            std::cout << "===== Phase B.5 numerical-FD closure ====="
+            std::cout << "===== Numerical-FD closure ====="
                       << "  nFieldModes=" << nlocalbfield
                       << "  testing " << nTest << " modes"
                       << "  eps=" << eps << std::endl;
@@ -1628,7 +1628,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                         << "  an=[" << dStateAn.transpose() << "]"
                         << std::endl;
             }
-            std::cout << "===== B.5 FD closure: worst rel = " << worstRel
+            std::cout << "===== FD closure: worst rel = " << worstRel
                       << " over " << nTest << " modes ====="
                       << std::endl;
             std::cout.unsetf(std::ios_base::floatfield);
@@ -1648,7 +1648,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           }
 
           Vinvfull.block<nlocalcons, nlocalcons>(icons, icons) = Qinv;
-//           Vinvfullalt.block<nlocalcons, nlocalcons>(icons, icons) = Qinv;
+// Vinvfullalt.block<nlocalcons, nlocalcons>(icons, icons) = Qinv;
           Vinvfullalt.block<nlocalcons, nlocalcons>(icons, icons) = (Q - 0.1*dQMS).inverse();
 
           if (dores) {
@@ -1792,11 +1792,11 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               R = Matrix2d::Identity();
 
 
-//               std::cout << "1d hit, original x = " << preciseHit->localPosition().x() << " y = " << preciseHit->localPosition().y() << " corrected x = " << hitx << " y = " << hity << std::endl;
+// std::cout << "1d hit, original x = " << preciseHit->localPosition().x() << " y = " << preciseHit->localPosition().y() << " corrected x = " << hitx << " y = " << hity << std::endl;
             }
             else {
               // 2d hit
-//               assert(align2d);
+// assert(align2d);
               
               
               if (ispixel) {
@@ -1813,7 +1813,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                 // transform to polar coordinates to end the madness
                 //TODO handle the module deformations consistently here (currently equivalent to dropping/undoing deformation correction)
 
-//                   std::cout << "wedge\n" << std::endl;
+// std::cout << "wedge\n" << std::endl;
 
                 const ProxyStripTopology *proxytopology = dynamic_cast<const ProxyStripTopology*>(&(preciseHit->det()->topology()));
 
@@ -1841,7 +1841,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                 const double rhoerr2 = striplength*striplength/12.;
 
 
-//                   std::cout << "rhohit = " << rhohit << " rhobar = " << rhobar << " rhoerr2lin = " << rhoerr2lin << " rhoerr2 = " << rhoerr2 << std::endl;
+// std::cout << "rhohit = " << rhohit << " rhobar = " << rhobar << " rhoerr2lin = " << rhoerr2lin << " rhoerr2 = " << rhoerr2 << std::endl;
 
                 // TODO apply (inverse) corrections for module deformations here? (take into account for jacobian?)
                 const double phistate = rdir*std::atan2(lxcor, rdir*lycor + radius);
@@ -1881,7 +1881,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                 dy0[0] = phihit - phistate;
                 dy0[1] = rhohit - rhostate;
 
-//                 std::cout << "wedge hit, original x = " << preciseHit->localPosition().x() << " y = " << preciseHit->localPosition().y() << " corrected x = " << hitx << " y = " << hity << std::endl;
+// std::cout << "wedge hit, original x = " << preciseHit->localPosition().x() << " y = " << preciseHit->localPosition().y() << " corrected x = " << hitx << " y = " << hity << std::endl;
 
               }
             }
@@ -1894,9 +1894,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             // alignment jacobian
             Matrix<double, 2, 6> Aval = Matrix<double, 2, 6>::Zero();
 
-//             const Matrix<double, 6, 1> &localparmsalign = alignGlued_ ? globalToLocal(updtsos, surfaceglued) : localparms;
+// const Matrix<double, 6, 1> &localparmsalign = alignGlued_ ? globalToLocal(updtsos, surfaceglued) : localparms;
             
-//             Matrix<double, 6, 1> localparmsalign = localparms;
+// Matrix<double, 6, 1> localparmsalign = localparms;
             Matrix<double, 6, 1> localparmsalign = localparmsalignprop;
             if (alignGlued_) {
               localparmsalign = globalToLocal(updtsosalign, surfaceglued);
@@ -1934,7 +1934,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             // dy/dtheta_z
             Aval(1,5) = -localxvalorig;
 
-//             const Matrix<double, 2, 6> &A = alignGlued_ ? Rglued*Aval : Aval;
+// const Matrix<double, 2, 6> &A = alignGlued_ ? Rglued*Aval : Aval;
             
             Matrix<double, 2, 6> A = R*Aval;
             if (alignGlued_) {
@@ -1950,7 +1950,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             const double yyresfact = dores && ispixel ? std::exp(corparms_[yresglobalidx]) : 1.;
             const double xyresfact = std::sqrt(xxresfact*yyresfact);
             
-//             std::cout << "xxresfact = " << xxresfact << " yyresfact = " << yyresfact << " xyresfact = " << xyresfact << std::endl;
+// std::cout << "xxresfact = " << xxresfact << " yyresfact = " << yyresfact << " xyresfact = " << xyresfact << std::endl;
 
             iV(0, 0) *= xxresfact;
             iV(0, 1) *= xyresfact;
@@ -1997,7 +1997,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
             constexpr std::array<unsigned int, 6> alphaidxs = {{0, 2, 3, 4, 5, 1}};
 
-//             const double scalecov = hit1d ? 1.2 : 1.0;
+// const double scalecov = hit1d ? 1.2 : 1.0;
             const double scalecov = ispixel ? 0.8 : 1.2;
             
             if (ispixel) {
@@ -2067,11 +2067,11 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             if (iiter == 0) {
               
               // fill hit validation information
-//               Vector2d dyrecgenlocal;
-//               dyrecgenlocal << dy0[0].value().value(), dy0[1].value().value();
-//               const Vector2d dyrecgeneig = R*dyrecgenlocal;
-//               dxrecgen.push_back(dyrecgeneig[0]);
-//               dyrecgen.push_back(dyrecgeneig[1]);
+// Vector2d dyrecgenlocal;
+// dyrecgenlocal << dy0[0].value().value(), dy0[1].value().value();
+// const Vector2d dyrecgeneig = R*dyrecgenlocal;
+// dxrecgen.push_back(dyrecgeneig[0]);
+// dyrecgen.push_back(dyrecgeneig[1]);
               dxrecgen.push_back(dy0[0]);
               dyrecgen.push_back(dy0[1]);
               
@@ -2086,11 +2086,11 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               localx.push_back(localstatedebug[3]);
               localy.push_back(localstatedebug[4]);
 
-//               localqop.push_back(localqopval);
-//               localdxdz.push_back(localdxdzval);
-//               localdydz.push_back(localdydzval);
-//               localx.push_back(localxval);
-//               localy.push_back(localyval);
+// localqop.push_back(localqopval);
+// localdxdz.push_back(localdxdzval);
+// localdydz.push_back(localdydzval);
+// localx.push_back(localxval);
+// localy.push_back(localyval);
               
               const Matrix<double, 5, 5> Qtotlocal = Hp*Qtot*Hp.transpose();
               
@@ -2121,7 +2121,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                 const SiPixelCluster& cluster = *tkhit->cluster_pixel();
                 const SiPixelRecHit *pixhit = dynamic_cast<const SiPixelRecHit*>(tkhit);
                 assert(pixhit != nullptr);
-  //               std::cout << "pixel cluster sizeX = " << cluster.sizeX() <<" sizeY = " << cluster.sizeY() << std::endl;
+  // std::cout << "pixel cluster sizeX = " << cluster.sizeX() <<" sizeY = " << cluster.sizeY() << std::endl;
                 clusterSize.push_back(cluster.size());
                 clusterSizeX.push_back(cluster.sizeX());
                 clusterSizeY.push_back(cluster.sizeY());
@@ -2157,20 +2157,20 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                 stripsToEdge.push_back(std::min<int>(firstStrip, striptopology->nstrips() - 1 - lastStrip));
               }
               
-  //             if (ispixel) {
-  //               const SiPixelCluster& cluster = *tkhit->cluster_pixel();
-  //               dxreccluster.push_back(cluster.x() - preciseHit->localPosition().x());
-  //               dyreccluster.push_back(cluster.y() - preciseHit->localPosition().y());
-  //             }
-  //             else {
-  //               dxreccluster.push_back(-99.);
-  //               dyreccluster.push_back(-99.);
-  //             }
+  // if (ispixel) {
+  // const SiPixelCluster& cluster = *tkhit->cluster_pixel();
+  // dxreccluster.push_back(cluster.x() - preciseHit->localPosition().x());
+  // dyreccluster.push_back(cluster.y() - preciseHit->localPosition().y());
+  // }
+  // else {
+  // dxreccluster.push_back(-99.);
+  // dyreccluster.push_back(-99.);
+  // }
               
               if (doSim_) {
                 if (simhit != nullptr) {
                   
-//                   std::cout << "ihit = " << ihit << " eloss = " << simhit->energyLoss() << std::endl;
+// std::cout << "ihit = " << ihit << " eloss = " << simhit->energyLoss() << std::endl;
                   
                   Vector2d dy0simgenlocal;
                   dy0simgenlocal << simhit->localPosition().x() - localxval,
@@ -2178,8 +2178,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                   const Vector2d dysimgeneig = R*dy0simgenlocal;
                   dxsimgen.push_back(dysimgeneig[0]);
                   dysimgen.push_back(dysimgeneig[1]);
-  //                     dxsimgen.push_back(simhit->localPosition().x() - updtsos.localPosition().x());
-  //                     dysimgen.push_back(simhit->localPosition().y() - updtsos.localPosition().y());
+  // dxsimgen.push_back(simhit->localPosition().x() - updtsos.localPosition().x());
+  // dysimgen.push_back(simhit->localPosition().y() - updtsos.localPosition().y());
                   
                   Vector2d dy0simgenlocalconv;
                   dy0simgenlocalconv << simhit->localPosition().x() - localxval - localconv[0],
@@ -2193,7 +2193,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                   
                   // Vector2d dyrecsimlocal;
                   // dyrecsimlocal << preciseHit->localPosition().x() - simhit->localPosition().x(),
-                  //                 preciseHit->localPosition().y() - simhit->localPosition().y();
+                  // preciseHit->localPosition().y() - simhit->localPosition().y();
                   // const Vector2d dyrecsimeig = R*dyrecsimlocal;
                   // dxrecsim.push_back(dyrecsimeig[0]);
                   // dyrecsim.push_back(dyrecsimeig[1]);
@@ -2210,7 +2210,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                   const double eentry = std::sqrt(std::pow(simhit->pabs(), 2) + trackmass*trackmass);
                   const double emid = eentry - 0.5*simhit->energyLoss();
                   const double simqopval = genpart->charge()/std::sqrt(emid*emid - trackmass*trackmass);
-//                   std::cout << "eloss = " << simhit->energyLoss() << std::endl;
+// std::cout << "eloss = " << simhit->energyLoss() << std::endl;
                   
                   // "hybrid state" trying to adjust for entry point -> midpoint
                   // simlocalqop.push_back(simqopval);
@@ -2231,7 +2231,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                     const Point3DBase<double, LocalTag> simlocalpos = simhit->entryPoint();
                     const Vector3DBase<double, LocalTag> simlocalmom = simhit->momentumAtEntry();
 
-          //           std::cout << "simlocalpos" << simlocalpos << std::endl;
+          // std::cout << "simlocalpos" << simlocalpos << std::endl;
 
                     const Point3DBase<double, GlobalTag> simglobalpos = surface.toGlobal(simlocalpos);
                     const Vector3DBase<double, GlobalTag> simglobalmom = surface.toGlobal(simlocalmom);
@@ -2328,7 +2328,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       
       assert(iparm == npars);
       
-//       Fsparse = Ffull.rightCols(nstatefree).sparseView();
+// Fsparse = Ffull.rightCols(nstatefree).sparseView();
       Fsparse = Ffull(Eigen::placeholders::all, freestateidxs).sparseView();
       Vinvsparse = Vinvfull.sparseView();
       
@@ -2360,48 +2360,48 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
       }
       
-//       SimplicialLLT<SparseMatrix<double>> lltsparse;
-//       lltsparse.compute(Fsparse.transpose()*VinvF);
-//       
-//       const SparseMatrix<double> lfact = lltsparse.matrixL();
-//       std::cout << "lfact size = " << lfact.rows()*lfact.cols() << " nonzeros = " << lfact.nonZeros() << std::endl;
+// SimplicialLLT<SparseMatrix<double>> lltsparse;
+// lltsparse.compute(Fsparse.transpose()*VinvF);
+// 
+// const SparseMatrix<double> lfact = lltsparse.matrixL();
+// std::cout << "lfact size = " << lfact.rows()*lfact.cols() << " nonzeros = " << lfact.nonZeros() << std::endl;
       
-//       const SparseMatrix<double> testsparse = Fsparse.transpose()*VinvF;
-//       const MatrixXd testdense = testsparse;
-//       SimplicialLDLT<SparseMatrix<double>> ldltsparse;
-//       LDLT<MatrixXd> ldltdense(testdense.rows());
-//       
-//       constexpr unsigned int ntest = 10000;
+// const SparseMatrix<double> testsparse = Fsparse.transpose()*VinvF;
+// const MatrixXd testdense = testsparse;
+// SimplicialLDLT<SparseMatrix<double>> ldltsparse;
+// LDLT<MatrixXd> ldltdense(testdense.rows());
 // 
-//       double sparsetime;
-//       double densetime;
-//       
-//       {
-//         auto start = std::chrono::high_resolution_clock::now();
-//         for (unsigned int itest = 0; itest < ntest; ++itest) {
-//           ldltsparse.compute(testsparse);
-//         }
-//         auto stop = std::chrono::high_resolution_clock::now();
-//         
-//         auto duration = stop - start;
-//         sparsetime = duration.count();
-//         std::cout << "sparse decomp: " << sparsetime << std::endl;
-//       }
+// constexpr unsigned int ntest = 10000;
 // 
-//       {
-//         auto start = std::chrono::high_resolution_clock::now();
-//         for (unsigned int itest = 0; itest < ntest; ++itest) {
-//           ldltdense.compute(testdense);
-//         }
-//         auto stop = std::chrono::high_resolution_clock::now();
-//         
-//         auto duration = stop - start;
-//         densetime = duration.count();
-//         std::cout << "dense decomp: " << densetime << std::endl;
-//       }
-//       
-//       const double timeratio = sparsetime/densetime;
-//       std::cout << "size = " << testdense.rows() << " fillfactor = " << double(testsparse.nonZeros())/double(testsparse.rows()*testsparse.cols()) << " sparse/dense = " << timeratio << std::endl;
+// double sparsetime;
+// double densetime;
+// 
+// {
+// auto start = std::chrono::high_resolution_clock::now();
+// for (unsigned int itest = 0; itest < ntest; ++itest) {
+// ldltsparse.compute(testsparse);
+// }
+// auto stop = std::chrono::high_resolution_clock::now();
+// 
+// auto duration = stop - start;
+// sparsetime = duration.count();
+// std::cout << "sparse decomp: " << sparsetime << std::endl;
+// }
+// 
+// {
+// auto start = std::chrono::high_resolution_clock::now();
+// for (unsigned int itest = 0; itest < ntest; ++itest) {
+// ldltdense.compute(testdense);
+// }
+// auto stop = std::chrono::high_resolution_clock::now();
+// 
+// auto duration = stop - start;
+// densetime = duration.count();
+// std::cout << "dense decomp: " << densetime << std::endl;
+// }
+// 
+// const double timeratio = sparsetime/densetime;
+// std::cout << "size = " << testdense.rows() << " fillfactor = " << double(testsparse.nonZeros())/double(testsparse.rows()*testsparse.cols()) << " sparse/dense = " << timeratio << std::endl;
       
       dxfree = -Cinvd.solve(VinvF.transpose()*rfull);
 
@@ -2413,10 +2413,10 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       
       const Vector5d dxref = dxfull.head<5>();
 
-//       std::cout << "iiter = " << iiter << std::endl;
-//       std::cout << "dxfree.head<5>():\n" << dxfree.head<5>() << std::endl;
-//       std::cout << "dxfull.head<5>():\n" << dxfull.head<5>() << std::endl;
-//       std::cout << "dxref:\n" <<dxref << std::endl;
+// std::cout << "iiter = " << iiter << std::endl;
+// std::cout << "dxfree.head<5>():\n" << dxfree.head<5>() << std::endl;
+// std::cout << "dxfull.head<5>():\n" << dxfull.head<5>() << std::endl;
+// std::cout << "dxref:\n" <<dxref << std::endl;
 
       covfull = MatrixXd::Zero(nstateparms, nstateparms);
 
@@ -2475,7 +2475,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       }
       
       
-//       std::cout << "iiter = " << iiter << " edmval = " << edmval << " edmvalref " << edmvalref << " deltachisqval = " << deltachisqval << " chisqval = " << chisqval << std::endl;
+// std::cout << "iiter = " << iiter << " edmval = " << edmval << " edmvalref " << edmvalref << " deltachisqval = " << deltachisqval << " chisqval = " << chisqval << std::endl;
 
       if (anomDebug) {
         std::cout << "anomDebug: iiter = " << iiter << " edmval = " << edmval << " deltachisqval = " << deltachisqval << " chisqval = " << chisqval << std::endl;
@@ -2528,95 +2528,95 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       residxsfinal.push_back(iidx);
     }
     
-//     dxdparms = -Cinvd.solve(d2chisqdxdparmsfinal).transpose();
+// dxdparms = -Cinvd.solve(d2chisqdxdparmsfinal).transpose();
     
-//     grad = dchisqdparmsfinal + dxdparms*dchisqdx; 
-//     grad = dchisqdparmsfinal + d2chisqdxdparmsfinal.transpose()*dxfull;
-//     hess = d2chisqdparms2final + dxdparms*d2chisqdxdparmsfinal;
+// grad = dchisqdparmsfinal + dxdparms*dchisqdx; 
+// grad = dchisqdparmsfinal + d2chisqdxdparmsfinal.transpose()*dxfull;
+// hess = d2chisqdparms2final + dxdparms*d2chisqdxdparmsfinal;
     
     nParms = nparsfinal;
 
     //TODO avoid explicitly storing the transpose?
     const SparseMatrix<double> FtVinv = VinvF.transpose();
-//     const MatrixXd R = Vinvsparse - VinvF*Cinvd.solve(FtVinv);
+// const MatrixXd R = Vinvsparse - VinvF*Cinvd.solve(FtVinv);
     const SparseMatrix<double> Rsparse = Vinvsparse - VinvF*Cinvd.solve(FtVinv);
     const MatrixXd R = Rsparse;
     
     
-//     constexpr unsigned int ntest = 1000;
-//     
-//     auto time0 = std::chrono::high_resolution_clock::now();
-//     for (unsigned int itest = 0; itest < ntest; ++itest) {
-//       const SparseMatrix<double> R1 = Vinvsparse - VinvF*Cinvd.solve(FtVinv);
-//       const MatrixXd R2 = R1;
-//     }
-//     
-//     auto time1 = std::chrono::high_resolution_clock::now();
-//     for (unsigned int itest = 0; itest < ntest; ++itest) {
-//       const MatrixXd R1 = Vinvsparse - VinvF*Cinvd.solve(FtVinv);
-//       const SparseMatrix<double> R2 = R1.sparseView();
-//     }
-//     
-//     auto time2 = std::chrono::high_resolution_clock::now();
+// constexpr unsigned int ntest = 1000;
 // 
-//     
-//     const double d0 = (time1-time0).count();
-//     const double d1 = (time2-time1).count();
-// //       const double d2 = (time3-time2).count();
-// //       const double d3 = (time4-time3).count();
-// //       
-//       std::cout << "d0 = " << d0 << " d1 = " << d1 << std::endl;
+// auto time0 = std::chrono::high_resolution_clock::now();
+// for (unsigned int itest = 0; itest < ntest; ++itest) {
+// const SparseMatrix<double> R1 = Vinvsparse - VinvF*Cinvd.solve(FtVinv);
+// const MatrixXd R2 = R1;
+// }
+// 
+// auto time1 = std::chrono::high_resolution_clock::now();
+// for (unsigned int itest = 0; itest < ntest; ++itest) {
+// const MatrixXd R1 = Vinvsparse - VinvF*Cinvd.solve(FtVinv);
+// const SparseMatrix<double> R2 = R1.sparseView();
+// }
+// 
+// auto time2 = std::chrono::high_resolution_clock::now();
+// 
+// 
+// const double d0 = (time1-time0).count();
+// const double d1 = (time2-time1).count();
+// // const double d2 = (time3-time2).count();
+// // const double d3 = (time4-time3).count();
+// // 
+// std::cout << "d0 = " << d0 << " d1 = " << d1 << std::endl;
     
     
-//     std::vector<Triplet<Matrix<double, 3, 3>>> triplets;
-// //     SparseMatrix<Matrix<double, Dynamic, Dynamic, 0, 5, 5>> testsparse(100, 100);
-//     SparseMatrix<Matrix<double, 3, 3>> testsparse(100, 100);
-//     triplets.emplace_back(0, 0, Matrix<double, 3, 3>::Zero());
-//     
-//     testsparse.setFromTriplets(triplets.begin(), triplets.end());
-//     testsparse.insert(0, 0) = Matrix<double, 3, 3>::Identity();
+// std::vector<Triplet<Matrix<double, 3, 3>>> triplets;
+// // SparseMatrix<Matrix<double, Dynamic, Dynamic, 0, 5, 5>> testsparse(100, 100);
+// SparseMatrix<Matrix<double, 3, 3>> testsparse(100, 100);
+// triplets.emplace_back(0, 0, Matrix<double, 3, 3>::Zero());
+// 
+// testsparse.setFromTriplets(triplets.begin(), triplets.end());
+// testsparse.insert(0, 0) = Matrix<double, 3, 3>::Identity();
     
-//     std::cout << "R total size = " << R.rows()*R.cols() << " nonzeros = " << R.nonZeros() << std::endl;
+// std::cout << "R total size = " << R.rows()*R.cols() << " nonzeros = " << R.nonZeros() << std::endl;
     
-//     std::cout << "VinvF total size = " << VinvF.rows()*VinvF.cols() << " nonzeros = " << VinvF.nonZeros() << std::endl;
+// std::cout << "VinvF total size = " << VinvF.rows()*VinvF.cols() << " nonzeros = " << VinvF.nonZeros() << std::endl;
 
 
     //TODO make R dense (and find the best solution for sparse = sparse*dense case)
     
     
-//     chisqval = rfull.transpose()*R*rfull;
-//     
-//     grad = 2.*Jsparse.transpose()*R*rfull;
-//     hess = 2.*Jsparse.transpose()*R*Jsparse;
+// chisqval = rfull.transpose()*R*rfull;
+// 
+// grad = 2.*Jsparse.transpose()*R*rfull;
+// hess = 2.*Jsparse.transpose()*R*Jsparse;
     
     //TODO check this against explicit version
     const VectorXd Rr = Vinvsparse*(rfull + Fsparse*dxfree);
     
-//     const VectorXd Rrtest = R*rfull;
-//     const double Rrdiff = (Rr-Rrtest).array().square().sum();
-//     std::cout << "Rrdiff = " << Rrdiff << std::endl;
+// const VectorXd Rrtest = R*rfull;
+// const double Rrdiff = (Rr-Rrtest).array().square().sum();
+// std::cout << "Rrdiff = " << Rrdiff << std::endl;
     
-//     constexpr unsigned int ntest = 1000;
-//     
-//     auto time0 = std::chrono::high_resolution_clock::now();
-//     for (unsigned int itest = 0; itest < ntest; ++itest) {
-//       const VectorXd Rrtest = Vinvsparse*(rfull + Fsparse*dxfull);
-//     }
-//     
-//     auto time1 = std::chrono::high_resolution_clock::now();
-//     for (unsigned int itest = 0; itest < ntest; ++itest) {
-// //       VectorXd Rrtest = Vinvsparse*rfull;
-// //       Rrtest += Vinvsparse*Fsparse*dxfull;
-//       const VectorXd Rrtest = R*rfull;
-//     }
-//     
-//     auto time2 = std::chrono::high_resolution_clock::now();
+// constexpr unsigned int ntest = 1000;
 // 
-//     
-//     const double d0 = (time1-time0).count();
-//     const double d1 = (time2-time1).count();
+// auto time0 = std::chrono::high_resolution_clock::now();
+// for (unsigned int itest = 0; itest < ntest; ++itest) {
+// const VectorXd Rrtest = Vinvsparse*(rfull + Fsparse*dxfull);
+// }
 // 
-//     std::cout << "d0 = " << d0 << " d1 = " << d1 << std::endl;
+// auto time1 = std::chrono::high_resolution_clock::now();
+// for (unsigned int itest = 0; itest < ntest; ++itest) {
+// // VectorXd Rrtest = Vinvsparse*rfull;
+// // Rrtest += Vinvsparse*Fsparse*dxfull;
+// const VectorXd Rrtest = R*rfull;
+// }
+// 
+// auto time2 = std::chrono::high_resolution_clock::now();
+// 
+// 
+// const double d0 = (time1-time0).count();
+// const double d1 = (time2-time1).count();
+// 
+// std::cout << "d0 = " << d0 << " d1 = " << d1 << std::endl;
     
     
     chisqval = rfull.transpose()*Rr;
@@ -2646,92 +2646,92 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       SparseMatrix<double> &dViR = dVRs.emplace_back();
       dViR = dVi*Rsparse;
       
-//       const MatrixXd Rdense = R;
+// const MatrixXd Rdense = R;
       
-//       const SparseMatrix<double> dViRtest = dVi*(Rdense.sparseView().transpose().transpose());
-//       const SparseMatrix<double> dViRtest = Rdense.sparseView().transpose();
+// const SparseMatrix<double> dViRtest = dVi*(Rdense.sparseView().transpose().transpose());
+// const SparseMatrix<double> dViRtest = Rdense.sparseView().transpose();
 
-//       
-//       MatrixXd tmpdense = MatrixXd::Zero(ncons, ncons);
-//       
-//       constexpr unsigned int ntest = 1000;
-//       
-//       auto time0 = std::chrono::high_resolution_clock::now();
-//       for (unsigned int itest = 0; itest < ntest; ++itest) {
-//         const SparseMatrix<double> dViRtest = (dVi*Rdense).sparseView();
-//       }
-//       auto time1 = std::chrono::high_resolution_clock::now();
 // 
-//       for (unsigned int itest = 0; itest < ntest; ++itest) {
-//         const SparseMatrix<double> Rsparse = Rdense.sparseView();
-//         const SparseMatrix<double> dViRtest = dVi*Rsparse;
-//       }
-//       
-//       auto time2 = std::chrono::high_resolution_clock::now();
-//       
-//       for (unsigned int itest = 0; itest < ntest; ++itest) {
-//         const SparseMatrix<double> dViRtest = dVi*R;
-//       }
-//       
-//       auto time3 = std::chrono::high_resolution_clock::now();
-//       
-//       
-//       for (unsigned int itest = 0; itest < ntest; ++itest) {
-//         tmpdense = dVi*Rdense;
-// //         const SparseMatrix<double> dViRtest = tmpdense.sparseView();
-//       }
-//       
-//       auto time4 = std::chrono::high_resolution_clock::now();
-//       
-//       const double d0 = (time1-time0).count();
-//       const double d1 = (time2-time1).count();
-//       const double d2 = (time3-time2).count();
-//       const double d3 = (time4-time3).count();
-//       
-//       std::cout << "d0 = " << d0 << " d1 = " << d1 << " d2 = " << d2 << " d3 = " << d3 << std::endl;
+// MatrixXd tmpdense = MatrixXd::Zero(ncons, ncons);
+// 
+// constexpr unsigned int ntest = 1000;
+// 
+// auto time0 = std::chrono::high_resolution_clock::now();
+// for (unsigned int itest = 0; itest < ntest; ++itest) {
+// const SparseMatrix<double> dViRtest = (dVi*Rdense).sparseView();
+// }
+// auto time1 = std::chrono::high_resolution_clock::now();
+// 
+// for (unsigned int itest = 0; itest < ntest; ++itest) {
+// const SparseMatrix<double> Rsparse = Rdense.sparseView();
+// const SparseMatrix<double> dViRtest = dVi*Rsparse;
+// }
+// 
+// auto time2 = std::chrono::high_resolution_clock::now();
+// 
+// for (unsigned int itest = 0; itest < ntest; ++itest) {
+// const SparseMatrix<double> dViRtest = dVi*R;
+// }
+// 
+// auto time3 = std::chrono::high_resolution_clock::now();
+// 
+// 
+// for (unsigned int itest = 0; itest < ntest; ++itest) {
+// tmpdense = dVi*Rdense;
+// // const SparseMatrix<double> dViRtest = tmpdense.sparseView();
+// }
+// 
+// auto time4 = std::chrono::high_resolution_clock::now();
+// 
+// const double d0 = (time1-time0).count();
+// const double d1 = (time2-time1).count();
+// const double d2 = (time3-time2).count();
+// const double d3 = (time4-time3).count();
+// 
+// std::cout << "d0 = " << d0 << " d1 = " << d1 << " d2 = " << d2 << " d3 = " << d3 << std::endl;
       
-//       const double testfail = (dVi*MatrixXd::Identity(ncons, ncons)).sparseView();
+// const double testfail = (dVi*MatrixXd::Identity(ncons, ncons)).sparseView();
       
-//       const int testcount = (dVi*MatrixXd(R)).nonZeros();
-//       const Matrix<double, 10, 10> testdense = Matrix<double, 10, 10>::Identity();
-//       const int testcount2 = testdense.nonZeros();
-//       
-//       std::cout << "testcount2 = " << testcount2 << std::endl;
-//       
-//       std::cout << "dViR total size = " << dViR.rows()*dViR.cols() << " testcount = " << testcount << std::endl;
+// const int testcount = (dVi*MatrixXd(R)).nonZeros();
+// const Matrix<double, 10, 10> testdense = Matrix<double, 10, 10>::Identity();
+// const int testcount2 = testdense.nonZeros();
+// 
+// std::cout << "testcount2 = " << testcount2 << std::endl;
+// 
+// std::cout << "dViR total size = " << dViR.rows()*dViR.cols() << " testcount = " << testcount << std::endl;
 
       
-//       const MatrixXd ident = MatrixXd::Identity(ncons, ncons);
+// const MatrixXd ident = MatrixXd::Identity(ncons, ncons);
       
-//       SparseMatrix<double> testsparse = SparseMatrix<double>(dVi*ident);
+// SparseMatrix<double> testsparse = SparseMatrix<double>(dVi*ident);
       
-//       std::cout << "dViR total size = " << dViR.rows()*dViR.cols() << " nonzeros = " << dViR.nonZeros() << std::endl;
+// std::cout << "dViR total size = " << dViR.rows()*dViR.cols() << " nonzeros = " << dViR.nonZeros() << std::endl;
       
-//       dVRr.col(residxi) += dViR*rfull;
+// dVRr.col(residxi) += dViR*rfull;
       dVRr.col(residxi) += dVi*Rr;
       
       //TODO optimize traces for sparse matrices
       
-//       const double gradres = MatrixXd(dViR).trace();
+// const double gradres = MatrixXd(dViR).trace();
       
       //trace is not implemented directly for sparse matrices so use sum of diagonals explicitly
       const double gradres = dViR.diagonal().sum();
       
-//       const double gradres = -rfull.transpose()*R*dViR*rfull + MatrixXd(dViR).trace();
+// const double gradres = -rfull.transpose()*R*dViR*rfull + MatrixXd(dViR).trace();
       
-//       grad(residxi) += gradres;
+// grad(residxi) += gradres;
       gradll(residxi) += gradres;
             
-//       VectorXd hesscross = -2.*Jsparse.transpose()*R*dViR*rfull;
+// VectorXd hesscross = -2.*Jsparse.transpose()*R*dViR*rfull;
       // adjust diagonal element since it will be added twice
-//       hesscross(residxi) *= 0.5;
+// hesscross(residxi) *= 0.5;
       
-//       hess.col(residxi) += hesscross;
-//       hess.row(residxi) += hesscross.transpose();
+// hess.col(residxi) += hesscross;
+// hess.row(residxi) += hesscross.transpose();
       
-//       if (!dogen) {
-//         dxdparms.row(residxi) += (M*dViR*rfull).transpose();
-//       }
+// if (!dogen) {
+// dxdparms.row(residxi) += (M*dViR*rfull).transpose();
+// }
       
       const SparseMatrix<double> dViRT = dViR.transpose();
       
@@ -2739,17 +2739,17 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         auto const &dVjR = dVRs[jres];
         const unsigned int residxj = residxsfinal[jres];
         
-//         const SparseMatrix<double> dViRdVjR = dViR*dVjR;
+// const SparseMatrix<double> dViRdVjR = dViR*dVjR;
         
-//         const double hessres = -MatrixXd(dViR*dVjR).trace();
-//         const double hessres = 2.*rfull.transpose()*R*dViRdVjR*rfull - MatrixXd(dViRdVjR).trace();
+// const double hessres = -MatrixXd(dViR*dVjR).trace();
+// const double hessres = 2.*rfull.transpose()*R*dViRdVjR*rfull - MatrixXd(dViRdVjR).trace();
         
         // below is equivalent to -(dViR*dVjR).trace()
-//         const double hessres = -dViRT.cwiseProduct(dVjR).sum();
+// const double hessres = -dViRT.cwiseProduct(dVjR).sum();
         const double hessres = dViRT.cwiseProduct(dVjR).sum();
-//         const double hessresalt = -MatrixXd(dViR*dVjR).trace();
+// const double hessresalt = -MatrixXd(dViR*dVjR).trace();
         
-//         std::cout << "ires = " << ires << " jres = " << jres << " hessres = " << hessres << " hessresalt = " << hessresalt << std::endl;
+// std::cout << "ires = " << ires << " jres = " << jres << " hessres = " << hessres << " hessresalt = " << hessresalt << std::endl;
         
         hess(residxi, residxj) += hessres;
         if (ires != jres) {
@@ -2762,51 +2762,51 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     
       
       
-// //       const SparseMatrix<double> dViR = (dVi*R).sparseView();
-//       const SparseMatrix<double> dViR = dVi*R;
-// //       const MatrixXd dViR = dVi*R;
-//       
-//       //TODO optimized trace for sparse matrices
-//       //TODO optimize use of sparse vs dense matrices (and avoid redundant conversions)
-//       
-//       grad(residxi) += -rfull.transpose()*R*dViR*rfull + MatrixXd(dViR).trace();
-//       
-//       VectorXd hesscross = -2.*Jsparse.transpose()*R*dViR*rfull;
-//       
-//       // adjust diagonal element since it will be added twice
-//       hesscross(residxi) *= 0.5;
-//       
-//       hess.col(residxi) += hesscross;
-//       hess.row(residxi) += hesscross.transpose();
-//       
-//       if (!dogen) {
-//         dxdparms.row(residxi) += (M*dViR*rfull).transpose();
-//       }
-//       
-//       for (unsigned int jres = 0; jres < dVs.size(); ++jres) {
-//         auto const &dVj = dVs[jres];
-//         const unsigned int residxj = residxsfinal[jres];
-//         
-// //         const SparseMatrix<double> dViRdVjR = (dViR*dVj*R).sparseView();
-//         const SparseMatrix<double> dViRdVjR = dViR*dVj*R;
-// //         const MatrixXd dViRdVjR = dViR*dVj*R;
-//         
-//         const double hessres = 2.*rfull.transpose()*R*dViRdVjR*rfull - MatrixXd(dViRdVjR).trace();
-//         
-//         hess(residxi, residxj) += hessres;
-//         if (residxi != residxj) {
-//           hess(residxj, residxi) += hessres;
-//         }
-//       }
+// // const SparseMatrix<double> dViR = (dVi*R).sparseView();
+// const SparseMatrix<double> dViR = dVi*R;
+// // const MatrixXd dViR = dVi*R;
+// 
+// //TODO optimized trace for sparse matrices
+// //TODO optimize use of sparse vs dense matrices (and avoid redundant conversions)
+// 
+// grad(residxi) += -rfull.transpose()*R*dViR*rfull + MatrixXd(dViR).trace();
+// 
+// VectorXd hesscross = -2.*Jsparse.transpose()*R*dViR*rfull;
+// 
+// // adjust diagonal element since it will be added twice
+// hesscross(residxi) *= 0.5;
+// 
+// hess.col(residxi) += hesscross;
+// hess.row(residxi) += hesscross.transpose();
+// 
+// if (!dogen) {
+// dxdparms.row(residxi) += (M*dViR*rfull).transpose();
+// }
+// 
+// for (unsigned int jres = 0; jres < dVs.size(); ++jres) {
+// auto const &dVj = dVs[jres];
+// const unsigned int residxj = residxsfinal[jres];
+// 
+// // const SparseMatrix<double> dViRdVjR = (dViR*dVj*R).sparseView();
+// const SparseMatrix<double> dViRdVjR = dViR*dVj*R;
+// // const MatrixXd dViRdVjR = dViR*dVj*R;
+// 
+// const double hessres = 2.*rfull.transpose()*R*dViRdVjR*rfull - MatrixXd(dViRdVjR).trace();
+// 
+// hess(residxi, residxj) += hessres;
+// if (residxi != residxj) {
+// hess(residxj, residxi) += hessres;
+// }
+// }
       
     }
     
     const SparseMatrix<double> dVRrsparse = dVRr.sparseView();
     
-//     std::cout << "dVRrsparse size = " << dVRrsparse.rows()*dVRrsparse.cols() << " nonzeros = " << dVRrsparse.nonZeros() << std::endl;
+// std::cout << "dVRrsparse size = " << dVRrsparse.rows()*dVRrsparse.cols() << " nonzeros = " << dVRrsparse.nonZeros() << std::endl;
     
-//     grad += -(rfull.transpose()*R*dVRrsparse).transpose();
-//     grad += -(Rr.transpose()*dVRrsparse).transpose();
+// grad += -(rfull.transpose()*R*dVRrsparse).transpose();
+// grad += -(Rr.transpose()*dVRrsparse).transpose();
     grad += -dVRrsparse.transpose()*Rr;
     
     if (false) {
@@ -2817,78 +2817,78 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       hess += hesscross.transpose();
     }
     
-//     hess += hesscross + hesscross.transpose();
+// hess += hesscross + hesscross.transpose();
 
     //TODO deduplicate with above
     dxdparms(Eigen::placeholders::all, freestateidxs) += Cinvd.solve(FtVinv*dVRrsparse).transpose();
     
-//     if (!dogen) {
-//     //TODO deduplicate with above
-// //       const MatrixXd M = Cinvd.solve(FtVinv);
-// //       dxdparms += (M*dVRrsparse).transpose();
-//       dxdparms += Cinvd.solve(FtVinv*dVRrsparse).transpose();
-//     }
-//     
+// if (!dogen) {
+// //TODO deduplicate with above
+// // const MatrixXd M = Cinvd.solve(FtVinv);
+// // dxdparms += (M*dVRrsparse).transpose();
+// dxdparms += Cinvd.solve(FtVinv*dVRrsparse).transpose();
+// }
+// 
     
     //TODO check this against element-wise version
-//     grad += -(rfull.transpose()*R*dVRrsparse).transpose();
-//     hess += 2.*dVRrsparse.transpose()*R*dVRrsparse;
-//     
-//     MatrixXd hesstest = 2.*dVRrsparse.transpose()*R*dVRrsparse;
-//     MatrixXd hesstest2 = MatrixXd::Zero(nparsfinal, nparsfinal);
-//     for (unsigned int ires = 0; ires < dVs.size(); ++ires) {
-//       auto const &dVi = dVs[ires];
-//       const unsigned int residxi = residxsfinal[ires];
-//       
-//       const SparseMatrix<double> &dViR = dVRs[ires];
-//       
-//       for (unsigned int jres = 0; jres <= ires; ++jres) {
-//         auto const &dVjR = dVRs[jres];
-//         const unsigned int residxj = residxsfinal[jres];
-//         
-//         const double hesstestval = 2.*rfull.transpose()*R*dViR*dVjR*rfull;
-// //         const double hesstestval = 2.*rfull.transpose()*dViR*dVjR*rfull;
-//         
-// //         const double hesstestval2 = 2.*rfull.transpose()*dViR.transpose()*R*dVjR*rfull;
-//         
-//         hesstest2(residxi, residxj) += hesstestval;
-// //         if (residxi != residxj) {
-//         if (ires != jres) {
-//           hesstest2(residxj, residxi) += hesstestval;
-//         }
-//         
-// //         std::cout << "ires = " << ires << " jres = " << jres << " residxi = " << residxi << " residxj = " << residxj << " hesstestval = " << hesstestval << " hesstest(residxi, residxj) = " << hesstest(residxi, residxj) << std::endl;
-//         
-//       }
-//     }
-//     
-//     for (unsigned int ipar = 0; ipar < nparsfinal; ++ipar) {
-//       for (unsigned int jpar = 0; jpar < nparsfinal; ++jpar) {
-//         const double diff = hesstest2(ipar, jpar) - hesstest(ipar, jpar);
-//         
-//         if (std::fabs(diff) > 1e-16 && std::fabs(diff)/hesstest(ipar, jpar) > 1e-3) {
-//           std::cout << "ipar = " << ipar << " jpar = " << jpar << " hesstest(ipar, jpar) = " << hesstest(ipar, jpar) << " hessest2(ipar, jpar) = " << hesstest2(ipar, jpar) << std::endl;
-//         }
-//         
-//       }
-//     }
-//     
-//     const double diffsq = (hesstest2-hesstest).array().square().sum();
-//     std::cout << "diffsq = " << diffsq << std::endl;
+// grad += -(rfull.transpose()*R*dVRrsparse).transpose();
+// hess += 2.*dVRrsparse.transpose()*R*dVRrsparse;
+// 
+// MatrixXd hesstest = 2.*dVRrsparse.transpose()*R*dVRrsparse;
+// MatrixXd hesstest2 = MatrixXd::Zero(nparsfinal, nparsfinal);
+// for (unsigned int ires = 0; ires < dVs.size(); ++ires) {
+// auto const &dVi = dVs[ires];
+// const unsigned int residxi = residxsfinal[ires];
+// 
+// const SparseMatrix<double> &dViR = dVRs[ires];
+// 
+// for (unsigned int jres = 0; jres <= ires; ++jres) {
+// auto const &dVjR = dVRs[jres];
+// const unsigned int residxj = residxsfinal[jres];
+// 
+// const double hesstestval = 2.*rfull.transpose()*R*dViR*dVjR*rfull;
+// // const double hesstestval = 2.*rfull.transpose()*dViR*dVjR*rfull;
+// 
+// // const double hesstestval2 = 2.*rfull.transpose()*dViR.transpose()*R*dVjR*rfull;
+// 
+// hesstest2(residxi, residxj) += hesstestval;
+// // if (residxi != residxj) {
+// if (ires != jres) {
+// hesstest2(residxj, residxi) += hesstestval;
+// }
+// 
+// // std::cout << "ires = " << ires << " jres = " << jres << " residxi = " << residxi << " residxj = " << residxj << " hesstestval = " << hesstestval << " hesstest(residxi, residxj) = " << hesstest(residxi, residxj) << std::endl;
+// 
+// }
+// }
+// 
+// for (unsigned int ipar = 0; ipar < nparsfinal; ++ipar) {
+// for (unsigned int jpar = 0; jpar < nparsfinal; ++jpar) {
+// const double diff = hesstest2(ipar, jpar) - hesstest(ipar, jpar);
+// 
+// if (std::fabs(diff) > 1e-16 && std::fabs(diff)/hesstest(ipar, jpar) > 1e-3) {
+// std::cout << "ipar = " << ipar << " jpar = " << jpar << " hesstest(ipar, jpar) = " << hesstest(ipar, jpar) << " hessest2(ipar, jpar) = " << hesstest2(ipar, jpar) << std::endl;
+// }
+// 
+// }
+// }
+// 
+// const double diffsq = (hesstest2-hesstest).array().square().sum();
+// std::cout << "diffsq = " << diffsq << std::endl;
     
     
     
-//     MatrixXd hesscross = -2.*Jsparse.transpose()*R*dVRr;
-//     //correct diagonal since it gets added twice
-//     hesscross.diagonal() *= 0.5;
+// MatrixXd hesscross = -2.*Jsparse.transpose()*R*dVRr;
+// //correct diagonal since it gets added twice
+// hesscross.diagonal() *= 0.5;
     
-//     hess += hesscross + hesscross.transpose();
+// hess += hesscross + hesscross.transpose();
     
-//     std::cout << "hesscross.bottomRightCorner<10,10>():\n" << hesscross.bottomRightCorner<10,10>() << std::endl;
+// std::cout << "hesscross.bottomRightCorner<10,10>():\n" << hesscross.bottomRightCorner<10,10>() << std::endl;
     
-//     if (!dogen) {
-//       dxdparms += (M*dVRrsparse).transpose();
-//     }
+// if (!dogen) {
+// dxdparms += (M*dVRrsparse).transpose();
+// }
     
     gradchisqv.clear();
     gradchisqv.resize(nparsfinal, 0.);
@@ -2915,7 +2915,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     Map<VectorXf> gradout(gradv.data(), nparsfinal);
     Map<Matrix<float, 5, Dynamic, RowMajor> > jacrefout(jacrefv.data(), 5, nparsfinal);
     
-//     jacrefout = dxdparms.leftCols<5>().transpose().cast<float>();    
+// jacrefout = dxdparms.leftCols<5>().transpose().cast<float>(); 
     jacrefout = ( (dxdparms).leftCols<5>().transpose() ).cast<float>();  
 
 
@@ -2938,26 +2938,26 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     rx.resize(2*nvalid);
     Map<Matrix<float, Dynamic, 2, RowMajor> > rxout(rx.data(), nvalid, 2);
     rxout = rxfull;
-//     std::cout << "rx:" << std::endl;
-//     for (auto elem : rx) {
-//       std::cout << elem << " ";
-//     }
-//     std::cout << std::endl;
-//     std::cout << rx << std::endl;
+// std::cout << "rx:" << std::endl;
+// for (auto elem : rx) {
+// std::cout << elem << " ";
+// }
+// std::cout << std::endl;
+// std::cout << rx << std::endl;
     
     ry.resize(2*nvalid);
     Map<Matrix<float, Dynamic, 2, RowMajor> > ryout(ry.data(), nvalid, 2);
     ryout = ryfull;
     
-//     deigx.resize(nvalid);
-//     deigy.resize(nvalid);
-//     
-//     validdxeig = validdxeigjac*dxfull;
-//     
-//     for (unsigned int ivalid = 0; ivalid < nvalid; ++ivalid) {
-//       deigx[ivalid] = validdxeig[2*ivalid];
-//       deigy[ivalid] = validdxeig[2*ivalid + 1];
-//     }
+// deigx.resize(nvalid);
+// deigy.resize(nvalid);
+// 
+// validdxeig = validdxeigjac*dxfull;
+// 
+// for (unsigned int ivalid = 0; ivalid < nvalid; ++ivalid) {
+// deigx[ivalid] = validdxeig[2*ivalid];
+// deigy[ivalid] = validdxeig[2*ivalid + 1];
+// }
     
     float refPt = dogen ? genpart->pt() : std::abs(1./refParms[0])*std::sin(M_PI_2 - refParms[1]);
 
@@ -2990,26 +2990,26 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       std::cout << "hess debug" << std::endl;
       std::cout << "track parms" << std::endl;
       std::cout << tkparms << std::endl;
-  //     std::cout << "dxRef" << std::endl;
-  //     std::cout << dxRef << std::endl;
+  // std::cout << "dxRef" << std::endl;
+  // std::cout << dxRef << std::endl;
       std::cout << "original cov" << std::endl;
       std::cout << track.covariance() << std::endl;
       std::cout << "recomputed cov" << std::endl;
       std::cout << 2.*Cinner << std::endl;
     }
 
-//     std::cout << "dxinner/dparms" << std::endl;
-//     std::cout << dxdparms.bottomRows<5>() << std::endl;
-//     std::cout << "grad" << std::endl;
-//     std::cout << grad << std::endl;
-//     std::cout << "hess diagonal" << std::endl;
-//     std::cout << hess.diagonal() << std::endl;
-//     std::cout << "hess0 diagonal" << std::endl;
-//     std::cout << d2chisqdparms2.diagonal() << std::endl;
-//     std::cout << "hess1 diagonal" << std::endl;
-//     std::cout << 2.*(dxdparms.transpose()*d2chisqdxdparms).diagonal() << std::endl;
-//     std::cout << "hess2 diagonal" << std::endl;
-//     std::cout << (dxdparms.transpose()*d2chisqdx2*dxdparms).diagonal() << std::endl;
+// std::cout << "dxinner/dparms" << std::endl;
+// std::cout << dxdparms.bottomRows<5>() << std::endl;
+// std::cout << "grad" << std::endl;
+// std::cout << grad << std::endl;
+// std::cout << "hess diagonal" << std::endl;
+// std::cout << hess.diagonal() << std::endl;
+// std::cout << "hess0 diagonal" << std::endl;
+// std::cout << d2chisqdparms2.diagonal() << std::endl;
+// std::cout << "hess1 diagonal" << std::endl;
+// std::cout << 2.*(dxdparms.transpose()*d2chisqdxdparms).diagonal() << std::endl;
+// std::cout << "hess2 diagonal" << std::endl;
+// std::cout << (dxdparms.transpose()*d2chisqdx2*dxdparms).diagonal() << std::endl;
     
     //fill packed hessian and indices
     const unsigned int nsym = nparsfinal*(1+nparsfinal)/2;
@@ -3031,7 +3031,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       packedidx += segmentsize;
     }
 
-//     std::cout << "refParms[0]: " << refParms[0] << std::endl;
+// std::cout << "refParms[0]: " << refParms[0] << std::endl;
 
     if (fillTrackTree_) {
       tree->Fill();
@@ -3075,10 +3075,10 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       imomCov.assign(3*3, 0.);
       Map<Matrix<float, 3, 3, RowMajor>> momCovout(imomCov.data(), 3, 3);
       momCovout.triangularView<Upper>() = covfull.topLeftCorner<3,3>().cast<float>();
-//       std::cout << "covfull.topLeftCorner<3,3>()" << std::endl;
-//       std::cout << covfull.topLeftCorner<3,3>() << std::endl;
-//       std::cout << "momcovout" << std::endl;
-//       std::cout << momCovout << std::endl;
+// std::cout << "covfull.topLeftCorner<3,3>()" << std::endl;
+// std::cout << covfull.topLeftCorner<3,3>() << std::endl;
+// std::cout << "momcovout" << std::endl;
+// std::cout << momCovout << std::endl;
     }
 
 

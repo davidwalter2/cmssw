@@ -5,7 +5,7 @@
 
 #include "DataFormats/Common/interface/Handle.h"
 #include "DataFormats/TrackReco/interface/Track.h"
-#include "FWCore/Framework/interface/EDProducer.h"
+#include "FWCore/Framework/interface/stream/EDProducer.h"
 #include "FWCore/Framework/interface/Event.h"
 #include "FWCore/Framework/interface/EventSetup.h"
 #include "FWCore/Framework/interface/Frameworkfwd.h"
@@ -39,7 +39,7 @@ struct CandidateSummary {
 };
 }  // namespace
 
-class DstToD0PiCandidateProducer : public edm::EDProducer {
+class DstToD0PiCandidateProducer : public edm::stream::EDProducer<> {
 public:
   explicit DstToD0PiCandidateProducer(const edm::ParameterSet&);
   ~DstToD0PiCandidateProducer() override = default;
@@ -52,6 +52,7 @@ private:
   RefCountedKinematicTree fitDst(const edm::EventSetup&, const reco::Track&, const RefCountedKinematicParticle&) const;
 
   edm::EDGetTokenT<reco::TrackCollection> trackToken_;
+  edm::ESGetToken<TransientTrackBuilder, TransientTrackRecord> transTrackBuilderToken_;
 
   double kaonMass_;
   double pionMass_;
@@ -72,6 +73,7 @@ private:
 
 DstToD0PiCandidateProducer::DstToD0PiCandidateProducer(const edm::ParameterSet& iConfig)
     : trackToken_(consumes<reco::TrackCollection>(iConfig.getParameter<edm::InputTag>("src"))),
+      transTrackBuilderToken_(esConsumes(edm::ESInputTag("", "TransientTrackBuilder"))),
       // Kaon / pion masses + mass uncertainties looked up from the PDG
       // table (Analysis/HitAnalyzer/interface/ParticleProperties.h).
       // Single source of truth for daughter-particle properties.
@@ -137,8 +139,7 @@ FitQuality DstToD0PiCandidateProducer::fitQuality(RefCountedKinematicTree tree) 
 RefCountedKinematicTree DstToD0PiCandidateProducer::fitD0(const edm::EventSetup& iSetup,
                                                           const reco::Track& kaon,
                                                           const reco::Track& pion) const {
-  edm::ESHandle<TransientTrackBuilder> ttBuilder;
-  iSetup.get<TransientTrackRecord>().get("TransientTrackBuilder", ttBuilder);
+  auto ttBuilder = iSetup.getHandle(transTrackBuilderToken_);
 
   reco::TransientTrack kaonTT = ttBuilder->build(kaon);
   reco::TransientTrack pionTT = ttBuilder->build(pion);
@@ -159,8 +160,7 @@ RefCountedKinematicTree DstToD0PiCandidateProducer::fitD0(const edm::EventSetup&
 RefCountedKinematicTree DstToD0PiCandidateProducer::fitDst(const edm::EventSetup& iSetup,
                                                            const reco::Track& softPion,
                                                            const RefCountedKinematicParticle& d0) const {
-  edm::ESHandle<TransientTrackBuilder> ttBuilder;
-  iSetup.get<TransientTrackRecord>().get("TransientTrackBuilder", ttBuilder);
+  auto ttBuilder = iSetup.getHandle(transTrackBuilderToken_);
 
   reco::TransientTrack softPionTT = ttBuilder->build(softPion);
   reco::TransientTrack d0TT = d0->refittedTransientTrack();

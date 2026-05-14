@@ -10,7 +10,7 @@ Two checks at random input points (solenoid-like field):
   2) numerical FD of (qop, lam, phi, xt, yt) wrt Bx and By at finite epsilon
      matches the new analytic dBx, dBy partial columns (the full chain rule
      with dparmds * dsdinparm is validated end-to-end inside CMSSW by the
-     per-mode FD test described in plan B.5).
+     per-mode FD test).
 
 Reproduces the validation done before Phase B was committed. Run inside the
 wmassdev container:

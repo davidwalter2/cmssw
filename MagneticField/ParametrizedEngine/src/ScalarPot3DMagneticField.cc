@@ -1,6 +1,6 @@
 /** \file
  *
- *  Phase A.1 of replicated-bouncing-cloud.md.
+ *  scalar-potential field model.
  *
  *  \author David Walter
  */
@@ -45,8 +45,8 @@ GlobalVector ScalarPot3DMagneticField::inTesla(const GlobalPoint& gp) const {
 }
 
 GlobalVector ScalarPot3DMagneticField::inTeslaUnchecked(const GlobalPoint& gp) const {
-  // For Phase A.1 we use the dump file's stored coefficients directly
-  // as the basis amplitudes.  Per-event coefficient updates (A.4)
+  // For scalar-potential field model we use the dump file's stored coefficients directly
+  // as the basis amplitudes. Per-event coefficient updates
   // will replace this with a thread-safe shared accessor.
   return eval_->evaluateAbsoluteAt(gp, eval_->initCoeffs());
 }
@@ -54,7 +54,7 @@ GlobalVector ScalarPot3DMagneticField::inTeslaUnchecked(const GlobalPoint& gp) c
 bool ScalarPot3DMagneticField::isDefined(const GlobalPoint& gp) const {
   // Sphere |R| <= validity_radius_cm_, with R = sqrt(x^2 + y^2 + z^2).
   // The basis is fitted on a similar sphere; outside, R^L extrapolation
-  // becomes unreliable.  A.2 will replace this hard cutoff with a
+  // becomes unreliable. a future update will replace this hard cutoff with a
   // C^1 cosine blend to the underlying CMSSW field.
   const double R = std::sqrt(gp.x() * gp.x() + gp.y() * gp.y()
                              + gp.z() * gp.z());

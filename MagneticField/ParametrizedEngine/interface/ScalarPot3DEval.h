@@ -24,10 +24,10 @@
  *  Schmidt factor
  *  S(l,m) = sqrt((l-m)!/(l+m)!) — the cumulative LadderUp factor of
  *  CMSSW HarmBasis3DCyl — multiplies the *whole* mode (Bz, Br, Bphi)
- *  uniformly.  See replicated-bouncing-cloud.md A.0.
+ *  uniformly.
  *
  *  The evaluator is constructed from a flat-text dump file produced
- *  by mfs/dump_coeffs_for_cmssw.py (Phase A.5 format).
+ *  by mfs/dump_coeffs_for_cmssw.py (coefficient-dump format).
  *
  *  \author David Walter
  */
@@ -42,7 +42,7 @@ namespace magfieldparam {
 
 class ScalarPot3DEval {
 public:
-  /// Construct from a Phase-A.5 flat-text dump file.
+  /// Construct from a coefficient dump file.
   /// Throws std::runtime_error on malformed input.
   explicit ScalarPot3DEval(const std::string& dump_path);
 
@@ -60,7 +60,7 @@ public:
   void getBphiBasisAt(const GlobalPoint& gp, std::vector<double>& out) const;
 
   /// Compute Bz, Br, Bphi per mode in one pass (cheaper than three
-  /// separate calls).  Each output vector resized to nModes().
+  /// separate calls). Each output vector resized to nModes().
   void evaluateBasisAt(const GlobalPoint& gp,
                        std::vector<double>& bz,
                        std::vector<double>& br,
