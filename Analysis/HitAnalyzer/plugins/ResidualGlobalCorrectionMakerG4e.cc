@@ -23,7 +23,7 @@
 class ResidualGlobalCorrectionMakerG4e : public ResidualGlobalCorrectionMakerBase
 {
 public:
-  explicit ResidualGlobalCorrectionMakerG4e(const edm::ParameterSet &);
+  ResidualGlobalCorrectionMakerG4e(const edm::ParameterSet &, const CvhMasterThread *);
   ~ResidualGlobalCorrectionMakerG4e() {}
 
 // static void fillDescriptions(edm::ConfigurationDescriptions &descriptions);
@@ -93,8 +93,9 @@ private:
 };
 
 
-ResidualGlobalCorrectionMakerG4e::ResidualGlobalCorrectionMakerG4e(const edm::ParameterSet &iConfig)
-    : ResidualGlobalCorrectionMakerBase(iConfig),
+ResidualGlobalCorrectionMakerG4e::ResidualGlobalCorrectionMakerG4e(const edm::ParameterSet &iConfig,
+                                                                   const CvhMasterThread *master)
+    : ResidualGlobalCorrectionMakerBase(iConfig, master),
       ttrhToken_(esConsumes(edm::ESInputTag("", "WithAngleAndTemplate"))),
       g4ePropToken_(esConsumes(edm::ESInputTag("", "Geant4ePropagator"))),
       siStripClusterInfo_(consumesCollector())
@@ -324,10 +325,30 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   auto globalGeometry = iSetup.getHandle(globalGeometryEventToken_);
   auto trackerTopology = iSetup.getHandle(trackerTopologyEventToken_);
   auto ttrh = iSetup.getHandle(ttrhToken_);
-  auto thePropagator = iSetup.getHandle(g4ePropToken_);
-  
-  const Geant4ePropagator *g4prop = dynamic_cast<const Geant4ePropagator*>(thePropagator.product());
-  const MagneticField* field = thePropagator->magneticField();
+
+  // MT: bootstrap this TBB worker thread's G4 environment from the master
+  // (world + per-thread navigator + per-thread magnetic field). Idempotent
+  // per thread; runs on every produce() but only does work on the first.
+  worker_->ensureInitialized(globalCache()->cvhMaster());
+  // Bind this thread's G4 RNG to the stream's CLHEP engine for this event.
+  setG4RandomEngineForStream(iEvent.streamID());
+  // Lazy-init the per-stream propagator clone on first call. Clone now is
+  // safe -- the deep-copy ctor no longer eagerly allocates fluct (that
+  // happens lazily in propagateGenericWithJacobianAltD's first-call init,
+  // AFTER ensureGeant4eIsInitilizedForCVH has registered the G4Error
+  // physics on the newly-bootstrapped thread).
+  if (!streamPropagator_) {
+    auto thePropagator = iSetup.getHandle(g4ePropToken_);
+    const Geant4ePropagator *templateProp =
+        dynamic_cast<const Geant4ePropagator*>(thePropagator.product());
+    if (!templateProp) {
+      throw cms::Exception("Configuration")
+          << "ESProducer for label 'Geant4ePropagator' did not deliver a Geant4ePropagator";
+    }
+    streamPropagator_.reset(templateProp->clone());
+  }
+  const Geant4ePropagator *g4prop = streamPropagator_.get();
+  const MagneticField* field = g4prop->magneticField();
   
   // Track mass for energy / Jacobian calculations -- read from cfi
   // (default = muon mass for J/psi/Upsilon back-compat). Renamed from

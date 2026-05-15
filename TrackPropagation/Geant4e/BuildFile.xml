@@ -9,8 +9,15 @@
 <use name="FWCore/Framework"/>
 <use name="FWCore/MessageLogger"/>
 <use name="DataFormats/CLHEP"/>
+<use name="DataFormats/GeometryVector"/>
 <use name="CLHEP"/>
 <use name="eigen"/>
+<use name="MagneticField/Engine"/>
+<use name="MagneticField/Records"/>
+<use name="DetectorDescription/Core"/>
+<use name="DetectorDescription/DDCMS"/>
+<use name="Geometry/Records"/>
+<use name="SimG4Core/Geometry"/>
 <use name="SimG4Core/MagneticField"/>
 <export>
   <lib name="1"/>

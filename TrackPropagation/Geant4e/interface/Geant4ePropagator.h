@@ -15,7 +15,6 @@
 #include <Eigen/Core>
 
 #include "TrackPropagation/Geant4e/interface/G4UniversalFluctuationForExtrapolator.hh"
-#include "TrackPropagation/Geant4e/interface/G4WentzelVIModelForCVH.hh"
 
 /** Propagator based on the Geant4e package. Uses the Propagator class
  *  in the TrackingTools/GeomPropagators package to define the interface.
@@ -57,6 +56,13 @@ public:
 
   std::pair<TrajectoryStateOnSurface, double> propagateWithPath(const TrajectoryStateOnSurface &,
                                                                 const Cylinder &) const override;
+
+  // Deep-copy ctor: allocates an independent fluct so each Propagator
+  // instance has its own per-event state. Required for Tier-3 MT: per-stream
+  // residual-makers clone the ES-supplied propagator in produce() so no
+  // mutable state is shared across streams.
+  Geant4ePropagator(const Geant4ePropagator &other);
+  Geant4ePropagator &operator=(const Geant4ePropagator &) = delete;
 
   Geant4ePropagator *clone() const override { return new Geant4ePropagator(*this); }
 
@@ -112,9 +118,11 @@ private:
   mutable std::array<unsigned long long, 3> propFailCounts_{{0ULL, 0ULL, 0ULL}};
   mutable unsigned long long propTotalCalls_{0ULL};
 
-  // The Geant4e manager. Does the real propagation
-  G4ErrorPropagatorManager *theG4eManager;
-  G4ErrorPropagatorData *theG4eData;
+  // Geant4 11.1 made G4ErrorPropagatorManager / G4ErrorPropagatorData
+  // singletons G4ThreadLocal. Fetch them per-call via the static accessors
+  // instead of caching pointers at construction (which would alias the
+  // construction-thread's TLS instance from any other thread that uses
+  // this propagator).
   double plimit_;
 
   // Transform a CMS Reco detector surface into a Geant4 Target for the error
@@ -196,8 +204,11 @@ private:
   Eigen::Matrix<double, 5, 9> transportJacobianBxByBzD(
       const Eigen::Matrix<double, 7, 1> &start, double s, double dEdx, double mass, const Eigen::Vector3d &dB) const;
 
-  G4UniversalFluctuationForExtrapolator *fluct = nullptr;
-  G4WentzelVIModelForCVH *msmodel = nullptr;
+  // mutable: allocation deferred from ctors to the first-call init block
+  // in propagateGeneric / propagateGenericWithJacobianAltD (both const
+  // methods). Allocating in the ctors aborted on MT worker threads where
+  // the G4 navigator's world had not yet been set up by CvhWorker.
+  mutable G4UniversalFluctuationForExtrapolator *fluct = nullptr;
   bool forCVH_ = false;
 };
 

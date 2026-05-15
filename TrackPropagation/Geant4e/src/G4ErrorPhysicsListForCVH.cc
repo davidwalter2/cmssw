@@ -105,6 +105,22 @@ void G4ErrorPhysicsListForCVH::ConstructParticle() {
 
 //------------------------------------------------------------------------
 void G4ErrorPhysicsListForCVH::ConstructProcess() {
+  // MT-safe re-entry guard. G4VUserPhysicsList::InitializeWorker (called by
+  // G4WorkerRunManagerKernel::InitializePhysics on each worker thread)
+  // re-invokes ConstructProcess on the same physics-list instance, plus
+  // G4ErrorPropagatorManager::InitGeant4e (called by the propagator's
+  // first-call init) also calls it via /run/initialize. Each call adds a
+  // FRESH G4Transportation / eLoss / step-length / B-field process to
+  // every particle's ProcessManager -- visible as "G4ProcessVector
+  // inconsistent" aborts on the first track step. A thread_local flag
+  // keeps the construction one-shot per worker thread without affecting
+  // single-thread builds.
+  static thread_local bool constructProcessDoneOnThisThread = false;
+  if (constructProcessDoneOnThisThread) {
+    return;
+  }
+  constructProcessDoneOnThisThread = true;
+
   G4Transportation* theTransportationProcess = new G4Transportation();
 
 #ifdef G4VERBOSE
@@ -120,8 +136,6 @@ void G4ErrorPhysicsListForCVH::ConstructProcess() {
     G4ParticleDefinition* particle = myParticleIterator->value();
     G4ProcessManager* pmanager = particle->GetProcessManager();
     if (!particle->IsShortLived()) {
-      G4cout << particle << "G4ErrorPhysicsListForCVH:: particle process manager " << particle->GetParticleName()
-             << " = " << particle->GetProcessManager() << G4endl;
       // Add transportation process for all particles other than  "shortlived"
       if (pmanager == nullptr) {
         // Error !! no process manager
@@ -172,8 +186,14 @@ void G4ErrorPhysicsListForCVH::ConstructEM() {
     G4ProcessManager* pmanager = particle->GetProcessManager();
     G4String particleName = particle->GetParticleName();
 
+    if (pmanager == nullptr) {
+      continue;
+    }
+    // No per-particle MT re-entry check here -- the thread_local guard at
+    // the top of ConstructProcess (the only place this is invoked from)
+    // makes the whole physics-list construction one-shot per thread.
+
     if (particleName == "gamma") {
-      // gamma
       pmanager->AddDiscreteProcess(new G4GammaConversion());
       pmanager->AddDiscreteProcess(new G4ComptonScattering());
       pmanager->AddDiscreteProcess(new G4PhotoElectricEffect());

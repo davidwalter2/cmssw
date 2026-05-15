@@ -95,6 +95,9 @@
 
 #include "Analysis/HitAnalyzer/interface/ScalarPotentialFieldCorrection.h"
 #include "FWCore/Utilities/interface/Exception.h"
+#include "TrackPropagation/Geant4e/interface/Geant4ePropagator.h"
+#include "TrackPropagation/Geant4e/interface/CvhMasterThread.h"
+#include "TrackPropagation/Geant4e/interface/CvhWorker.h"
 
 
 #include "TFile.h"
@@ -164,16 +167,46 @@ namespace pat {
 template<typename T, int N>
 using AANT = AutoDiffScalar<Matrix<AutoDiffScalar<Matrix<T, N, 1>>, Dynamic, 1, 0, N, 1>>;
 
-class ResidualGlobalCorrectionMakerBase : public edm::stream::EDProducer<>
+class ResidualGlobalCorrectionMakerBase
+    : public edm::stream::EDProducer<edm::GlobalCache<CvhMasterThread>,
+                                     edm::RunCache<int>>
 {
 public:
-  explicit ResidualGlobalCorrectionMakerBase(const edm::ParameterSet &);
+  // Two-arg ctor: the framework passes the GlobalCache pointer here. The
+  // master thread / G4 master kernel has already been constructed in
+  // initializeGlobalCache by the time this is called.
+  ResidualGlobalCorrectionMakerBase(const edm::ParameterSet &, const CvhMasterThread *);
   ~ResidualGlobalCorrectionMakerBase();
 
   static void fillDescriptions(edm::ConfigurationDescriptions &descriptions);
 
+  // GlobalCache lifecycle (called once per job by the framework, on the
+  // main thread, before/after any stream is constructed). Owning the
+  // CvhMasterThread here is what lets it spawn the dedicated G4 master
+  // thread BEFORE any TBB worker is started -- the fix for the Navigator-
+  // NULL-world abort that previously blocked numberOfThreads >= 2.
+  static std::unique_ptr<CvhMasterThread>
+  initializeGlobalCache(const edm::ParameterSet &);
+
+  // RunCache. `int` is a placeholder -- we don't actually need per-run
+  // shared state; declaring a RunCache is what makes the framework
+  // dispatch globalBeginRun / globalEndRun so we can forward them to the
+  // master thread's state loop (the G4 world / field setup must happen
+  // before any stream's first produce()).
+  static std::shared_ptr<int>
+  globalBeginRun(const edm::Run &, const edm::EventSetup &,
+                 const CvhMasterThread *);
+
+  // globalEndRun: the framework passes a RunContext that bundles both the
+  // GlobalCache and the (placeholder) RunCache. We just forward EndRun
+  // to the master thread so its state loop tears down G4 between runs.
+  static void globalEndRun(const edm::Run &, const edm::EventSetup &,
+                           const RunContext *);
+
+  static void globalEndJob(CvhMasterThread *);
+
 protected:
-  
+
   virtual void beginStream(edm::StreamID) override;
 // virtual void analyze(const edm::Event &, const edm::EventSetup &) override;
   virtual void endStream() override;
@@ -541,9 +574,26 @@ protected:
   TH2D *hetaphi = nullptr;
 
   std::string outprefix;
-  
+
 // bool filledRunTree_;
-  
+
+  // MT support: each stream owns its own Geant4ePropagator clone, plus a
+  // CvhWorker that does per-thread G4 setup (world + magnetic field) on
+  // first produce(). The clone is fetched / built lazily in derived
+  // produce() AFTER worker_->ensureInitialized has installed the world on
+  // this TBB worker thread; before then, allocating the propagator's fluct
+  // would abort in G4WentzelVIModel::Initialise (NULL world). See
+  // geant4e_multithreading_exploration.txt.
+  std::unique_ptr<CvhWorker> worker_;
+  std::unique_ptr<Geant4ePropagator> streamPropagator_;
+
+  // Wire the stream's CLHEP engine into Geant4's thread-local engine at the
+  // top of every produce() call (G4Random::setTheEngine is itself
+  // thread-local; setting it once in beginStream wouldn't survive TBB
+  // thread migration). Derived classes call this helper from produce().
+  // Returns the engine reference so callers may seed any private RNG too.
+  CLHEP::HepRandomEngine &setG4RandomEngineForStream(edm::StreamID) const;
+
 };
 
 template <typename T>

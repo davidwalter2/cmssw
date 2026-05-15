@@ -44,6 +44,9 @@ opts.register('runFDClosure', False, VarParsing.VarParsing.multiplicity.singleto
 opts.register('epsilonFDClosure', 1e-4, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.float,
               'eps for the FD closure (used as eps * dB_perMode for each test mode)')
+opts.register('numberOfThreads', 1, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.int,
+              'framework numberOfThreads (numberOfStreams follows the same value)')
 opts.parseArguments()
 if not opts.scalarPot3DInitFile:
     raise SystemExit(
@@ -90,6 +93,7 @@ process.GlobalTag.toGet = cms.VPSet(
 process.XMLFromDBSource.label = cms.string("Extended")
 
 process.load("TrackPropagation.Geant4e.geantRefit_cff")
+from TrackPropagation.Geant4e.cvhMaster_cfi import CvhMasterPSet
 
 process.maxEvents = cms.untracked.PSet(input=cms.untracked.int32(opts.nEvents))
 
@@ -111,9 +115,19 @@ if opts.goldenJson:
         filename=opts.goldenJson).getVLuminosityBlockRange()
 
 process.options = cms.untracked.PSet(
-    numberOfThreads=cms.untracked.uint32(1),
-    numberOfStreams=cms.untracked.uint32(1),
+    numberOfThreads=cms.untracked.uint32(int(opts.numberOfThreads)),
+    numberOfStreams=cms.untracked.uint32(int(opts.numberOfThreads)),
     numberOfConcurrentLuminosityBlocks=cms.untracked.uint32(1),
+)
+
+# Per-stream CLHEP engine for the residual-maker. The Tier-3 MT path calls
+# setG4RandomEngineForStream() at the top of every produce() to wire this
+# engine into Geant4's thread-local RNG. Reproducible across thread counts
+# because the framework derives per-stream seeds deterministically from the
+# initialSeed below + stream index.
+process.RandomNumberGeneratorService.globalCor = cms.PSet(
+    initialSeed=cms.untracked.uint32(123456789),
+    engineName=cms.untracked.string('HepJamesRandom'),
 )
 
 # Reduce log spam (every 100 events instead of every event).
@@ -162,12 +176,22 @@ process.globalCor = cms.EDProducer(
     MagneticFieldLabel=cms.string(""),
     # Scalar-potential B-field correction (parmtype-14, absolute-field
     # model). Initial coefficients + basis structure are loaded from a
-    # coefficient dump file (mfs/dump_coeffs_for_cmssw.py output).
+    # coefficient dump file (mfs/dump_coeffs_for_cmssw.py output). The
+    # dump's mode count determines nFieldModes -- use a 50-mode
+    # ("custom50": lphi5-base + l=6,m=1; see mfs/CLAUDE.md) dump to keep
+    # the per-event Hessian workspace small in MT runs.
     scalarPotentialInitFile=cms.string(opts.scalarPot3DInitFile),
     # Numerical-FD closure (debug only).
     runFDClosure=cms.bool(bool(opts.runFDClosure)),
     epsilonFDClosure=cms.double(float(opts.epsilonFDClosure)),
     outprefix=cms.untracked.string("globalcor"),
+    # MT G4Error master: GlobalCache config for CvhMasterThread. The master
+    # spawns a dedicated thread in initializeGlobalCache that builds DDDWorld
+    # + master magnetic field BEFORE any TBB worker starts. Each per-stream
+    # CvhWorker then attaches per-thread G4 state to it on first produce().
+    # This replaces the geopro side-effect dependency that blocked
+    # numberOfThreads >= 2 previously.
+    CvhMaster=CvhMasterPSet,
 )
 
 # Bring up the labelled 3D field producer and rewire the consumers
@@ -190,17 +214,28 @@ process.ScalarPot3DMagneticFieldProducer = ScalarPot3DMagneticFieldProducer.clon
 process.ScalarPot3DMagneticFieldProducer.parameters.InitFile = opts.scalarPot3DInitFile
 fieldlabel = "ScalarPot3DMf"
 process.ScalarPot3DMagneticFieldProducer.label = fieldlabel
+# geopro lives in geantRefit_cff but is no longer wired into the path --
+# CvhMasterThread (GlobalCache of the residual-maker) replaces its world /
+# field setup with an MT-safe master-thread flow. Keeping the attribute
+# assignment so re-enabling geopro for diagnostics doesn't need an extra
+# line; harmless when the module isn't in any Path.
 process.geopro.MagneticFieldLabel = fieldlabel
 process.Geant4ePropagator.MagneticFieldLabel = fieldlabel
+# CvhMaster builds its master G4 field via SimG4Core's FieldBuilder on top
+# of the same labelled magnetic field that the propagator consumes.
+process.globalCor.CvhMaster.MagneticFieldLabel = cms.string(fieldlabel)
 # Activate the CVH-specific propagator path: instantiates the custom fluct
-# (G4UniversalFluctuationForExtrapolator) + msmodel (G4WentzelVIModelForCVH)
-# and routes their table pointers via SetParticleAndCharge. Without this,
-# computeErrorIoni dereferences a null fluct->table on the first event.
+# (G4UniversalFluctuationForExtrapolator) and routes its table pointer via
+# SetParticleAndCharge. Without this, computeErrorIoni dereferences a null
+# fluct->table on the first event.
 process.Geant4ePropagator.ForCVH = cms.bool(True)
 process.globalCor.MagneticFieldLabel = cms.string(fieldlabel)
 
 process.reconstruction_step = cms.Path(
-    process.hltFilter * process.geopro * process.offlineBeamSpot * process.globalCor
+    # geopro is removed: CvhMasterThread (residual-maker GlobalCache) now
+    # owns the G4 world / master magnetic field setup in an MT-safe way.
+    # See TrackPropagation/Geant4e/{interface,src}/CvhMaster*.
+    process.hltFilter * process.offlineBeamSpot * process.globalCor
 )
 process.schedule = cms.Schedule(process.reconstruction_step)
 

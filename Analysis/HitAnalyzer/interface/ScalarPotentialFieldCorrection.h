@@ -32,7 +32,10 @@ public:
 
   // Construct from a coefficient dump file (path produced by
   // mfs/dump_coeffs_for_cmssw.py). The file determines the basis
-  // structure and supplies the initial coefficients (initCoeffs()).
+  // structure (l_max, mode list) AND the parameter count the fit floats.
+  // To shrink the per-event Hessian workspace in MT runs, supply a dump
+  // with fewer modes (e.g. the 50-mode "custom50" lphi5-base + l=6,m=1
+  // prescription -- see mfs/CLAUDE.md "Best 50-parameter prescription").
   explicit ScalarPotentialFieldCorrection(const std::string& dumpPath);
 
   ~ScalarPotentialFieldCorrection();

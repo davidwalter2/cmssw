@@ -96,6 +96,10 @@
 #include <iostream>
 #include <functional>
 
+#include "FWCore/ServiceRegistry/interface/Service.h"
+#include "FWCore/Utilities/interface/RandomNumberGenerator.h"
+#include "Randomize.hh"   // CLHEP / G4 random engine entry points
+
 
 //
 // constants, enums and typedefs
@@ -108,7 +112,40 @@
 //
 // constructors and destructor
 //
-ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::ParameterSet &iConfig)
+// GlobalCache lifecycle. initializeGlobalCache runs ONCE per job, on the
+// framework's main thread, before any stream::EDProducer instance is
+// constructed -- so the dedicated G4 master thread (which builds DDDWorld
+// and the master magnetic field) exists before any TBB worker spins up.
+std::unique_ptr<CvhMasterThread>
+ResidualGlobalCorrectionMakerBase::initializeGlobalCache(const edm::ParameterSet &iConfig) {
+  return std::make_unique<CvhMasterThread>(iConfig.getParameter<edm::ParameterSet>("CvhMaster"));
+}
+
+std::shared_ptr<int>
+ResidualGlobalCorrectionMakerBase::globalBeginRun(const edm::Run &,
+                                                  const edm::EventSetup &iSetup,
+                                                  const CvhMasterThread *master) {
+  // Forward to the dedicated master thread; it builds DDDWorld + master
+  // magnetic field in its state loop before this call returns. By the
+  // time any stream's produce() runs, the G4 world is in place.
+  master->beginRun(iSetup);
+  return std::shared_ptr<int>();
+}
+
+void ResidualGlobalCorrectionMakerBase::globalEndRun(const edm::Run &,
+                                                     const edm::EventSetup &,
+                                                     const RunContext *iContext) {
+  if (iContext != nullptr && iContext->global() != nullptr) {
+    iContext->global()->endRun();
+  }
+}
+
+void ResidualGlobalCorrectionMakerBase::globalEndJob(CvhMasterThread *master) {
+  master->stopThread();
+}
+
+ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::ParameterSet &iConfig,
+                                                                     const CvhMasterThread *master)
     : globalGeometryToken_(esConsumes<edm::Transition::BeginRun>()),
       trackerGeomIdealToken_(esConsumes<edm::Transition::BeginRun>(edm::ESInputTag("", "idealForDigi"))),
       trackerTopologyToken_(esConsumes<edm::Transition::BeginRun>()),
@@ -116,6 +153,20 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
       globalGeometryEventToken_(esConsumes()),
       trackerTopologyEventToken_(esConsumes())
 {
+  // Register the BeginRun-transition ES consumers that the GlobalCache
+  // (CvhMasterThread) needs to populate the master G4 world + field.
+  // Idempotent across streams thanks to the m_hasToken guard inside.
+  master->callConsumes(consumesCollector());
+
+  // Per-stream CvhWorker: lazy first-produce() per TBB worker thread sets
+  // up that thread's G4 world / field. Constructed empty here; no G4
+  // touched yet.
+  worker_ = std::make_unique<CvhWorker>();
+
+  // MT: this is now a stream::EDProducer<GlobalCache<CvhMasterThread>> --
+  // GlobalCache owns the G4 master thread, the per-stream instance owns a
+  // CvhWorker, and each stream's produce() bootstraps its TBB worker
+  // thread's G4 state on first call before any propagation runs.
   //now do what ever initialization is needed
 // inputTraj_ = consumes<std::vector<Trajectory>>(edm::InputTag("TrackRefitter"));
 // inputTrack_ = consumes<TrajTrackAssociationCollection>(edm::InputTag("TrackRefitter"));
@@ -369,12 +420,32 @@ void ResidualGlobalCorrectionMakerBase::endStream()
   }
 }
 
+// Bind the stream's CLHEP engine into Geant4's thread-local random engine
+// at the top of each produce() call. G4Random::setTheEngine is itself
+// G4ThreadLocal (in G4 11.1), and the framework may dispatch a stream's
+// produce() to different TBB worker threads across events — so we cannot
+// set this once in beginStream and have it persist. The cost is a single
+// TLS-pointer assignment per event.
+CLHEP::HepRandomEngine &
+ResidualGlobalCorrectionMakerBase::setG4RandomEngineForStream(edm::StreamID streamid) const
+{
+  edm::Service<edm::RandomNumberGenerator> rng;
+  if (!rng.isAvailable()) {
+    throw cms::Exception("Configuration")
+        << "ResidualGlobalCorrectionMaker requires the RandomNumberGeneratorService"
+        << " — add it to the cfg so each stream gets a reproducible CLHEP engine.";
+  }
+  CLHEP::HepRandomEngine &engine = rng->getEngine(streamid);
+  G4Random::setTheEngine(&engine);
+  return engine;
+}
+
 // ------------ method called when starting to processes a run ------------
 
 void 
 ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup const& es)
 {
-  
+
   auto globalGeometryNominal = es.getHandle(globalGeometryToken_);
 
   auto globalGeometryIdeal = es.getHandle(trackerGeomIdealToken_);
@@ -1038,14 +1109,13 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
         
         surfacemapD_[parmdetid] = surfaceGlued;
       }
-      
+
       surfacemapD_[det->geographicalId()] = surfaceD;
       rgluemap_[det->geographicalId()] = Rglued;
     }
-    
+
   }
-    
-  
+
 }
 
 
