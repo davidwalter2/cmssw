@@ -2,6 +2,11 @@
 #include "MagneticFieldOffset.h"
 #include "Analysis/HitAnalyzer/interface/ParticleProperties.h"
 
+// Sparse GBL design-matrix formulation (ported from the single-track
+// maker). base.h provides Eigen/Core + Eigen/Eigenvalues + `using
+// namespace Eigen`; the sparse solver path needs Eigen/Sparse too.
+#include <Eigen/Sparse>
+
 // required for Transient Tracks
 #include "TrackingTools/TransientTrack/interface/TransientTrack.h"
 #include "TrackingTools/TransientTrack/interface/TransientTrackBuilder.h"
@@ -698,15 +703,30 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
   const std::array<double, 2> trackMassErr = {{daughterMass1Err_, daughterMass2Err_}};
   const double massForConstraintHelpers = 0.5 * (daughterMass1_ + daughterMass2_);
 
-  VectorXd gradfull;
-  MatrixXd hessfull;
-  
+  // Sparse GBL design-matrix formulation (ported from the single-track
+  // maker ResidualGlobalCorrectionMakerG4e.cc). Replaces the dense
+  // hessfull = MatrixXd::Zero(nparmsfull, nparmsfull) (~1.35 GB at 360
+  // field modes) with rfull/Ffull/Jfull/Vinvfull (peak ~tens of MB,
+  // sparseView'd before the heavy ops). Mathematically identical to the
+  // old dense path: dxfull = -(2 FtVinvF)^-1 (2 FtVinvr) collapses to
+  // dxfree = -(FtVinvF)^-1 FtVinvr (the factor of 2 cancels).
+  VectorXd rfull;
+  MatrixXd Ffull;
+  MatrixXd Jfull;
+  MatrixXd Vinvfull;
+  VectorXd dxfree;
+
   VectorXd dxfull;
   MatrixXd dxdparms;
   VectorXd grad;
   MatrixXd hess;
-  LDLT<MatrixXd> Cinvd;
-// MatrixXd covstate;
+
+  SparseMatrix<double> Fsparse;
+  SparseMatrix<double> Vinvsparse;
+  SparseMatrix<double> VinvF;
+  SimplicialLDLT<SparseMatrix<double>> Cinvd;
+
+  MatrixXd covfull;
   Matrix<double, 6, 6> covrefmom;
 // FullPivLU<MatrixXd> Cinvd;
 // ColPivHouseholderQR<MatrixXd> Cinvd;
@@ -1212,9 +1232,32 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
       
       const unsigned int nstateparms = 10 + 5*nhits;
       const unsigned int nparmsfull = nstateparms + npars;
-      
-    
-      
+
+      // Sparse GBL: the state params that are actually solved for. Mirrors
+      // the dense freezeparm() logic (old lines ~2282-2298): fitFromGenParms_
+      // freezes the 10-dim vertex PCA (idx 0..9); doVtxConstraint_ freezes
+      // the track-PCA distance (idx 6). A frozen index is simply excluded
+      // from freestateidxs instead of being deweighted with a 1e6 diagonal.
+      using VectorXb = Matrix<bool, Dynamic, 1>;
+      VectorXb freestatemask = VectorXb::Ones(nstateparms);
+      if (fitFromGenParms_) {
+        freestatemask.head<10>() = Matrix<bool, 10, 1>::Zero();
+      }
+      if (fitFromSimParms_) {
+        freestatemask = VectorXb::Zero(nstateparms);
+      }
+      if (doVtxConstraint_) {
+        freestatemask[6] = false;
+      }
+      std::vector<Eigen::Index> freestateidxs;
+      freestateidxs.reserve(nstateparms);
+      for (Eigen::Index istate = 0; istate < (Eigen::Index)nstateparms; ++istate) {
+        if (freestatemask[istate]) {
+          freestateidxs.push_back(istate);
+        }
+      }
+      const unsigned int nstatefree = freestateidxs.size();
+
       bool valid = true;
       
       
@@ -1228,7 +1271,22 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 // const unsigned int nicons = doMassConstraint_ ? 3 : 1;
       
       for (unsigned int icons = 0; icons < nicons; ++icons) {
-        
+
+        // Sparse GBL constraint-row count for this icons pass:
+        //  - 5 propagation/MS rows per hit (both tracks; nhits is the sum)
+        //  - 2 measurement rows per valid hit (the two-track dense maker
+        //    uses a uniform 2-dim Fhit/dy0 for every valid hit; strip hits
+        //    are handled by a near-singular Vinv on the unmeasured coord,
+        //    NOT by emitting fewer rows -- so it is 2*nvalid, not the
+        //    single-track maker's nvalid+nvalidpixel)
+        //  - 3 beamspot rows per track when bsConstraint_ (off by default)
+        //  - 1 pointing row when doPointingConstraint_ (off by default)
+        //  - 1 J/psi-mass row on the constrained pass (icons==1)
+        const unsigned int nbscons = bsConstraint_ ? 3u * 2u : 0u;
+        const unsigned int npointcons = doPointingConstraint_ ? 1u : 0u;
+        const unsigned int nmasscons = (icons == 1) ? 1u : 0u;
+        const unsigned int ncons =
+            5u * nhits + 2u * nvalid + nbscons + npointcons + nmasscons;
 
         // common vertex fit
         std::vector<RefCountedKinematicParticle> parts;
@@ -1340,8 +1398,20 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
         for (unsigned int iiter=0; iiter<niters; ++iiter) {
           
-          gradfull = VectorXd::Zero(nparmsfull);
-          hessfull = MatrixXd::Zero(nparmsfull, nparmsfull);
+          // Sparse GBL assembly buffers (replaces dense gradfull/hessfull).
+          // Ffull = d(residual)/d(state)  [ncons x nstateparms]
+          // Jfull = d(residual)/d(globalparm)  [ncons x npars]
+          // Vinvfull = inverse covariance of the residual rows  [ncons x ncons]
+          // rfull = residual vector  [ncons]
+          rfull = VectorXd::Zero(ncons);
+          Ffull = MatrixXd::Zero(ncons, nstateparms);
+          Jfull = MatrixXd::Zero(ncons, npars);
+          Vinvfull = MatrixXd::Zero(ncons, ncons);
+
+          // Running constraint-row cursor (single-track maker calls this
+          // `icons`; renamed `irow` here because `icons` is the outer
+          // constrained/unconstrained pass index in this two-track maker).
+          unsigned int irow = 0;
 
           globalidxv.clear();
           globalidxv.resize(npars, 0);
@@ -1458,15 +1528,18 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               const Matrix<double, 3, 3> covBSinv = covBS.inverse();
 
               const double bschisq = dbs0.transpose()*covBSinv*dbs0;
-              const Matrix<double, nlocal, 1> gradlocal = 2.*Fbs.transpose()*covBSinv*dbs0;
-              const Matrix<double, nlocal, nlocal> hesslocal = 2.*Fbs.transpose()*covBSinv*Fbs;
-
               chisq0val += bschisq;
 
-              //fill global gradient
-              gradfull.segment<nlocalvtx>(fullvtxidx) += gradlocal.head<nlocalvtx>();
-              //fill global hessian (upper triangular blocks only)
-              hessfull.block<nlocalvtx,nlocalvtx>(fullvtxidx, fullvtxidx) += hesslocal.topLeftCorner<nlocalvtx,nlocalvtx>();
+              // Sparse GBL row write: 3 beamspot rows constraining the
+              // vertex-PCA position (state idx 7,8,9). Emitted once per
+              // track id (matching the dense path's per-id accumulation;
+              // ncons accounts for 3*2). Fbs = Identity(3,3), residual
+              // dbs0 = vertex - beamspot, weight covBSinv.
+              rfull.segment<3>(irow) = dbs0;
+              Ffull.block(irow, fullvtxidx, 3, nlocalvtx) =
+                  Fbs.leftCols<nlocalvtx>();
+              Vinvfull.block<3, 3>(irow, irow) = covBSinv;
+              irow += 3;
 
             }
 
@@ -1550,12 +1623,15 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               // Jg(0, 6) and Jg(0, 9) are zero by construction.
 
               const double pointingChisq = g * g * inv_var;
-              const Matrix<double, nlocal, 1> gradlocalPt = 2. * inv_var * g * Jg.transpose();
-              const Matrix<double, nlocal, nlocal> hesslocalPt = 2. * inv_var * Jg.transpose() * Jg;
-
               chisq0val += pointingChisq;
-              gradfull.segment<nlocal>(fullvtxidx) += gradlocalPt;
-              hessfull.block<nlocal, nlocal>(fullvtxidx, fullvtxidx) += hesslocalPt;
+
+              // Sparse GBL row write: 1 pointing row. residual = g,
+              // design = Jg (1 x 10 over the full vertex-PCA state at
+              // fullvtxidx=0), weight = inv_var (scalar).
+              rfull(irow) = g;
+              Ffull.block(irow, fullvtxidx, 1, nlocal) = Jg;
+              Vinvfull(irow, irow) = inv_var;
+              irow += 1;
             }
 
 
@@ -1805,21 +1881,23 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                 }
 
                 const double propchisq = dx0.transpose()*Qinv*dx0;
-                const VectorXd propgrad = 2.*Fprop.transpose()*Qinv*dx0;
-                const MatrixXd prophess = 2.*Fprop.transpose()*Qinv*Fprop;
-
-                const std::array<unsigned int, 3> localsizes = {{ nvtxstate, nlocalstate, nlocalparms }};
-                const std::array<unsigned int, 3> localidxs = {{ localvtxidx, localstateidx, localparmidx }};
-                const std::array<unsigned int, 3> fullidxs = {{ fullvtxidx, fullstateidx, fullparmidx }};
-
                 chisq0val += propchisq;
 
-                for (unsigned int iidx = 0; iidx < localidxs.size(); ++iidx) {
-                  gradfull.segment(fullidxs[iidx], localsizes[iidx]) += propgrad.segment(localidxs[iidx], localsizes[iidx]);
-                  for (unsigned int jidx = 0; jidx < localidxs.size(); ++jidx) {
-                    hessfull.block(fullidxs[iidx], fullidxs[jidx], localsizes[iidx], localsizes[jidx]) += prophess.block(localidxs[iidx], localidxs[jidx], localsizes[iidx], localsizes[jidx]);
-                  }
-                }
+                // Sparse GBL row write: residual dx0, weight Qinv, design
+                // = Fprop split into vertex-PCA + this-hit-state (Ffull)
+                // and field+eloss (Jfull). (void)fullparmidx — Jfull is
+                // npars-standalone so its column is parmidx, not the dense
+                // nstateparms+parmidx.
+                (void)fullparmidx;
+                rfull.segment<5>(irow) = dx0;
+                Ffull.block(irow, fullvtxidx, 5, nvtxstate) =
+                    Fprop.middleCols<nvtxstate>(localvtxidx);
+                Ffull.block(irow, fullstateidx, 5, nlocalstate) =
+                    Fprop.middleCols<nlocalstate>(localstateidx);
+                Jfull.block(irow, parmidx, 5, nlocalparms) =
+                    Fprop.middleCols(localparmidx, nlocalparms);
+                Vinvfull.block<5, 5>(irow, irow) = Qinv;
+                irow += 5;
               }
               else {
                 constexpr unsigned int nlocalstate = 10;
@@ -1844,21 +1922,19 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                 }
 
                 const double propchisq = dx0.transpose()*Qinv*dx0;
-                const VectorXd propgrad = 2.*Fprop.transpose()*Qinv*dx0;
-                const MatrixXd prophess = 2.*Fprop.transpose()*Qinv*Fprop;
-
-                const std::array<unsigned int, 2> localsizes = {{ nlocalstate, nlocalparms }};
-                const std::array<unsigned int, 2> localidxs = {{ localstateidx, localparmidx }};
-                const std::array<unsigned int, 2> fullidxs = {{ fullstateidx, fullparmidx }};
-
                 chisq0val += propchisq;
 
-                for (unsigned int iidx = 0; iidx < localidxs.size(); ++iidx) {
-                  gradfull.segment(fullidxs[iidx], localsizes[iidx]) += propgrad.segment(localidxs[iidx], localsizes[iidx]);
-                  for (unsigned int jidx = 0; jidx < localidxs.size(); ++jidx) {
-                    hessfull.block(fullidxs[iidx], fullidxs[jidx], localsizes[iidx], localsizes[jidx]) += prophess.block(localidxs[iidx], localidxs[jidx], localsizes[iidx], localsizes[jidx]);
-                  }
-                }
+                // Sparse GBL row write. nlocalstate=10 here spans the
+                // previous + current hit state (Fprop.leftCols<10>);
+                // localparmidx=10 is the field+eloss column group.
+                (void)fullparmidx;
+                rfull.segment<5>(irow) = dx0;
+                Ffull.block(irow, fullstateidx, 5, nlocalstate) =
+                    Fprop.leftCols(nlocalstate);
+                Jfull.block(irow, parmidx, 5, nlocalparms) =
+                    Fprop.middleCols(localparmidx, nlocalparms);
+                Vinvfull.block<5, 5>(irow, irow) = Qinv;
+                irow += 5;
 
               }
 
@@ -2116,21 +2192,24 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                   }
 
                   const double hitchisq = dy0.transpose()*Vinv*dy0;
-                  const Matrix<double, nlocal, 1> hitgrad = 2.*Fhit.transpose()*Vinv*dy0;
-                  const Matrix<double, nlocal, nlocal> hithess = 2.*Fhit.transpose()*Vinv*Fhit;
-
-                  constexpr std::array<unsigned int, 2> localsizes = {{ nlocalstate, nlocalparms }};
-                  constexpr std::array<unsigned int, 2> localidxs = {{ localstateidx, localparmidx }};
-                  const std::array<unsigned int, 2> fullidxs = {{ fullstateidx, fullparmidx }};
-
                   chisq0val += hitchisq;
 
-                  for (unsigned int iidx = 0; iidx < localidxs.size(); ++iidx) {
-                    gradfull.segment(fullidxs[iidx], localsizes[iidx]) += hitgrad.segment(localidxs[iidx], localsizes[iidx]);
-                    for (unsigned int jidx = 0; jidx < localidxs.size(); ++jidx) {
-                      hessfull.block(fullidxs[iidx], fullidxs[jidx], localsizes[iidx], localsizes[jidx]) += hithess.block(localidxs[iidx], localidxs[jidx], localsizes[iidx], localsizes[jidx]);
-                    }
-                  }
+                  // Sparse GBL row write: 2-dim measurement residual dy0,
+                  // weight Vinv; design = Fhit split into this-hit local
+                  // x/y state (Ffull, cols [fullstateidx, +2)) and the
+                  // alignment dofs (Jfull, col group at
+                  // nparsBfield+nparsEloss+alignmentparmidx). The dense
+                  // fullparmidx = nstateparms + that group.
+                  (void)fullparmidx;
+                  rfull.segment<2>(irow) = dy0;
+                  Ffull.block(irow, fullstateidx, 2, nlocalstate) =
+                      Fhit.middleCols(localstateidx, nlocalstate);
+                  Jfull.block(irow,
+                              nparsBfield + nparsEloss + alignmentparmidx,
+                              2, nlocalparms) =
+                      Fhit.middleCols(localparmidx, nlocalparms);
+                  Vinvfull.block<2, 2>(irow, irow) = Vinv;
+                  irow += 2;
                   
                   for (unsigned int idim=0; idim<nlocalalignment; ++idim) {
                     const unsigned int iidx = alphaidxs[idim];
@@ -2224,22 +2303,20 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             const double invSigmaMsq = 1./massConstraintWidth_/massConstraintWidth_;
 
             const double masschisq = dmsq0*dmsq0*invSigmaMsq;
-            const Matrix<double, nlocal, 1> gradlocal = 2.*Fmass.transpose()*invSigmaMsq*dmsq0;
-            const Matrix<double, nlocal, nlocal> hesslocal = 2.*Fmass.transpose()*invSigmaMsq*Fmass;
-            
-            constexpr std::array<unsigned int, 2> localsizes = {{ nlocalstate0, nlocalstate0 }};
-            constexpr std::array<unsigned int, 2> localidxs = {{ localstateidx0, localstateidx1 }};
-            const std::array<unsigned int, 2> fullidxs = {{ fullstateidx0, fullstateidx1 }};
-            
             chisq0val += masschisq;
 
-            for (unsigned int iidx = 0; iidx < localidxs.size(); ++iidx) {
-              gradfull.segment(fullidxs[iidx], localsizes[iidx]) += gradlocal.segment(localidxs[iidx], localsizes[iidx]);
-              for (unsigned int jidx = 0; jidx < localidxs.size(); ++jidx) {
-                hessfull.block(fullidxs[iidx], fullidxs[jidx], localsizes[iidx], localsizes[jidx]) += hesslocal.block(localidxs[iidx], localidxs[jidx], localsizes[iidx], localsizes[jidx]);
-              }
-            }
-            
+            // Sparse GBL row write: 1 J/psi-mass row (icons==1 pass only).
+            // residual = dmsq0, weight = invSigmaMsq (scalar). Fmass (1x6)
+            // splits into the two daughters' qop/lam/phi state blocks at
+            // fullstateidx0=0 and fullstateidx1=3.
+            rfull(irow) = dmsq0;
+            Ffull.block(irow, fullstateidx0, 1, nlocalstate0) =
+                Fmass.block(0, localstateidx0, 1, nlocalstate0);
+            Ffull.block(irow, fullstateidx1, 1, nlocalstate1) =
+                Fmass.block(0, localstateidx1, 1, nlocalstate1);
+            Vinvfull(irow, irow) = invSigmaMsq;
+            irow += 1;
+
           }
 
          
@@ -2259,29 +2336,21 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           assert(trackstateidx == nstateparms);
           assert(parmidx == (nparsBfield + nparsEloss));
           assert(alignmentparmidx == nparsAlignment);
+          // Sparse GBL: the running constraint-row cursor must land
+          // exactly on the pre-computed ncons, else rfull/Ffull/Jfull/
+          // Vinvfull rows are misaligned. Cheap permanent invariant.
+          assert(irow == ncons);
           
     // if (nhits != nvalid) {
     // continue;
     // }
 
-          auto freezeparm = [&](unsigned int idx) {
-            gradfull[idx] = 0.;
-            hessfull.row(idx) *= 0.;
-            hessfull.col(idx) *= 0.;
-            hessfull(idx,idx) = 1e6;
-          };
-          
-          if (fitFromGenParms_) {
-            for (unsigned int i=0; i<10; ++i) {
-              freezeparm(i);
-            }
-          }
+          // Sparse GBL: the dense freezeparm() (deweight via 1e6 diagonal)
+          // is replaced by excluding the index from freestateidxs --
+          // already applied at the freestatemask construction near the
+          // top (fitFromGenParms_ -> vtx 0..9, doVtxConstraint_ -> idx 6,
+          // fitFromSimParms_ -> all). Nothing to do here.
 
-          if (doVtxConstraint_) {
-            // freeze track pca distance to 0 to impose common vertex constraint
-            freezeparm(6);
-          }
-          
 // if (fitFromGenParms_) {
 // freezeparm(2);
 // for (unsigned int id = 0; id < 2; ++id) {
@@ -2340,19 +2409,19 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
     // std::cout << "hessfull.diagonal():" << std::endl;
     // std::cout << hessfull.diagonal() << std::endl;
           
-          auto const& dchisqdx = gradfull.head(nstateparms);
-          auto const& dchisqdparms = gradfull.tail(npars);
-          
-          auto const& d2chisqdx2 = hessfull.topLeftCorner(nstateparms, nstateparms);
-          auto const& d2chisqdxdparms = hessfull.topRightCorner(nstateparms, npars);
-          auto const& d2chisqdparms2 = hessfull.bottomRightCorner(npars, npars);
-          
+          // Sparse GBL solve (replaces dense Cinvd=LDLT(2 Fs^T Vinv Fs);
+          // dxfull=-Cinvd.solve(2 Fs^T Vinv r)). Mathematically identical:
+          // the factor of 2 cancels in -(Fs^T Vinv Fs)^-1 Fs^T Vinv r.
+          Fsparse = Ffull(Eigen::placeholders::all, freestateidxs).sparseView();
+          Vinvsparse = Vinvfull.sparseView();
+          VinvF = Vinvsparse * Fsparse;
 
-          
-          Cinvd.compute(d2chisqdx2);
-          
-          dxfull = -Cinvd.solve(dchisqdx);
-// dxdparms = -Cinvd.solve(d2chisqdxdparms).transpose();
+          Cinvd.compute(Fsparse.transpose() * VinvF);
+
+          dxfree = -Cinvd.solve(VinvF.transpose() * rfull);
+
+          dxfull = VectorXd::Zero(nstateparms);
+          dxfull(freestateidxs) = dxfree;
           
           
 // std::cout << "dxfull vtx: " << dxfull.head<3>() << std::endl;
@@ -2369,9 +2438,12 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
       // hess = d2chisqdparms2 + 2.*dxdparms*d2chisqdxdparms + dxdparms*d2chisqdx2*dxdparms.transpose();
   // hess = d2chisqdparms2 + dxdparms*d2chisqdxdparms;
           
-          const Matrix<double, 1, 1> deltachisq = dchisqdx.transpose()*dxfull + 0.5*dxfull.transpose()*d2chisqdx2*dxfull;
-          
-// std::cout << "iiter = " << iiter << ", deltachisq = " << deltachisq[0] << std::endl;
+          // Sparse GBL deltachi2: dense g^T dx + 0.5 dx^T H dx with
+          // g=2Fs^TVinvr, H=2Fs^TVinvFs, dx=-H^-1 g reduces algebraically
+          // to -(Fs^TVinvr)^T(Fs^TVinvFs)^-1(Fs^TVinvr) = rfull^T VinvF dxfree.
+          const double deltachisq = (rfull.transpose() * VinvF * dxfree)(0, 0);
+
+// std::cout << "iiter = " << iiter << ", deltachisq = " << deltachisq << std::endl;
 // // 
 // SelfAdjointEigenSolver<MatrixXd> es(d2chisqdx2, EigenvaluesOnly);
 // const double condition = es.eigenvalues()[nstateparms-1]/es.eigenvalues()[0];
@@ -2379,11 +2451,11 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 // std::cout << es.eigenvalues().transpose() << std::endl;
 // std::cout << "condition: " << condition << std::endl;
           
-          chisqval = chisq0val + deltachisq[0];
-          
-          deltachisqval = chisq0val + deltachisq[0] - chisqvalold;
-          
-          chisqvalold = chisq0val + deltachisq[0];
+          chisqval = chisq0val + deltachisq;
+
+          deltachisqval = chisq0val + deltachisq - chisqvalold;
+
+          chisqvalold = chisq0val + deltachisq;
           
 // ndof = 5*nhits + nvalid + nvalidalign2d - nstateparms;
           ndof = 5*nhits + nvalid + nvalidpixel - nstateparms;
@@ -2651,7 +2723,13 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 // std::cout << "Muminus pt, eta, phi = " << Muminus_pt << ", " << Muminus_eta << ", " << Muminus_phi << std::endl;
           
           
-          MatrixXd covstate =  2.*Cinvd.solve(MatrixXd::Identity(nstateparms,nstateparms));
+          // Sparse GBL state covariance: dense 2*Cinvd_dense^-1 with
+          // Cinvd_dense=2Fs^TVinvFs equals (Fs^TVinvFs)^-1 = the sparse
+          // Cinvd.solve(I) (no factor 2). Scatter free->full so the
+          // topLeftCorner<6,6>/<10,10> vertex-PCA views still work.
+          MatrixXd covstate = MatrixXd::Zero(nstateparms, nstateparms);
+          covstate(freestateidxs, freestateidxs) =
+              Cinvd.solve(MatrixXd::Identity(nstatefree, nstatefree)).eval();
 
           covrefmom  = covstate.topLeftCorner<6, 6>();
 
@@ -2955,7 +3033,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
 
           niter = iiter + 1;
-          edmval = -deltachisq[0];
+          edmval = -deltachisq;
 
           const Matrix<double, 10, 1> dxRef = dxfull.head<10>();
           const Matrix<double, 10, 10> covref = covstate.topLeftCorner<10, 10>();
@@ -3025,13 +3103,6 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           break;
         }
 
-        auto const& dchisqdx = gradfull.head(nstateparms);
-        auto const& dchisqdparms = gradfull.tail(npars);
-
-        auto const& d2chisqdx2 = hessfull.topLeftCorner(nstateparms, nstateparms);
-        auto const& d2chisqdxdparms = hessfull.topRightCorner(nstateparms, npars);
-        auto const& d2chisqdparms2 = hessfull.bottomRightCorner(npars, npars);
-
         std::unordered_map<unsigned int, unsigned int> idxmap;
 
         globalidxvfinal.clear();
@@ -3047,25 +3118,40 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
         const unsigned int nparsfinal = globalidxvfinal.size();
 
-        VectorXd dchisqdparmsfinal = VectorXd::Zero(nparsfinal);
-        MatrixXd d2chisqdxdparmsfinal = MatrixXd::Zero(nstateparms, nparsfinal);
-        MatrixXd d2chisqdparms2final = MatrixXd::Zero(nparsfinal, nparsfinal);
-
+        // Sparse GBL reduction (mirrors single-track maker 2536-2651).
+        // Column-gather Jfull (ncons x npars, per-hit-replicated field
+        // modes) down to Jfinal (ncons x nparsfinal, deduped global
+        // params) via the same idxmap the dense path used. Replaces the
+        // O(npars^2) dense d2chisqdparms2 gather (was ~164M iters at 360
+        // modes) with an O(ncons*npars) sparse column-add.
+        MatrixXd Jfinal = MatrixXd::Zero(ncons, nparsfinal);
         for (unsigned int i = 0; i < npars; ++i) {
-          const unsigned int iidx = idxmap.at(globalidxv[i]);
-          dchisqdparmsfinal[iidx] += dchisqdparms[i];
-          d2chisqdxdparmsfinal.col(iidx) += d2chisqdxdparms.col(i);
-          for (unsigned int j = 0; j < npars; ++j) {
-            const unsigned int jidx = idxmap.at(globalidxv[j]);
-            d2chisqdparms2final(iidx, jidx) += d2chisqdparms2(i, j);
-          }
+          Jfinal.col(idxmap.at(globalidxv[i])) += Jfull.col(i);
         }
+        const SparseMatrix<double> Jsparse = Jfinal.sparseView();
 
-        dxdparms = -Cinvd.solve(d2chisqdxdparmsfinal).transpose();
+        // Residual projector R = Vinv - VinvF Cinvd^-1 (VinvF)^T and the
+        // cheaper Rr = Vinv (r + Fs dxfree) == R r. grad/hess are the
+        // GBL reduced gradient/Hessian wrt the global params (stored to
+        // gradv/hesspackedv when fillGrads_). Algebraically identical to
+        // the dense  grad = dchisqdparmsfinal + d2chisqdxdparmsfinal^T dxfull,
+        // hess = d2chisqdparms2final + dxdparms d2chisqdxdparmsfinal
+        // (the factor-of-2 / Schur-complement bookkeeping cancels).
+        const SparseMatrix<double> FtVinv = VinvF.transpose();
+        const SparseMatrix<double> Rsparse = Vinvsparse - VinvF*Cinvd.solve(FtVinv);
+        const MatrixXd R = Rsparse;
+        const VectorXd Rr = Vinvsparse*(rfull + Fsparse*dxfree);
 
-    // grad = dchisqdparmsfinal + dxdparms*dchisqdx;
-        grad = dchisqdparmsfinal + d2chisqdxdparmsfinal.transpose()*dxfull;
-        hess = d2chisqdparms2final + dxdparms*d2chisqdxdparmsfinal;
+        grad = 2.*Jsparse.transpose()*Rr;
+        hess = 2.*Jsparse.transpose()*R*Jsparse;
+
+        // dxdparms (nparsfinal x nstateparms): sensitivity of the fitted
+        // state to the global params. Free-state columns filled from the
+        // sparse solve; frozen-state columns stay zero. The Muplus/Muminus
+        // _jacRef and Jpsi_jacMass emitters below consume this unchanged.
+        dxdparms = MatrixXd::Zero(nparsfinal, nstateparms);
+        dxdparms(Eigen::placeholders::all, freestateidxs) =
+            -Cinvd.solve(VinvF.transpose()*Jsparse).transpose();
 
         if (icons == 0) {
           const unsigned int idxplus = muchargearr[0] > 0 ? 0 : 1;
