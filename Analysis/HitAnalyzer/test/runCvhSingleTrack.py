@@ -1,10 +1,8 @@
-## Stage-2 CVH refit driver for J/psi ALCARECO (data, Run 2 2016).
-## Reads ALCARECOTkAlJpsiMuMu directly; the producer falls back to the
-## legacy in-module track-pair loop when srcCandidates is empty, so no
-## prior candidate-producer step is required.
-##
-## Knobs are exposed through VarParsing('analysis'); see the opts.register
-## calls below for the full list. Driven by calibration_studies/slurm/.
+## Single-track CVH refit driver for J/psi ALCARECO (data, Run 2 2016).
+## Uses ResidualGlobalCorrectionMakerG4e (NOT TwoTrack) so there is no
+## kinematic-vertex fit / mass constraint -- each muon track is refit
+## independently. Useful for validating the single-track CVH refit and
+## as a lighter-weight cross-check of the propagator / residual chain.
 import FWCore.ParameterSet.Config as cms
 import FWCore.ParameterSet.VarParsing as VarParsing
 
@@ -20,41 +18,20 @@ opts.register('fillJac', True, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool, 'store per-track Jacobians')
 opts.register('fillGrads', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool, 'store per-event gradient + packed Hessian')
-opts.register('doMassConstraint', False, VarParsing.VarParsing.multiplicity.singleton,
-              VarParsing.VarParsing.varType.bool, 'apply J/psi mass constraint in the two-track fit')
 opts.register('useIdealGeometry', True, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool, 'use ideal (uncorrected) tracker geometry')
-opts.register('goldenJson', '', VarParsing.VarParsing.multiplicity.singleton,
-              VarParsing.VarParsing.varType.string,
-              'optional Golden JSON file to filter run/lumi pre-processing; empty = no filter')
 opts.register('useScalarPot3D', True, VarParsing.VarParsing.multiplicity.singleton,
-              VarParsing.VarParsing.varType.bool,
-              'use the spherical-harmonic scalar-potential field  '
-              'in the CVH refit (default; only model supported in this port)')
+              VarParsing.VarParsing.varType.bool, 'use the ScalarPot3D field model')
 opts.register('useOpera3D', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
-              'use the full 3D TOSCA volumetric grid (160812) as the baseline '
-              'field for the propagator + geopro + globalCor; takes precedence '
-              'over useScalarPot3D when True.')
+              'use the full 3D TOSCA grid as baseline field (takes precedence over useScalarPot3D)')
 opts.register('scalarPot3DInitFile', '', VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string,
-              'coefficient dump file produced by mfs/dump_coeffs_for_cmssw.py. '
-              'Always required: the residual-correction maker uses it to register '
-              'parmtype-14 modes and seed their initial coefficients. Also reused '
-              'as the field producer init file when useScalarPot3D=True.')
-opts.register('runFDClosure', False, VarParsing.VarParsing.multiplicity.singleton,
-              VarParsing.VarParsing.varType.bool,
-              'Numerical-FD closure of the per-mode chain rule '
-              '(debug; runs once on the first chain-rule site)')
-opts.register('epsilonFDClosure', 1e-4, VarParsing.VarParsing.multiplicity.singleton,
-              VarParsing.VarParsing.varType.float,
-              'eps for the FD closure (used as eps * dB_perMode for each test mode)')
+              'coefficient dump file produced by mfs/dump_coeffs_for_cmssw.py (always required)')
 opts.parseArguments()
 if not opts.scalarPot3DInitFile:
     raise SystemExit(
-        "scalarPot3DInitFile=<path> is required (coefficient dump file): "
-        "the basis evaluator in globalCor needs it for chain-rule columns "
-        "even when useOpera3D=True swaps the baseline field model.")
+        "scalarPot3DInitFile=<path> is required (coefficient dump file)")
 
 JPSI_TRIGGERS = [
     "HLT_Dimuon0_Jpsi_Muon",
@@ -101,7 +78,6 @@ process.load("TrackPropagation.Geant4e.geantRefit_cff")
 process.maxEvents = cms.untracked.PSet(input=cms.untracked.int32(opts.nEvents))
 
 assert opts.input, "must set input=<path> on the cmsRun command line"
-# Accept local paths (prepend "file:") or xrootd URLs as-is.
 _url = opts.input if opts.input.startswith(("root://", "file:")) else "file:" + opts.input
 process.source = cms.Source(
     "PoolSource",
@@ -109,40 +85,28 @@ process.source = cms.Source(
     secondaryFileNames=cms.untracked.vstring(),
 )
 
-# Golden-JSON pre-filter: drop run/lumi pairs that aren't certified.
-# Applied at the source so the framework never delivers those events to the
-# CVH module, saving CPU on bad lumis.
-if opts.goldenJson:
-    import FWCore.PythonUtilities.LumiList as LumiList
-    process.source.lumisToProcess = LumiList.LumiList(
-        filename=opts.goldenJson).getVLuminosityBlockRange()
-
 process.options = cms.untracked.PSet(
     numberOfThreads=cms.untracked.uint32(1),
     numberOfStreams=cms.untracked.uint32(1),
     numberOfConcurrentLuminosityBlocks=cms.untracked.uint32(1),
 )
-
-# Reduce log spam (every 100 events instead of every event).
 process.MessageLogger.cerr.FwkReport.reportEvery = 100
 
 process.offlineBeamSpot = cms.EDProducer("BeamSpotProducer")
 
-# HLT pre-filter: drop events that don't pass any of the J/psi paths we
-# also store decisions for. Saves the Geant4e/CVH cost on triggers we'd
-# never analyse. throw=False so the filter tolerates menu changes across
-# eras (any path missing in a given menu is silently skipped).
 process.hltFilter = cms.EDFilter(
     "HLTHighLevel",
     HLTPaths=cms.vstring(*[t + "_v*" for t in JPSI_TRIGGERS]),
     eventSetupPathsKey=cms.string(""),
-    andOr=cms.bool(True),     # OR over the path list
+    andOr=cms.bool(True),
     throw=cms.bool(False),
     TriggerResultsTag=cms.InputTag("TriggerResults", "", "HLT"),
 )
 
+# Single-track CVH refit. No kinematic-vertex fit, no mass constraint --
+# each ALCARECOTkAlJpsiMuMu track is refit by itself.
 process.globalCor = cms.EDProducer(
-    "ResidualGlobalCorrectionMakerTwoTrackG4e",
+    "ResidualGlobalCorrectionMakerG4e",
     src=cms.InputTag("ALCARECOTkAlJpsiMuMu"),
     fitFromGenParms=cms.bool(False),
     fitFromSimParms=cms.bool(False),
@@ -160,34 +124,14 @@ process.globalCor = cms.EDProducer(
     useIdealGeometry=cms.bool(bool(opts.useIdealGeometry)),
     bsConstraint=cms.bool(False),
     applyHitQuality=cms.bool(True),
-    doVtxConstraint=cms.bool(False),
-    doMassConstraint=cms.bool(bool(opts.doMassConstraint)),
-    massConstraint=cms.double(3.0969),
-    massConstraintWidth=cms.double(1e-5),
     corFiles=cms.vstring(),
     triggers=cms.vstring(*JPSI_TRIGGERS),
     MagneticFieldLabel=cms.string(""),
-    # Scalar-potential B-field correction (parmtype-14, absolute-field
-    # model). Initial coefficients + basis structure are loaded from a
-    # coefficient dump file (mfs/dump_coeffs_for_cmssw.py output).
     scalarPotentialInitFile=cms.string(opts.scalarPot3DInitFile),
-    # Numerical-FD closure (debug only).
-    runFDClosure=cms.bool(bool(opts.runFDClosure)),
-    epsilonFDClosure=cms.double(float(opts.epsilonFDClosure)),
-    outprefix=cms.untracked.string("globalcor"),
+    outprefix=cms.untracked.string("globalcor_single"),
 )
 
-# Bring up the labelled 3D field producer and rewire the consumers
-# present in this driver (geopro, Geant4ePropagator, and our
-# globalCor analyzer). Uses the scalar-potential ScalarPot3D model
-# from scalar-potential field model. Independent from
-# nano_cff.setup3DFieldForRefit (which assumes the full set of seven
-# CVH-side consumers from the NanoAOD configuration).
 if opts.useOpera3D:
-    # Use the full 3D TOSCA volumetric grid (160812) as the baseline field
-    # for the propagator / geopro / globalCor instead of the scalar-potential
-    # ScalarPot3D model. Provided as an alternative field-model option for
-    # cross-checks and B-field studies.
     from MagneticField.Engine.volumeBasedMagneticField_160812_cfi import \
         VolumeBasedMagneticFieldESProducer as Opera3DMagneticFieldProducer
     from MagneticField.Engine.volumeBasedMagneticField_160812_cfi import magfield as MagneticFieldGeometry
@@ -198,26 +142,17 @@ if opts.useOpera3D:
     process.Opera3DMagneticFieldProducer.label = fieldlabel
     process.Opera3DMagneticFieldProducer.useParametrizedTrackerField = cms.bool(False)
 elif not opts.useScalarPot3D:
-    raise RuntimeError(
-        "useScalarPot3D=False is no longer supported; the legacy non-thread-safe "
-        "wrapper class is not part of this port. Use the ScalarPot3D model.")
+    raise RuntimeError("useScalarPot3D=False not supported; use ScalarPot3D or Opera3D")
 else:
-    if not opts.scalarPot3DInitFile:
-        raise RuntimeError(
-            "useScalarPot3D=True requires scalarPot3DInitFile to point "
-            "at a coefficient dump file produced by mfs/dump_coeffs_for_cmssw.py")
     from MagneticField.ParametrizedEngine.parametrizedMagneticField_ScalarPot3D_cfi \
         import ParametrizedMagneticFieldProducer as ScalarPot3DMagneticFieldProducer
     process.ScalarPot3DMagneticFieldProducer = ScalarPot3DMagneticFieldProducer.clone()
     process.ScalarPot3DMagneticFieldProducer.parameters.InitFile = opts.scalarPot3DInitFile
     fieldlabel = "ScalarPot3DMf"
     process.ScalarPot3DMagneticFieldProducer.label = fieldlabel
+
 process.geopro.MagneticFieldLabel = fieldlabel
 process.Geant4ePropagator.MagneticFieldLabel = fieldlabel
-# Activate the CVH-specific propagator path: instantiates the custom fluct
-# (G4UniversalFluctuationForExtrapolator) + msmodel (G4WentzelVIModelForCVH)
-# and routes their table pointers via SetParticleAndCharge. Without this,
-# computeErrorIoni dereferences a null fluct->table on the first event.
 process.Geant4ePropagator.ForCVH = cms.bool(True)
 process.globalCor.MagneticFieldLabel = cms.string(fieldlabel)
 
