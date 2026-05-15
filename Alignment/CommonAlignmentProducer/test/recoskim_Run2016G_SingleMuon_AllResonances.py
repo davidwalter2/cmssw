@@ -2,7 +2,7 @@
 # using:
 # Revision: 1.19
 # Source: /local/reps/CMSSW/CMSSW/Configuration/Applications/python/ConfigBuilder.py,v
-# with command line options: RECO -s RAW2DIGI,L1Reco,RECO,SKIM:LogError+LogErrorMonitor,ALCA:TkAlKsToPiPi+TkAlLambdaToProtonPi+TkAlDstToD0Pi+TkAlJpsiMuMu,EI,DQM:@rerecoCommon --runUnscheduled --nThreads 8 --data --era Run2_2016 --scenario pp --conditions 106X_dataRun2_v27 --eventcontent AOD,DQM --datatier AOD,DQMIO --customise Configuration/DataProcessing/RecoTLR.customisePostEra_Run2_2016,Configuration/DataProcessing/Utils.addMonitoring --filein /store/data/Run2016G/SingleMuon/RAW/v1/000/279/654/00000/8245F1D7-D46B-E611-A448-02163E014137.root -n 1000 --python_filename Alignment/CommonAlignmentProducer/test/recoskim_Run2016G_SingleMuon_AllResonances.py --no_exec
+# with command line options: RECO -s RAW2DIGI,L1Reco,RECO,SKIM:LogError+LogErrorMonitor,ALCA:TkAlKsToPiPi+TkAlLambdaToProtonPi+TkAlDstToD0Pi+TkAlJpsiMuMu,EI,DQM:@rerecoCommon --runUnscheduled --nThreads 8 --data --era Run2_2016 --scenario pp --conditions 106X_dataRun2_v27 --eventcontent AOD,DQM --datatier AOD,DQMIO --customise Configuration/DataProcessing/RecoTLR.customisePostEra_Run2_2016,Configuration/DataProcessing/Utils.addMonitoring,Alignment/CommonAlignmentProducer/alcarecoSplitLevel.setAlcaRecoSplitLevel --filein /store/data/Run2016G/SingleMuon/RAW/v1/000/279/654/00000/8245F1D7-D46B-E611-A448-02163E014137.root -n 1000 --python_filename Alignment/CommonAlignmentProducer/test/recoskim_Run2016G_SingleMuon_AllResonances.py --no_exec
 #
 # Extension of recoskim_Run2016G_SingleMuon_KsLambdaDst.py adding the
 # TkAlJpsiMuMu ALCAREco stream so the new TwoBodyDecayCandidateProducer +
@@ -243,6 +243,12 @@ from Configuration.DataProcessing.Utils import addMonitoring
 
 #call to customisation function addMonitoring imported from Configuration.DataProcessing.Utils
 process = addMonitoring(process)
+
+# Automatic addition of the customisation function from Alignment.CommonAlignmentProducer.alcarecoSplitLevel
+from Alignment.CommonAlignmentProducer.alcarecoSplitLevel import setAlcaRecoSplitLevel
+
+#call to customisation function setAlcaRecoSplitLevel imported from Alignment.CommonAlignmentProducer.alcarecoSplitLevel
+process = setAlcaRecoSplitLevel(process)
 
 # End of customisation functions
 #do not add changes to your config after this point (unless you know what you are doing)
