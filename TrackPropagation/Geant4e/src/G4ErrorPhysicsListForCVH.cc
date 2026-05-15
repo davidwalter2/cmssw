@@ -68,7 +68,28 @@
 #include "TrackPropagation/Geant4e/interface/G4ErrorEnergyLossForCVH.h"
 
 //------------------------------------------------------------------------
-G4ErrorPhysicsListForCVH::G4ErrorPhysicsListForCVH() : G4VUserPhysicsList() {
+namespace {
+  // Full canonical CVH particle set: matches the hardcoded list used
+  // by all callers before particleNames_ became configurable. Used as
+  // the default for the no-arg ctor so back-compat is exact.
+  const std::vector<std::string> kFullParticleList = {
+      "gamma",
+      "e+", "e-",
+      "mu+", "mu-",
+      "pi+", "pi-",
+      "kaon+", "kaon-",
+      "proton", "anti_proton",
+  };
+}  // namespace
+
+//------------------------------------------------------------------------
+G4ErrorPhysicsListForCVH::G4ErrorPhysicsListForCVH()
+    : G4ErrorPhysicsListForCVH(kFullParticleList) {}
+
+//------------------------------------------------------------------------
+G4ErrorPhysicsListForCVH::G4ErrorPhysicsListForCVH(
+    const std::vector<std::string>& particleNames)
+    : G4VUserPhysicsList(), particleNames_(particleNames) {
   defaultCutValue = 1.0E+9 * cm;  // set big step so that AlongStep computes all the energy
 }
 
@@ -77,30 +98,56 @@ G4ErrorPhysicsListForCVH::~G4ErrorPhysicsListForCVH() {}
 
 //------------------------------------------------------------------------
 void G4ErrorPhysicsListForCVH::ConstructParticle() {
-  // In this method, static member functions should be called
-  // for all particles which you want to use.
-  // This ensures that objects of these particle types will be
-  // created in the program.
-  //  gamma
+  // Mandatory particles -- always defined regardless of the user list:
+  //   gamma, e+, e- -- G4PhysicsListHelper::CheckParticleList in G4 11+
+  //     aborts with Run0101 ("Missing EM basic particle") otherwise.
+  //   mu+, mu-, proton -- referenced by G4TablesForExtrapolatorForCVH's
+  //     ctor for dE/dx / range / inv-range table generation (the
+  //     master-side G4EnergyLossForExtrapolatorForCVH::tables and the
+  //     ionOnly-mode tables in G4UniversalFluctuationForExtrapolator).
+  //     Without them, race conditions at high thread count produce
+  //     Run0271 / PART10116 ("ProcessManager is being set without proper
+  //     initialization of TLS pointer vector") on workers.
+  // These are cheap (just G4ParticleDefinition + ProcessManager); the
+  // memory-heavy stock G4 EM processes (Compton/conv/photoelectric on
+  // gamma; dE/dx tables on charged) are only attached in ConstructEM
+  // for the optional list below.
   G4Gamma::GammaDefinition();
-  //  e+/-
   G4Electron::ElectronDefinition();
   G4Positron::PositronDefinition();
-  // mu+/-
   G4MuonPlus::MuonPlusDefinition();
   G4MuonMinus::MuonMinusDefinition();
-
-  // pi+/-
-  G4PionPlus::PionPlusDefinition();
-  G4PionMinus::PionMinusDefinition();
-
-  // K+/-  -- needed for D0 -> K pi (CVH ntuplizer kaon hypothesis)
-  G4KaonPlus::KaonPlusDefinition();
-  G4KaonMinus::KaonMinusDefinition();
-
-  // proton / anti-proton  -- anti_proton needed for Lambda-bar daughters
   G4Proton::ProtonDefinition();
-  G4AntiProton::AntiProtonDefinition();
+
+  // Optional particles -- everything else the caller asked for. Each
+  // entry is a canonical G4 particle name; unknown names abort with
+  // G4Exception so typos don't silently disable a daughter category at
+  // runtime. Mandatory names listed above are accepted here as no-ops.
+  for (const auto& name : particleNames_) {
+    if (name == "gamma" || name == "e+" || name == "e-" ||
+        name == "mu+" || name == "mu-" || name == "proton") {
+      // already defined unconditionally above
+    } else if (name == "pi+") {
+      G4PionPlus::PionPlusDefinition();
+    } else if (name == "pi-") {
+      G4PionMinus::PionMinusDefinition();
+    } else if (name == "kaon+") {
+      G4KaonPlus::KaonPlusDefinition();
+    } else if (name == "kaon-") {
+      G4KaonMinus::KaonMinusDefinition();
+    } else if (name == "proton") {
+      G4Proton::ProtonDefinition();
+    } else if (name == "anti_proton") {
+      G4AntiProton::AntiProtonDefinition();
+    } else {
+      G4Exception("G4ErrorPhysicsListForCVH::ConstructParticle",
+                  "UnknownParticle",
+                  FatalException,
+                  ("Unknown G4 particle name '" + name +
+                   "' in CvhMaster.Particles. Recognised: gamma, e+, e-, "
+                   "mu+, mu-, pi+, pi-, kaon+, kaon-, proton, anti_proton.").c_str());
+    }
+  }
 }
 
 //------------------------------------------------------------------------

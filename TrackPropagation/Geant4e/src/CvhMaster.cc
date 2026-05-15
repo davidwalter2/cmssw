@@ -31,7 +31,8 @@
 CvhMaster::CvhMaster(const edm::ParameterSet& p)
     : m_geoFromDD4hep(p.getParameter<bool>("g4GeometryDD4hepSource")),
       m_pUseMagneticField(p.getParameter<bool>("UseMagneticField")),
-      m_pField(p.getParameter<edm::ParameterSet>("MagneticField")) {
+      m_pField(p.getParameter<edm::ParameterSet>("MagneticField")),
+      m_particleNames(p.getParameter<std::vector<std::string>>("Particles")) {
   m_kernel = new G4MTRunManagerKernel();
   m_stateManager = G4StateManager::GetStateManager();
   m_UIsession = new CustomUIsession();
@@ -101,7 +102,7 @@ void CvhMaster::initG4(const DDCompactView* pDD,
   // so InitializeWorker re-invocations on worker threads do not
   // double-register.
   m_stateManager->SetNewState(G4State_PreInit);
-  m_physicsList = new G4ErrorPhysicsListForCVH();
+  m_physicsList = new G4ErrorPhysicsListForCVH(m_particleNames);
   m_kernel->SetPhysics(m_physicsList);
 
   m_stateManager->SetNewState(G4State_Init);

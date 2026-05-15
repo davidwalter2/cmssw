@@ -45,14 +45,29 @@
 #include "globals.hh"
 #include "G4VUserPhysicsList.hh"
 
+#include <string>
+#include <vector>
+
 class G4ErrorPhysicsListForCVH : public G4VUserPhysicsList {
 public:  // with description
+  // Default ctor: registers the canonical full CVH particle set
+  // (gamma, e+-, mu+-, pi+-, K+-, p, anti_proton). Kept for back-compat
+  // with any direct caller; new code should pass the narrowed list it
+  // actually needs through the vector ctor.
   G4ErrorPhysicsListForCVH();
+
+  // Construct with an explicit list of G4 particle names (e.g.
+  // {"mu+", "mu-"} for a J/psi-only refit). Recognised names:
+  //   "gamma", "e+", "e-", "mu+", "mu-", "pi+", "pi-",
+  //   "kaon+", "kaon-", "proton", "anti_proton".
+  // An unknown name aborts construction with a G4Exception.
+  explicit G4ErrorPhysicsListForCVH(const std::vector<std::string>& particleNames);
+
   ~G4ErrorPhysicsListForCVH() override;
 
 protected:
   void ConstructParticle() override;
-  // constructs gamma, e+/-, mu+/- and stable hadrons
+  // constructs the particles listed in particleNames_
 
   void ConstructProcess() override;
   // construct physical processes
@@ -62,6 +77,11 @@ protected:
 
   virtual void ConstructEM();
   // constructs electromagnetic processes
+
+private:
+  // G4 particle names to register in ConstructParticle. Captured at
+  // construction; const after.
+  const std::vector<std::string> particleNames_;
 };
 
 #endif

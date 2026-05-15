@@ -191,7 +191,13 @@ process.globalCor = cms.EDProducer(
     # CvhWorker then attaches per-thread G4 state to it on first produce().
     # This replaces the geopro side-effect dependency that blocked
     # numberOfThreads >= 2 previously.
-    CvhMaster=CvhMasterPSet,
+    #
+    # Narrowed to muons -- this runner only propagates J/psi -> mu mu
+    # daughters, so the rest of the canonical CVH particle set
+    # (gamma, e+-, pi+-, K+-, p, anti_p) is skipped at physics-list
+    # construction. Saves the per-thread ProcessManager + process
+    # allocations for ~9 unused particles.
+    CvhMaster=CvhMasterPSet.clone(Particles=cms.vstring("mu+", "mu-")),
 )
 
 # Bring up the labelled 3D field producer and rewire the consumers

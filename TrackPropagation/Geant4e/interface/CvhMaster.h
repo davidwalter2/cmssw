@@ -20,6 +20,8 @@
 #include "FWCore/ParameterSet/interface/ParameterSet.h"
 
 #include <memory>
+#include <string>
+#include <vector>
 
 namespace cms {
   class DDCompactView;
@@ -73,6 +75,10 @@ private:
   const bool m_geoFromDD4hep;
   const bool m_pUseMagneticField;
   edm::ParameterSet m_pField;
+  // G4 particle names to register in G4ErrorPhysicsListForCVH. Narrowing
+  // this (e.g. {"mu+", "mu-"} for J/psi-only) skips construction of
+  // unused per-thread ProcessManagers + their physics processes.
+  std::vector<std::string> m_particleNames;
 
   const MagneticField* m_pMagField{nullptr};
   bool m_managerInitialized{false};
