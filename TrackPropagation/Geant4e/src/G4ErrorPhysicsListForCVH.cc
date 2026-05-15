@@ -68,7 +68,28 @@
 #include "TrackPropagation/Geant4e/interface/G4ErrorEnergyLossForCVH.h"
 
 //------------------------------------------------------------------------
-G4ErrorPhysicsListForCVH::G4ErrorPhysicsListForCVH() : G4VUserPhysicsList() {
+namespace {
+  // Full canonical CVH particle set: matches the hardcoded list used
+  // by all callers before particleNames_ became configurable. Used as
+  // the default for the no-arg ctor so back-compat is exact.
+  const std::vector<std::string> kFullParticleList = {
+      "gamma",
+      "e+", "e-",
+      "mu+", "mu-",
+      "pi+", "pi-",
+      "kaon+", "kaon-",
+      "proton", "anti_proton",
+  };
+}  // namespace
+
+//------------------------------------------------------------------------
+G4ErrorPhysicsListForCVH::G4ErrorPhysicsListForCVH()
+    : G4ErrorPhysicsListForCVH(kFullParticleList) {}
+
+//------------------------------------------------------------------------
+G4ErrorPhysicsListForCVH::G4ErrorPhysicsListForCVH(
+    const std::vector<std::string>& particleNames)
+    : G4VUserPhysicsList(), particleNames_(particleNames) {
   defaultCutValue = 1.0E+9 * cm;  // set big step so that AlongStep computes all the energy
 }
 
@@ -77,34 +98,76 @@ G4ErrorPhysicsListForCVH::~G4ErrorPhysicsListForCVH() {}
 
 //------------------------------------------------------------------------
 void G4ErrorPhysicsListForCVH::ConstructParticle() {
-  // In this method, static member functions should be called
-  // for all particles which you want to use.
-  // This ensures that objects of these particle types will be
-  // created in the program.
-  //  gamma
+  // Mandatory particles -- always defined regardless of the user list:
+  //   gamma, e+, e- -- G4PhysicsListHelper::CheckParticleList in G4 11+
+  //     aborts with Run0101 ("Missing EM basic particle") otherwise.
+  //   mu+, mu-, proton -- referenced by G4TablesForExtrapolatorForCVH's
+  //     ctor for dE/dx / range / inv-range table generation (the
+  //     master-side G4EnergyLossForExtrapolatorForCVH::tables and the
+  //     ionOnly-mode tables in G4UniversalFluctuationForExtrapolator).
+  //     Without them, race conditions at high thread count produce
+  //     Run0271 / PART10116 ("ProcessManager is being set without proper
+  //     initialization of TLS pointer vector") on workers.
+  // These are cheap (just G4ParticleDefinition + ProcessManager); the
+  // memory-heavy stock G4 EM processes (Compton/conv/photoelectric on
+  // gamma; dE/dx tables on charged) are only attached in ConstructEM
+  // for the optional list below.
   G4Gamma::GammaDefinition();
-  //  e+/-
   G4Electron::ElectronDefinition();
   G4Positron::PositronDefinition();
-  // mu+/-
   G4MuonPlus::MuonPlusDefinition();
   G4MuonMinus::MuonMinusDefinition();
-
-  // pi+/-
-  G4PionPlus::PionPlusDefinition();
-  G4PionMinus::PionMinusDefinition();
-
-  // K+/-  -- needed for D0 -> K pi (CVH ntuplizer kaon hypothesis)
-  G4KaonPlus::KaonPlusDefinition();
-  G4KaonMinus::KaonMinusDefinition();
-
-  // proton / anti-proton  -- anti_proton needed for Lambda-bar daughters
   G4Proton::ProtonDefinition();
-  G4AntiProton::AntiProtonDefinition();
+
+  // Optional particles -- everything else the caller asked for. Each
+  // entry is a canonical G4 particle name; unknown names abort with
+  // G4Exception so typos don't silently disable a daughter category at
+  // runtime. Mandatory names listed above are accepted here as no-ops.
+  for (const auto& name : particleNames_) {
+    if (name == "gamma" || name == "e+" || name == "e-" ||
+        name == "mu+" || name == "mu-" || name == "proton") {
+      // already defined unconditionally above
+    } else if (name == "pi+") {
+      G4PionPlus::PionPlusDefinition();
+    } else if (name == "pi-") {
+      G4PionMinus::PionMinusDefinition();
+    } else if (name == "kaon+") {
+      G4KaonPlus::KaonPlusDefinition();
+    } else if (name == "kaon-") {
+      G4KaonMinus::KaonMinusDefinition();
+    } else if (name == "proton") {
+      G4Proton::ProtonDefinition();
+    } else if (name == "anti_proton") {
+      G4AntiProton::AntiProtonDefinition();
+    } else {
+      G4Exception("G4ErrorPhysicsListForCVH::ConstructParticle",
+                  "UnknownParticle",
+                  FatalException,
+                  ("Unknown G4 particle name '" + name +
+                   "' in CvhMaster.Particles. Recognised: gamma, e+, e-, "
+                   "mu+, mu-, pi+, pi-, kaon+, kaon-, proton, anti_proton.").c_str());
+    }
+  }
 }
 
 //------------------------------------------------------------------------
 void G4ErrorPhysicsListForCVH::ConstructProcess() {
+  // MT-safe re-entry guard. G4VUserPhysicsList::InitializeWorker (called by
+  // G4WorkerRunManagerKernel::InitializePhysics on each worker thread)
+  // re-invokes ConstructProcess on the same physics-list instance, plus
+  // G4ErrorPropagatorManager::InitGeant4e (called by the propagator's
+  // first-call init) also calls it via /run/initialize. Each call adds a
+  // FRESH G4Transportation / eLoss / step-length / B-field process to
+  // every particle's ProcessManager -- visible as "G4ProcessVector
+  // inconsistent" aborts on the first track step. A thread_local flag
+  // keeps the construction one-shot per worker thread without affecting
+  // single-thread builds.
+  static thread_local bool constructProcessDoneOnThisThread = false;
+  if (constructProcessDoneOnThisThread) {
+    return;
+  }
+  constructProcessDoneOnThisThread = true;
+
   G4Transportation* theTransportationProcess = new G4Transportation();
 
 #ifdef G4VERBOSE
@@ -120,8 +183,6 @@ void G4ErrorPhysicsListForCVH::ConstructProcess() {
     G4ParticleDefinition* particle = myParticleIterator->value();
     G4ProcessManager* pmanager = particle->GetProcessManager();
     if (!particle->IsShortLived()) {
-      G4cout << particle << "G4ErrorPhysicsListForCVH:: particle process manager " << particle->GetParticleName()
-             << " = " << particle->GetProcessManager() << G4endl;
       // Add transportation process for all particles other than  "shortlived"
       if (pmanager == nullptr) {
         // Error !! no process manager
@@ -172,8 +233,14 @@ void G4ErrorPhysicsListForCVH::ConstructEM() {
     G4ProcessManager* pmanager = particle->GetProcessManager();
     G4String particleName = particle->GetParticleName();
 
+    if (pmanager == nullptr) {
+      continue;
+    }
+    // No per-particle MT re-entry check here -- the thread_local guard at
+    // the top of ConstructProcess (the only place this is invoked from)
+    // makes the whole physics-list construction one-shot per thread.
+
     if (particleName == "gamma") {
-      // gamma
       pmanager->AddDiscreteProcess(new G4GammaConversion());
       pmanager->AddDiscreteProcess(new G4ComptonScattering());
       pmanager->AddDiscreteProcess(new G4PhotoElectricEffect());

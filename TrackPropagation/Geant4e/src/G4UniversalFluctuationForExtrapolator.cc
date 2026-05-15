@@ -61,17 +61,39 @@
 
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
 
+// Process-wide shared dE/dx / range / inv-range tables. Built once on the
+// first ctor call (under extrMutex in MT builds); subsequent instances --
+// including the per-stream Geant4ePropagator clones in the CVH refit --
+// reuse the same pointer. Tables are read-only after construction. Leaked
+// at process exit to keep ownership trivial.
+G4TablesForExtrapolatorForCVH* G4UniversalFluctuationForExtrapolator::tables = nullptr;
+#ifdef G4MULTITHREADED
+G4Mutex G4UniversalFluctuationForExtrapolator::extrMutex = G4MUTEX_INITIALIZER;
+#endif
+
 G4UniversalFluctuationForExtrapolator::G4UniversalFluctuationForExtrapolator(const G4String& nam)
     : G4VEmFluctuationModel(nam), minLoss(10. * CLHEP::eV) {
   rndmarray = new G4double[sizearray];
-  tables = new G4TablesForExtrapolatorForCVH(0, 70, 1. * MeV, 10. * TeV, true);
+
+  if (nullptr == tables) {
+#ifdef G4MULTITHREADED
+    G4MUTEXLOCK(&extrMutex);
+    if (nullptr == tables) {
+#endif
+      tables = new G4TablesForExtrapolatorForCVH(0, 70, 1. * MeV, 10. * TeV, true);
+#ifdef G4MULTITHREADED
+    }
+    G4MUTEXUNLOCK(&extrMutex);
+#endif
+  }
 }
 
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
 
 G4UniversalFluctuationForExtrapolator::~G4UniversalFluctuationForExtrapolator() {
   delete[] rndmarray;
-  delete tables;
+  // tables is a process-wide shared static; do not delete here. The OS
+  // reclaims memory on process exit.
 }
 
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......

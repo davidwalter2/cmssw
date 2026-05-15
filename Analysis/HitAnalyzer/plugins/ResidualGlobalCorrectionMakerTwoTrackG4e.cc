@@ -42,7 +42,7 @@
 class ResidualGlobalCorrectionMakerTwoTrackG4e : public ResidualGlobalCorrectionMakerBase
 {
 public:
-  explicit ResidualGlobalCorrectionMakerTwoTrackG4e(const edm::ParameterSet &);
+  ResidualGlobalCorrectionMakerTwoTrackG4e(const edm::ParameterSet &, const CvhMasterThread *);
   ~ResidualGlobalCorrectionMakerTwoTrackG4e() {}
 
 // static void fillDescriptions(edm::ConfigurationDescriptions &descriptions);
@@ -272,8 +272,9 @@ private:
 };
 
 
-ResidualGlobalCorrectionMakerTwoTrackG4e::ResidualGlobalCorrectionMakerTwoTrackG4e(const edm::ParameterSet &iConfig)
-    : ResidualGlobalCorrectionMakerBase(iConfig),
+ResidualGlobalCorrectionMakerTwoTrackG4e::ResidualGlobalCorrectionMakerTwoTrackG4e(
+    const edm::ParameterSet &iConfig, const CvhMasterThread *master)
+    : ResidualGlobalCorrectionMakerBase(iConfig, master),
       ttrhToken_(esConsumes(edm::ESInputTag("", "WithAngleAndTemplate"))),
       g4ePropToken_(esConsumes(edm::ESInputTag("", "Geant4ePropagator"))),
       transTrackBuilderToken_(esConsumes(edm::ESInputTag("", "TransientTrackBuilder"))),
@@ -625,10 +626,26 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
   auto globalGeometry = iSetup.getHandle(globalGeometryEventToken_);
   auto trackerTopology = iSetup.getHandle(trackerTopologyEventToken_);
   auto ttrh = iSetup.getHandle(ttrhToken_);
-  auto thePropagator = iSetup.getHandle(g4ePropToken_);
 
-  const MagneticField* field = thePropagator->magneticField();
-  const Geant4ePropagator *g4prop = dynamic_cast<const Geant4ePropagator*>(thePropagator.product());
+  // MT: bootstrap this TBB worker thread's G4 environment from the master
+  // (world + per-thread navigator + per-thread magnetic field). Idempotent
+  // per thread.
+  worker_->ensureInitialized(globalCache()->cvhMaster());
+  setG4RandomEngineForStream(iEvent.streamID());
+  // Lazy-init the per-stream propagator clone. Safe AFTER ensureInitialized
+  // has put the world in place on this thread.
+  if (!streamPropagator_) {
+    auto thePropagator = iSetup.getHandle(g4ePropToken_);
+    const Geant4ePropagator *templateProp =
+        dynamic_cast<const Geant4ePropagator*>(thePropagator.product());
+    if (!templateProp) {
+      throw cms::Exception("Configuration")
+          << "ESProducer for label 'Geant4ePropagator' did not deliver a Geant4ePropagator";
+    }
+    streamPropagator_.reset(templateProp->clone());
+  }
+  const Geant4ePropagator *g4prop = streamPropagator_.get();
+  const MagneticField* field = g4prop->magneticField();
   
 // Handle<std::vector<reco::GenParticle>> genPartCollection;
   Handle<edm::View<reco::Candidate>> genPartCollection;

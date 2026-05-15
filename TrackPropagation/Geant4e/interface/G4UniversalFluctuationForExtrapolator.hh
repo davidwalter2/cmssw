@@ -50,6 +50,7 @@
 #include "G4VEmFluctuationModel.hh"
 #include "G4ParticleDefinition.hh"
 #include "G4Poisson.hh"
+#include "G4Threading.hh"
 #include <CLHEP/Random/RandomEngine.h>
 #include "TrackPropagation/Geant4e/interface/G4TablesForExtrapolatorForCVH.h"
 
@@ -137,7 +138,18 @@ protected:
   G4double* rndmarray = nullptr;
   G4int sizearray = 30;
 
-  G4TablesForExtrapolatorForCVH* tables = nullptr;
+  // The dE/dx + range + inv-range tables (G4TablesForExtrapolatorForCVH)
+  // are read-only after construction and identical for all instances
+  // (always built with the same (0, 70, 1 MeV, 10 TeV, ionOnly=true)
+  // parameters). Share them as a process-wide static so that multi-stream /
+  // multi-thread CVH refits do not allocate ~tens of MB of duplicate
+  // material × particle dE/dx tables per stream. Mirrors the existing
+  // static pattern in G4EnergyLossForExtrapolatorForCVH::tables.
+  static G4TablesForExtrapolatorForCVH* tables;
+#ifdef G4MULTITHREADED
+  static G4Mutex extrMutex;
+#endif
+
   const G4PhysicsTable* table = nullptr;
   G4double massratio = 1.;
   G4double charge2ratio = 1.;
