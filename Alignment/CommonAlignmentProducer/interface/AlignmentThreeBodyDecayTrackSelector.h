@@ -41,11 +41,19 @@ private:
   double theFirstDaughterMass;
   double theSecondDaughterMass;
   double theThirdDaughterMass;
+  double theFirstDaughterPtMin;
+  double theSecondDaughterPtMin;
+  double theThirdDaughterPtMin;
 
   unsigned int theCandNumber;
 
   int theCharge;
   bool theUnsignedSwitch;
+
+  mutable unsigned long long eventsChecked_;
+  mutable unsigned long long eventsWithCandidates_;
+  mutable unsigned long long totalPassingCandidates_;
+  mutable unsigned long long totalSelectedFlatTracks_;
 };
 
 #endif

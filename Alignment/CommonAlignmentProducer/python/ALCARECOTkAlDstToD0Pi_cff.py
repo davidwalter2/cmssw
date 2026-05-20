@@ -15,30 +15,34 @@ ALCARECOTkAlDstToD0Pi.filter = True
 ALCARECOTkAlDstToD0Pi.src = 'generalTracks'
 
 ALCARECOTkAlDstToD0Pi.applyBasicCuts = True
-ALCARECOTkAlDstToD0Pi.ptMin = 0.5
+ALCARECOTkAlDstToD0Pi.ptMin = 0.35
 ALCARECOTkAlDstToD0Pi.etaMin = -3.5
 ALCARECOTkAlDstToD0Pi.etaMax = 3.5
 ALCARECOTkAlDstToD0Pi.nHitMin = 0
+ALCARECOTkAlDstToD0Pi.trackQualities = cms.vstring("highPurity")
 
 ALCARECOTkAlDstToD0Pi.GlobalSelector.applyGlobalMuonFilter = False
 ALCARECOTkAlDstToD0Pi.GlobalSelector.applyIsolationtest = False
 
 ALCARECOTkAlDstToD0Pi.ThreeBodyDecaySelector.applyMassrangeFilter = True
-ALCARECOTkAlDstToD0Pi.ThreeBodyDecaySelector.minXMass = 1.860
-ALCARECOTkAlDstToD0Pi.ThreeBodyDecaySelector.maxXMass = 2.160
+ALCARECOTkAlDstToD0Pi.ThreeBodyDecaySelector.minXMass = 1.89
+ALCARECOTkAlDstToD0Pi.ThreeBodyDecaySelector.maxXMass = 2.13
 ALCARECOTkAlDstToD0Pi.ThreeBodyDecaySelector.applyIntermediateMassrangeFilter = True
-ALCARECOTkAlDstToD0Pi.ThreeBodyDecaySelector.minIntermediateMass = 1.81483
-ALCARECOTkAlDstToD0Pi.ThreeBodyDecaySelector.maxIntermediateMass = 1.91483
+ALCARECOTkAlDstToD0Pi.ThreeBodyDecaySelector.minIntermediateMass = 1.75
+ALCARECOTkAlDstToD0Pi.ThreeBodyDecaySelector.maxIntermediateMass = 1.98
 ALCARECOTkAlDstToD0Pi.ThreeBodyDecaySelector.applyMassDifferenceFilter = True
-ALCARECOTkAlDstToD0Pi.ThreeBodyDecaySelector.minMassDifference = 0.14243
-ALCARECOTkAlDstToD0Pi.ThreeBodyDecaySelector.maxMassDifference = 0.14843
+ALCARECOTkAlDstToD0Pi.ThreeBodyDecaySelector.minMassDifference = 0.140
+ALCARECOTkAlDstToD0Pi.ThreeBodyDecaySelector.maxMassDifference = 0.152
 ALCARECOTkAlDstToD0Pi.ThreeBodyDecaySelector.firstDaughterMass = 0.493677
 ALCARECOTkAlDstToD0Pi.ThreeBodyDecaySelector.secondDaughterMass = 0.139570
 ALCARECOTkAlDstToD0Pi.ThreeBodyDecaySelector.thirdDaughterMass = 0.139570
+ALCARECOTkAlDstToD0Pi.ThreeBodyDecaySelector.firstDaughterPtMin = cms.double(1.0)
+ALCARECOTkAlDstToD0Pi.ThreeBodyDecaySelector.secondDaughterPtMin = cms.double(1.0)
+ALCARECOTkAlDstToD0Pi.ThreeBodyDecaySelector.thirdDaughterPtMin = cms.double(0.35)
 ALCARECOTkAlDstToD0Pi.ThreeBodyDecaySelector.applyChargeFilter = True
 ALCARECOTkAlDstToD0Pi.ThreeBodyDecaySelector.charge = 1
 ALCARECOTkAlDstToD0Pi.ThreeBodyDecaySelector.useUnsignedCharge = True
-ALCARECOTkAlDstToD0Pi.ThreeBodyDecaySelector.numberOfCandidates = 1
+ALCARECOTkAlDstToD0Pi.ThreeBodyDecaySelector.numberOfCandidates = cms.uint32(0)
 
 # Persist per-track dE/dx (Harmonic2 strip + pixel-only + joint strip+pixel)
 # for the selected D* daughter tracks, re-keyed onto the cloned

@@ -1,12 +1,12 @@
-#include "FWCore/MessageLogger/interface/MessageLogger.h"
-
-#include "FWCore/Framework/interface/Event.h"
-
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <map>
+#include <iostream>
 #include <vector>
+
+#include "FWCore/MessageLogger/interface/MessageLogger.h"
+
+#include "FWCore/Framework/interface/Event.h"
 
 #include "DataFormats/TrackReco/interface/Track.h"
 #include "TLorentzVector.h"
@@ -23,6 +23,12 @@ namespace {
     const reco::Track* pion;
     const reco::Track* softPion;
   };
+
+  void addUniqueTrack(AlignmentThreeBodyDecayTrackSelector::Tracks& tracks, const reco::Track* track) {
+    if (std::find(tracks.begin(), tracks.end(), track) == tracks.end()) {
+      tracks.push_back(track);
+    }
+  }
 }
 
 AlignmentThreeBodyDecayTrackSelector::AlignmentThreeBodyDecayTrackSelector(const edm::ParameterSet& cfg,
@@ -44,13 +50,29 @@ AlignmentThreeBodyDecayTrackSelector::AlignmentThreeBodyDecayTrackSelector(const
   theFirstDaughterMass = cfg.getParameter<double>("firstDaughterMass");
   theSecondDaughterMass = cfg.getParameter<double>("secondDaughterMass");
   theThirdDaughterMass = cfg.getParameter<double>("thirdDaughterMass");
+  theFirstDaughterPtMin =
+      cfg.existsAs<double>("firstDaughterPtMin") ? cfg.getParameter<double>("firstDaughterPtMin") : -1.;
+  theSecondDaughterPtMin =
+      cfg.existsAs<double>("secondDaughterPtMin") ? cfg.getParameter<double>("secondDaughterPtMin") : -1.;
+  theThirdDaughterPtMin =
+      cfg.existsAs<double>("thirdDaughterPtMin") ? cfg.getParameter<double>("thirdDaughterPtMin") : -1.;
   theCandNumber = cfg.getParameter<unsigned int>("numberOfCandidates");
 
   theCharge = cfg.getParameter<int>("charge");
   theUnsignedSwitch = cfg.getParameter<bool>("useUnsignedCharge");
+  eventsChecked_ = 0;
+  eventsWithCandidates_ = 0;
+  totalPassingCandidates_ = 0;
+  totalSelectedFlatTracks_ = 0;
 }
 
-AlignmentThreeBodyDecayTrackSelector::~AlignmentThreeBodyDecayTrackSelector() {}
+AlignmentThreeBodyDecayTrackSelector::~AlignmentThreeBodyDecayTrackSelector() {
+  std::cout << "AlignmentThreeBodyDecayTrackSelector D* summary"
+            << " eventsChecked=" << eventsChecked_
+            << " eventsWithCandidates=" << eventsWithCandidates_
+            << " totalPassingCandidates=" << totalPassingCandidates_
+            << " totalSelectedFlatTracks=" << totalSelectedFlatTracks_ << std::endl;
+}
 
 bool AlignmentThreeBodyDecayTrackSelector::useThisFilter() {
   return theMassrangeSwitch || theIntermediateMassSwitch || theMassDifferenceSwitch || theChargeSwitch;
@@ -72,6 +94,7 @@ AlignmentThreeBodyDecayTrackSelector::Tracks AlignmentThreeBodyDecayTrackSelecto
 
 AlignmentThreeBodyDecayTrackSelector::Tracks AlignmentThreeBodyDecayTrackSelector::checkMass(const Tracks& cands) const {
   Tracks result;
+  ++eventsChecked_;
 
   if (cands.size() < 3)
     return result;
@@ -80,6 +103,8 @@ AlignmentThreeBodyDecayTrackSelector::Tracks AlignmentThreeBodyDecayTrackSelecto
 
   for (unsigned int iK = 0; iK < cands.size(); ++iK) {
     const reco::Track* kaon = cands[iK];
+    if (theFirstDaughterPtMin >= 0. && kaon->pt() < theFirstDaughterPtMin)
+      continue;
     const int kaonCharge = kaon->charge();
 
     TLorentzVector kaonP4;
@@ -93,6 +118,8 @@ AlignmentThreeBodyDecayTrackSelector::Tracks AlignmentThreeBodyDecayTrackSelecto
         continue;
 
       const reco::Track* pion = cands[iPi];
+      if (theSecondDaughterPtMin >= 0. && pion->pt() < theSecondDaughterPtMin)
+        continue;
       if (pion->charge() != -kaonCharge)
         continue;
 
@@ -107,14 +134,13 @@ AlignmentThreeBodyDecayTrackSelector::Tracks AlignmentThreeBodyDecayTrackSelecto
           !(intermediate.M() > theMinIntermediateMass && intermediate.M() < theMaxIntermediateMass))
         continue;
 
-      bool acceptedCandidate = false;
-      ThreeBodyCandidate bestCandidate{0., nullptr, nullptr, nullptr};
-
       for (unsigned int iPis = 0; iPis < cands.size(); ++iPis) {
         if (iPis == iK || iPis == iPi)
           continue;
 
         const reco::Track* softPion = cands[iPis];
+        if (theThirdDaughterPtMin >= 0. && softPion->pt() < theThirdDaughterPtMin)
+          continue;
         if (softPion->charge() != pion->charge())
           continue;
 
@@ -137,40 +163,28 @@ AlignmentThreeBodyDecayTrackSelector::Tracks AlignmentThreeBodyDecayTrackSelecto
             !(massDifference > theMinMassDifference && massDifference < theMaxMassDifference))
           continue;
 
-        if (!acceptedCandidate || mother.Pt() > bestCandidate.pt) {
-          bestCandidate = {mother.Pt(), kaon, pion, softPion};
-          acceptedCandidate = true;
-        }
+        candCollection.push_back({mother.Pt(), kaon, pion, softPion});
       }
-
-      if (acceptedCandidate)
-        candCollection.push_back(bestCandidate);
     }
   }
 
   if (candCollection.empty())
     return result;
+  ++eventsWithCandidates_;
+  totalPassingCandidates_ += candCollection.size();
 
   sort(candCollection.begin(), candCollection.end(), [](const ThreeBodyCandidate& a, const ThreeBodyCandidate& b) {
     return a.pt > b.pt;
   });
 
-  map<const reco::Track*, unsigned int> uniqueTrackIndex;
-  for (unsigned int i = 0; i < candCollection.size() && i < theCandNumber; ++i) {
+  const unsigned int maxCandidates = theCandNumber == 0 ? candCollection.size() : theCandNumber;
+  for (unsigned int i = 0; i < candCollection.size() && i < maxCandidates; ++i) {
     const ThreeBodyCandidate& candidate = candCollection[i];
-    if (uniqueTrackIndex.find(candidate.kaon) == uniqueTrackIndex.end()) {
-      result.push_back(candidate.kaon);
-      uniqueTrackIndex[candidate.kaon] = i;
-    }
-    if (uniqueTrackIndex.find(candidate.pion) == uniqueTrackIndex.end()) {
-      result.push_back(candidate.pion);
-      uniqueTrackIndex[candidate.pion] = i;
-    }
-    if (uniqueTrackIndex.find(candidate.softPion) == uniqueTrackIndex.end()) {
-      result.push_back(candidate.softPion);
-      uniqueTrackIndex[candidate.softPion] = i;
-    }
+    addUniqueTrack(result, candidate.kaon);
+    addUniqueTrack(result, candidate.pion);
+    addUniqueTrack(result, candidate.softPion);
   }
+  totalSelectedFlatTracks_ += result.size();
 
   return result;
 }
