@@ -12,7 +12,7 @@
 <library   name="AlignmentCommonAlignmentProducerAsAnalyzerPlugin" file="AlignmentProducerAsAnalyzer.cc">
   <use   name="Alignment/CommonAlignmentProducer"/>
 </library>
-<library   name="CommonAlignmentProducerSelectors" file="Alignment*SelectorModule.cc,AlignmentTrackSelectorWithIndexMapModule.cc,AlignmentMuonHIPTrajectorySelector.cc,V0DaughterTrackProducer.cc,DeDxValueMapProjector.cc,TwoBodyDecayCandidateProducer.cc,VertexCompositeCandidateRemapper.cc">
+<library   name="CommonAlignmentProducerSelectors" file="Alignment*SelectorModule.cc,AlignmentTrackSelectorWithIndexMapModule.cc,AlignmentMuonHIPTrajectorySelector.cc,V0DaughterTrackProducer.cc,DeDxValueMapProjector.cc,TwoBodyDecayCandidateProducer.cc,VertexCompositeCandidateRemapper.cc,JpsiXCandidateProducer.cc,CompositeDaughterTrackProducer.cc">
   <use   name="Alignment/CommonAlignmentProducer"/>
   <use   name="DataFormats/DetId"/>
   <use   name="DataFormats/MuonDetId"/>
@@ -28,9 +28,11 @@
   <use   name="CommonTools/UtilAlgos"/>
   <use   name="CommonTools/RecoAlgos"/>
   <use   name="TrackingTools/PatternTools"/>
+  <use   name="TrackingTools/GeomPropagators"/>
   <use   name="TrackingTools/TrackFitters"/>
   <use   name="TrackingTools/TransientTrackingRecHit"/>
   <use   name="root"/>
+  <flags EDM_PLUGIN="1"/>
 </library>
 <library   name="AlignmentCommonAlignmentProducerGlobal" file="GlobalTrackerMuonAlignment.cc">
   <use   name="root"/>
