@@ -12,6 +12,7 @@
 #include "TrackingTools/TransientTrack/interface/TransientTrackBuilder.h"
 #include "TrackingTools/Records/interface/TransientTrackRecord.h"
 #include "MagneticField/Engine/interface/MagneticField.h"
+#include "TrackingTools/GeomPropagators/interface/AnalyticalImpactPointExtrapolator.h"
 // required for vtx fitting
 #include "RecoVertex/KinematicFitPrimitives/interface/TransientTrackKinematicParticle.h"
 #include "RecoVertex/KinematicFitPrimitives/interface/KinematicParticleFactoryFromTransientTrack.h"
@@ -48,7 +49,21 @@ class ResidualGlobalCorrectionMakerTwoTrackG4e : public ResidualGlobalCorrection
 {
 public:
   ResidualGlobalCorrectionMakerTwoTrackG4e(const edm::ParameterSet &, const CvhMasterThread *);
-  ~ResidualGlobalCorrectionMakerTwoTrackG4e() {}
+  ~ResidualGlobalCorrectionMakerTwoTrackG4e() {
+    // fix-cvh-displaced-starting-state: report per-job counters for the
+    // midPropagated mode. Total = number of (icons-phase × candidate) tries
+    // when useStartingState='midPropagated'; Fallback = subset where the
+    // analytical extrapolation failed on either daughter and the producer
+    // fell back to perigee (Kalman-daughter) per-event.
+    if (midPropagatedTotalCount_ > 0ULL) {
+      const double fallbackPct = 100.0 * static_cast<double>(midPropagatedFallbackCount_)
+                                       / static_cast<double>(midPropagatedTotalCount_);
+      edm::LogInfo("ResidualGlobalCorrectionMakerTwoTrackG4e")
+          << "midPropagated summary: total=" << midPropagatedTotalCount_
+          << "  fallback=" << midPropagatedFallbackCount_
+          << " (" << fallbackPct << "%)";
+    }
+  }
 
 // static void fillDescriptions(edm::ConfigurationDescriptions &descriptions);
 
@@ -82,6 +97,32 @@ private:
   // is preserved exactly.
   bool   doPointingConstraint_;
   double pointingSigma_;        // angular pointing resolution, radians
+
+  // §1 of openspec/improve-cvh-refit-convergence: configurable knobs for
+  // the CVH joint-refit convergence study. Defaults reproduce the
+  // published Run2016H baseline bit-identically (nIters=10,
+  // edmConvergence=1e-5, useStartingState="perigee",
+  // debugPerIterDump=false). Read with existsAs-guards so legacy cfis
+  // that don't set them continue to work.
+  unsigned int nIters_;             // Gauss-Newton iteration cap per icons phase
+  double       edmConvergence_;     // edmval < this -> break (was hard-coded 1e-5)
+  std::string  useStartingState_;   // "perigee" (legacy) | "midPropagated" (lands iter-0 at perigee-midpoint, fix-cvh-displaced-starting-state)
+  // Per-job counter for midPropagated mode: number of events where the
+  // AnalyticalImpactPointExtrapolator returned an invalid TSOS for either
+  // daughter, forcing a per-event fallback to the perigee (Kalman-daughter)
+  // path. Logged from EndJob.
+  mutable unsigned long long midPropagatedFallbackCount_ = 0ULL;
+  mutable unsigned long long midPropagatedTotalCount_    = 0ULL;
+  bool         debugPerIterDump_;   // emit per-iter vector branches when true
+
+  // Per-iteration debug vectors (filled only when debugPerIterDump_=true).
+  // Reset at the top of each event; push_back inside the iter loop.
+  // Spans both icons=0 and icons=1 phases (concatenated in iteration order).
+  std::vector<double> chisqval_iter;
+  std::vector<double> edmval_iter;
+  std::vector<double> deltachisqval_iter;
+  std::vector<double> mu_qoverp_iter;       // 2 entries per iter (muplus, muminus)
+  std::vector<double> Jpsi_mass_iter;       // 1 entry per iter
 
   bool doL1Trigger_;
   edm::EDGetTokenT<L1GlobalTriggerReadoutRecord> inputL1ReadoutRecord_;
@@ -202,12 +243,20 @@ private:
   unsigned int Muplus_nvalidpixel;
   unsigned int Muplus_nmatchedvalid;
   unsigned int Muplus_nambiguousmatchedvalid;
-  
+  // Per-muon counts of hits that survive the alignment-pass quality check
+  // (`morehitquality` block at the per-hit loop). Symmetric with `nvalid`;
+  // diverges from `nvalid` only if a future change introduces hit rejection
+  // in `morehitquality` (currently always true).
+  unsigned int Muplus_nvalidFinal;
+  unsigned int Muplus_nvalidpixelFinal;
+
   unsigned int Muminus_nhits;
   unsigned int Muminus_nvalid;
   unsigned int Muminus_nvalidpixel;
   unsigned int Muminus_nmatchedvalid;
   unsigned int Muminus_nambiguousmatchedvalid;
+  unsigned int Muminus_nvalidFinal;
+  unsigned int Muminus_nvalidpixelFinal;
 
   bool Muplus_highpurity;
   bool Muminus_highpurity;
@@ -312,6 +361,48 @@ ResidualGlobalCorrectionMakerTwoTrackG4e::ResidualGlobalCorrectionMakerTwoTrackG
   pointingSigma_ = iConfig.existsAs<double>("pointingSigma")
       ? iConfig.getParameter<double>("pointingSigma") : 1.e-3;
 
+  // CVH-refit convergence knobs (openspec/improve-cvh-refit-convergence).
+  // Defaults reproduce the published Run2016H baseline bit-identically.
+  nIters_ = iConfig.existsAs<unsigned int>("nIters")
+      ? iConfig.getParameter<unsigned int>("nIters") : 10u;
+  edmConvergence_ = iConfig.existsAs<double>("edmConvergence")
+      ? iConfig.getParameter<double>("edmConvergence") : 1.e-5;
+  useStartingState_ = iConfig.existsAs<std::string>("useStartingState")
+      ? iConfig.getParameter<std::string>("useStartingState") : std::string("perigee");
+  if (useStartingState_ != "perigee" && useStartingState_ != "midPropagated") {
+    throw cms::Exception("Configuration")
+        << "ResidualGlobalCorrectionMakerTwoTrackG4e: useStartingState='"
+        << useStartingState_ << "' not supported. "
+        << "Valid values are: 'perigee', 'midPropagated'.";
+  }
+  if (useStartingState_ == "midPropagated") {
+    // Implementation per openspec/fix-cvh-displaced-starting-state:
+    // each daughter's perigee FreeTrajectoryState is extrapolated (analytical
+    // helix, AnalyticalImpactPointExtrapolator) to the 3D closest approach
+    // to the midpoint of the two daughter perigees. The resulting TSOS is
+    // used as the iter-0 reference state instead of the in-maker Kalman
+    // fit's daughter-state-at-vertex. Motivation: in-maker Kalman fit on
+    // prompt-tracking-perigee inputs can land mm-biased for displaced
+    // J/psi-from-B vertices, putting iter-0 outside the GN convergence
+    // basin (see the K_S vs J/psi residual diagnostic). The geometric
+    // perigee-midpoint is a cheap displacement-aware seed that K_S
+    // gets implicitly from V0Producer; midPropagated grants the same
+    // to J/psi without an upstream Kalman fit.
+    edm::LogInfo("ResidualGlobalCorrectionMakerTwoTrackG4e")
+        << "useStartingState='midPropagated' active. Iter-0 reference state "
+        << "for the joint refit will be the AnalyticalImpactPointExtrapolator "
+        << "output at the perigee-midpoint. On extrapolation failure the "
+        << "producer falls back to 'perigee' per-event and increments "
+        << "midPropagatedFallbackCount_.";
+  }
+  debugPerIterDump_ = iConfig.existsAs<bool>("debugPerIterDump")
+      ? iConfig.getParameter<bool>("debugPerIterDump") : false;
+  edm::LogInfo("ResidualGlobalCorrectionMakerTwoTrackG4e")
+      << "CVH convergence knobs: nIters=" << nIters_
+      << ", edmConvergence=" << edmConvergence_
+      << ", useStartingState=" << useStartingState_
+      << ", debugPerIterDump=" << (debugPerIterDump_ ? "true" : "false");
+
   // Optional per-track dE/dx ValueMaps (Harmonic2 strip + pixel-only),
   // projected onto the ALCARECO selected-track collection by
   // DeDxValueMapProjector. All three of `dedxSourceTracks` (the ALCARECO
@@ -353,6 +444,11 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::beginStream(edm::StreamID streami
   ResidualGlobalCorrectionMakerBase::beginStream(streamid);
   
   if (fillTrackTree_) {
+    // Stage-2 per-row B+ candidate index, branched only when the cfi
+    // configured bCandIdxSrc (additive, no-op for legacy J/psi/Upsilon/Z).
+    if (!bCandIdxSrcTag_.label().empty()) {
+      tree->Branch("bCandIdx", &bCandIdx);
+    }
     // From CVH refit (no mass constraint): per-track parameters at the
     // joint two-track PCA from the GBL/Geant4e fit. Dimuon kinematics are
     // the sum of the per-track 4-vectors. Vertex (x, y, z) and signed
@@ -507,12 +603,16 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::beginStream(edm::StreamID streami
     tree->Branch("Muplus_nhits", &Muplus_nhits);
     tree->Branch("Muplus_nvalid", &Muplus_nvalid);
     tree->Branch("Muplus_nvalidpixel", &Muplus_nvalidpixel);
+    tree->Branch("Muplus_nvalidFinal", &Muplus_nvalidFinal);
+    tree->Branch("Muplus_nvalidpixelFinal", &Muplus_nvalidpixelFinal);
     tree->Branch("Muplus_nmatchedvalid", &Muplus_nmatchedvalid);
     tree->Branch("Muplus_nambiguousmatchedvalid", &Muplus_nambiguousmatchedvalid);
 
     tree->Branch("Muminus_nhits", &Muminus_nhits);
     tree->Branch("Muminus_nvalid", &Muminus_nvalid);
     tree->Branch("Muminus_nvalidpixel", &Muminus_nvalidpixel);
+    tree->Branch("Muminus_nvalidFinal", &Muminus_nvalidFinal);
+    tree->Branch("Muminus_nvalidpixelFinal", &Muminus_nvalidpixelFinal);
     tree->Branch("Muminus_nmatchedvalid", &Muminus_nmatchedvalid);
     tree->Branch("Muminus_nambiguousmatchedvalid", &Muminus_nambiguousmatchedvalid);
 
@@ -588,6 +688,19 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::beginStream(edm::StreamID streami
     tree->Branch("dmassconvval_cons0", &dmassconvval_cons0);
     tree->Branch("dinvmasssqconvval_cons0", &dinvmasssqconvval_cons0);
 
+    // openspec/improve-cvh-refit-convergence §1.5: per-iteration debug
+    // dump. Branches present only when debugPerIterDump_=true. Each
+    // vector spans both icons=0 and icons=1 phases, concatenated in
+    // iteration order. mu_qoverp_iter has 2 entries per iteration
+    // (Muplus, then Muminus); other vectors have 1 entry per iteration.
+    if (debugPerIterDump_) {
+      tree->Branch("chisqval_iter",       &chisqval_iter);
+      tree->Branch("edmval_iter",         &edmval_iter);
+      tree->Branch("deltachisqval_iter",  &deltachisqval_iter);
+      tree->Branch("mu_qoverp_iter",      &mu_qoverp_iter);
+      tree->Branch("Jpsi_mass_iter",      &Jpsi_mass_iter);
+    }
+
     // L1 trigger decisions: one boolean per configured l1Triggers_
     // path (from the channel cfi). Used downstream to re-weight or
     // categorise events by trigger.
@@ -613,6 +726,14 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
   Handle<reco::TrackCollection> trackOrigH;
   iEvent.getByToken(inputTrackOrig_, trackOrigH);
+
+  // Optional Stage-2 B+ candidate index, parallel to inputCandidates_
+  // (or to the fallback legacy track-pair loop). Empty handle => bCandIdx
+  // stays at its -1 sentinel and the branch was not added.
+  Handle<std::vector<int>> bCandIdxH;
+  if (!bCandIdxSrcTag_.label().empty()) {
+    iEvent.getByToken(bCandIdxToken_, bCandIdxH);
+  }
 
   Handle<reco::TrackCollection>   dedxSourceTracksH;
   Handle<edm::ValueMap<float>> dedxHarmonic2H;
@@ -875,27 +996,39 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
   // selection is trusted; no re-pairing or vertex pre-fit). Fallback: the
   // legacy j>i outer-product over the input TrackCollection.
   std::vector<std::array<const reco::Track*, 2>> trackPairs;
+  // Stage-2 per-pair index, accumulated alongside trackPairs so the
+  // per-pair loop below can fill bCandIdx positionally. Empty when no
+  // bCandIdxSrc was configured -- per-row Fill() sees -1.
+  std::vector<int> bCandIdxPerPair;
   if (!inputCandidatesTag_.label().empty()) {
     Handle<reco::VertexCompositeCandidateCollection> candH;
     iEvent.getByToken(inputCandidates_, candH);
     trackPairs.reserve(candH->size());
-    for (const auto& cand : *candH) {
+    bCandIdxPerPair.reserve(candH->size());
+    for (std::size_t ic = 0; ic < candH->size(); ++ic) {
+      const auto& cand = (*candH)[ic];
       if (cand.numberOfDaughters() < 2) continue;
       const auto* d0 = dynamic_cast<const reco::RecoChargedCandidate*>(cand.daughter(0));
       const auto* d1 = dynamic_cast<const reco::RecoChargedCandidate*>(cand.daughter(1));
       if (!d0 || !d1 || d0->track().isNull() || d1->track().isNull()) continue;
       trackPairs.push_back({{&*d0->track(), &*d1->track()}});
+      bCandIdxPerPair.push_back(
+          (bCandIdxH.isValid() && ic < bCandIdxH->size()) ? (*bCandIdxH)[ic] : -1);
     }
   } else {
     if (trackOrigH->size() >= 2) {
       trackPairs.reserve(trackOrigH->size() * (trackOrigH->size() - 1) / 2);
     }
     for (auto itrack = trackOrigH->begin(); itrack != trackOrigH->end(); ++itrack)
-      for (auto jtrack = itrack + 1; jtrack != trackOrigH->end(); ++jtrack)
+      for (auto jtrack = itrack + 1; jtrack != trackOrigH->end(); ++jtrack) {
         trackPairs.push_back({{&*itrack, &*jtrack}});
+        bCandIdxPerPair.push_back(-1);  // no candidate-level index in the legacy outer-product
+      }
   }
 
-  for (auto& trackPair : trackPairs) {
+  for (std::size_t ipair = 0; ipair < trackPairs.size(); ++ipair) {
+    auto& trackPair = trackPairs[ipair];
+    bCandIdx = bCandIdxPerPair[ipair];
     const reco::Track* itrack = trackPair[0];
     const reco::Track* jtrack = trackPair[1];
     if (itrack->isLooper() || jtrack->isLooper()) {
@@ -1100,6 +1233,13 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
       std::array<unsigned int, 2> nhitsarr = {{ 0, 0 }};
       std::array<unsigned int, 2> nvalidarr = {{ 0, 0 }};
       std::array<unsigned int, 2> nvalidpixelarr = {{ 0, 0 }};
+      // Per-track Final counters parallel to nvalidarr / nvalidpixelarr,
+      // incremented in the per-hit loop only when `morehitquality` passes
+      // (currently always true). Filled to Mu{plus,minus}_nvalidFinal at
+      // the per-event branch-write block. Symmetric with the existing
+      // nvalid arrays so the per-muon final-hit counts are observable.
+      std::array<unsigned int, 2> nvalidFinalarr = {{ 0, 0 }};
+      std::array<unsigned int, 2> nvalidpixelFinalarr = {{ 0, 0 }};
       std::array<unsigned int, 2> nmatchedvalidarr = {{ 0, 0 }};
       std::array<unsigned int, 2> nambiguousmatchedvalidarr = {{ 0, 0 }};
       
@@ -1269,7 +1409,19 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
       const unsigned int nicons = doMassConstraint_ ? 2 : 1;
 // const unsigned int nicons = doMassConstraint_ ? 3 : 1;
-      
+
+      // openspec/improve-cvh-refit-convergence §1.5: clear per-iter
+      // debug vectors at the start of this candidate. push_back happens
+      // inside the iter loop below; the vectors span both icons phases
+      // concatenated in order.
+      if (debugPerIterDump_) {
+        chisqval_iter.clear();
+        edmval_iter.clear();
+        deltachisqval_iter.clear();
+        mu_qoverp_iter.clear();
+        Jpsi_mass_iter.clear();
+      }
+
       for (unsigned int icons = 0; icons < nicons; ++icons) {
 
         // Sparse GBL constraint-row count for this icons pass:
@@ -1357,19 +1509,57 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           refftsarr[1][6] = mu1gen->charge();
         }
         else {
-          for (unsigned int id = 0; id < 2; ++id) {
-            const GlobalPoint pos = outparts[id]->currentState().freeTrajectoryState().position();
-            const GlobalVector mom = outparts[id]->currentState().freeTrajectoryState().momentum();
-            
-            refftsarr[id][0] = pos.x();
-            refftsarr[id][1] = pos.y();
-            refftsarr[id][2] = pos.z();
-            refftsarr[id][3] = mom.x();
-            refftsarr[id][4] = mom.y();
-            refftsarr[id][5] = mom.z();
-            refftsarr[id][6] = outparts[id]->currentState().freeTrajectoryState().charge();
+          // useStartingState_ == "midPropagated": analytical extrapolation of
+          // each daughter's perigee FTS to the midpoint of the two perigees.
+          // Falls back to the perigee (Kalman-daughter) path per-event when
+          // either extrapolation returns an invalid TSOS.
+          bool midPropOk = false;
+          if (useStartingState_ == "midPropagated") {
+            ++midPropagatedTotalCount_;
+            const FreeTrajectoryState fts0 = itt.initialFreeState();
+            const FreeTrajectoryState fts1 = jtt.initialFreeState();
+            const GlobalPoint p0 = fts0.position();
+            const GlobalPoint p1 = fts1.position();
+            const GlobalPoint mid(0.5 * (p0.x() + p1.x()),
+                                  0.5 * (p0.y() + p1.y()),
+                                  0.5 * (p0.z() + p1.z()));
+            AnalyticalImpactPointExtrapolator extrap(field);
+            const TrajectoryStateOnSurface tsos0 = extrap.extrapolate(fts0, mid);
+            const TrajectoryStateOnSurface tsos1 = extrap.extrapolate(fts1, mid);
+            if (tsos0.isValid() && tsos1.isValid()) {
+              for (unsigned int id = 0; id < 2; ++id) {
+                const TrajectoryStateOnSurface& tsos = (id == 0 ? tsos0 : tsos1);
+                const GlobalPoint  pos = tsos.globalPosition();
+                const GlobalVector mom = tsos.globalMomentum();
+                refftsarr[id][0] = pos.x();
+                refftsarr[id][1] = pos.y();
+                refftsarr[id][2] = pos.z();
+                refftsarr[id][3] = mom.x();
+                refftsarr[id][4] = mom.y();
+                refftsarr[id][5] = mom.z();
+                refftsarr[id][6] = static_cast<double>(tsos.charge());
+              }
+              midPropOk = true;
+            } else {
+              ++midPropagatedFallbackCount_;
+            }
           }
-          
+          if (!midPropOk) {
+            // perigee (Kalman-daughter) path -- the legacy / default code,
+            // also the fallback when midPropagated extrapolation fails.
+            for (unsigned int id = 0; id < 2; ++id) {
+              const GlobalPoint pos = outparts[id]->currentState().freeTrajectoryState().position();
+              const GlobalVector mom = outparts[id]->currentState().freeTrajectoryState().momentum();
+
+              refftsarr[id][0] = pos.x();
+              refftsarr[id][1] = pos.y();
+              refftsarr[id][2] = pos.z();
+              refftsarr[id][3] = mom.x();
+              refftsarr[id][4] = mom.y();
+              refftsarr[id][5] = mom.z();
+              refftsarr[id][6] = outparts[id]->currentState().freeTrajectoryState().charge();
+            }
+          }
         }
         
         std::array<std::vector<Matrix<double, 7, 1>>, 2> layerStatesarr;
@@ -1388,16 +1578,26 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 // constexpr unsigned int niters = 3;
 // constexpr unsigned int niters = 5;
 // constexpr unsigned int niters = 10;
-        
+
 // constexpr unsigned int niters = 1;
-        const unsigned int niters = (dogen && !dolocalupdate) ? 1 : 10;
+        // openspec/improve-cvh-refit-convergence §1.2: cap configurable via
+        // nIters_ (cfi default 10 reproduces the baseline).
+        const unsigned int niters = (dogen && !dolocalupdate) ? 1 : nIters_;
 
 
 // const unsigned int niters = icons == 0 ? 10 : 1;
         
 
         for (unsigned int iiter=0; iiter<niters; ++iiter) {
-          
+
+          // Per-iter Final-counter reset (openspec §1.6). The per-hit loop
+          // below runs once per iter; without resetting here, nvalidFinalarr
+          // accumulates as nhits × niter. Resetting at the top of each iter
+          // means the final value (read after the iter loop) is the LAST
+          // iter's pass count -- exactly what "Final" semantically denotes.
+          nvalidFinalarr = {{ 0, 0 }};
+          nvalidpixelFinalarr = {{ 0, 0 }};
+
           // Sparse GBL assembly buffers (replaces dense gradfull/hessfull).
           // Ffull = d(residual)/d(state)  [ncons x nstateparms]
           // Jfull = d(residual)/d(globalparm)  [ncons x npars]
@@ -2173,8 +2373,10 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
                   if (morehitquality) {
                     nValidHitsFinal++;
+                    nvalidFinalarr[id]++;
                     if (ispixel) {
                       nValidPixelHitsFinal++;
+                      nvalidpixelFinalarr[id]++;
                     }
                   }
                   else {
@@ -2818,12 +3020,16 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           Muplus_nhits = nhitsarr[idxplus];
           Muplus_nvalid = nvalidarr[idxplus];
           Muplus_nvalidpixel = nvalidpixelarr[idxplus];
+          Muplus_nvalidFinal = nvalidFinalarr[idxplus];
+          Muplus_nvalidpixelFinal = nvalidpixelFinalarr[idxplus];
           Muplus_nmatchedvalid = nmatchedvalidarr[idxplus];
           Muplus_nambiguousmatchedvalid = nambiguousmatchedvalidarr[idxplus];
           
           Muminus_nhits = nhitsarr[idxminus];
           Muminus_nvalid = nvalidarr[idxminus];
           Muminus_nvalidpixel = nvalidpixelarr[idxminus];
+          Muminus_nvalidFinal = nvalidFinalarr[idxminus];
+          Muminus_nvalidpixelFinal = nvalidpixelFinalarr[idxminus];
           Muminus_nmatchedvalid = nmatchedvalidarr[idxminus];
           Muminus_nambiguousmatchedvalid = nambiguousmatchedvalidarr[idxminus];
           
@@ -3054,7 +3260,43 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             edmval_cons0 = edmval;
             niter_cons0 = niter;
           }
-          
+
+          // openspec/improve-cvh-refit-convergence §1.5: per-iter debug
+          // dump. Records the full trace (chisqval, edmval, deltachisqval,
+          // per-muon q/p, dimuon mass) across both icons phases for this
+          // candidate. Pushed before the convergence-break check so the
+          // break-triggering iteration is included.
+          if (debugPerIterDump_) {
+            chisqval_iter.push_back(static_cast<double>(chisqval));
+            edmval_iter.push_back(static_cast<double>(edmval));
+            deltachisqval_iter.push_back(static_cast<double>(deltachisqval));
+            for (unsigned int id = 0; id < 2; ++id) {
+              const double px = refftsarr[id][3];
+              const double py = refftsarr[id][4];
+              const double pz = refftsarr[id][5];
+              const double pmag = std::sqrt(px*px + py*py + pz*pz);
+              const double qop = (pmag > 0.0)
+                                     ? refftsarr[id][6] / pmag
+                                     : 0.0;
+              mu_qoverp_iter.push_back(qop);
+            }
+            const double m0 = daughterMass1_;
+            const double m1 = daughterMass2_;
+            const double E0 = std::sqrt(refftsarr[0][3] * refftsarr[0][3] +
+                                        refftsarr[0][4] * refftsarr[0][4] +
+                                        refftsarr[0][5] * refftsarr[0][5] +
+                                        m0 * m0);
+            const double E1 = std::sqrt(refftsarr[1][3] * refftsarr[1][3] +
+                                        refftsarr[1][4] * refftsarr[1][4] +
+                                        refftsarr[1][5] * refftsarr[1][5] +
+                                        m1 * m1);
+            const double Px = refftsarr[0][3] + refftsarr[1][3];
+            const double Py = refftsarr[0][4] + refftsarr[1][4];
+            const double Pz = refftsarr[0][5] + refftsarr[1][5];
+            const double m2 = (E0 + E1) * (E0 + E1) - Px * Px - Py * Py - Pz * Pz;
+            Jpsi_mass_iter.push_back(m2 > 0.0 ? std::sqrt(m2) : 0.0);
+          }
+
 // std::cout << "icons = " << icons << " iiter = " << iiter << " edmval = " << edmval << " deltachisqval = " << deltachisqval << " chisqval = " << chisqval << std::endl;
 // std::cout << "dxvtx" << std::endl;
           
@@ -3086,10 +3328,12 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 // break;
 // }
           
-          if (iiter > 0 && dolocalupdate && edmval < 1e-5) {
+          // openspec/improve-cvh-refit-convergence §1.3: threshold configurable
+          // via edmConvergence_ (cfi default 1e-5 reproduces the baseline).
+          if (iiter > 0 && dolocalupdate && edmval < edmConvergence_) {
             break;
           }
-          else if (iiter > 0 && !dolocalupdate && edmvalref < 1e-5) {
+          else if (iiter > 0 && !dolocalupdate && edmvalref < edmConvergence_) {
             break;
           }
           

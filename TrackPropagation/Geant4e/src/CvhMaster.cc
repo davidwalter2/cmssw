@@ -80,6 +80,10 @@ void CvhMaster::initG4(const DDCompactView* pDD,
 
   // Master magnetic field. Workers set up their own per-thread field
   // manager attached to the same MagneticField object in CvhWorker.
+  //
+  // [openspec §9.4.iv] Tested SKIPPING this master-side FieldBuilder.build()
+  // — the G4-field 2× anomaly PERSISTED (still 2.00006). So the master's
+  // contribution is NOT the doubler. Restored to baseline.
   if (m_pUseMagneticField) {
     m_pMagField = pMF;
     sim::FieldBuilder fieldBuilder(m_pMagField, m_pField);

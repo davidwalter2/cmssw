@@ -185,6 +185,15 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
     inputCandidates_ = consumes<reco::VertexCompositeCandidateCollection>(inputCandidatesTag_);
   }
 
+  // Optional Stage-2 B+ candidate index transport. Mirrors the
+  // srcCandidates pattern above: existsAs<InputTag> + label-empty switch.
+  bCandIdxSrcTag_ = iConfig.existsAs<edm::InputTag>("bCandIdxSrc")
+      ? iConfig.getParameter<edm::InputTag>("bCandIdxSrc")
+      : edm::InputTag();
+  if (!bCandIdxSrcTag_.label().empty()) {
+    bCandIdxToken_ = consumes<std::vector<int>>(bCandIdxSrcTag_);
+  }
+
   fitFromGenParms_ = iConfig.getParameter<bool>("fitFromGenParms");
   fitFromSimParms_ = iConfig.getParameter<bool>("fitFromSimParms");
   fillTrackTree_ = iConfig.getParameter<bool>("fillTrackTree");
@@ -943,20 +952,34 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
     corparmsIncremental_.assign(corFiles_.size(), std::vector<double>(parmset.size(), 0.));
     corparms_.assign(parmset.size(), 0.);
 
-    // Seed the parmtype-14 entries with the absolute initial coefficients
-    // from the dump file. corFiles entries for parmtype-14 are deltas-on-old-
-    // basis and don't translate cleanly to the new absolute-field paramset,
-    // so they are skipped on load (semantics deferred -- "Out of scope" in
-    // ).
+    // Originally seeded corparms_ parmtype-14 entries with absolute initial
+    // coefficients from the scalar-potential dump file. Disabled — see FIXME
+    // below for the root-cause analysis. corFiles
+    // parmtype-14 entries are deltas-on-old-basis and don't translate cleanly
+    // to the absolute-field paramset, so they are still skipped on load.
     {
-      const auto& initCoeffs = fieldCorrection_->initCoeffs();
-      const unsigned int nFieldModes = fieldCorrection_->nModes();
-      assert(initCoeffs.size() == nFieldModes);
-      for (unsigned int imode = 0; imode < nFieldModes; ++imode) {
-        corparms_[fieldCorrection_->basisGlobalIdx(imode)] = initCoeffs[imode];
-      }
-      std::cout << "scalar-potential init: seeded " << nFieldModes
-                << " parmtype-14 modes from " << scalarPotentialInitFile_
+      // FIXME: scalar-potential seeding disabled. Seeding
+      // corparms_ with the absolute initCoeffs caused getCorrectionAt() to
+      // return the full CMSSW base field as `dB`, which the propagator then
+      // added on top of the base in BOTH the analytic Jacobian and the G4
+      // stepper, doubling the effective B and halving refit q/p. Leaving
+      // corparms_ at zero restores pre-aa7f5893bb3 semantics (corrections
+      // start at zero and are fitted as deltas). Proper fix: either seed
+      // with (initCoeffs - harmonic expansion of base field) so corparms_
+      // is a true delta, or redefine getCorrectionAt() to return a delta.
+      // Until then, do not seed.
+      //
+      // const auto& initCoeffs = fieldCorrection_->initCoeffs();
+      // const unsigned int nFieldModes = fieldCorrection_->nModes();
+      // assert(initCoeffs.size() == nFieldModes);
+      // for (unsigned int imode = 0; imode < nFieldModes; ++imode) {
+      //   corparms_[fieldCorrection_->basisGlobalIdx(imode)] = initCoeffs[imode];
+      // }
+      // std::cout << "scalar-potential init: seeded " << nFieldModes
+      //           << " parmtype-14 modes from " << scalarPotentialInitFile_
+      //           << std::endl;
+      std::cout << "scalar-potential init: corparms_ left at ZERO "
+                   "(FIXME: seeding disabled pending proper delta-basis fix)"
                 << std::endl;
     }
 

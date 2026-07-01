@@ -5,6 +5,8 @@
 <use name="DataFormats/TrackReco"/>
 <use name="DataFormats/SiStripDetId"/>
 <use name="DataFormats/HepMCCandidate"/>
+<use name="DataFormats/Candidate"/>
+<use name="DataFormats/RecoCandidate"/>
 <use name="DataFormats/MuonReco"/>
 <use name="DataFormats/PatCandidates"/>
 <use name="TrackingTools/PatternTools"/>

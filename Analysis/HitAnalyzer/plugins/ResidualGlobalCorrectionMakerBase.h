@@ -286,6 +286,14 @@ protected:
   // runtime switch.
   edm::EDGetTokenT<reco::VertexCompositeCandidateCollection> inputCandidates_;
   edm::InputTag inputCandidatesTag_;
+  // Optional Stage-2 per-row B+ candidate index. When `bCandIdxSrc` is
+  // configured non-empty, a parallel std::vector<int> (same length + order
+  // as the per-row source collection -- trackOrigH for the single-track
+  // maker, inputCandidates_ for the two-track maker's fast path) is read
+  // and an `int bCandIdx` branch is added to the per-row output tree.
+  // Empty => no branch added; bCandIdx member stays at sentinel -1.
+  edm::EDGetTokenT<std::vector<int>> bCandIdxToken_;
+  edm::InputTag bCandIdxSrcTag_;
   edm::EDGetTokenT<std::vector<int> > inputIndices_;
   edm::EDGetTokenT<reco::BeamSpot> inputBs_;
 // edm::EDGetTokenT<std::vector<PSimHit>> inputSimHits_;
@@ -354,6 +362,10 @@ protected:
   
   unsigned int nValidHitsFinal;
   unsigned int nValidPixelHitsFinal;
+
+  // Stage-2 per-row B+ candidate index (filled per Fill() call when the
+  // optional bCandIdxToken_ is configured; -1 sentinel otherwise).
+  int bCandIdx = -1;
   
   float gradmax;
   float hessmax;

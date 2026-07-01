@@ -138,6 +138,11 @@ void ResidualGlobalCorrectionMakerG4e::beginStream(edm::StreamID streamid)
     tree->Branch("trackPhi", &trackPhi, basketSize);
     tree->Branch("trackCharge", &trackCharge, basketSize);
     tree->Branch("trackQopErr", &trackQopErr);
+    // Stage-2 per-row B+ candidate index, branched only when the cfi
+    // configured bCandIdxSrc (additive, no-op for legacy J/psi/Upsilon/Z).
+    if (!bCandIdxSrcTag_.label().empty()) {
+      tree->Branch("bCandIdx", &bCandIdx, basketSize);
+    }
     //workaround for older ROOT version inability to store std::array automatically
   // tree->Branch("trackOrigParms", trackOrigParms.data(), "trackOrigParms[5]/F", basketSize);
   // tree->Branch("trackOrigCov", trackOrigCov.data(), "trackOrigCov[25]/F", basketSize);
@@ -169,9 +174,16 @@ void ResidualGlobalCorrectionMakerG4e::beginStream(edm::StreamID streamid)
     tree->Branch("nHits", &nHits, basketSize);
     tree->Branch("nValidHits", &nValidHits, basketSize);
     tree->Branch("nValidPixelHits", &nValidPixelHits, basketSize);
-    
-    tree->Branch("nValidHitsFinal", &nValidHitsFinal);
-    tree->Branch("nValidPixelHitsFinal", &nValidPixelHitsFinal);
+
+    // openspec/improve-cvh-refit-convergence §2: the `nValidHitsFinal` and
+    // `nValidPixelHitsFinal` branches previously emitted here were declared,
+    // initialised to 0, and never incremented in this single-track producer
+    // (the per-hit loop has no `morehitquality` quality gate). The branches
+    // therefore wrote literal 0 for every event in the published Run2016H
+    // sample, falsely suggesting that 100% of kaon hits had been dropped by
+    // the refit (`Kbach_nValidHitsFinal=0` in the joined tree). Removed
+    // entirely until a real per-hit rejection mechanism lands and the
+    // counters can carry meaningful information.
 
     if (fillJac_) {
       tree->Branch("nJacRef", &nJacRef, basketSize);
@@ -322,6 +334,14 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   Handle<reco::TrackCollection> trackOrigH;
   iEvent.getByToken(inputTrackOrig_, trackOrigH);
 
+  // Optional Stage-2 B+ candidate index, parallel to trackOrigH. Empty
+  // handle when bCandIdxSrc is not configured -- per-row bCandIdx stays at
+  // its -1 sentinel and the branch was not added in beginStream().
+  Handle<std::vector<int>> bCandIdxH;
+  if (!bCandIdxSrcTag_.label().empty()) {
+    iEvent.getByToken(bCandIdxToken_, bCandIdxH);
+  }
+
   auto globalGeometry = iSetup.getHandle(globalGeometryEventToken_);
   auto trackerTopology = iSetup.getHandle(trackerTopologyEventToken_);
   auto ttrh = iSetup.getHandle(ttrhToken_);
@@ -436,6 +456,11 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   for (unsigned int itrack = 0; itrack < trackOrigH->size(); ++itrack) {
     const reco::Track &track = (*trackOrigH)[itrack];
     const reco::TrackRef trackref(trackOrigH, itrack);
+
+    // Stage-2: positionally read the bCandIdx for this row, defaulting to
+    // -1 if the optional input is absent or shorter than expected.
+    bCandIdx = (bCandIdxH.isValid() && itrack < bCandIdxH->size())
+        ? (*bCandIdxH)[itrack] : -1;
 
     // Build the per-track Geant4 particle-name override once. Naming logic
     // shared with the two-track ntuplizer via the base-class helper.
@@ -759,7 +784,12 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     
     nValidHits = nvalid;
     nValidPixelHits = nvalidpixel;
-    
+    // openspec/improve-cvh-refit-convergence §2: per-event resets of the
+    // (now-unbranched) base-class nValidHitsFinal / nValidPixelHitsFinal
+    // counters. The two-track maker still uses these as a running sum;
+    // resetting here avoids inherited state if that maker runs in the
+    // same job, even though the values are never emitted from this
+    // single-track producer.
     nValidHitsFinal = 0;
     nValidPixelHitsFinal = 0;
     
@@ -911,10 +941,47 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       }
     }
 
+    // [openspec §9.4.a] One-shot kaon-q/p diagnostic. Prints the input
+    // track perigee, the cartesian `refFts` state we just built, and the
+    // implied input q/p. Repeated at end-of-iteration (around line ~2500
+    // post-`qbpupd`) to compare against the refit's q/p. First N kaon
+    // tracks only to keep logs short.
+    static std::atomic<int> kaonQpDumpCount{0};
+    constexpr int kKaonQpDumpMax = 5;
+    // Gate widened from "kaon" to "kaon || mu" so the §9.4.c mass-hypothesis
+    // A/B (kaonAsMuon=True ⇒ trackParticleName="mu" on the kaon collection)
+    // still fires the diagnostic. Single-track G4e maker is only used here
+    // by the bachelor-kaon path in `runCvhBplusJpsiK.py`, so this is safe.
+    const bool dumpKaonQp = (trackParticleName_ == "kaon" || trackParticleName_ == "mu")
+                          && (kaonQpDumpCount.load() < kKaonQpDumpMax);
+    if (dumpKaonQp) {
+      kaonQpDumpCount.fetch_add(1);
+      const double inP = std::sqrt(track.momentum().mag2());
+      const double refP = refFts.segment<3>(3).norm();
+      const double qOverPin = track.charge() / std::max(inP, 1e-12);
+      const double qOverPref0 = refFts[6] / std::max(refP, 1e-12);
+      std::cout << "===== [§9.4.a kaon q/p ENTRY] track #" << kaonQpDumpCount.load() << " =====\n"
+                << "  input track : charge=" << track.charge()
+                << "  pt=" << track.pt() << "  eta=" << track.eta()
+                << "  phi=" << track.phi() << "  |p|=" << inP
+                << "  q/p=" << qOverPin << "\n"
+                << "  refFts(in)  : charge[6]=" << refFts[6]
+                << "  mom=("  << refFts[3] << "," << refFts[4] << "," << refFts[5] << ")"
+                << "  |p|="    << refP
+                << "  q/p="    << qOverPref0 << "\n"
+                << "  track.parameters() = " << track.parameters() << std::endl;
+    }
+
     if (dopca) {
       // enforce that reference state is really a consistent PCA to the beamline (by adjusting the reference position if needed)
       const Matrix<double, 5, 1> statepca = cart2pca(refFts, *bsH);
       refFts = pca2cart(statepca, *bsH);
+    }
+    if (dumpKaonQp) {
+      const double refP = refFts.segment<3>(3).norm();
+      std::cout << "  refFts(pca) : charge[6]=" << refFts[6]
+                << "  |p|=" << refP
+                << "  q/p=" << refFts[6]/std::max(refP, 1e-12) << std::endl;
     }
 
     std::vector<Matrix<double, 7, 1>> layerStates;
@@ -2467,7 +2534,26 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       const double qbpupd = qbp + dxref[0];
       const double lamupd = lam + dxref[1];
       const double phiupd = phi + dxref[2];
-      
+
+      // [openspec §9.4.a] One-shot kaon-q/p diagnostic, exit side. Compares
+      // the post-iteration refit q/p (qbpupd) to the input track q/p, plus
+      // the iteration-end |p|.
+      if (dumpKaonQp) {
+        const double refP = refFts.segment<3>(3).norm();
+        const double inP = std::sqrt(track.momentum().mag2());
+        std::cout << "===== [§9.4.a kaon q/p EXIT] track itrack=" << itrack << " =====\n"
+                  << "  refFts(end) : charge[6]=" << refFts[6]
+                  << "  |p|=" << refP
+                  << "  qbp_pre=" << qbp << "  dxref[0]=" << dxref[0]
+                  << "  qbpupd="  << qbpupd << "\n"
+                  << "  input     : q/p=" << track.charge()/std::max(inP, 1e-12)
+                  << "  |p|=" << inP << "\n"
+                  << "  ratio refit/input  q/p=" << qbpupd/(track.charge()/std::max(inP, 1e-12))
+                  << "  |p|=" << refP/std::max(inP, 1e-12)
+                  << "  lam ref/in=" << lamupd << "/" << std::atan(track.momentum().z()/track.pt())
+                  << std::endl;
+      }
+
       refParms[0] = qbpupd;
       refParms[1] = lamupd;
       refParms[2] = phiupd;
