@@ -12,7 +12,7 @@
 <library   name="AlignmentCommonAlignmentProducerAsAnalyzerPlugin" file="AlignmentProducerAsAnalyzer.cc">
   <use   name="Alignment/CommonAlignmentProducer"/>
 </library>
-<library   name="CommonAlignmentProducerSelectors" file="Alignment*SelectorModule.cc,AlignmentTrackSelectorWithIndexMapModule.cc,AlignmentMuonHIPTrajectorySelector.cc,V0DaughterTrackProducer.cc,DeDxValueMapProjector.cc,TwoBodyDecayCandidateProducer.cc,VertexCompositeCandidateRemapper.cc,JpsiXCandidateProducer.cc,CompositeDaughterTrackProducer.cc">
+<library   name="CommonAlignmentProducerSelectors" file="Alignment*SelectorModule.cc,AlignmentTrackSelectorWithIndexMapModule.cc,AlignmentMuonHIPTrajectorySelector.cc,AlignmentTrackToMuonAssociator.cc,V0DaughterTrackProducer.cc,DeDxValueMapProjector.cc,TwoBodyDecayCandidateProducer.cc,VertexCompositeCandidateRemapper.cc,JpsiXCandidateProducer.cc,CompositeDaughterTrackProducer.cc">
   <use   name="Alignment/CommonAlignmentProducer"/>
   <use   name="DataFormats/DetId"/>
   <use   name="DataFormats/MuonDetId"/>

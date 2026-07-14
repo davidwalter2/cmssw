@@ -76,38 +76,40 @@ _PRESETC_KALMAN = dict(
 
 # Per-channel non-V0 kinematic + geometric cuts. Mass windows are NOT keyed by
 # preset -- they are channel-defining. Phase-1 lock: A vs B on B+ MC settled
-# preset B at (Muon_pt>4, |kaon_eta|<1.8, kaon-mu-DOCA<0.03 cm, raw J/psi pT > 3,
+# preset B at (Muon_pt>4, |kaon_eta|<2.5, kaon-mu-DOCA<0.03 cm, raw J/psi pT > 3,
 # raw B pT > 5). Bachelor / daughter pT lowered from 1.5 / 1.0 GeV to 0.1 GeV
 # to align with the V0 clone's tkPtCut and serve the alignment use case
 # (openspec change add-jpsi-x-vertex-fit-and-low-pt).
+# Bachelor / daughter eta cap raised to the tracker acceptance edge (2.5)
+# under every preset (openspec change add-jpsi-x-muons-and-preprod-refinements).
 _NON_V0_PRESETS = {
     'A': {
-        'BPlus':   dict(minBachelorPt=0.5,  maxBachelorEta=2.4, minJpsiPt=0., minMotherPt=0.,
+        'BPlus':   dict(minBachelorPt=0.5,  maxBachelorEta=2.5, minJpsiPt=0., minMotherPt=0.,
                         maxBachelorMuTrackDOCA=_DISABLED),
-        'Bc':      dict(minBachelorPt=0.3,  maxBachelorEta=2.4, minJpsiPt=0., minMotherPt=0.,
+        'Bc':      dict(minBachelorPt=0.3,  maxBachelorEta=2.5, minJpsiPt=0., minMotherPt=0.,
                         maxBachelorMuTrackDOCA=_DISABLED),
         'B0Kstar': dict(minJpsiPt=0., minMotherPt=0., maxBachelorMuTrackDOCA=_DISABLED),
         'BsPhi':   dict(minJpsiPt=0., minMotherPt=0., maxBachelorMuTrackDOCA=_DISABLED),
         # K*0 / phi sub-resonance daughter cuts (TwoBodyDecayCandidateProducer)
-        'Kstar':   dict(minDaughterPt=0.0, maxDaughterEta=2.4),
-        'Phi':     dict(minDaughterPt=0.0, maxDaughterEta=2.4),
+        'Kstar':   dict(minDaughterPt=0.0, maxDaughterEta=2.5),
+        'Phi':     dict(minDaughterPt=0.0, maxDaughterEta=2.5),
     },
     'B': {
-        'BPlus':   dict(minBachelorPt=0.1,  maxBachelorEta=1.8, minJpsiPt=3., minMotherPt=5.,
+        'BPlus':   dict(minBachelorPt=0.1,  maxBachelorEta=2.5, minJpsiPt=3., minMotherPt=5.,
                         maxBachelorMuTrackDOCA=0.03),
-        'Bc':      dict(minBachelorPt=0.1,  maxBachelorEta=1.8, minJpsiPt=3., minMotherPt=5.,
+        'Bc':      dict(minBachelorPt=0.1,  maxBachelorEta=2.5, minJpsiPt=3., minMotherPt=5.,
                         maxBachelorMuTrackDOCA=0.03),
         'B0Kstar': dict(minJpsiPt=3., minMotherPt=5., maxBachelorMuTrackDOCA=0.03),
         'BsPhi':   dict(minJpsiPt=3., minMotherPt=5., maxBachelorMuTrackDOCA=0.03),
         # K*0 / phi sub-resonance daughter cuts
-        'Kstar':   dict(minDaughterPt=0.1, maxDaughterEta=1.8),
-        'Phi':     dict(minDaughterPt=0.1, maxDaughterEta=1.8),
+        'Kstar':   dict(minDaughterPt=0.1, maxDaughterEta=2.5),
+        'Phi':     dict(minDaughterPt=0.1, maxDaughterEta=2.5),
     },
     'C': {
         # Inherits updated preset B kinematics; adds Kalman vertex-fit cuts.
-        'BPlus':   dict(minBachelorPt=0.1,  maxBachelorEta=1.8, minJpsiPt=3., minMotherPt=5.,
+        'BPlus':   dict(minBachelorPt=0.1,  maxBachelorEta=2.5, minJpsiPt=3., minMotherPt=5.,
                         maxBachelorMuTrackDOCA=0.03, **_PRESETC_KALMAN),
-        'Bc':      dict(minBachelorPt=0.1,  maxBachelorEta=1.8, minJpsiPt=3., minMotherPt=5.,
+        'Bc':      dict(minBachelorPt=0.1,  maxBachelorEta=2.5, minJpsiPt=3., minMotherPt=5.,
                         maxBachelorMuTrackDOCA=0.03, **_PRESETC_KALMAN),
         'B0Kstar': dict(minJpsiPt=3., minMotherPt=5., maxBachelorMuTrackDOCA=0.03,
                         **_PRESETC_KALMAN),
@@ -117,8 +119,8 @@ _NON_V0_PRESETS = {
         # Kalman fit added here -- the B-level multi-body fit in
         # JpsiXCandidateProducer already constrains all leaf tracks to a common
         # B vertex).
-        'Kstar':   dict(minDaughterPt=0.1, maxDaughterEta=1.8),
-        'Phi':     dict(minDaughterPt=0.1, maxDaughterEta=1.8),
+        'Kstar':   dict(minDaughterPt=0.1, maxDaughterEta=2.5),
+        'Phi':     dict(minDaughterPt=0.1, maxDaughterEta=2.5),
     },
 }[_TKALJPSIX_SELECTION_PRESET]
 
@@ -148,6 +150,18 @@ ALCARECOTkAlJpsiXDCSFilter = DPGAnalysis.Skims.skim_detstatus_cfi.dcsstatus.clon
 
 import Alignment.CommonAlignmentProducer.TkAlMuonSelectors_cfi
 ALCARECOTkAlJpsiXGoodMuons = Alignment.CommonAlignmentProducer.TkAlMuonSelectors_cfi.TkAlGoodIdMuonSelector.clone()
+
+# Looser muon selector for the J/psi-only production channel below.
+# Superset of ALCARECOTkAlJpsiXGoodMuons by construction (relaxes the
+# tracker&global AND to OR, drops the two globalTrack.* sub-cuts). Also
+# doubles as the persisted-muon source (ALCARECOTkAlJpsiXMuons) since a
+# superset of the tight selector's output.
+ALCARECOTkAlJpsiXLooseMuons = Alignment.CommonAlignmentProducer.TkAlMuonSelectors_cfi.TkAlLooseIdMuonSelector.clone(
+    filter = cms.bool(False)   ## don't gate the event on loose-muon presence;
+                               ## the tight selector gates it, which is a
+                               ## subset so loose is already non-empty when
+                               ## tight is
+)
 
 # ---------------------------------------------------------------------------
 # Stage 1 -- Shared candidate construction
@@ -199,6 +213,48 @@ ALCARECOTkAlJpsiXKstarCandidates = cms.EDProducer('TwoBodyDecayCandidateProducer
     acoplanarDistance       = cms.double(1.0),
     applyVertexFit          = cms.bool(False),   ## no Kalman fit at AlCaReco (cost)
     minVtxProb              = cms.double(0.0),
+)
+
+# Dipion pair for psi(2S) -> J/psi pi+pi- (BR ~34.7 %). This replaces
+# the previous psi(2S) wiring which sourced pi+pi- from the V0 Ks
+# output -- that was a physics bug (psi(2S) does not have a Ks-quality
+# displaced pi+pi- vertex; the dipion is at the psi(2S) decay vertex).
+# psi(2S) itself can be prompt (~80 % of the total psi(2S) rate at CMS)
+# or non-prompt from B decays (~20 %); this producer accepts both since
+# preset B applies no displacement cut. See openspec change
+# add-jpsi-x-muons-and-preprod-refinements.
+#
+# Mass window (0.28, 0.65) covers the physical dipion mass range: 2*m_pi
+# threshold at 0.279 GeV up to (m_psi(2S) - m_J/psi) ~ 0.589 GeV. The
+# spectrum peaks near 0.5 GeV due to chiral dynamics; window has small
+# sideband margin above the phase-space edge.
+#
+# Combinatorial control via maxTrackTrackDOCA (openspec item 6):
+# static straight-line 3D DCA between the two pion tracks. Real pi+pi-
+# from a common psi(2S) vertex have DCAs at the beamspot + tracking
+# resolution scale (few tens of um), well below the 0.03 cm cut.
+# Random-track combinatorics have DCAs distributed up to cm-scale and
+# are rejected. Matches the physical scale of maxBachelorMuTrackDOCA
+# used on the four non-V0 preset-B JpsiXCandidateProducer instances.
+# Not a Kalman fit -- purely geometric.
+ALCARECOTkAlJpsiXPiPiCandidates = cms.EDProducer('TwoBodyDecayCandidateProducer',
+    src           = cms.InputTag('generalTracks'),
+    muonSrc       = cms.InputTag(''),           ## no muon filter
+    daughterMass  = cms.double(0.139570),       ## pion
+    daughterPdgId = cms.int32(211),             ## pi+
+    motherPdgId   = cms.int32(100443),          ## psi(2S) (candidate tag only)
+    minMass       = cms.double(0.28),
+    maxMass       = cms.double(0.65),
+    minDaughterPt            = cms.double(0.1), ## matches K*0 / phi under all presets
+    maxDaughterEta           = cms.double(2.5), ## matches K*0 / phi under all presets
+    applyChargeFilter        = cms.bool(True),
+    charge                   = cms.int32(0),
+    useUnsignedCharge        = cms.bool(True),
+    applyAcoplanarityFilter  = cms.bool(False),
+    acoplanarDistance        = cms.double(1.0),
+    applyVertexFit           = cms.bool(False), ## no Kalman fit at AlCaReco
+    minVtxProb               = cms.double(0.0),
+    maxTrackTrackDOCA        = cms.double(0.03),## 3D DCA between the two pion tracks (cm)
 )
 
 # phi(1020) -> K+K- candidates: symmetric mode (existing interface).
@@ -302,18 +358,27 @@ ALCARECOTkAlJpsiXLambdabCandidates = cms.EDProducer('JpsiXCandidateProducer',
     ## maxMotherAlphaBS removed: see B0->Ks comment.
 )
 
-# psi(2S) -> J/psi Ks  (VCC mode: Ks)
+# psi(2S) -> J/psi pi+pi-  (VCC mode: prompt pi+pi- from ALCARECOTkAlJpsiXPiPiCandidates).
+# Historically wired to V0 Ks output (WRONG -- psi(2S) does not have a
+# displaced Ks-quality pi+pi- vertex). Fixed in openspec
+# add-jpsi-x-muons-and-preprod-refinements: the dipion producer above
+# supplies a prompt-relative-to-psi(2S) pi+pi- pair via
+# TwoBodyDecayCandidateProducer. psi(2S) itself may be prompt (from PV,
+# dominant fraction) or non-prompt (from B decays, ~20 %); no
+# displacement cut is applied under preset B, so both are accepted.
 ALCARECOTkAlJpsiXPsi2SCandidates = cms.EDProducer('JpsiXCandidateProducer',
     xMode         = cms.string('vcc'),
     jpsiSrc       = cms.InputTag('ALCARECOTkAlJpsiXJpsiCandidates'),
-    xSrc          = cms.InputTag('ALCARECOTkAlV0Candidates', 'Kshort'),
+    xSrc          = cms.InputTag('ALCARECOTkAlJpsiXPiPiCandidates'),
     motherPdgId   = cms.int32(100443), ## psi(2S)
     minMotherMass = cms.double(3.5),
     maxMotherMass = cms.double(3.9),
     minJpsiPt     = cms.double(3.0),
     minMotherPt   = cms.double(3.0),
-    applyJpsiMassConstraint = cms.bool(False),  ## V0-mode invariant: False under every preset
-    ## maxMotherAlphaBS removed: see B0->Ks comment.
+    applyJpsiMassConstraint = cms.bool(False),  ## preset-invariant: no dimuon constraint
+    ## maxMotherAlphaBS removed: no Kalman B-vertex fit at AlCaReco (preset B).
+    ## Under preset C, alpha_BS + Lxy sig can be added here to filter to
+    ## non-prompt (from B decays) psi(2S) only.
 )
 
 # Bc+ -> J/psi pi+/-  (track mode: bachelor = pion from generalTracks)
@@ -332,6 +397,30 @@ ALCARECOTkAlJpsiXBcCandidates = cms.EDProducer('JpsiXCandidateProducer',
     maxBachelorEta = cms.double(_NON_V0_PRESETS['Bc']['maxBachelorEta']),
     maxBachelorMuTrackDOCA   = cms.double(_NON_V0_PRESETS['Bc']['maxBachelorMuTrackDOCA']),
     applyJpsiMassConstraint  = cms.bool(False),  ## flipped to True under preset C only
+)
+
+# ---------------------------------------------------------------------------
+# Eighth production channel: J/psi-only, dimuon-only, run over the LOOSE muon
+# selector (ALCARECOTkAlJpsiXLooseMuons) so it captures muon populations the
+# tight selector would reject (tracker-only muons, muons with no globalTrack
+# info). Preset-invariant: the muon-quality axis is orthogonal to the
+# selection preset. See openspec change add-jpsi-x-muons-and-preprod-refinements.
+# ---------------------------------------------------------------------------
+ALCARECOTkAlJpsiXJpsiOnlyCandidates = cms.EDProducer('TwoBodyDecayCandidateProducer',
+    src           = cms.InputTag('generalTracks'),
+    muonSrc       = cms.InputTag('ALCARECOTkAlJpsiXLooseMuons'),
+    minMass       = cms.double(2.95),   ## same window as the tight-selector J/psi
+    maxMass       = cms.double(3.25),
+    daughterMass  = cms.double(0.105),  ## muon
+    daughterPdgId = cms.int32(13),      ## mu-
+    motherPdgId   = cms.int32(443),     ## J/psi
+    applyChargeFilter        = cms.bool(True),
+    charge                   = cms.int32(0),
+    useUnsignedCharge        = cms.bool(True),
+    applyAcoplanarityFilter  = cms.bool(False),
+    acoplanarDistance        = cms.double(1.0),
+    applyVertexFit           = cms.bool(False),
+    minVtxProb               = cms.double(0.0),
 )
 
 # ---------------------------------------------------------------------------
@@ -372,6 +461,7 @@ ALCARECOTkAlJpsiXAllTracks = cms.EDProducer('CompositeDaughterTrackProducer',
         cms.InputTag('ALCARECOTkAlJpsiXLambdabCandidates'),
         cms.InputTag('ALCARECOTkAlJpsiXPsi2SCandidates'),
         cms.InputTag('ALCARECOTkAlJpsiXBcCandidates'),
+        cms.InputTag('ALCARECOTkAlJpsiXJpsiOnlyCandidates'),
     ),
 )
 
@@ -457,6 +547,24 @@ ALCARECOTkAlJpsiXBcResonances = cms.EDProducer('VertexCompositeCandidateRemapper
     intermediateTracks = cms.InputTag('ALCARECOTkAlJpsiXAllTracks'),
     originalIndexMap   = cms.InputTag('ALCARECOTkAlJpsiX', 'originalIndex'),
 )
+ALCARECOTkAlJpsiXJpsiOnlyResonances = cms.EDProducer('VertexCompositeCandidateRemapper',
+    srcCandidates      = cms.InputTag('ALCARECOTkAlJpsiXJpsiOnlyCandidates'),
+    selectedTracks     = cms.InputTag('ALCARECOTkAlJpsiX'),
+    intermediateTracks = cms.InputTag('ALCARECOTkAlJpsiXAllTracks'),
+    originalIndexMap   = cms.InputTag('ALCARECOTkAlJpsiX', 'originalIndex'),
+)
+
+# Track -> reco::Muon association keyed on the persisted deduplicated track
+# collection ALCARECOTkAlJpsiX and valued into ALCARECOTkAlJpsiXLooseMuons (a
+# superset of the tight selector's output, so a single association covers
+# both). Non-muon tracks (bachelors, V0 daughters, K*0 / phi daughters) map
+# to null MuonRef. See plugin AlignmentTrackToMuonAssociator.
+ALCARECOTkAlJpsiXTrackToMuon = cms.EDProducer('AlignmentTrackToMuonAssociator',
+    selectedTracks     = cms.InputTag('ALCARECOTkAlJpsiX'),
+    intermediateTracks = cms.InputTag('ALCARECOTkAlJpsiXAllTracks'),
+    originalIndexMap   = cms.InputTag('ALCARECOTkAlJpsiX', 'originalIndex'),
+    muons              = cms.InputTag('ALCARECOTkAlJpsiXLooseMuons'),
+)
 
 # ---------------------------------------------------------------------------
 # Combined sequence (Stage 0 -> 1 -> 2 -> 3 -> 4 -> 5)
@@ -465,10 +573,13 @@ ALCARECOTkAlJpsiXBcResonances = cms.EDProducer('VertexCompositeCandidateRemapper
 seqALCARECOTkAlJpsiX = cms.Sequence(
     ALCARECOTkAlJpsiXDCSFilter +
     ALCARECOTkAlJpsiXGoodMuons +
+    ALCARECOTkAlJpsiXLooseMuons +
     ALCARECOTkAlJpsiXJpsiCandidates +
+    ALCARECOTkAlJpsiXJpsiOnlyCandidates +
     ALCARECOTkAlV0Candidates +
     ALCARECOTkAlJpsiXKstarCandidates +
     ALCARECOTkAlJpsiXPhiCandidates +
+    ALCARECOTkAlJpsiXPiPiCandidates +
     ALCARECOTkAlJpsiXBPlusCandidates +
     ALCARECOTkAlJpsiXB0KstarCandidates +
     ALCARECOTkAlJpsiXB0KsCandidates +
@@ -478,6 +589,7 @@ seqALCARECOTkAlJpsiX = cms.Sequence(
     ALCARECOTkAlJpsiXBcCandidates +
     ALCARECOTkAlJpsiXAllTracks +
     ALCARECOTkAlJpsiX +
+    ALCARECOTkAlJpsiXTrackToMuon +
     alcaDedxJointEstimator +
     ALCARECOTkAlJpsiXDeDxHarmonic2 +
     ALCARECOTkAlJpsiXDeDxPixelHarmonic2 +
@@ -488,5 +600,6 @@ seqALCARECOTkAlJpsiX = cms.Sequence(
     ALCARECOTkAlJpsiXBsPhiResonances +
     ALCARECOTkAlJpsiXLambdabResonances +
     ALCARECOTkAlJpsiXPsi2SResonances +
-    ALCARECOTkAlJpsiXBcResonances
+    ALCARECOTkAlJpsiXBcResonances +
+    ALCARECOTkAlJpsiXJpsiOnlyResonances
 )

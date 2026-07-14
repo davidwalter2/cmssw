@@ -37,6 +37,7 @@
 #include "FWCore/Framework/interface/EventSetup.h"
 #include "FWCore/Framework/interface/MakerMacros.h"
 #include "FWCore/ParameterSet/interface/ParameterSet.h"
+#include "FWCore/Utilities/interface/Exception.h"
 #include "FWCore/Utilities/interface/InputTag.h"
 #include "FWCore/MessageLogger/interface/MessageLogger.h"
 
@@ -104,9 +105,24 @@ public:
                             : false),
         minVtxProb_(cfg.existsAs<double>("minVtxProb")
                         ? cfg.getParameter<double>("minVtxProb")
-                        : 0.0) {
+                        : 0.0),
+        maxTrackTrackDOCA_(cfg.existsAs<double>("maxTrackTrackDOCA")
+                               ? cfg.getParameter<double>("maxTrackTrackDOCA")
+                               : std::numeric_limits<double>::max()) {
     if (useMuonFilter_) {
       muonToken_ = consumes<edm::View<reco::Muon>>(muonTag_);
+    }
+    // Every emitted daughter (both charges) and the mother candidate MUST
+    // carry a non-zero pdgId; downstream consumers read daughter->pdgId() as
+    // the mass-hypothesis source of truth. openspec change
+    // add-jpsi-x-muons-and-preprod-refinements.
+    if (motherPdgId_ == 0 || firstDaughterPdgId_ == 0 ||
+        secondDaughterPdgId_ == 0) {
+      throw cms::Exception("Configuration")
+          << "TwoBodyDecayCandidateProducer requires non-zero motherPdgId, "
+          << "firstDaughterPdgId, and secondDaughterPdgId (got "
+          << motherPdgId_ << ", " << firstDaughterPdgId_ << ", "
+          << secondDaughterPdgId_ << ").";
     }
     produces<reco::VertexCompositeCandidateCollection>();
   }
@@ -221,6 +237,7 @@ public:
     }
 
     unsigned nDroppedByVtx = 0;
+    unsigned nDroppedByDOCA = 0;
     out->reserve(ranked.size());
     for (const auto& item : ranked) {
       size_t iPos = std::get<1>(item);
@@ -229,6 +246,19 @@ public:
 
       const reco::Track& trPos = (*trackH)[iPos];
       const reco::Track& trNeg = (*trackH)[iNeg];
+
+      // Static straight-line 3D DCA cut between the two daughter tracks.
+      // Same primitive as JpsiXCandidateProducer::trackTrackDCA (which
+      // powers maxBachelorMuTrackDOCA). No Kalman fit, no ES access.
+      // Filters combinatoric pairs whose closest-approach distance
+      // exceeds threshold. openspec change
+      // add-jpsi-x-muons-and-preprod-refinements.
+      if (maxTrackTrackDOCA_ < std::numeric_limits<double>::max()) {
+        if (trackTrackDCA(trPos, trNeg) > maxTrackTrackDOCA_) {
+          ++nDroppedByDOCA;
+          continue;
+        }
+      }
 
       double mPos = swapped ? secondDaughterMass_ : firstDaughterMass_;
       double mNeg = swapped ? firstDaughterMass_ : secondDaughterMass_;
@@ -278,7 +308,8 @@ public:
 
     LogDebug("TwoBodyDecayCandidateProducer")
         << "Built " << out->size() << " candidates from " << goodIdx.size()
-        << " input tracks; " << nDroppedByVtx << " dropped by vertex fit.";
+        << " input tracks; " << nDroppedByVtx << " dropped by vertex fit; "
+        << nDroppedByDOCA << " dropped by track-track DOCA.";
     evt.put(std::move(out));
   }
 
@@ -312,6 +343,37 @@ private:
 
   bool applyVertexFit_;
   double minVtxProb_;
+  double maxTrackTrackDOCA_;
+
+  // Static straight-line 3D DCA between two tracks. Mirror of the helper in
+  // JpsiXCandidateProducer.cc (openspec change
+  // add-jpsi-x-muons-and-preprod-refinements): straight-line within ~10 %
+  // of the helix-based DOCA at the short distances probed by the cut
+  // (~0.03 cm). For parallel tracks falls back to the point-on-second-track
+  // distance.
+  static double trackTrackDCA(const reco::Track& t1, const reco::Track& t2) {
+    const double inv1 = 1.0 / t1.p();
+    const double inv2 = 1.0 / t2.p();
+    const double u1x = t1.px() * inv1, u1y = t1.py() * inv1, u1z = t1.pz() * inv1;
+    const double u2x = t2.px() * inv2, u2y = t2.py() * inv2, u2z = t2.pz() * inv2;
+    const double cx = u1y * u2z - u1z * u2y;
+    const double cy = u1z * u2x - u1x * u2z;
+    const double cz = u1x * u2y - u1y * u2x;
+    const double cN = std::sqrt(cx * cx + cy * cy + cz * cz);
+    const double dx = t2.vx() - t1.vx();
+    const double dy = t2.vy() - t1.vy();
+    const double dz = t2.vz() - t1.vz();
+    if (cN < 1e-12) {
+      // Parallel tracks: perpendicular distance from t2's reference point
+      // to t1's line (u1 has unit length).
+      const double parallel = dx * u1x + dy * u1y + dz * u1z;
+      const double perpx = dx - parallel * u1x;
+      const double perpy = dy - parallel * u1y;
+      const double perpz = dz - parallel * u1z;
+      return std::sqrt(perpx * perpx + perpy * perpy + perpz * perpz);
+    }
+    return std::fabs(dx * cx + dy * cy + dz * cz) / cN;
+  }
 };
 
 DEFINE_FWK_MODULE(TwoBodyDecayCandidateProducer);

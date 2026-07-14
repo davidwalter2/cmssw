@@ -29,6 +29,9 @@ OutALCARECOTkAlJpsiX_noDrop = cms.PSet(
         'keep *_ALCARECOTkAlJpsiXLambdabResonances_*_*',      ## Lambda_b -> J/psi Lambda
         'keep *_ALCARECOTkAlJpsiXPsi2SResonances_*_*',        ## psi(2S) -> J/psi Ks
         'keep *_ALCARECOTkAlJpsiXBcResonances_*_*',           ## Bc -> J/psi pi
+        'keep *_ALCARECOTkAlJpsiXJpsiOnlyResonances_*_*',     ## J/psi-only (loose selector)
+        'keep *_ALCARECOTkAlJpsiXLooseMuons_*_*',             ## persisted muons (loose selector = superset of tight)
+        'keep *_ALCARECOTkAlJpsiXTrackToMuon_*_*',            ## track -> muon association
         'keep L1AcceptBunchCrossings_*_*_*',
         'keep L1GlobalTriggerReadoutRecord_gtDigis_*_*',
         'keep *_TriggerResults_*_*',

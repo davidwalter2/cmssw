@@ -61,6 +61,7 @@
 #include "FWCore/Framework/interface/EventSetup.h"
 #include "FWCore/Framework/interface/MakerMacros.h"
 #include "FWCore/ParameterSet/interface/ParameterSet.h"
+#include "FWCore/Utilities/interface/Exception.h"
 #include "FWCore/Utilities/interface/InputTag.h"
 #include "FWCore/MessageLogger/interface/MessageLogger.h"
 
@@ -131,11 +132,24 @@ public:
                             ? cfg.getParameter<double>("maxJpsiAlphaBS")
                             : std::numeric_limits<double>::max()),
         applyAlphaBS_(cfg.existsAs<double>("maxJpsiAlphaBS")) {
+    // Mother pdgId is used as the species tag on every emitted candidate
+    // (VertexCompositeCandidate) and must be non-zero for the invariant that
+    // downstream reads daughter->pdgId() as the mass-hypothesis source of
+    // truth. openspec change add-jpsi-x-muons-and-preprod-refinements.
+    if (motherPdgId_ == 0) {
+      throw cms::Exception("Configuration")
+          << "JpsiXCandidateProducer requires motherPdgId != 0; "
+          << "downstream consumers read daughter.pdgId() as the species tag.";
+    }
     if (trackMode_) {
       trackToken_ = consumes<reco::TrackCollection>(cfg.getParameter<edm::InputTag>("trackSrc"));
       minBachelorPt_ = cfg.getParameter<double>("minBachelorPt");
       bachelorMass_ = cfg.getParameter<double>("bachelorMass");
       bachelorPdgId_ = cfg.getParameter<int>("bachelorPdgId");
+      if (bachelorPdgId_ == 0) {
+        throw cms::Exception("Configuration")
+            << "JpsiXCandidateProducer (track mode) requires bachelorPdgId != 0.";
+      }
       maxBachelorEta_ = cfg.existsAs<double>("maxBachelorEta")
                             ? cfg.getParameter<double>("maxBachelorEta")
                             : std::numeric_limits<double>::max();
