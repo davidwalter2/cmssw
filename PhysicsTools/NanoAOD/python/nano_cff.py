@@ -478,14 +478,16 @@ def nanoAOD_customizeData(process):
     # fieldlabel = "PolyFit3DMf"
     # process.PolyFit3DMagneticFieldProducer.label = fieldlabel
 
-    # load latest TOSCA model (volumeBasedMagneticField_170812_cfi also provides the magfield XMLIdealGeometryESSource
-    # which supplies DDCompactView("magfield") needed by VolumeBasedMagneticFieldESProducer)
-    from MagneticField.Engine.volumeBasedMagneticField_170812_cfi import VolumeBasedMagneticFieldESProducer as MagneticFieldProducer
-    from MagneticField.Engine.volumeBasedMagneticField_170812_cfi import magfield as MagneticFieldGeometry
+    # load nominal TOSCA model 160812 (grid files shipped with the release via cms-data, unlike 170812;
+    # the two versions differ only in the steel BH-curve and are negligibly different inside the tracker).
+    # The cfi also provides the magfield XMLIdealGeometryESSource which supplies
+    # DDCompactView("magfield") needed by VolumeBasedMagneticFieldESProducer.
+    from MagneticField.Engine.volumeBasedMagneticField_160812_cfi import VolumeBasedMagneticFieldESProducer as MagneticFieldProducer
+    from MagneticField.Engine.volumeBasedMagneticField_160812_cfi import magfield as MagneticFieldGeometry
     process.magfield = MagneticFieldGeometry
     process.es_prefer_magfield_cvhrefit = cms.ESPrefer("XMLIdealGeometryESSource", "magfield")
     process.Opera3DMagneticFieldProducer = MagneticFieldProducer
-    fieldlabel = "grid_170812_3_8t"
+    fieldlabel = "grid_160812_3_8t"
     process.Opera3DMagneticFieldProducer.label = fieldlabel
     # disable 2D parameterization in tracker and use slower but more accurate 3D splines of original data
     process.Opera3DMagneticFieldProducer.useParametrizedTrackerField = cms.bool(False)
