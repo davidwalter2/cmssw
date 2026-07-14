@@ -26,11 +26,34 @@
 ##                         for future-proofing if CvhMasterThread ever gets
 ##                         a shared-singleton refactor, but at present it
 ##                         WILL crash; run two jobs instead.
+import os
+
 import FWCore.ParameterSet.Config as cms
 import FWCore.ParameterSet.VarParsing as VarParsing
 
 from Configuration.Eras.Era_Run2_2016_cff import Run2_2016
 from Configuration.AlCa.GlobalTag import GlobalTag
+
+# AN2021_131_v8 §3.3-3.4 canonical correction file. Located relative to
+# $WREM_BASE (set by setup.sh); a clear EnvironmentError is raised at
+# driver-parse time if the env var is unset or the file is missing.
+def _resolve_default_corfile():
+    wrem_base = os.environ.get('WREM_BASE')
+    if not wrem_base:
+        raise EnvironmentError(
+            'WREM_BASE environment variable is not set. Source setup.sh at the '
+            'repo root before invoking cmsRun so the default corFiles path can '
+            'be resolved. (Explicit override: pass corFiles=<path> on the CLI.)'
+        )
+    rel = 'wremnants-data/data/calibration/correctionResults_v721_recjpsidata.root'
+    p = os.path.join(wrem_base, rel)
+    if not os.path.isfile(p):
+        raise EnvironmentError(
+            'Default correction file not found at: {}. Either restore the '
+            'wremnants-data submodule (git submodule update --init) or override '
+            'via corFiles=<path> on the CLI.'.format(p)
+        )
+    return p
 
 opts = VarParsing.VarParsing('analysis')
 opts.register('input', '', VarParsing.VarParsing.multiplicity.singleton,
@@ -66,7 +89,13 @@ opts.register('kaonAsMuon', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'when True, override `trackParticleName` on the kaon-side maker '
               'to "mu" (mass-hypothesis A/B test; §9.4.c). Inputs remain the '
-              'bachelor kaon tracks, only the propagation hypothesis changes.')
+              'bachelor kaon tracks, only the propagation hypothesis changes. '
+              'NOTE (openspec add-jpsi-x-muons-and-preprod-refinements): the '
+              'JpsiKCandidateSplitter now emits `bachelorPdgId` / `muon0PdgId` '
+              '/ `muon1PdgId` branches derived from daughter->pdgId(). This '
+              'B+ config still uses the hard-coded kaon mass hypothesis; the '
+              'multi-channel Stage-2 (Bc/K*0/phi/Ks/Lambda/psi2S) will consume '
+              'the pdgId branches to pick the mass hypothesis per event.')
 opts.register('plimit', 1.0, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.float,
               'Geant4ePropagator PropagationPtotLimit [GeV/c]. Default 1.0 '
@@ -93,7 +122,67 @@ opts.register('debug', False, VarParsing.VarParsing.multiplicity.singleton,
               'when True, write per-iter vector branches (chisqval_iter, edmval_iter, '
               'deltachisqval_iter, mu_qoverp_iter, Jpsi_mass_iter) for the dimuon-side '
               'maker. Use only for the matrix per-iter deep dive; bloats output ~80 B/event.')
+opts.register('useIdealGeometry', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'Default False (btojpsik option (B)): propagate against the aligned geometry '
+              'loaded from the CMSSW GlobalTag. Set True for the AN2021_131_v8 canonical '
+              'config, in which case populate corFiles (below) with a correctionResults*.root '
+              'whose parmset matches this producer build; the WMass-era v721 file does NOT '
+              'match this build (idxmaptree remapping not implemented in the current maker), '
+              'so True + corFiles=[v721] currently crashes at the parmset-size assert. '
+              'See openspec/enable-an-canonical-corrections (follow-up) for the (A) path.')
+opts.register('useIdealGeometryMuon', -1, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.int,
+              'per-leg override: -1 (default) inherits from useIdealGeometry, 0 forces False, '
+              '1 forces True (int-bool because VarParsing bools cannot express "unset").')
+opts.register('useIdealGeometryKaon', -1, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.int,
+              'per-leg override for the bachelor-kaon maker; semantics as useIdealGeometryMuon.')
+opts.register('corFiles', [], VarParsing.VarParsing.multiplicity.list,
+              VarParsing.VarParsing.varType.string,
+              'AN2021_131_v8 Stage-2 correction file list. Default [] (btojpsik option (B), '
+              'physics-quality via aligned geometry with no Stage-2 corrections). To attempt '
+              'AN-canonical (option (A)) pass a correctionResults*.root whose parmtree row '
+              'count matches this producer build (WMass v721 does NOT match; see follow-up).')
+opts.register('corFilesMuon', [], VarParsing.VarParsing.multiplicity.list,
+              VarParsing.VarParsing.varType.string,
+              'per-leg override: empty (default) inherits from corFiles.')
+opts.register('corFilesKaon', [], VarParsing.VarParsing.multiplicity.list,
+              VarParsing.VarParsing.varType.string,
+              'per-leg override for the bachelor-kaon maker; semantics as corFilesMuon.')
+opts.register('disableCorFiles', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'explicit knob to disable Stage-2 corrections (both legs). Useful for the '
+              'broken-baseline point P3 and for the (B) side of the (A)-vs-(B) overlay.')
 opts.parseArguments()
+
+# Resolve corFiles: empty on the CLI --> driver default (v721); non-empty --> take as-is.
+# `disableCorFiles=True` --> force empty on both legs regardless of other opts.
+def _resolve_corfiles(opts_value, base_default):
+    if opts.disableCorFiles:
+        return []
+    if opts_value:
+        return list(opts_value)
+    return list(base_default)
+
+_base_corfiles = [] if opts.disableCorFiles else list(opts.corFiles)
+_muon_corfiles = _resolve_corfiles(opts.corFilesMuon, _base_corfiles)
+_kaon_corfiles = _resolve_corfiles(opts.corFilesKaon, _base_corfiles)
+
+# Resolve per-leg useIdealGeometry: -1 inherits, 0/1 override.
+def _resolve_ideal_geom(per_leg, base):
+    if per_leg < 0:
+        return bool(base)
+    return bool(per_leg)
+
+_muon_ideal_geom = _resolve_ideal_geom(opts.useIdealGeometryMuon, opts.useIdealGeometry)
+_kaon_ideal_geom = _resolve_ideal_geom(opts.useIdealGeometryKaon, opts.useIdealGeometry)
+
+# Echo the resolved config to stdout so the CMSSW log carries an obvious
+# summary line even before the plugin's own LogInfo runs.
+print('[runCvhBplusJpsiK.py] resolved CVH config:', flush=True)
+print('  muon: useIdealGeometry={}, corFiles={}'.format(_muon_ideal_geom, _muon_corfiles), flush=True)
+print('  kaon: useIdealGeometry={}, corFiles={}'.format(_kaon_ideal_geom, _kaon_corfiles), flush=True)
 assert opts.input, 'must set input=<path>'
 assert opts.mode in ('both', 'dimuon', 'kaon'), \
     f'mode must be both|dimuon|kaon, got {opts.mode!r}'
@@ -153,6 +242,8 @@ process.globalCorJpsiK = globalCorJpsiK.clone(
     fillJac=cms.bool(bool(opts.fillJac)),
     runFDClosure=cms.bool(bool(opts.runFDClosure)),
     epsilonFDClosure=cms.double(float(opts.epsilonFDClosure)),
+    useIdealGeometry=cms.bool(_muon_ideal_geom),
+    corFiles=cms.vstring(*_muon_corfiles),
     # Defaults (10, 1e-5, "perigee", False) reproduce the baseline bit-identically.
     nIters=cms.uint32(int(opts.nIters)),
     edmConvergence=cms.double(float(opts.edmConvergence)),
@@ -179,6 +270,8 @@ process.globalCorJpsiKKaon = globalCorJpsiKKaon.clone(
     fillJac=cms.bool(bool(opts.fillJac)),
     runFDClosure=cms.bool(bool(opts.runFDClosure)),
     epsilonFDClosure=cms.double(float(opts.epsilonFDClosure)),
+    useIdealGeometry=cms.bool(_kaon_ideal_geom),
+    corFiles=cms.vstring(*_kaon_corfiles),
     # §9.4.c knob: override the propagation hypothesis from "kaon" to "mu"
     # while leaving the input track collection (bachelor kaons) untouched.
     trackParticleName=cms.string('mu' if opts.kaonAsMuon else 'kaon'),

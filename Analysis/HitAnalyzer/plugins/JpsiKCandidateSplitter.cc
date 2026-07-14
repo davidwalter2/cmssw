@@ -19,10 +19,19 @@
 //     emitted dimuon / bachelor collections, holding the source B+ candidate
 //     index. Per-candidate joining downstream uses these.
 //
-// Species disambiguation is by the input collection name (e.g.
-// `ALCARECOTkAlJpsiXBPlusResonances` => bachelor is a kaon), NOT by
-// `daughter.mass()` / `daughter.pdgId()`. The cfi sets that policy per
-// channel; the splitter itself just trusts the layout.
+// Species disambiguation is by the daughter `pdgId()` set at Stage 1 by
+// `JpsiXCandidateProducer` (bachelor) / `TwoBodyDecayCandidateProducer`
+// (J/psi muons and K*0/phi daughters). This splitter reads the bachelor
+// pdgId and the two J/psi-daughter muon pdgIds off the candidate and
+// propagates them onto its output as parallel `std::vector<int>` branches
+// (`bachelorPdgId`, `muon0PdgId`, `muon1PdgId`). Downstream Stage-2
+// mass-hypothesis lookup consumes those branches instead of hard-coding
+// per-channel masses.
+//
+// Collection LAYOUT still defines the daughter ORDER
+// (daughter(0) = J/psi VCC, daughter(1) = bachelor RCC): only the species
+// TAG moves to the pdgId. See openspec change
+// add-jpsi-x-muons-and-preprod-refinements.
 //
 // No fit code, no candidate-level cuts. Stage-1 already selected.
 
@@ -68,6 +77,12 @@ JpsiKCandidateSplitter::JpsiKCandidateSplitter(const edm::ParameterSet& iConfig)
   produces<reco::TrackCollection>("bachelor");
   produces<std::vector<int>>("dimuonBCandIdx");
   produces<std::vector<int>>("bachelorBCandIdx");
+  // Species tags read from daughter->pdgId() at Stage 1 (openspec change
+  // add-jpsi-x-muons-and-preprod-refinements). Downstream Stage-2 lookup
+  // consumes these instead of hard-coding per-channel masses.
+  produces<std::vector<int>>("bachelorPdgId");
+  produces<std::vector<int>>("muon0PdgId");
+  produces<std::vector<int>>("muon1PdgId");
 }
 
 void JpsiKCandidateSplitter::produce(edm::Event& iEvent, const edm::EventSetup&) {
@@ -78,12 +93,18 @@ void JpsiKCandidateSplitter::produce(edm::Event& iEvent, const edm::EventSetup&)
   auto outBachelor = std::make_unique<reco::TrackCollection>();
   auto outDimuonIdx = std::make_unique<std::vector<int>>();
   auto outBachelorIdx = std::make_unique<std::vector<int>>();
+  auto outBachelorPdg = std::make_unique<std::vector<int>>();
+  auto outMuon0Pdg = std::make_unique<std::vector<int>>();
+  auto outMuon1Pdg = std::make_unique<std::vector<int>>();
 
   int nSkip = 0;
   outDimuon->reserve(bplusH->size());
   outBachelor->reserve(bplusH->size());
   outDimuonIdx->reserve(bplusH->size());
   outBachelorIdx->reserve(bplusH->size());
+  outBachelorPdg->reserve(bplusH->size());
+  outMuon0Pdg->reserve(bplusH->size());
+  outMuon1Pdg->reserve(bplusH->size());
 
   for (std::size_t ib = 0; ib < bplusH->size(); ++ib) {
     const reco::VertexCompositeCandidate& bplus = (*bplusH)[ib];
@@ -92,8 +113,9 @@ void JpsiKCandidateSplitter::produce(edm::Event& iEvent, const edm::EventSetup&)
       continue;
     }
     // daughter(0) is the J/psi VCC, daughter(1) is the bachelor RCC, per
-    // `JpsiXCandidateProducer.cc` lines 617-618. Verified by collection
-    // layout, not by .mass() / .pdgId().
+    // `JpsiXCandidateProducer.cc`. LAYOUT is trusted; species/mass hypothesis
+    // is looked up from daughter->pdgId() (Stage-1 non-zero invariant,
+    // openspec add-jpsi-x-muons-and-preprod-refinements).
     const auto* dJpsi = dynamic_cast<const reco::VertexCompositeCandidate*>(
         bplus.daughter(0));
     const auto* dBach = dynamic_cast<const reco::RecoChargedCandidate*>(
@@ -116,6 +138,10 @@ void JpsiKCandidateSplitter::produce(edm::Event& iEvent, const edm::EventSetup&)
 
     outBachelor->push_back(*dBach->track());
     outBachelorIdx->push_back(static_cast<int>(ib));
+
+    outBachelorPdg->push_back(dBach->pdgId());
+    outMuon0Pdg->push_back(dJpsi->daughter(0)->pdgId());
+    outMuon1Pdg->push_back(dJpsi->daughter(1)->pdgId());
   }
 
   if (nSkip > 0) {
@@ -128,6 +154,9 @@ void JpsiKCandidateSplitter::produce(edm::Event& iEvent, const edm::EventSetup&)
   iEvent.put(std::move(outBachelor), "bachelor");
   iEvent.put(std::move(outDimuonIdx), "dimuonBCandIdx");
   iEvent.put(std::move(outBachelorIdx), "bachelorBCandIdx");
+  iEvent.put(std::move(outBachelorPdg), "bachelorPdgId");
+  iEvent.put(std::move(outMuon0Pdg), "muon0PdgId");
+  iEvent.put(std::move(outMuon1Pdg), "muon1PdgId");
 }
 
 }  // namespace ana_hitanalyzer

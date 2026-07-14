@@ -97,6 +97,7 @@
 
 #include "FWCore/ServiceRegistry/interface/Service.h"
 #include "FWCore/Utilities/interface/RandomNumberGenerator.h"
+#include "FWCore/MessageLogger/interface/MessageLogger.h"
 #include "Randomize.hh"   // CLHEP / G4 random engine entry points
 
 
@@ -211,6 +212,17 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   useIdealGeometry_ = iConfig.getParameter<bool>("useIdealGeometry");
   corFiles_ = iConfig.getParameter<std::vector<std::string>>("corFiles");
   fieldlabel_ = iConfig.getParameter<std::string>("MagneticFieldLabel");
+
+  // Echo the effective AN2021_131_v8 §3.3-3.4 two-stage config once per
+  // maker instance. `useIdealGeometry=true, corFiles.size()=0` is the
+  // Stage-1-only (broken) configuration; a job log carrying that combination
+  // will produce the sigma~80 MeV / 33% tail signature documented in the
+  // debug study. See openspec/finalize-cvh-producer-15-0-19.
+  // LogPrint is unconditionally emitted regardless of MessageLogger
+  // whitelist config, so this alarm is always visible.
+  edm::LogPrint("ResidualGlobalCorrectionMakerBase")
+      << "useIdealGeometry=" << (useIdealGeometry_ ? "true" : "false")
+      << ", corFiles.size()=" << corFiles_.size();
 
   // Scalar-potential B-field correction: basis structure and initial
   // coefficients are loaded from a coefficient dump file produced by

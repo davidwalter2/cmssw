@@ -22,8 +22,11 @@ opts.register('fillGrads', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool, 'store per-event gradient + packed Hessian')
 opts.register('doMassConstraint', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool, 'apply J/psi mass constraint in the two-track fit')
-opts.register('useIdealGeometry', True, VarParsing.VarParsing.multiplicity.singleton,
-              VarParsing.VarParsing.varType.bool, 'use ideal (uncorrected) tracker geometry')
+opts.register('useIdealGeometry', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'Default False (btojpsik option (B), aligned geometry from GT). Set True '
+              'only for the AN Stage-1 broken baseline (Stage-2 corrections not applied '
+              'here). See openspec/finalize-cvh-producer-15-0-19.')
 opts.register('goldenJson', '', VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string,
               'optional Golden JSON file to filter run/lumi pre-processing; empty = no filter')
