@@ -67,11 +67,13 @@
 
 #include "TrackPropagation/Geant4e/interface/G4ErrorEnergyLossForCVH.h"
 
+#include <mutex>
+
 //------------------------------------------------------------------------
 namespace {
   // Full canonical CVH particle set: matches the hardcoded list used
   // by all callers before particleNames_ became configurable. Used as
-  // the default for the no-arg ctor so back-compat is exact.
+  // the default for the no-arg ctor when no set has been registered.
   const std::vector<std::string> kFullParticleList = {
       "gamma",
       "e+", "e-",
@@ -80,17 +82,38 @@ namespace {
       "kaon+", "kaon-",
       "proton", "anti_proton",
   };
+
+  // Job-wide particle set. All physics-list instances in a job MUST agree
+  // on the particle set: ConstructProcess runs once per worker thread (see
+  // the thread_local guard below), so a later instance with a LARGER set
+  // would define extra particles that never get processes -- they would
+  // abort in G4SteppingManager on first use. The first explicitly
+  // configured set (CvhMaster's, from the CvhMaster.Particles parameter)
+  // is recorded here and reused by every no-arg construction (the
+  // propagator's per-thread G4Error init).
+  std::mutex jobParticleSetMutex;
+  std::vector<std::string> jobParticleSet;
+
+  std::vector<std::string> jobParticleSetOrFull() {
+    std::lock_guard<std::mutex> lk(jobParticleSetMutex);
+    return jobParticleSet.empty() ? kFullParticleList : jobParticleSet;
+  }
 }  // namespace
 
 //------------------------------------------------------------------------
 G4ErrorPhysicsListForCVH::G4ErrorPhysicsListForCVH()
-    : G4ErrorPhysicsListForCVH(kFullParticleList) {}
+    : G4ErrorPhysicsListForCVH(jobParticleSetOrFull()) {}
 
 //------------------------------------------------------------------------
 G4ErrorPhysicsListForCVH::G4ErrorPhysicsListForCVH(
     const std::vector<std::string>& particleNames)
     : G4VUserPhysicsList(), particleNames_(particleNames) {
   defaultCutValue = 1.0E+9 * cm;  // set big step so that AlongStep computes all the energy
+  // Register the first constructed set as the job-wide set (see above).
+  std::lock_guard<std::mutex> lk(jobParticleSetMutex);
+  if (jobParticleSet.empty()) {
+    jobParticleSet = particleNames_;
+  }
 }
 
 //------------------------------------------------------------------------
@@ -135,8 +158,6 @@ void G4ErrorPhysicsListForCVH::ConstructParticle() {
       G4KaonPlus::KaonPlusDefinition();
     } else if (name == "kaon-") {
       G4KaonMinus::KaonMinusDefinition();
-    } else if (name == "proton") {
-      G4Proton::ProtonDefinition();
     } else if (name == "anti_proton") {
       G4AntiProton::AntiProtonDefinition();
     } else {

@@ -96,20 +96,25 @@ void CvhMasterThread::callConsumes(edm::ConsumesCollector&& iC) const {
   m_hasToken = true;
 }
 
-void CvhMasterThread::beginRun(const edm::EventSetup& iSetup) const {
+void CvhMasterThread::ensureG4Started(const edm::EventSetup& iSetup) const {
   std::lock_guard<std::mutex> lk(m_protectMutex);
+
+  // Job-scoped lazy start: the first call builds the G4 world; every later
+  // call (subsequent runs) is a no-op. The ES products captured here stay in
+  // use for the whole job.
+  if (m_g4Started) {
+    return;
+  }
+
   std::unique_lock<std::mutex> lk2(m_threadMutex);
 
-  if (m_firstRun) {
-    if (m_pGeoFromDD4hep) {
-      m_pDD4hep = &(*iSetup.getTransientHandle(m_DD4hep));
-    } else {
-      m_pDDD = &(*iSetup.getTransientHandle(m_DDD));
-    }
-    if (m_pUseMagneticField) {
-      m_pMF = &iSetup.getData(m_MagField);
-    }
-    m_firstRun = false;
+  if (m_pGeoFromDD4hep) {
+    m_pDD4hep = &(*iSetup.getTransientHandle(m_DD4hep));
+  } else {
+    m_pDDD = &(*iSetup.getTransientHandle(m_DDD));
+  }
+  if (m_pUseMagneticField) {
+    m_pMF = &iSetup.getData(m_MagField);
   }
 
   m_masterThreadState = ThreadState::BeginRun;
@@ -117,16 +122,21 @@ void CvhMasterThread::beginRun(const edm::EventSetup& iSetup) const {
   m_mainCanProceed = false;
   m_notifyMasterCv.notify_one();
   m_notifyMainCv.wait(lk2, [&]() { return m_mainCanProceed; });
+  m_g4Started = true;
 }
 
-void CvhMasterThread::endRun() const {
+void CvhMasterThread::stopG4() const {
   std::lock_guard<std::mutex> lk(m_protectMutex);
+  if (!m_g4Started) {
+    return;
+  }
   std::unique_lock<std::mutex> lk2(m_threadMutex);
   m_masterThreadState = ThreadState::EndRun;
   m_mainCanProceed = false;
   m_masterCanProceed = true;
   m_notifyMasterCv.notify_one();
   m_notifyMainCv.wait(lk2, [&]() { return m_mainCanProceed; });
+  m_g4Started = false;
 }
 
 void CvhMasterThread::stopThread() {
@@ -134,6 +144,8 @@ void CvhMasterThread::stopThread() {
     return;
   }
   edm::LogVerbatim("Geant4e") << "CvhMasterThread::stopThread";
+  // The state loop requires the EndRun handshake before Destruct.
+  stopG4();
   std::unique_lock<std::mutex> lk2(m_threadMutex);
   m_masterThreadState = ThreadState::Destruct;
   m_masterCanProceed = true;

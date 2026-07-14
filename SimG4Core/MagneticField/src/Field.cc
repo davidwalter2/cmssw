@@ -2,7 +2,6 @@
 #include "SimG4Core/MagneticField/interface/Field.h"
 
 #include "DataFormats/GeometryVector/interface/GlobalPoint.h"
-#include "G4Mag_UsualEqRhs.hh"
 
 #include <CLHEP/Units/SystemOfUnits.h>
 
@@ -14,8 +13,6 @@ Field::Field(const MagneticField *f, double d) : G4MagneticField(), theCMSMagnet
     oldb[i] = 0.0;
     offset[i] = 0.0;
   }
-
-  std::cout << "Field constructor" << std::endl;
 }
 
 Field::~Field() {}

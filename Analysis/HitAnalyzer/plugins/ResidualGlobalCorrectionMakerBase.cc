@@ -125,19 +125,19 @@ std::shared_ptr<int>
 ResidualGlobalCorrectionMakerBase::globalBeginRun(const edm::Run &,
                                                   const edm::EventSetup &iSetup,
                                                   const CvhMasterThread *master) {
-  // Forward to the dedicated master thread; it builds DDDWorld + master
-  // magnetic field in its state loop before this call returns. By the
-  // time any stream's produce() runs, the G4 world is in place.
-  master->beginRun(iSetup);
+  // Lazy job-scoped G4 start: the first run builds DDDWorld + master
+  // magnetic field in the master thread's state loop before this call
+  // returns (so the G4 world is in place before any stream's produce());
+  // subsequent runs are no-ops -- G4 stays alive for the whole job.
+  master->ensureG4Started(iSetup);
   return std::shared_ptr<int>();
 }
 
 void ResidualGlobalCorrectionMakerBase::globalEndRun(const edm::Run &,
                                                      const edm::EventSetup &,
-                                                     const RunContext *iContext) {
-  if (iContext != nullptr && iContext->global() != nullptr) {
-    iContext->global()->endRun();
-  }
+                                                     const RunContext *) {
+  // Framework-required stub (declaring a RunCache makes the framework call
+  // this). The G4 world is job-scoped -- torn down in globalEndJob.
 }
 
 void ResidualGlobalCorrectionMakerBase::globalEndJob(CvhMasterThread *master) {

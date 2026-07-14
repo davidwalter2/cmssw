@@ -26,13 +26,18 @@ ScalarPot3DMagneticField::ScalarPot3DMagneticField(const edm::ParameterSet& para
         << "ScalarPot3DMagneticField requires a non-empty InitFile parameter";
   }
   eval_ = std::make_unique<magfieldparam::ScalarPot3DEval>(init_file);
+  // Required by the MagneticField base class contract: caches the nominal
+  // field (from Bz at the origin) so nominalValue()/inverseBzAtOriginInGeV()
+  // are meaningful for consumers of this labelled field.
+  setNominalValue();
   edm::LogInfo("MagneticField|ScalarPot3D")
       << "Loaded ScalarPot3DEval from " << init_file
       << ":  nModes=" << eval_->nModes()
       << "  l_max=" << eval_->lMax()
       << "  r_scale=" << eval_->rScale() << " cm"
       << "  cmssw_norm=" << eval_->cmsswNorm()
-      << "  validity_radius=" << validity_radius_cm_ << " cm";
+      << "  validity_radius=" << validity_radius_cm_ << " cm"
+      << "  nominal=" << nominalValue() / 10. << " T";
 }
 
 ScalarPot3DMagneticField::~ScalarPot3DMagneticField() = default;
@@ -41,6 +46,14 @@ GlobalVector ScalarPot3DMagneticField::inTesla(const GlobalPoint& gp) const {
   if (isDefined(gp)) {
     return inTeslaUnchecked(gp);
   }
+  // Hard cutoff outside the validity sphere: the physical field there is
+  // still O(T), so returning zero is only acceptable as long as no
+  // propagation actually leaves the sphere. Warn so silent use outside the
+  // fit domain does not go unnoticed; a C^1 blend to the volume-based field
+  // is planned to replace this.
+  edm::LogWarning("MagneticField|ScalarPot3D")
+      << "Field queried outside the validity sphere (R=" << gp.mag() << " cm > " << validity_radius_cm_
+      << " cm) at " << gp << "; returning B=0.";
   return GlobalVector();
 }
 

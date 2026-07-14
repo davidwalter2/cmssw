@@ -134,7 +134,7 @@ protected:
   G4double meanLoss = 0.0;
 
   const G4ParticleDefinition* particle = nullptr;
-  const G4Material* lastMaterial;
+  const G4Material* lastMaterial = nullptr;
   G4double* rndmarray = nullptr;
   G4int sizearray = 30;
 

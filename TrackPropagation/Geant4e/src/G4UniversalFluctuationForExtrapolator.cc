@@ -126,6 +126,13 @@ G4double G4UniversalFluctuationForExtrapolator::SampleFluctuations2(const G4Mate
   // (out of validity of the model)
   //
 
+  // Full rebind (not just InitialiseMe) BEFORE the dedx lookup -- see
+  // SampleFluctuations for the rationale.
+  if (dp->GetDefinition() != particle) {
+    const G4double q = dp->GetDefinition()->GetPDGCharge() / CLHEP::eplus;
+    SetParticleAndCharge(dp->GetDefinition(), q * q);
+  }
+
   size_t idx = 0;
   G4double dedx = ((*table)[material->GetIndex()])->Value(massratio * ekin, idx) * charge2ratio;
   G4double meanLoss = length * dedx;
@@ -136,10 +143,6 @@ G4double G4UniversalFluctuationForExtrapolator::SampleFluctuations2(const G4Mate
 
   if (meanLoss < minLoss) {
     return meanLoss + extraloss;
-  }
-
-  if (dp->GetDefinition() != particle) {
-    InitialiseMe(dp->GetDefinition());
   }
 
   CLHEP::HepRandomEngine* rndmEngineF = G4Random::getTheEngine();
@@ -311,6 +314,15 @@ G4double G4UniversalFluctuationForExtrapolator::SampleFluctuations(
   // (out of validity of the model)
   //
 
+  // Full rebind (not just InitialiseMe) BEFORE the dedx lookup: table /
+  // massratio / charge2ratio must match the particle, otherwise a
+  // particleNameOverride (kaon/pion/proton) would compute the variance
+  // with the muon dE/dx table while the mean loss uses proton scaling.
+  if (dp->GetDefinition() != particle) {
+    const G4double q = dp->GetDefinition()->GetPDGCharge() / CLHEP::eplus;
+    SetParticleAndCharge(dp->GetDefinition(), q * q);
+  }
+
   size_t idx = 0;
   G4double dedx = ((*table)[material->GetIndex()])->Value(massratio * ekin, idx) * charge2ratio;
   G4double meanLoss = length * dedx;
@@ -318,10 +330,6 @@ G4double G4UniversalFluctuationForExtrapolator::SampleFluctuations(
   G4double tkin = ekin;
   if (meanLoss < minLoss) {
     return 0.;
-  }
-
-  if (dp->GetDefinition() != particle) {
-    InitialiseMe(dp->GetDefinition());
   }
 
   G4double tau = tkin * m_Inv_particleMass;

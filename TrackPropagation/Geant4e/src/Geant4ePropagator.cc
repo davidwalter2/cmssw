@@ -385,10 +385,12 @@ std::pair<TrajectoryStateOnSurface, double> Geant4ePropagator::propagateGeneric(
         // forceInit=true to drive G4ErrorRunManagerHelper through its
         // init -- this is what allocates G4ErrorPropagator's internal
         // navigator + transportation, needed before InitTrackPropagation
-        // can run. The physics-list ConstructProcess is idempotent (skips
-        // particles whose ProcessManager already has Transportation), so
+        // can run. The physics-list ConstructProcess is one-shot per
+        // worker thread (thread_local flag), and this instance shares the
+        // job-wide particle set registered by CvhMaster's list, so
         // re-invoking it after CvhWorker's master/worker InitializeWorker
-        // does NOT double-register processes.
+        // neither double-registers processes nor defines extra
+        // process-less particles.
         ensureGeant4eIsInitilizedForCVH(true);
       } else {
         ensureGeant4eIsInitilized(true);
@@ -524,6 +526,10 @@ std::pair<TrajectoryStateOnSurface, double> Geant4ePropagator::propagateGeneric(
 
     finalPathLength += thisPathLength;
 
+    // Cap deliberately loosened from the stock/10_6 value of 200 cm: low-pT
+    // curling tracks (e.g. B->J/psiK bachelor kaons, helix radius ~50 cm) can
+    // legitimately accumulate >2 m of path before intersecting the target
+    // surface. 100 m still bounds pathological loopers.
     if (std::fabs(finalPathLength) > 10000.0f) {
       LogDebug("Geant4e") << "ERROR: Quitting propagation: path length mega large" << std::endl;
       theG4eManager->GetPropagator()->InvokePostUserTrackingAction(g4eTrajState.GetG4Track());
@@ -625,10 +631,12 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
         // forceInit=true to drive G4ErrorRunManagerHelper through its
         // init -- this is what allocates G4ErrorPropagator's internal
         // navigator + transportation, needed before InitTrackPropagation
-        // can run. The physics-list ConstructProcess is idempotent (skips
-        // particles whose ProcessManager already has Transportation), so
+        // can run. The physics-list ConstructProcess is one-shot per
+        // worker thread (thread_local flag), and this instance shares the
+        // job-wide particle set registered by CvhMaster's list, so
         // re-invoking it after CvhWorker's master/worker InitializeWorker
-        // does NOT double-register processes.
+        // neither double-registers processes nor defines extra
+        // process-less particles.
         ensureGeant4eIsInitilizedForCVH(true);
       } else {
         ensureGeant4eIsInitilized(true);
@@ -893,6 +901,10 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
 
     finalPathLength += thisPathLength;
 
+    // Cap deliberately loosened from the stock/10_6 value of 200 cm: low-pT
+    // curling tracks (e.g. B->J/psiK bachelor kaons, helix radius ~50 cm) can
+    // legitimately accumulate >2 m of path before intersecting the target
+    // surface. 100 m still bounds pathological loopers.
     if (std::fabs(finalPathLength) > 10000.0f) {
       LogDebug("Geant4e") << "ERROR: Quitting propagation: path length mega large" << std::endl;
       theG4eManager->GetPropagator()->InvokePostUserTrackingAction(g4eTrajState.GetG4Track());

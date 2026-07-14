@@ -7,7 +7,8 @@
 // dedicated std::thread that constructs and drives a CvhMaster (the G4 master
 // kernel + DDDWorld + master magnetic field). Held in an edm::GlobalCache by
 // the CVH residual-maker; initializeGlobalCache spawns the master thread once
-// per job, globalBeginRun forwards BeginRun signals, globalEndJob joins it.
+// per job, globalBeginRun calls ensureG4Started (first call starts G4, later
+// runs are no-ops), globalEndJob joins it via stopThread.
 //
 // EventSetup reads happen on the framework's main thread (callConsumes
 // registers the tokens during the residual-maker's ctor; beginRun() reads
@@ -45,8 +46,14 @@ public:
   // pointer) to register the ES tokens this master needs. Idempotent.
   void callConsumes(edm::ConsumesCollector&& iC) const;
 
-  void beginRun(const edm::EventSetup&) const;
-  void endRun() const;
+  // The G4 world is a JOB-scoped resource with a lazy start: it needs the
+  // EventSetup (geometry + field), so it cannot be built at construction.
+  // ensureG4Started() is called at every globalBeginRun and initializes G4
+  // exactly once; later calls are no-ops. There is deliberately no per-run
+  // teardown: initG4/stopG4 are not re-entrant, and CVH refits data where
+  // multi-run input is normal (unlike the single-run simulation flow this
+  // class was adapted from). stopThread() tears G4 down at end of job.
+  void ensureG4Started(const edm::EventSetup&) const;
   void stopThread();
 
   inline CvhMaster& cvhMaster() const { return *m_cvhMaster; }
@@ -54,6 +61,10 @@ public:
 
 private:
   enum class ThreadState { NotExist = 0, BeginRun = 1, EndRun = 2, Destruct = 3 };
+
+  // Signals the state loop to tear down G4 (EndRun handshake). Only used
+  // from stopThread(); no-op if G4 was never started.
+  void stopG4() const;
 
   const bool m_pGeoFromDD4hep;
   const bool m_pUseMagneticField;
@@ -79,7 +90,7 @@ private:
   mutable bool m_hasToken{false};
   mutable bool m_masterCanProceed{false};
   mutable bool m_mainCanProceed{false};
-  mutable bool m_firstRun{true};
+  mutable bool m_g4Started{false};
   mutable bool m_stopped{false};
 };
 

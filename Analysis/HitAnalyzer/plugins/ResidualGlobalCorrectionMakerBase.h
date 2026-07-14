@@ -189,16 +189,15 @@ public:
 
   // RunCache. `int` is a placeholder -- we don't actually need per-run
   // shared state; declaring a RunCache is what makes the framework
-  // dispatch globalBeginRun / globalEndRun so we can forward them to the
-  // master thread's state loop (the G4 world / field setup must happen
-  // before any stream's first produce()).
+  // dispatch globalBeginRun, which lazily starts the job-scoped G4 world
+  // (needs the EventSetup, so it can't happen in initializeGlobalCache;
+  // must happen before any stream's first produce()).
   static std::shared_ptr<int>
   globalBeginRun(const edm::Run &, const edm::EventSetup &,
                  const CvhMasterThread *);
 
-  // globalEndRun: the framework passes a RunContext that bundles both the
-  // GlobalCache and the (placeholder) RunCache. We just forward EndRun
-  // to the master thread so its state loop tears down G4 between runs.
+  // Framework-required stub (comes with the RunCache ability). G4 is
+  // job-scoped: teardown happens in globalEndJob, not at run boundaries.
   static void globalEndRun(const edm::Run &, const edm::EventSetup &,
                            const RunContext *);
 
