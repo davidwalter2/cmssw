@@ -361,6 +361,15 @@ private:
     return std::sqrt(cx * cx + cy * cy + cz * cz);
   }
 
+  // Signed pdgId for a charged daughter given the (positive) species code.
+  // Charged leptons have pdgId sign opposite to their charge (mu- = +13);
+  // hadrons carry the sign of their charge (K+ = +321, pi+ = +211).
+  static int signedPdgId(int species, int charge) {
+    const int a = std::abs(species);
+    const bool lepton = (a == 11 || a == 13 || a == 15);
+    return lepton ? -charge * a : charge * a;
+  }
+
   // Recursively collect TrackRefs of all leaf RecoChargedCandidates.
   static void collectLeafTrackRefs(const reco::Candidate& cand,
                                     std::vector<reco::TrackRef>& refs) {
@@ -766,7 +775,7 @@ private:
           }
         }
 
-        int pdgBach = (tr.charge() < 0) ? +bachelorPdgId_ : -bachelorPdgId_;
+        int pdgBach = signedPdgId(bachelorPdgId_, tr.charge());
         reco::RecoChargedCandidate dBach(tr.charge(), lvBach,
                                          {tr.vx(), tr.vy(), tr.vz()}, pdgBach);
         dBach.setTrack(reco::TrackRef(trackH, iT));
@@ -829,6 +838,25 @@ private:
         // TwoBodyDecayCandidateProducer for K*0/phi, V0Producer for Ks/Lambda).
         std::vector<reco::TrackRef> xDaughterRefs;
         collectLeafTrackRefs(xCand, xDaughterRefs);
+
+        // Veto X candidates that reuse one of the J/psi muon tracks. The
+        // K*0/phi/pipi producers run on generalTracks with no muon veto, so
+        // a J/psi muon can be re-paired into the X candidate; combining it
+        // with its own J/psi would double-count the track (and, under
+        // preset C, feed the same track twice to the multi-track fit).
+        // Mirrors the jpsiDaughterKeys veto in track mode.
+        bool sharesTrackWithJpsi = false;
+        for (const auto& xRef : xDaughterRefs) {
+          for (const auto& muRef : muRefs) {
+            if (xRef.id() == muRef.id() && xRef.key() == muRef.key()) {
+              sharesTrackWithJpsi = true;
+              break;
+            }
+          }
+          if (sharesTrackWithJpsi) break;
+        }
+        if (sharesTrackWithJpsi) continue;
+
         reco::Particle::LorentzVector lvX = xCand.p4();
         if (ttb && xDaughterRefs.size() == 2 &&
             xCand.numberOfDaughters() == 2) {

@@ -1,7 +1,6 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <iostream>
 #include <vector>
 
 #include "FWCore/MessageLogger/interface/MessageLogger.h"
@@ -67,11 +66,11 @@ AlignmentThreeBodyDecayTrackSelector::AlignmentThreeBodyDecayTrackSelector(const
 }
 
 AlignmentThreeBodyDecayTrackSelector::~AlignmentThreeBodyDecayTrackSelector() {
-  std::cout << "AlignmentThreeBodyDecayTrackSelector D* summary"
-            << " eventsChecked=" << eventsChecked_
-            << " eventsWithCandidates=" << eventsWithCandidates_
-            << " totalPassingCandidates=" << totalPassingCandidates_
-            << " totalSelectedFlatTracks=" << totalSelectedFlatTracks_ << std::endl;
+  edm::LogInfo("Alignment") << "AlignmentThreeBodyDecayTrackSelector D* summary"
+                            << " eventsChecked=" << eventsChecked_
+                            << " eventsWithCandidates=" << eventsWithCandidates_
+                            << " totalPassingCandidates=" << totalPassingCandidates_
+                            << " totalSelectedFlatTracks=" << totalSelectedFlatTracks_;
 }
 
 bool AlignmentThreeBodyDecayTrackSelector::useThisFilter() {

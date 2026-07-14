@@ -96,8 +96,7 @@ public:
     auto out = std::make_unique<reco::VertexCompositeCandidateCollection>();
     out->reserve(candH->size());
     for (const auto& cand : *candH) {
-      reco::VertexCompositeCandidate remapped(cand.charge(), cand.p4(), cand.vertex(), cand.pdgId());
-      remapped.setVertex(cand.vertex());
+      reco::VertexCompositeCandidate remapped = makeShell(cand);
       if (rebuildDaughters(cand, remapped, origToSel, selH))
         out->push_back(std::move(remapped));
     }
@@ -109,6 +108,20 @@ public:
   }
 
 private:
+  // Vertex-only copy of a candidate (daughters rebuilt separately). When the
+  // source is itself a VertexCompositeCandidate, carry the vertex covariance
+  // and fit chi2/ndof over -- V0Producer / vertex-fitted candidates store
+  // physics content there that would otherwise be silently dropped.
+  static reco::VertexCompositeCandidate makeShell(const reco::Candidate& c) {
+    if (const auto* vcc = dynamic_cast<const reco::VertexCompositeCandidate*>(&c)) {
+      reco::Candidate::CovarianceMatrix cov;
+      vcc->fillVertexCovariance(cov);
+      return reco::VertexCompositeCandidate(
+          c.charge(), c.p4(), c.vertex(), cov, vcc->vertexChi2(), vcc->vertexNdof(), c.pdgId());
+    }
+    return reco::VertexCompositeCandidate(c.charge(), c.p4(), c.vertex(), c.pdgId());
+  }
+
   // Copy daughters of `src` into `dst`, rewriting TrackRefs of leaf
   // RecoChargedCandidates via origToSel. Returns false if any leaf is
   // missing from the filtered collection (-> caller drops the whole tree).
@@ -130,7 +143,7 @@ private:
         dst.addDaughter(newDau);
       } else if (d->numberOfDaughters() > 0) {
         // Nested composite: rebuild recursively.
-        reco::VertexCompositeCandidate nested(d->charge(), d->p4(), d->vertex(), d->pdgId());
+        reco::VertexCompositeCandidate nested = makeShell(*d);
         if (!rebuildDaughters(*d, nested, origToSel, selH)) return false;
         dst.addDaughter(nested);
       } else {

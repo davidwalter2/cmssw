@@ -262,12 +262,13 @@ public:
 
       double mPos = swapped ? secondDaughterMass_ : firstDaughterMass_;
       double mNeg = swapped ? firstDaughterMass_ : secondDaughterMass_;
-      // PDG sign convention (matching existing code): positive PDG for the
-      // negative-charge daughter (particle), negative PDG for the positive-charge
-      // daughter (anti-particle). firstDaughterPdgId_ describes the positive-side
-      // species in the standard assignment; secondDaughterPdgId_ the negative-side.
-      int pdgPos = swapped ? -secondDaughterPdgId_ : -firstDaughterPdgId_;
-      int pdgNeg = swapped ? +firstDaughterPdgId_ : +secondDaughterPdgId_;
+      // PDG sign follows the actual track charge per species: charged
+      // leptons have pdgId sign opposite to their charge (mu- = +13),
+      // hadrons carry the sign of their charge (K+ = +321). Using the track
+      // charge (not the pos/neg slot) also keeps same-sign pairs
+      // (applyChargeFilter = False) self-consistent.
+      int pdgPos = signedPdgId(swapped ? secondDaughterPdgId_ : firstDaughterPdgId_, trPos.charge());
+      int pdgNeg = signedPdgId(swapped ? firstDaughterPdgId_ : secondDaughterPdgId_, trNeg.charge());
 
       double ePos = std::sqrt(trPos.p() * trPos.p() + mPos * mPos);
       double eNeg = std::sqrt(trNeg.p() * trNeg.p() + mNeg * mNeg);
@@ -293,7 +294,14 @@ public:
         tts.push_back(ttb->build(reco::TrackRef(trackH, iPos)));
         tts.push_back(ttb->build(reco::TrackRef(trackH, iNeg)));
         KalmanVertexFitter kvf;
-        TransientVertex fv = kvf.vertex(tts);
+        TransientVertex fv;
+        try {
+          fv = kvf.vertex(tts);
+        } catch (...) {
+          // VertexException on pathological input; treat as fit failure.
+          ++nDroppedByVtx;
+          continue;
+        }
         if (!fv.isValid()) { ++nDroppedByVtx; continue; }
         double prob = TMath::Prob(fv.totalChiSquared(), (int)fv.degreesOfFreedom());
         if (prob < minVtxProb_) { ++nDroppedByVtx; continue; }
@@ -344,6 +352,16 @@ private:
   bool applyVertexFit_;
   double minVtxProb_;
   double maxTrackTrackDOCA_;
+
+  // Signed pdgId for a charged daughter given the (positive) species code.
+  // Mirror of the helper in JpsiXCandidateProducer.cc: charged leptons have
+  // pdgId sign opposite to their charge (mu- = +13); hadrons carry the sign
+  // of their charge (K+ = +321, pi+ = +211).
+  static int signedPdgId(int species, int charge) {
+    const int a = std::abs(species);
+    const bool lepton = (a == 11 || a == 13 || a == 15);
+    return lepton ? -charge * a : charge * a;
+  }
 
   // Static straight-line 3D DCA between two tracks. Mirror of the helper in
   // JpsiXCandidateProducer.cc (openspec change

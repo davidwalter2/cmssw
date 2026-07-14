@@ -41,8 +41,9 @@ import FWCore.ParameterSet.Config as cms
 #       (minBVtxProb, maxMotherAlphaBS, minBLxyOverSigma activated). 3-body
 #       Kalman fit in track mode (B+, Bc); 4-body Kalman fit on all leaf tracks
 #       in VCC mode (B0->K*0, Bs->phi).
-# V0-mode channels (B0->Ks, Lambda_b, psi(2S)) are preset-invariant (they ride
-# on the central V0Producer which already gives clean candidates at ~1/event).
+# The V0-mode channels (B0->Ks, Lambda_b) are preset-invariant (they ride on
+# the V0Producer clone which already gives clean candidates at ~1/event), as
+# is psi(2S) (prompt pi+pi- from ALCARECOTkAlJpsiXPiPiCandidates, not a V0).
 _TKALJPSIX_SELECTION_PRESET = os.environ.get('TKALJPSIX_SELECTION_PRESET', 'B')
 if _TKALJPSIX_SELECTION_PRESET not in ('A', 'B', 'C'):
     raise ValueError(
@@ -444,9 +445,9 @@ if _TKALJPSIX_SELECTION_PRESET == 'C':
         _prod.maxMotherAlphaBS        = cms.double(_NON_V0_PRESETS[_channel]['maxMotherAlphaBS'])
         _prod.minBLxyOverSigma        = cms.double(_NON_V0_PRESETS[_channel]['minBLxyOverSigma'])
         _prod.applyJpsiMassConstraint = cms.bool(True)
-    ## V0-mode producers (ALCARECOTkAlJpsiX{B0Ks,Lambdab,Psi2S}Candidates) keep
-    ## applyJpsiMassConstraint=False under preset C: they are preset-invariant
-    ## by the V0 spec requirement.
+    ## The V0-mode producers (ALCARECOTkAlJpsiX{B0Ks,Lambdab}Candidates) and
+    ## the psi(2S) producer (prompt pi+pi-, not a V0) keep
+    ## applyJpsiMassConstraint=False under preset C: they are preset-invariant.
 
 # ---------------------------------------------------------------------------
 # Stage 3 -- Merged deduplicated leaf-track collection
