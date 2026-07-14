@@ -390,24 +390,25 @@ std::pair<TrajectoryStateOnSurface, double> Geant4ePropagator::propagateGeneric(
         // re-invoking it after CvhWorker's master/worker InitializeWorker
         // does NOT double-register processes.
         ensureGeant4eIsInitilizedForCVH(true);
-        // fluct allocation is deferred from the ctors to here so it runs
-        // AFTER the world is installed on this thread (CvhWorker) and the
-        // G4Error physics list is registered (ensureGeant4eIsInitilizedForCVH
-        // above) -- only then is G4WentzelVIModel::Initialise's chained
-        // G4SafetyHelper::InitialiseHelper safe to call from this thread.
-        if (!fluct) {
-          fluct = new G4UniversalFluctuationForExtrapolator();
-        }
-        // Now that the physics list is loaded, G4ParticleTable knows about
-        // mu+ etc., so bind fluct's particle.
-        const G4ParticleDefinition *partdef =
-            G4ParticleTable::GetParticleTable()->FindParticle(generateParticleName(1));
-        fluct->SetParticleAndCharge(partdef, 1.);
       } else {
         ensureGeant4eIsInitilized(true);
       }
       geant4eInitDoneForThread() = true;
     }
+  }
+  // fluct is per-INSTANCE while the init flag above is per-THREAD: another
+  // stream's propagator may already have initialized this thread, so the
+  // allocation must not live inside the guarded block. It is deferred from
+  // the ctors to here so it runs AFTER the world is installed on this thread
+  // (CvhWorker) and the G4Error physics list is registered (guaranteed once
+  // geant4eInitDoneForThread() is true) -- only then is
+  // G4WentzelVIModel::Initialise's chained G4SafetyHelper::InitialiseHelper
+  // safe to call, and only then does G4ParticleTable know about mu+ etc.
+  if (forCVH_ && !fluct) {
+    fluct = new G4UniversalFluctuationForExtrapolator();
+    const G4ParticleDefinition *partdef =
+        G4ParticleTable::GetParticleTable()->FindParticle(generateParticleName(1));
+    fluct->SetParticleAndCharge(partdef, 1.);
   }
   auto *theG4eManager = G4ErrorPropagatorManager::GetErrorPropagatorManager();
   auto *theG4eData = G4ErrorPropagatorData::GetErrorPropagatorData();
@@ -629,20 +630,19 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
         // re-invoking it after CvhWorker's master/worker InitializeWorker
         // does NOT double-register processes.
         ensureGeant4eIsInitilizedForCVH(true);
-        // fluct allocation deferred from the ctors to here so it runs after
-        // the world is installed on this thread (CvhWorker) and the G4Error
-        // physics list is registered. See propagateGeneric for the rationale.
-        if (!fluct) {
-          fluct = new G4UniversalFluctuationForExtrapolator();
-        }
-        const G4ParticleDefinition *partdef =
-            G4ParticleTable::GetParticleTable()->FindParticle(generateParticleName(1));
-        fluct->SetParticleAndCharge(partdef, 1.);
       } else {
         ensureGeant4eIsInitilized(true);
       }
       geant4eInitDoneForThread() = true;
     }
+  }
+  // Per-instance fluct allocation, outside the per-thread guard.
+  // See propagateGeneric for the rationale.
+  if (forCVH_ && !fluct) {
+    fluct = new G4UniversalFluctuationForExtrapolator();
+    const G4ParticleDefinition *partdef =
+        G4ParticleTable::GetParticleTable()->FindParticle(generateParticleName(1));
+    fluct->SetParticleAndCharge(partdef, 1.);
   }
   auto *theG4eManager = G4ErrorPropagatorManager::GetErrorPropagatorManager();
   auto *theG4eData = G4ErrorPropagatorData::GetErrorPropagatorData();

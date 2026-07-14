@@ -302,14 +302,6 @@ muonTable = simplePATMuonFlatTableProducer.clone(
         bsConstrainedPt = ExtVar(cms.InputTag("muonBSConstrain:muonBSConstrainedPt"),float, doc="pT with beamspot constraint",precision=-1),
         bsConstrainedPtErr = ExtVar(cms.InputTag("muonBSConstrain:muonBSConstrainedPtErr"),float, doc="pT error with beamspot constraint ",precision=6),
         bsConstrainedChi2 = ExtVar(cms.InputTag("muonBSConstrain:muonBSConstrainedChi2"),float, doc="chi2 of beamspot constraint",precision=6),
-        cvhPt = ExtVar(cms.InputTag("trackrefit:corPt"), float, doc="Refitted track pt", precision=-1),
-        cvhEta = ExtVar(cms.InputTag("trackrefit:corEta"), float, doc="Refitted track eta", precision=12),
-        cvhPhi = ExtVar(cms.InputTag("trackrefit:corPhi"), float, doc="Refitted track phi", precision=12),
-        cvhCharge = ExtVar(cms.InputTag("trackrefit:corCharge"), int, doc="Refitted track charge"),
-        cvhbsPt = ExtVar(cms.InputTag("trackrefitbs:corPt"), float, doc="Refitted track pt (with bs constraint)", precision=-1),
-        cvhbsEta = ExtVar(cms.InputTag("trackrefitbs:corEta"), float, doc="Refitted track eta (with bs constraint)", precision=12),
-        cvhbsPhi = ExtVar(cms.InputTag("trackrefitbs:corPhi"), float, doc="Refitted track phi (with bs constraint)", precision=12),
-        cvhbsCharge = ExtVar(cms.InputTag("trackrefitbs:corCharge"), int, doc="Refitted track charge (with bs constraint)"),
     ),
 )
 
@@ -331,6 +323,33 @@ muonExternalVecVarsTable = cms.EDProducer("FlattenedCandValueMapVectorTableProdu
         bsJacRef = ExtVar(cms.InputTag("trackrefitbs:jacRef"), "std::vector<float>", doc="Jacobian for corrections (with bs constraint)", precision = 12),
     )
 )
+
+def nanoAOD_addCvhMuonBranches(process):
+    """Attach the CVH-refit muon branches (Muon_cvh*, Muon_cvh vector table).
+
+    NOT applied by default: these branches consume the 'trackrefit' /
+    'trackrefitbs' CVH refit modules, which are not part of standard NanoAOD
+    (the 15_0 refit chain needs the CvhMaster Geant4 setup and a
+    scalar-potential coefficient file). Call this customization from a WMass
+    NanoAOD production config that defines process.trackrefit and
+    process.trackrefitbs.
+    """
+    for name, tag in (("trackrefit", "trackrefit"), ("trackrefitbs", "trackrefitbs")):
+        if not hasattr(process, name):
+            raise RuntimeError(
+                "nanoAOD_addCvhMuonBranches: process.%s is not defined; "
+                "set up the CVH refit chain before applying this customization" % name)
+    extVars = process.muonTable.externalVariables
+    extVars.cvhPt = ExtVar(cms.InputTag("trackrefit:corPt"), float, doc="Refitted track pt", precision=-1)
+    extVars.cvhEta = ExtVar(cms.InputTag("trackrefit:corEta"), float, doc="Refitted track eta", precision=12)
+    extVars.cvhPhi = ExtVar(cms.InputTag("trackrefit:corPhi"), float, doc="Refitted track phi", precision=12)
+    extVars.cvhCharge = ExtVar(cms.InputTag("trackrefit:corCharge"), int, doc="Refitted track charge")
+    extVars.cvhbsPt = ExtVar(cms.InputTag("trackrefitbs:corPt"), float, doc="Refitted track pt (with bs constraint)", precision=-1)
+    extVars.cvhbsEta = ExtVar(cms.InputTag("trackrefitbs:corEta"), float, doc="Refitted track eta (with bs constraint)", precision=12)
+    extVars.cvhbsPhi = ExtVar(cms.InputTag("trackrefitbs:corPhi"), float, doc="Refitted track phi (with bs constraint)", precision=12)
+    extVars.cvhbsCharge = ExtVar(cms.InputTag("trackrefitbs:corCharge"), int, doc="Refitted track charge (with bs constraint)")
+    process.muonTablesTask.add(process.muonExternalVecVarsTable)
+    return process
 
 
 
@@ -363,5 +382,5 @@ muonMCTable = cms.EDProducer("CandMCMatchTableProducer",
 
 muonTask = cms.Task(slimmedMuonsUpdated,isoForMu,ptRatioRelForMu,slimmedMuonsWithUserData,finalMuons,finalLooseMuons)
 muonMCTask = cms.Task(muonsMCMatchForTable,muonMCTable)
-muonTablesTask = cms.Task(muonPROMPTMVA,muonMVALowPt,muonBSConstrain,muonTable,muonMVAID,muonPNetVariables,muonPNetScores,muonExternalVecVarsTable)
+muonTablesTask = cms.Task(muonPROMPTMVA,muonMVALowPt,muonBSConstrain,muonTable,muonMVAID,muonPNetVariables,muonPNetScores)
 
