@@ -81,7 +81,6 @@
 // #include "DataFormats/Math/interface/Point3D.h"
 
 
-// #include "../interface/OffsetMagneticField.h"
 // #include "../interface/ParmInfo.h"
 
 

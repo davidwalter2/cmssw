@@ -81,7 +81,7 @@ G4VParticleChange* G4ErrorEnergyLossForCVH::AlongStepDoIt(const G4Track& aTrack,
 
 #ifdef G4VERBOSE
     if (G4ErrorPropagatorData::verbose() >= 3)
-      G4cout << " G4ErrorEnergyLossForCVH FWD  end " << kinEnergyEnd << " halfstep " << kinEnergyHalfStep << G4endl;
+      G4cout << " G4ErrorEnergyLossForCVH BCKD end " << kinEnergyEnd << " halfstep " << kinEnergyHalfStep << G4endl;
 #endif
 
     //--- rescale to energy lost at 1/2 step
@@ -95,7 +95,7 @@ G4VParticleChange* G4ErrorEnergyLossForCVH::AlongStepDoIt(const G4Track& aTrack,
     G4double kinEnergyHalfStep = (kinEnergyStart + kinEnergyEnd) * 0.5;
 #ifdef G4VERBOSE
     if (G4ErrorPropagatorData::verbose() >= 3)
-      G4cout << " G4ErrorEnergyLossForCVH BCKD  end " << kinEnergyEnd << " halfstep " << kinEnergyHalfStep << G4endl;
+      G4cout << " G4ErrorEnergyLossForCVH FWD  end " << kinEnergyEnd << " halfstep " << kinEnergyHalfStep << G4endl;
 #endif
 
     //--- rescale to energy lost at 1/2 step

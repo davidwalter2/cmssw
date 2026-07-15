@@ -52,7 +52,10 @@ globalCorJpsiK = cms.EDProducer(
     l1Results = cms.InputTag('gtDigis', '', 'RECO'),
     l1Triggers = cms.vstring(),
     doRes = cms.bool(False),
-    useIdealGeometry = cms.bool(True),
+    # False by default: True together with the default empty corFiles is the
+    # broken Stage-1-only configuration (ideal geometry, no corrections)
+    # the maker itself warns about. The driver overrides per leg.
+    useIdealGeometry = cms.bool(False),
     bsConstraint = cms.bool(False),
     applyHitQuality = cms.bool(True),
     doVtxConstraint = cms.bool(False),

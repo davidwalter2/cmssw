@@ -33,6 +33,15 @@ process.maxEvents = cms.untracked.PSet(input = cms.untracked.int32(1))
 # Load our cfi. Override label="" so the standard `IdealMagneticFieldRecord`
 # accessor (no label) returns our field.
 process.load('MagneticField.ParametrizedEngine.parametrizedMagneticField_ScalarPot3D_cfi')
+
+# Standalone job: nothing else provides the IdealMagneticFieldRecord IOV
+# (the cfi deliberately ships no ESSource -- real jobs get it from the
+# GlobalTag / standard field config).
+process.idealMagneticFieldRecordSource = cms.ESSource("EmptyESSource",
+    recordName = cms.string('IdealMagneticFieldRecord'),
+    iovIsRunNotTime = cms.bool(True),
+    firstValid = cms.vuint32(1)
+)
 process.ParametrizedMagneticFieldProducer.label = ''
 process.ParametrizedMagneticFieldProducer.parameters.InitFile = opts.initFile
 

@@ -10,9 +10,9 @@ import FWCore.ParameterSet.Config as cms
 #                            element = source B+ candidate index
 #   - `bachelorBCandIdx`   : std::vector<int>, parallel to `bachelor`
 #
-# Channel-species disambiguation comes from the input collection name
-# (here: `ALCARECOTkAlJpsiXBPlusResonances` => bachelor is a kaon).
-# The downstream single-track maker cfi sets `trackParticleName="kaon"`.
+# Channel-species disambiguation comes from the per-leg pdgId branches
+# emitted by the splitter (`bachelorPdgId`, `muon0PdgId`, `muon1PdgId`);
+# the downstream single-track maker cfi sets `trackParticleName="kaon"`.
 jpsiKCandidateSplitter = cms.EDProducer(
     'JpsiKCandidateSplitter',
     src=cms.InputTag('ALCARECOTkAlJpsiXBPlusResonances'),

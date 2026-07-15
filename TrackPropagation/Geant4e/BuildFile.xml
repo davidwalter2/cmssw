@@ -1,4 +1,3 @@
-<flags CXXFLAGS="-g"/>
 <use name="root"/>
 <use name="geant4"/>
 <use name="FWCore/ParameterSet"/>

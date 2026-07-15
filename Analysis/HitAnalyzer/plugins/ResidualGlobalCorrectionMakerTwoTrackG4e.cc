@@ -1,5 +1,4 @@
 #include "ResidualGlobalCorrectionMakerBase.h"
-#include "MagneticFieldOffset.h"
 #include "Analysis/HitAnalyzer/interface/ParticleProperties.h"
 
 // Sparse GBL design-matrix formulation (ported from the single-track
@@ -2372,10 +2371,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                   bool morehitquality = true;
 
                   if (morehitquality) {
-                    nValidHitsFinal++;
                     nvalidFinalarr[id]++;
                     if (ispixel) {
-                      nValidPixelHitsFinal++;
                       nvalidpixelFinalarr[id]++;
                     }
                   }

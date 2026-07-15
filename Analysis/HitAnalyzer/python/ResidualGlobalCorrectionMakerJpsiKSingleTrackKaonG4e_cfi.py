@@ -34,7 +34,10 @@ globalCorJpsiKKaon = cms.EDProducer(
     doMuonAssoc = cms.bool(False),
     doTrigger = cms.bool(False),
     doRes = cms.bool(False),
-    useIdealGeometry = cms.bool(True),
+    # False by default: True together with the default empty corFiles is the
+    # broken Stage-1-only configuration (ideal geometry, no corrections)
+    # the maker itself warns about. The driver overrides per leg.
+    useIdealGeometry = cms.bool(False),
     bsConstraint = cms.bool(False),
     applyHitQuality = cms.bool(True),
     corFiles = cms.vstring(),

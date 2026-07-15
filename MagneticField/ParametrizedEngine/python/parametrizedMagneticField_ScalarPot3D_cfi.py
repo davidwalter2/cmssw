@@ -17,11 +17,11 @@ Usage in nano_cff.py / runCvhJpsi.py:
 
 import FWCore.ParameterSet.Config as cms
 
-idealMagneticFieldRecordSource = cms.ESSource("EmptyESSource",
-    recordName = cms.string('IdealMagneticFieldRecord'),
-    iovIsRunNotTime = cms.bool(True),
-    firstValid = cms.vuint32(1)
-)
+# NOTE: no EmptyESSource here on purpose. Real jobs already provide the
+# IdealMagneticFieldRecord IOV (GlobalTag / standard field config), and a
+# second provider from process.load()'ing this cfi would conflict with it.
+# Standalone jobs (no other field loaded) must declare their own source --
+# see test/testScalarPot3DField_cfg.py.
 
 ParametrizedMagneticFieldProducer = cms.ESProducer("ParametrizedMagneticFieldProducer",
     version = cms.string('ScalarPot3D'),

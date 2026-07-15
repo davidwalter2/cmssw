@@ -784,14 +784,6 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     
     nValidHits = nvalid;
     nValidPixelHits = nvalidpixel;
-    // openspec/improve-cvh-refit-convergence §2: per-event resets of the
-    // (now-unbranched) base-class nValidHitsFinal / nValidPixelHitsFinal
-    // counters. The two-track maker still uses these as a running sum;
-    // resetting here avoids inherited state if that maker runs in the
-    // same job, even though the values are never emitted from this
-    // single-track producer.
-    nValidHitsFinal = 0;
-    nValidPixelHitsFinal = 0;
     
     const unsigned int nparsAlignment = 5*nvalid + nvalidalign2d;
     const unsigned int nFieldModes = fieldCorrection_->nModes();
@@ -948,14 +940,15 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     // tracks only to keep logs short.
     static std::atomic<int> kaonQpDumpCount{0};
     constexpr int kKaonQpDumpMax = 5;
-    // Gate widened from "kaon" to "kaon || mu" so the §9.4.c mass-hypothesis
-    // A/B (kaonAsMuon=True ⇒ trackParticleName="mu" on the kaon collection)
-    // still fires the diagnostic. Single-track G4e maker is only used here
-    // by the bachelor-kaon path in `runCvhBplusJpsiK.py`, so this is safe.
-    const bool dumpKaonQp = (trackParticleName_ == "kaon" || trackParticleName_ == "mu")
-                          && (kaonQpDumpCount.load() < kKaonQpDumpMax);
+    // Gate on the B->J/psiK bachelor path (bCandIdxSrc configured) rather
+    // than on the particle name: this keeps the diagnostic for the §9.4.c
+    // mass-hypothesis A/B (kaonAsMuon=True => trackParticleName="mu" on the
+    // kaon collection) WITHOUT firing in plain muon single-track jobs
+    // (runCvhSingleTrack.py), which use this same plugin. fetch_add first
+    // so the cap cannot be exceeded by concurrent streams.
+    const bool dumpKaonQp = !bCandIdxSrcTag_.label().empty()
+                          && (kaonQpDumpCount.fetch_add(1) < kKaonQpDumpMax);
     if (dumpKaonQp) {
-      kaonQpDumpCount.fetch_add(1);
       const double inP = std::sqrt(track.momentum().mag2());
       const double refP = refFts.segment<3>(3).norm();
       const double qOverPin = track.charge() / std::max(inP, 1e-12);

@@ -90,7 +90,6 @@
 
 #include "SimDataFormats/PileupSummaryInfo/interface/PileupSummaryInfo.h"
 
-// #include "../interface/OffsetMagneticField.h"
 // #include "../interface/ParmInfo.h"
 
 #include "Analysis/HitAnalyzer/interface/ScalarPotentialFieldCorrection.h"
@@ -358,9 +357,6 @@ protected:
   unsigned int nParms;
   unsigned int nJacRef;
   unsigned int nSym;
-  
-  unsigned int nValidHitsFinal;
-  unsigned int nValidPixelHitsFinal;
 
   // Stage-2 per-row B+ candidate index (filled per Fill() call when the
   // optional bCandIdxToken_ is configured; -1 sentinel otherwise).
