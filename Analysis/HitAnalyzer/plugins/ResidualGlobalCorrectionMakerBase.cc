@@ -1,4 +1,5 @@
 // system include files
+#include <algorithm>
 #include <memory>
 
 #include "ResidualGlobalCorrectionMakerBase.h"
@@ -805,7 +806,7 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
         const Vector3DBase<double, GlobalTag> xglob = surfaceD.toGlobal(localx);
         const Vector3DBase<double, GlobalTag> xglobIdeal = surfaceDIdeal.toGlobal(localx);
         
-        const double dtheta = std::acos(xglob.dot(xglobIdeal));
+        dtheta = std::acos(std::clamp(xglob.dot(xglobIdeal), -1., 1.));
         
         
     // if (detid.rawId() == 302122272) {
