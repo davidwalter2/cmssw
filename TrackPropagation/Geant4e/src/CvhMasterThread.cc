@@ -101,8 +101,23 @@ void CvhMasterThread::ensureG4Started(const edm::EventSetup& iSetup) const {
 
   // Job-scoped lazy start: the first call builds the G4 world; every later
   // call (subsequent runs) is a no-op. The ES products captured here stay in
-  // use for the whole job.
+  // use for the whole job -- valid only while their IOVs are unchanged, so
+  // a mid-job conditions change is refused loudly below (G4 cannot be
+  // rebuilt; silently keeping the stale field/geometry pointers would be
+  // physics corruption or a dangling pointer).
   if (m_g4Started) {
+    if (iSetup.get<IdealGeometryRecord>().cacheIdentifier() != m_geometryCacheId) {
+      throw cms::Exception("Conditions")
+          << "CvhMasterThread: the geometry payload changed at a run boundary, but the G4 world "
+          << "was built from the previous one and cannot be rebuilt. Process one geometry IOV per job.";
+    }
+    if (m_pUseMagneticField &&
+        iSetup.get<IdealMagneticFieldRecord>().cacheIdentifier() != m_magFieldCacheId) {
+      throw cms::Exception("Conditions")
+          << "CvhMasterThread: the magnetic-field payload changed at a run boundary (e.g. a magnet-"
+          << "current change picked up by AutoMagneticFieldESProducer), but the G4 world was built "
+          << "with the previous field and cannot be rebuilt. Process one field IOV per job.";
+    }
     return;
   }
 
@@ -115,7 +130,9 @@ void CvhMasterThread::ensureG4Started(const edm::EventSetup& iSetup) const {
   }
   if (m_pUseMagneticField) {
     m_pMF = &iSetup.getData(m_MagField);
+    m_magFieldCacheId = iSetup.get<IdealMagneticFieldRecord>().cacheIdentifier();
   }
+  m_geometryCacheId = iSetup.get<IdealGeometryRecord>().cacheIdentifier();
 
   m_masterThreadState = ThreadState::BeginRun;
   m_masterCanProceed = true;

@@ -80,6 +80,12 @@ private:
   mutable edm::ESGetToken<cms::DDCompactView, IdealGeometryRecord> m_DD4hep;
   mutable edm::ESGetToken<MagneticField, IdealMagneticFieldRecord> m_MagField;
 
+  // Cache identifiers of the ES records whose products the G4 world
+  // captured at first start. Used to detect (and refuse) a mid-job IOV
+  // change -- G4 cannot be rebuilt, so stale conditions must fail loudly.
+  mutable unsigned long long m_geometryCacheId{0};
+  mutable unsigned long long m_magFieldCacheId{0};
+
   mutable std::mutex m_protectMutex;
   mutable std::mutex m_threadMutex;
   mutable std::condition_variable m_notifyMasterCv;
