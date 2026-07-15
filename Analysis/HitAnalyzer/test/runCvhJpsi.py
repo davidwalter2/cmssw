@@ -20,6 +20,9 @@ opts.register('fillJac', True, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool, 'store per-track Jacobians')
 opts.register('fillGrads', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool, 'store per-event gradient + packed Hessian')
+opts.register('fillGradsFactored', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'store per-event gradient + low-rank factored Hessian (H = B^T B)')
 opts.register('doMassConstraint', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool, 'apply J/psi mass constraint in the two-track fit')
 opts.register('useIdealGeometry', False, VarParsing.VarParsing.multiplicity.singleton,
@@ -185,6 +188,10 @@ process.globalCor = cms.EDProducer(
     fitFromSimParms=cms.bool(False),
     fillTrackTree=cms.bool(True),
     fillGrads=cms.bool(bool(opts.fillGrads)),
+    # Low-rank factored Hessian storage (H = B^T B, nRank x nParms):
+    # ~9x smaller than hesspackedv at 360 field modes; see
+    # ResidualGlobalCorrectionMakerTwoTrackG4e.cc for the rank argument.
+    fillGradsFactored=cms.untracked.bool(bool(opts.fillGradsFactored)),
     fillJac=cms.bool(bool(opts.fillJac)),
     fillRunTree=cms.bool(True),
     doGen=cms.bool(False),

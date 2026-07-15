@@ -198,6 +198,20 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   fitFromSimParms_ = iConfig.getParameter<bool>("fitFromSimParms");
   fillTrackTree_ = iConfig.getParameter<bool>("fillTrackTree");
   fillGrads_ = iConfig.getParameter<bool>("fillGrads");
+  // Factored (low-rank) storage of the per-candidate global-parameter
+  // Hessian; see the branch definitions in beginStream. Untracked with a
+  // default so existing cfi fragments stay valid.
+  fillGradsFactored_ = iConfig.getUntrackedParameter<bool>("fillGradsFactored", false);
+  // Relative eigenvalue cutoff for the rank truncation. 1e-8 matches the
+  // fidelity floor of the float32 packed storage: any mode below
+  // 1e-8*lambda_max is indistinguishable from the quantization noise of
+  // hesspackedv, so the factored branch at this tolerance is at least as
+  // faithful as the packed one.
+  hessFactorTol_ = iConfig.getUntrackedParameter<double>("hessFactorTol", 1e-8);
+  // only the two-track maker fills these; keep them zeroed elsewhere
+  nRank = 0;
+  nFactor = 0;
+  hessdroppedmass = 0.;
   fillJac_ = iConfig.getParameter<bool>("fillJac");
   fillRunTree_ = iConfig.getParameter<bool>("fillRunTree");
   doGen_ = iConfig.getParameter<bool>("doGen");
@@ -362,13 +376,24 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
     }
 
     
-    if (fillGrads_) {
+    if (fillGrads_ || fillGradsFactored_) {
       tree->Branch("gradv", gradv.data(), "gradv[nParms]/F", basketSize);
-      tree->Branch("nSym", &nSym, basketSize);
-      tree->Branch("hesspackedv", hesspackedv.data(), "hesspackedv[nSym]/F", basketSize);
-      
+
       tree->Branch("gradmax", &gradmax);
       tree->Branch("hessmax", &hessmax);
+    }
+
+    if (fillGrads_) {
+      tree->Branch("nSym", &nSym, basketSize);
+      tree->Branch("hesspackedv", hesspackedv.data(), "hesspackedv[nSym]/F", basketSize);
+    }
+
+    if (fillGradsFactored_) {
+      // H = B^T B with B row-major (nRank x nParms); nFactor = nRank*nParms
+      tree->Branch("nRank", &nRank, basketSize);
+      tree->Branch("nFactor", &nFactor, basketSize);
+      tree->Branch("hessfactorv", hessfactorv.data(), "hessfactorv[nFactor]/F", basketSize);
+      tree->Branch("hessdroppedmass", &hessdroppedmass);
     }
     
     tree->Branch("run", &run);

@@ -3623,8 +3623,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
       gradv.clear();
       gradv.resize(nparsfinal,0.);
-      
-      if (fillTrackTree_ && fillGrads_) {
+
+      if (fillTrackTree_ && (fillGrads_ || fillGradsFactored_)) {
         tree->SetBranchAddress("gradv", gradv.data());
       }
       
@@ -3661,14 +3661,14 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
         
       //fill packed hessian and indices
       const unsigned int nsym = nparsfinal*(1+nparsfinal)/2;
-      hesspackedv.clear();    
+      hesspackedv.clear();
       hesspackedv.resize(nsym, 0.);
-      
+
       nSym = nsym;
       if (fillTrackTree_ && fillGrads_) {
         tree->SetBranchAddress("hesspackedv", hesspackedv.data());
       }
-      
+
       Map<VectorXf> hesspacked(hesspackedv.data(), nsym);
       const Map<const VectorXu> globalidx(globalidxvfinal.data(), nparsfinal);
 
@@ -3678,7 +3678,56 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
         hesspacked.segment(packedidx, segmentsize) = hess.block<1, Dynamic>(ipar, ipar, 1, segmentsize).cast<float>();
         packedidx += segmentsize;
       }
-      
+
+      // Factored (low-rank) Hessian storage: hess = 2 J^T R J with
+      // rank(R) = rank(Vinv) - nstatefree, i.e. the measurement content
+      // ndof (+1 mass row on the constrained pass) plus the deweighted
+      // strip coordinates, which sit at ~1e-9 relative eigenvalue and
+      // carry no fit weight by construction. Keeping eigenmodes above
+      // hessFactorTol_*lambda_max stores nRank*nParms floats instead of
+      // nParms*(nParms+1)/2 -- with the 360-mode scalar potential this
+      // is ~25-40 modes vs nParms~550, a ~9x reduction, faithful to
+      // within the float32 quantization of the packed storage.
+      // Convention: H = B^T B, B row-major (nRank x nParms), row k =
+      // sqrt(lambda_k) * v_k^T.
+      if (fillGradsFactored_) {
+        const SelfAdjointEigenSolver<MatrixXd> eshess(hess);
+        const VectorXd& eigvals = eshess.eigenvalues();  // ascending
+        const double lambdamax = eigvals(nparsfinal - 1);
+        const double lambdacut = hessFactorTol_*lambdamax;
+
+        unsigned int nrank = 0;
+        double keptmass = 0.;
+        double droppedmass = 0.;
+        for (unsigned int ieig = 0; ieig < nparsfinal; ++ieig) {
+          const double lambda = eigvals(ieig);
+          if (lambda > lambdacut) {
+            ++nrank;
+            keptmass += lambda;
+          }
+          else if (lambda > 0.) {
+            droppedmass += lambda;
+          }
+        }
+
+        nRank = nrank;
+        nFactor = nrank*nparsfinal;
+        hessdroppedmass = keptmass > 0. ? droppedmass/keptmass : 0.;
+
+        hessfactorv.clear();
+        hessfactorv.resize(nFactor, 0.);
+        if (fillTrackTree_) {
+          tree->SetBranchAddress("hessfactorv", hessfactorv.data());
+        }
+
+        // rows ordered by decreasing eigenvalue
+        Map<Matrix<float, Dynamic, Dynamic, RowMajor>> hessfactor(hessfactorv.data(), nrank, nparsfinal);
+        for (unsigned int irank = 0; irank < nrank; ++irank) {
+          const unsigned int ieig = nparsfinal - 1 - irank;
+          hessfactor.row(irank) = (std::sqrt(eigvals(ieig))*eshess.eigenvectors().col(ieig)).transpose().cast<float>();
+        }
+      }
+
       
 // assert(globalidxvfinal.size() == (2*Muplus_nhits + 2*Muminus_nhits + 2*Muplus_nvalid + 2*Muminus_nvalid + Muplus_nvalidpixel + Muminus_nvalidpixel));
 

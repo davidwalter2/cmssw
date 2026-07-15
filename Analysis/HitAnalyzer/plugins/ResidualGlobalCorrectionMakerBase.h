@@ -358,6 +358,17 @@ protected:
   unsigned int nJacRef;
   unsigned int nSym;
 
+  // Factored Hessian storage (fillGradsFactored_): the reduced Hessian
+  // wrt the global params has rank ~ ndof + nconstraints << nParms, so
+  // it is stored as B (nRank x nParms, row-major, H = B^T B summed over
+  // rows) instead of the packed dense upper triangle. nFactor =
+  // nRank*nParms is the flat branch dimension.
+  unsigned int nRank;
+  unsigned int nFactor;
+  // relative eigenvalue mass dropped by the rank truncation,
+  // sum(dropped lambda)/sum(kept lambda) -- monitoring quantity
+  float hessdroppedmass;
+
   // Stage-2 per-row B+ candidate index (filled per Fill() call when the
   // optional bCandIdxToken_ is configured; -1 sentinel otherwise).
   int bCandIdx = -1;
@@ -389,7 +400,8 @@ protected:
   std::vector<unsigned int> globalidxvfinal;
   
   std::vector<float> hesspackedv;
-  
+  std::vector<float> hessfactorv;
+
   std::vector<unsigned int> hitidxv;
   std::vector<float> dxrecgen;
   std::vector<float> dyrecgen;
@@ -488,6 +500,8 @@ protected:
   bool fitFromSimParms_;
   bool fillTrackTree_;
   bool fillGrads_;
+  bool fillGradsFactored_;
+  double hessFactorTol_;
   bool fillJac_;
   bool fillRunTree_;
   bool alignGlued_ = true;
