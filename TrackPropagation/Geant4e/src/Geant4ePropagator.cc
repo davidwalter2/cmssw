@@ -130,7 +130,8 @@ Geant4ePropagator::~Geant4ePropagator() {
   // called (CVH ntuplizer use case).
   if (propTotalCalls_ > 0ULL) {
     const unsigned long long fail_total =
-        propFailCounts_[0] + propFailCounts_[1] + propFailCounts_[2] + propFailCounts_[3] + propFailCounts_[4];
+        propFailCounts_[0] + propFailCounts_[1] + propFailCounts_[2] + propFailCounts_[3] + propFailCounts_[4] +
+        propFailCounts_[5];
     std::cout << "Geant4ePropagator::propagateGenericWithJacobianAltD summary"
               << "  calls="        << propTotalCalls_
               << "  failures="     << fail_total
@@ -140,6 +141,7 @@ Geant4ePropagator::~Geant4ePropagator() {
               << "   exit3[maxlen]=" << propFailCounts_[2]
               << "   exit4[pdrain]=" << propFailCounts_[3]
               << "   exit5[offsurface]=" << propFailCounts_[4]
+              << "   exit6[fieldbound]=" << propFailCounts_[5]
               << "   backwardLegs=" << propBackwardLegs_
               << std::endl;
   }
@@ -839,6 +841,39 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
                 << "  particle=" << g4ParticleName
                 << std::endl;
       return retDefault();
+    }
+
+    // Field-model validity bound: every tracker module (and therefore every
+    // legitimate module-to-module leg) lies strictly inside the field
+    // model's defined region (ScalarPot3D: sphere R = 320 cm vs. outermost
+    // module corners at R ~ 295 cm). A state outside it is unambiguous
+    // proof of a runaway/wrong-way leg, caught here within one G4 step
+    // (<= 10 mm) of leaving -- metres earlier and thousands of steps
+    // cheaper than the momentum-drain or off-surface checks below. For
+    // field models defined everywhere (volume-based map) isDefined() is
+    // always true and this guard never fires.
+    {
+      const GlobalPoint curPos(g4eTrajState.GetPosition().x() / CLHEP::cm,
+                               g4eTrajState.GetPosition().y() / CLHEP::cm,
+                               g4eTrajState.GetPosition().z() / CLHEP::cm);
+      if (!theField->isDefined(curPos)) {
+        ++propFailCounts_[5];
+        std::cout << "Geant4e fail[fieldbound]"
+                  << "  r="        << curPos.perp()
+                  << "  z="        << curPos.z()
+                  << "  p="        << g4eTrajState.GetMomentum().mag() / CLHEP::GeV
+                  << "  pT0="      << cmsInitMom.perp()
+                  << "  eta0="     << cmsInitMom.eta()
+                  << "  charge="   << charge
+                  << "  surf_r="   << std::hypot(pDest.position().x(), pDest.position().y())
+                  << "  surf_z="   << pDest.position().z()
+                  << "  iter="     << iterations
+                  << "  pathLen="  << finalPathLength
+                  << "  particle=" << g4ParticleName
+                  << std::endl;
+        theG4eManager->GetPropagator()->InvokePostUserTrackingAction(g4eTrajState.GetG4Track());
+        return retDefault();
+      }
     }
 
     // In-flight momentum floor: a leg whose momentum drains below plimit_

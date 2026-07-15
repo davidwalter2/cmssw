@@ -117,9 +117,11 @@ private:
   // 2 = max path length / max iterations, 3 = in-flight momentum drain
   // below plimit (runaway leg ground down by material before reaching the
   // target plane), 4 = propagation reported success but the final state is
-  // off the destination plane (e.g. pinned at the G4 world boundary).
-  // Dumped from the destructor.
-  mutable std::array<unsigned long long, 5> propFailCounts_{{0ULL, 0ULL, 0ULL, 0ULL, 0ULL}};
+  // off the destination plane (e.g. pinned at the G4 world boundary),
+  // 5 = state left the field model's validity region (all tracker modules
+  // lie inside it, so exiting is unambiguous proof of a runaway leg --
+  // fires earliest of the runaway guards). Dumped from the destructor.
+  mutable std::array<unsigned long long, 6> propFailCounts_{{0ULL, 0ULL, 0ULL, 0ULL, 0ULL, 0ULL}};
   mutable unsigned long long propTotalCalls_{0ULL};
   // Successful backward legs (anyDirection mode): counted so the frequency
   // of the momentum-flipped frame conversion stays observable per job.
