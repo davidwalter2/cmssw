@@ -63,13 +63,14 @@ opts.register('eventsToProcess', '', VarParsing.VarParsing.multiplicity.singleto
               VarParsing.VarParsing.varType.string,
               'comma-separated run:event list to select specific events '
               '(e.g. 278769:15462343,278769:16101980); empty = all')
-opts.register('propagationDirection', 'alongMomentum', VarParsing.VarParsing.multiplicity.singleton,
+opts.register('propagationDirection', 'anyDirection', VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string,
-              'Geant4ePropagator PropagationDirection. "anyDirection" picks '
-              'forward/backward per leg from the target-plane geometry, '
+              'Geant4ePropagator PropagationDirection. "anyDirection" (default) '
+              'picks forward/backward per leg from the target-plane geometry, '
               'recovering legs whose target plane is marginally behind the '
               'state (runaway-leg failure mode); "alongMomentum" is the '
-              'legacy behaviour.')
+              'legacy forward-only behaviour (bit-identical for all fits '
+              'that do not fail with it).')
 opts.parseArguments()
 if not opts.scalarPot3DInitFile:
     raise SystemExit(

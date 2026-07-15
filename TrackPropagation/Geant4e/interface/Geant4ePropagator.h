@@ -121,6 +121,9 @@ private:
   // Dumped from the destructor.
   mutable std::array<unsigned long long, 5> propFailCounts_{{0ULL, 0ULL, 0ULL, 0ULL, 0ULL}};
   mutable unsigned long long propTotalCalls_{0ULL};
+  // Successful backward legs (anyDirection mode): counted so the frequency
+  // of the momentum-flipped frame conversion stays observable per job.
+  mutable unsigned long long propBackwardLegs_{0ULL};
 
   // Geant4 11.1 made G4ErrorPropagatorManager / G4ErrorPropagatorData
   // singletons G4ThreadLocal. Fetch them per-call via the static accessors

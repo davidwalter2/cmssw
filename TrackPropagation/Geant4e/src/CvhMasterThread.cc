@@ -113,10 +113,26 @@ void CvhMasterThread::ensureG4Started(const edm::EventSetup& iSetup) const {
     }
     if (m_pUseMagneticField &&
         iSetup.get<IdealMagneticFieldRecord>().cacheIdentifier() != m_magFieldCacheId) {
-      throw cms::Exception("Conditions")
-          << "CvhMasterThread: the magnetic-field payload changed at a run boundary (e.g. a magnet-"
-          << "current change picked up by AutoMagneticFieldESProducer), but the G4 world was built "
-          << "with the previous field and cannot be rebuilt. Process one field IOV per job.";
+      // The record-level cache identifier rolls at every run boundary where
+      // ANY product in IdealMagneticFieldRecord has a run-limited IOV (e.g.
+      // AutoMagneticFieldESProducer following RunInfo). That alone does not
+      // mean OUR field product changed: a file-based labelled field (e.g.
+      // ScalarPot3D) is produced once and the EventSetup keeps returning the
+      // same cached object. Re-fetch the product and accept the boundary iff
+      // it is literally the same object the G4 world (master + workers) was
+      // built with; only a genuinely rebuilt product is fatal, since G4
+      // holds the raw pointer for the whole job and cannot be re-pointed.
+      const MagneticField* mfNew = &iSetup.getData(m_MagField);
+      if (mfNew != m_pMF) {
+        throw cms::Exception("Conditions")
+            << "CvhMasterThread: the magnetic-field product was rebuilt at a run boundary (e.g. a "
+            << "magnet-current change picked up by AutoMagneticFieldESProducer), but the G4 world "
+            << "was built with the previous field object and cannot be rebuilt. Process one field "
+            << "IOV per job.";
+      }
+      m_magFieldCacheId = iSetup.get<IdealMagneticFieldRecord>().cacheIdentifier();
+      edm::LogInfo("Geant4e") << "CvhMasterThread: magnetic-field record IOV rolled at a run "
+                              << "boundary but the field product is unchanged; continuing.";
     }
     return;
   }

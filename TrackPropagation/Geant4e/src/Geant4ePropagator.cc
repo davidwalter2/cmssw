@@ -140,6 +140,7 @@ Geant4ePropagator::~Geant4ePropagator() {
               << "   exit3[maxlen]=" << propFailCounts_[2]
               << "   exit4[pdrain]=" << propFailCounts_[3]
               << "   exit5[offsurface]=" << propFailCounts_[4]
+              << "   backwardLegs=" << propBackwardLegs_
               << std::endl;
   }
 
@@ -1028,14 +1029,39 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
   // Backward legs (anyDirection mode picking PropBackwards): the momentum
   // was flipped before running G4's backward propagation; flip it back so
   // the returned state has physical (along-track) momentum, mirroring the
-  // TSOS-based propagateGeneric. NOTE: the 5x9 transport Jacobian is
-  // accumulated in the flipped frame; for the ~mm-scale backward legs this
-  // mode is meant to recover, the associated material/field derivatives are
-  // negligible, but long backward legs should not rely on it.
+  // TSOS-based propagateGeneric.
+  //
+  // Exact frame conversion of the derivative/noise outputs: everything was
+  // accumulated on the momentum-FLIPPED trajectory, i.e. in the curvilinear
+  // frame of the reversed direction. Under momentum reversal the CMSSW
+  // curvilinear basis transforms as q/p even, lambda odd, dphi even (phi
+  // shifts by the constant pi), xT odd (U = Z x T flips with T), yT even
+  // (V = T x U is invariant) -- the flip map has Jacobian
+  // P = diag(1, -1, 1, -1, 1), which is its own inverse. Hence:
+  //   J_phys(state block) = P * J_flip * P   (rows: end frame, cols: start frame)
+  //   J_phys(dB/dxi cols) = P * cols         (the perturbations are global-frame)
+  //   Q_phys              = P * Q_flip * P   (both indices in the end frame)
+  //   dEdx_phys           = -dEdx_flip       (retraced path gains energy where
+  //                                           the physical track loses it)
+  // With this conversion the per-leg gradients and noise matrices are exact
+  // for backward legs of any length, not only the mm-scale marginal legs.
   if (mode == G4ErrorMode_PropBackwards) {
     ftsEnd[3] = -ftsEnd[3];
     ftsEnd[4] = -ftsEnd[4];
     ftsEnd[5] = -ftsEnd[5];
+
+    Matrix<double, 5, 5> Pflip = Matrix<double, 5, 5>::Identity();
+    Pflip(1, 1) = -1.;
+    Pflip(3, 3) = -1.;
+
+    jac.leftCols<5>() = (Pflip * jac.leftCols<5>() * Pflip).eval();
+    jac.rightCols<4>() = (Pflip * jac.rightCols<4>()).eval();
+    g4errorEnd = (Pflip * g4errorEnd * Pflip).eval();
+    dQ = (Pflip * dQ * Pflip).eval();
+    dQ2 = (Pflip * dQ2 * Pflip).eval();
+    dEdxlast = -dEdxlast;
+
+    ++propBackwardLegs_;
   }
 
   cmsField->SetOffset(0., 0., 0.);

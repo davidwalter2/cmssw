@@ -28,6 +28,14 @@ opts.register('useOpera3D', False, VarParsing.VarParsing.multiplicity.singleton,
 opts.register('scalarPot3DInitFile', '', VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string,
               'coefficient dump file produced by mfs/dump_coeffs_for_cmssw.py (always required)')
+opts.register('numberOfThreads', 1, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.int,
+              'framework numberOfThreads (numberOfStreams follows the same value)')
+opts.register('propagationDirection', 'anyDirection', VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.string,
+              'Geant4ePropagator PropagationDirection (anyDirection = per-leg '
+              'forward/backward choice, default; alongMomentum = legacy '
+              'forward-only)')
 opts.parseArguments()
 if not opts.scalarPot3DInitFile:
     raise SystemExit(
@@ -87,8 +95,8 @@ process.source = cms.Source(
 )
 
 process.options = cms.untracked.PSet(
-    numberOfThreads=cms.untracked.uint32(1),
-    numberOfStreams=cms.untracked.uint32(1),
+    numberOfThreads=cms.untracked.uint32(int(opts.numberOfThreads)),
+    numberOfStreams=cms.untracked.uint32(int(opts.numberOfThreads)),
     numberOfConcurrentLuminosityBlocks=cms.untracked.uint32(1),
 )
 process.MessageLogger.cerr.FwkReport.reportEvery = 100
@@ -165,6 +173,7 @@ else:
 process.geopro.MagneticFieldLabel = fieldlabel
 process.Geant4ePropagator.MagneticFieldLabel = fieldlabel
 process.Geant4ePropagator.ForCVH = cms.bool(True)
+process.Geant4ePropagator.PropagationDirection = cms.string(opts.propagationDirection)
 process.globalCor.MagneticFieldLabel = cms.string(fieldlabel)
 process.globalCor.CvhMaster.MagneticFieldLabel = cms.string(fieldlabel)
 

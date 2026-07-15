@@ -98,6 +98,7 @@ private:
   mutable unsigned long long fitFailProp_ = 0ULL;       // Geant4e propagation failed
   mutable unsigned long long fitFailHitUpdate_ = 0ULL;  // CPE re-evaluation (cloner) invalid
   mutable unsigned long long fitFailNaN_ = 0ULL;        // NaN/inf parameter update
+  mutable unsigned long long fitStepClamped_ = 0ULL;    // fits with >=1 trust-region-clamped GN step
 };
 
 ResidualGlobalCorrectionMakerG4e::~ResidualGlobalCorrectionMakerG4e() {
@@ -111,6 +112,7 @@ ResidualGlobalCorrectionMakerG4e::~ResidualGlobalCorrectionMakerG4e() {
               << "  fail[prop]=" << fitFailProp_
               << "  fail[hitupdate]=" << fitFailHitUpdate_
               << "  fail[nan]=" << fitFailNaN_
+              << "  clamped[step]=" << fitStepClamped_
               << std::endl;
   }
 }
@@ -1004,6 +1006,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     layerStates.reserve(nhits);
     
     bool valid = true;
+    bool stepClampedThisFit = false;
     ++fitAttempted_;
 
     const bool islikelihood = false;
@@ -2527,12 +2530,54 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         break;
       }
 
+      dxfull = VectorXd::Zero(nstateparms);
+      dxfull(freestateidxs) = dxfree;
+
+      // Momentum-floor safeguard on the Gauss-Newton step. Large relative
+      // q/p steps are legitimate (forward tracks routinely repull q/p by
+      // O(100%) in the first iterations), so a generic step cap would bind
+      // on healthy fits. Only two outcomes of an update are fatal, and only
+      // those are prevented, by scaling the whole step vector (direction
+      // preserved):
+      //  - the updated momentum drops below pFloor (2 GeV, safely above the
+      //    1 GeV propagation refusal that killed such fits), or
+      //  - q/p changes sign (charge flip of a seeded reconstructed track --
+      //    always a diverging step, and 1/p blows up on the way).
+      {
+        const double pref = refFts.segment<3>(3).norm();
+        const double qopref = pref > 0. ? refFts[6] / pref : 0.;
+        const double dqop = dxfull[0];
+        const double qopupd = qopref + dqop;
+        constexpr double pFloor = 2.0;  // GeV
+        double stepscale = 1.;
+        if (qopref != 0. && dqop != 0.) {
+          if (qopupd * qopref <= 0.) {
+            // sign flip: stop half-way toward q/p = 0
+            stepscale = -0.5 * qopref / dqop;
+          } else if (std::abs(qopupd) > 1. / pFloor) {
+            // p_upd below the floor: land exactly on p = pFloor, same charge
+            stepscale = (std::copysign(1. / pFloor, qopref) - qopref) / dqop;
+          }
+        }
+        if (stepscale < 1.) {
+          stepscale = std::max(stepscale, 0.);
+          dxfree *= stepscale;
+          dxfull *= stepscale;
+          if (!stepClampedThisFit) {
+            stepClampedThisFit = true;
+            ++fitStepClamped_;
+          }
+          std::cout << "GN step clamped: iiter = " << iiter
+                    << " qopref = " << qopref << " dqop = " << dqop
+                    << " scale = " << stepscale
+                    << " seed(q,pt,eta)=(" << track.charge() << "," << track.pt() << "," << track.eta() << ")"
+                    << std::endl;
+        }
+      }
+
       const double deltachisq = rfull.transpose()*VinvF*dxfree;
       edmval = -deltachisq;
 
-      dxfull = VectorXd::Zero(nstateparms);
-      dxfull(freestateidxs) = dxfree;
-      
       const Vector5d dxref = dxfull.head<5>();
 
 // std::cout << "iiter = " << iiter << std::endl;
