@@ -74,6 +74,7 @@ process.GlobalTag.toGet = cms.VPSet(
 process.XMLFromDBSource.label = cms.string("Extended")
 
 process.load("TrackPropagation.Geant4e.geantRefit_cff")
+from TrackPropagation.Geant4e.cvhMaster_cfi import CvhMasterPSet
 
 process.maxEvents = cms.untracked.PSet(input=cms.untracked.int32(opts.nEvents))
 
@@ -91,6 +92,13 @@ process.options = cms.untracked.PSet(
     numberOfConcurrentLuminosityBlocks=cms.untracked.uint32(1),
 )
 process.MessageLogger.cerr.FwkReport.reportEvery = 100
+
+# Per-stream CLHEP engine for the residual-maker (required by the MT-safe
+# CvhMaster path; seeds are derived deterministically per stream).
+process.RandomNumberGeneratorService.globalCor = cms.PSet(
+    initialSeed=cms.untracked.uint32(123456789),
+    engineName=cms.untracked.string('HepJamesRandom'),
+)
 
 process.offlineBeamSpot = cms.EDProducer("BeamSpotProducer")
 
@@ -129,6 +137,9 @@ process.globalCor = cms.EDProducer(
     MagneticFieldLabel=cms.string(""),
     scalarPotentialInitFile=cms.string(opts.scalarPot3DInitFile),
     outprefix=cms.untracked.string("globalcor_single"),
+    # MT G4Error master (GlobalCache) -- owns the G4 world / master field.
+    # Muon-only particle set: this driver refits muon tracks only.
+    CvhMaster=CvhMasterPSet.clone(Particles=cms.vstring("mu+", "mu-")),
 )
 
 if opts.useOpera3D:
@@ -155,9 +166,11 @@ process.geopro.MagneticFieldLabel = fieldlabel
 process.Geant4ePropagator.MagneticFieldLabel = fieldlabel
 process.Geant4ePropagator.ForCVH = cms.bool(True)
 process.globalCor.MagneticFieldLabel = cms.string(fieldlabel)
+process.globalCor.CvhMaster.MagneticFieldLabel = cms.string(fieldlabel)
 
 process.reconstruction_step = cms.Path(
-    process.hltFilter * process.geopro * process.offlineBeamSpot * process.globalCor
+    # geopro removed: CvhMasterThread (GlobalCache) owns the G4 world setup.
+    process.hltFilter * process.offlineBeamSpot * process.globalCor
 )
 process.schedule = cms.Schedule(process.reconstruction_step)
 

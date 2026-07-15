@@ -55,6 +55,21 @@ opts.register('epsilonFDClosure', 1e-4, VarParsing.VarParsing.multiplicity.singl
 opts.register('numberOfThreads', 1, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.int,
               'framework numberOfThreads (numberOfStreams follows the same value)')
+opts.register('debugPerIterDump', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'per-iteration debug trace (tree vectors + stdout dbgSeed/dbgIter '
+              'lines); use together with eventsToProcess on a few events')
+opts.register('eventsToProcess', '', VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.string,
+              'comma-separated run:event list to select specific events '
+              '(e.g. 278769:15462343,278769:16101980); empty = all')
+opts.register('propagationDirection', 'alongMomentum', VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.string,
+              'Geant4ePropagator PropagationDirection. "anyDirection" picks '
+              'forward/backward per leg from the target-plane geometry, '
+              'recovering legs whose target plane is marginally behind the '
+              'state (runaway-leg failure mode); "alongMomentum" is the '
+              'legacy behaviour.')
 opts.parseArguments()
 if not opts.scalarPot3DInitFile:
     raise SystemExit(
@@ -123,6 +138,10 @@ if opts.goldenJson:
     import FWCore.PythonUtilities.LumiList as LumiList
     process.source.lumisToProcess = LumiList.LumiList(
         filename=opts.goldenJson).getVLuminosityBlockRange()
+
+if opts.eventsToProcess:
+    process.source.eventsToProcess = cms.untracked.VEventRange(
+        *[s.strip() for s in opts.eventsToProcess.split(',') if s.strip()])
 
 process.options = cms.untracked.PSet(
     numberOfThreads=cms.untracked.uint32(int(opts.numberOfThreads)),
@@ -194,6 +213,7 @@ process.globalCor = cms.EDProducer(
     # Numerical-FD closure (debug only).
     runFDClosure=cms.bool(bool(opts.runFDClosure)),
     epsilonFDClosure=cms.double(float(opts.epsilonFDClosure)),
+    debugPerIterDump=cms.bool(bool(opts.debugPerIterDump)),
     outprefix=cms.untracked.string("globalcor"),
     # MT G4Error master: GlobalCache config for CvhMasterThread. The master
     # spawns a dedicated thread in initializeGlobalCache that builds DDDWorld
@@ -255,6 +275,7 @@ process.globalCor.CvhMaster.MagneticFieldLabel = cms.string(fieldlabel)
 # SetParticleAndCharge. Without this, computeErrorIoni dereferences a null
 # fluct->table on the first event.
 process.Geant4ePropagator.ForCVH = cms.bool(True)
+process.Geant4ePropagator.PropagationDirection = cms.string(opts.propagationDirection)
 process.globalCor.MagneticFieldLabel = cms.string(fieldlabel)
 
 process.reconstruction_step = cms.Path(

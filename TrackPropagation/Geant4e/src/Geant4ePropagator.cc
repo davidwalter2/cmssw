@@ -130,7 +130,7 @@ Geant4ePropagator::~Geant4ePropagator() {
   // called (CVH ntuplizer use case).
   if (propTotalCalls_ > 0ULL) {
     const unsigned long long fail_total =
-        propFailCounts_[0] + propFailCounts_[1] + propFailCounts_[2];
+        propFailCounts_[0] + propFailCounts_[1] + propFailCounts_[2] + propFailCounts_[3] + propFailCounts_[4];
     std::cout << "Geant4ePropagator::propagateGenericWithJacobianAltD summary"
               << "  calls="        << propTotalCalls_
               << "  failures="     << fail_total
@@ -138,6 +138,8 @@ Geant4ePropagator::~Geant4ePropagator() {
               << "   exit1[plimit]=" << propFailCounts_[0]
               << "   exit2[ierr]="   << propFailCounts_[1]
               << "   exit3[maxlen]=" << propFailCounts_[2]
+              << "   exit4[pdrain]=" << propFailCounts_[3]
+              << "   exit5[offsurface]=" << propFailCounts_[4]
               << std::endl;
   }
 
@@ -838,6 +840,33 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
       return retDefault();
     }
 
+    // In-flight momentum floor: a leg whose momentum drains below plimit_
+    // can only end at the extrapolator table floor (Ekin ~ 1 MeV) after
+    // grinding through meters of dense material -- a runaway/wrong-way leg
+    // that will never reach the intended (bounded) module. Without this
+    // check such a leg is returned as a *success* with p ~ 15 MeV, and the
+    // 1/p^n transport-Jacobian terms poison the downstream fit (NaN state
+    // updates). Fail fast instead, mirroring the entry-point plimit check.
+    if (g4eTrajState.GetMomentum().mag() / CLHEP::GeV < plimit_) {
+      ++propFailCounts_[3];
+      std::cout << "Geant4e fail[pdrain]"
+                << "  p="        << g4eTrajState.GetMomentum().mag() / CLHEP::GeV
+                << "  plimit="   << plimit_
+                << "  pT0="      << cmsInitMom.perp()
+                << "  eta0="     << cmsInitMom.eta()
+                << "  charge="   << charge
+                << "  r="        << g4eTrajState.GetPosition().perp() / CLHEP::cm
+                << "  z="        << g4eTrajState.GetPosition().z() / CLHEP::cm
+                << "  surf_r="   << std::hypot(pDest.position().x(), pDest.position().y())
+                << "  surf_z="   << pDest.position().z()
+                << "  iter="     << iterations
+                << "  pathLen="  << finalPathLength
+                << "  particle=" << g4ParticleName
+                << std::endl;
+      theG4eManager->GetPropagator()->InvokePostUserTrackingAction(g4eTrajState.GetG4Track());
+      return retDefault();
+    }
+
     const double thisPathLength = TrackPropagation::g4doubleToCmsDouble(g4eTrajState.GetG4Track()->GetStepLength());
 
     const double ePre = g4eTrajState.GetG4Track()->GetStep()->GetPreStepPoint()->GetTotalEnergy() / CLHEP::GeV;
@@ -950,6 +979,37 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
 
   LogDebug("Geant4e") << "Final position of the Track :" << g4eTrajState.GetPosition() << std::endl;
 
+  // On-surface closure check: G4's target-reached logic (CheckIfLastStep)
+  // can report success without the state being anywhere near the target
+  // plane -- observed when a leg whose target plane is behind the state
+  // escapes to the G4 world boundary (r ~ 17.5 m) and every subsequent leg
+  // returns a zero-step "success" pinned at the world edge. Such states
+  // poison the fit with astronomic residuals. Require the final position
+  // to lie on the destination plane within 1 mm.
+  {
+    const Point3DBase<double, GlobalTag> finalPosCms(finalRecoPos.x() / CLHEP::cm,
+                                                     finalRecoPos.y() / CLHEP::cm,
+                                                     finalRecoPos.z() / CLHEP::cm);
+    const double distToPlane = pDest.toLocal(finalPosCms).z();
+    if (std::abs(distToPlane) > 0.1) {
+      ++propFailCounts_[4];
+      std::cout << "Geant4e fail[offsurface]"
+                << "  dPlane="   << distToPlane
+                << "  pT0="      << cmsInitMom.perp()
+                << "  eta0="     << cmsInitMom.eta()
+                << "  charge="   << charge
+                << "  r="        << finalPosCms.perp()
+                << "  z="        << finalPosCms.z()
+                << "  surf_r="   << std::hypot(pDest.position().x(), pDest.position().y())
+                << "  surf_z="   << pDest.position().z()
+                << "  iter="     << iterations
+                << "  pathLen="  << finalPathLength
+                << "  particle=" << g4ParticleName
+                << std::endl;
+      return retDefault();
+    }
+  }
+
   //////////////////////////////
   // Retrieve the state in the end from Geant4e, convert them to CMS vectors
   // and points, and build global trajectory parameters.
@@ -964,6 +1024,19 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
   ftsEnd[4] = g4eTrajState.GetMomentum().y() / CLHEP::GeV;
   ftsEnd[5] = g4eTrajState.GetMomentum().z() / CLHEP::GeV;
   ftsEnd[6] = charge;
+
+  // Backward legs (anyDirection mode picking PropBackwards): the momentum
+  // was flipped before running G4's backward propagation; flip it back so
+  // the returned state has physical (along-track) momentum, mirroring the
+  // TSOS-based propagateGeneric. NOTE: the 5x9 transport Jacobian is
+  // accumulated in the flipped frame; for the ~mm-scale backward legs this
+  // mode is meant to recover, the associated material/field derivatives are
+  // negligible, but long backward legs should not rely on it.
+  if (mode == G4ErrorMode_PropBackwards) {
+    ftsEnd[3] = -ftsEnd[3];
+    ftsEnd[4] = -ftsEnd[4];
+    ftsEnd[5] = -ftsEnd[5];
+  }
 
   cmsField->SetOffset(0., 0., 0.);
   cmsField->SetMaterialOffset(0.);

@@ -24,7 +24,7 @@ class ResidualGlobalCorrectionMakerG4e : public ResidualGlobalCorrectionMakerBas
 {
 public:
   ResidualGlobalCorrectionMakerG4e(const edm::ParameterSet &, const CvhMasterThread *);
-  ~ResidualGlobalCorrectionMakerG4e() {}
+  ~ResidualGlobalCorrectionMakerG4e();
 
 // static void fillDescriptions(edm::ConfigurationDescriptions &descriptions);
 
@@ -90,7 +90,30 @@ private:
   double trackMass_;
   std::string trackParticleName_;
 
+  // Per-stream fit-outcome accounting, printed from the destructor.
+  // attempted = tracks entering the iterative refit (post-selection);
+  // succeeded = fits that survived all iterations (tree/valuemap filled).
+  mutable unsigned long long fitAttempted_ = 0ULL;
+  mutable unsigned long long fitSucceeded_ = 0ULL;
+  mutable unsigned long long fitFailProp_ = 0ULL;       // Geant4e propagation failed
+  mutable unsigned long long fitFailHitUpdate_ = 0ULL;  // CPE re-evaluation (cloner) invalid
+  mutable unsigned long long fitFailNaN_ = 0ULL;        // NaN/inf parameter update
 };
+
+ResidualGlobalCorrectionMakerG4e::~ResidualGlobalCorrectionMakerG4e() {
+  if (fitAttempted_ > 0ULL) {
+    const unsigned long long failTotal = fitAttempted_ - fitSucceeded_;
+    std::cout << "ResidualGlobalCorrectionMakerG4e fit summary"
+              << "  attempted=" << fitAttempted_
+              << "  succeeded=" << fitSucceeded_
+              << "  failed=" << failTotal
+              << " (" << (100. * failTotal / fitAttempted_) << "%)"
+              << "  fail[prop]=" << fitFailProp_
+              << "  fail[hitupdate]=" << fitFailHitUpdate_
+              << "  fail[nan]=" << fitFailNaN_
+              << std::endl;
+  }
+}
 
 
 ResidualGlobalCorrectionMakerG4e::ResidualGlobalCorrectionMakerG4e(const edm::ParameterSet &iConfig,
@@ -981,6 +1004,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     layerStates.reserve(nhits);
     
     bool valid = true;
+    ++fitAttempted_;
 
     const bool islikelihood = false;
 
@@ -1446,7 +1470,11 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         }
 
         if (!std::get<0>(propresult)) {
-          std::cout << "Abort: Propagation Failed!" << std::endl;
+          std::cout << "Abort: Propagation Failed!"
+                    << " iiter = " << iiter << " ihit = " << ihit
+                    << " seed: q=" << track.charge() << " pt=" << track.pt()
+                    << " eta=" << track.eta() << std::endl;
+          ++fitFailProp_;
           valid = false;
           break;
         }
@@ -1791,6 +1819,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           auto const& preciseHit = cloner.makeShared(hit, tsostmp);
           if (!preciseHit->isValid()) {
             std::cout << "Abort: Failed updating hit" << std::endl;
+            ++fitFailHitUpdate_;
             valid = false;
             break;
           }
@@ -2486,9 +2515,21 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       
       dxfree = -Cinvd.solve(VinvF.transpose()*rfull);
 
+      // Fail fast on a non-finite update (drained/runaway propagation leg
+      // or singular normal matrix) instead of leaking NaN into the state.
+      if (!dxfree.allFinite()) {
+        std::cout << "Abort: non-finite parameter update from solve!"
+                  << " iiter = " << iiter
+                  << " seed(q,pt,eta)=(" << track.charge() << "," << track.pt() << "," << track.eta() << ")"
+                  << std::endl;
+        ++fitFailNaN_;
+        valid = false;
+        break;
+      }
+
       const double deltachisq = rfull.transpose()*VinvF*dxfree;
       edmval = -deltachisq;
-      
+
       dxfull = VectorXd::Zero(nstateparms);
       dxfull(freestateidxs) = dxfree;
       
@@ -2570,6 +2611,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       
       if (std::isnan(edmval) || std::isinf(edmval)) {
         std::cout << "WARNING: invalid parameter update!!!" << " edmval = " << edmval << " lamupd = " << lamupd << " deltachisqval = " << deltachisqval << std::endl;
+        ++fitFailNaN_;
         valid = false;
         break;
       }
@@ -2596,6 +2638,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       // tree->Fill();
       continue;
     }
+    ++fitSucceeded_;
         
     std::unordered_map<unsigned int, unsigned int> idxmap;
     

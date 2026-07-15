@@ -62,6 +62,24 @@ public:
           << "  fallback=" << midPropagatedFallbackCount_
           << " (" << fallbackPct << "%)";
     }
+    // Per-stream fit-outcome accounting (see counters below): attempted =
+    // track pairs entering the icons/iteration loops; succeeded = pairs
+    // whose fit survived all phases (tree filled).
+    if (fitAttempted_ > 0ULL) {
+      const unsigned long long failTotal = fitAttempted_ - fitSucceeded_;
+      std::cout << "ResidualGlobalCorrectionMakerTwoTrackG4e fit summary"
+                << "  attempted=" << fitAttempted_
+                << "  succeeded=" << fitSucceeded_
+                << "  failed=" << failTotal
+                << " (" << (100. * failTotal / fitAttempted_) << "%)"
+                << "  fail[kinfit]=" << fitFailKinFit_
+                << "  fail[prop]=" << fitFailProp_
+                << "  fail[hitupdate]=" << fitFailHitUpdate_
+                << "  fail[chargeflip]=" << fitFailChargeFlip_
+                << "  fail[nan]=" << fitFailNaN_
+                << "  skipped[samesign]=" << fitSkippedSameSign_
+                << std::endl;
+    }
   }
 
 // static void fillDescriptions(edm::ConfigurationDescriptions &descriptions);
@@ -112,6 +130,16 @@ private:
   // path. Logged from EndJob.
   mutable unsigned long long midPropagatedFallbackCount_ = 0ULL;
   mutable unsigned long long midPropagatedTotalCount_    = 0ULL;
+
+  // Per-stream fit-outcome accounting, printed from the destructor.
+  mutable unsigned long long fitAttempted_ = 0ULL;
+  mutable unsigned long long fitSucceeded_ = 0ULL;
+  mutable unsigned long long fitFailKinFit_ = 0ULL;      // seed kinematic vertex fit empty/inconsistent
+  mutable unsigned long long fitFailProp_ = 0ULL;        // Geant4e propagation failed
+  mutable unsigned long long fitFailHitUpdate_ = 0ULL;   // CPE re-evaluation (cloner) invalid
+  mutable unsigned long long fitFailChargeFlip_ = 0ULL;  // q/p sign flip in parameter update
+  mutable unsigned long long fitFailNaN_ = 0ULL;         // NaN/inf parameter update
+  mutable unsigned long long fitSkippedSameSign_ = 0ULL; // same-sign pairs skipped pre-fit (not failures)
   bool         debugPerIterDump_;   // emit per-iter vector branches when true
 
   // Per-iteration debug vectors (filled only when debugPerIterDump_=true).
@@ -1033,6 +1061,16 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
     if (itrack->isLooper() || jtrack->isLooper()) {
       continue;
     }
+
+    // All two-track channels fit a neutral parent; a same-sign pair can
+    // never satisfy the charge-sum requirement enforced after the update,
+    // so it would waste a kinematic fit plus a full GN iteration and then
+    // abort deterministically. Skip it up front (counted separately -- these
+    // are not fit failures).
+    if (itrack->charge() + jtrack->charge() != 0) {
+      ++fitSkippedSameSign_;
+      continue;
+    }
     
     const reco::Candidate *mu0gen = nullptr;
     double drmin0 = 0.1;
@@ -1398,6 +1436,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
       const unsigned int nstatefree = freestateidxs.size();
 
       bool valid = true;
+      ++fitAttempted_;
       
       
       if (false) {
@@ -1465,6 +1504,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
         if (kinTree->isEmpty() || !kinTree->isConsistent()) {
 // continue;
           std::cout << "Abort: invalid kinematic fit!\n";
+          ++fitFailKinFit_;
           valid = false;
           break;
         }
@@ -1472,6 +1512,16 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
         kinTree->movePointerToTheTop();
         RefCountedKinematicParticle dimu_kinfit = kinTree->currentParticle();
         const double m0 = dimu_kinfit->currentState().mass();
+
+        if (debugPerIterDump_) {
+          RefCountedKinematicVertex dbgvtx = kinTree->currentDecayVertex();
+          std::cout << "dbgSeed: icons=" << icons
+                    << " kinvtx=" << dbgvtx->position()
+                    << " kinmass=" << m0
+                    << " seed0(q,pt,eta)=(" << itrack->charge() << "," << itrack->pt() << "," << itrack->eta() << ")"
+                    << " seed1(q,pt,eta)=(" << jtrack->charge() << "," << jtrack->pt() << "," << jtrack->eta() << ")"
+                    << std::endl;
+        }
         
         if (false) {
           // debug output
@@ -1870,7 +1920,13 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               auto propresult = g4prop->propagateGenericWithJacobianAltD(updtsos, surface, dB, dxival,
                                                                           0., 0., -1., g4PartName);
               if (!std::get<0>(propresult)) {
-                std::cout << "ResidualGlobalCorrectionMakerTwoTrackG4e ### Abort: Propagation Failed!" << std::endl;
+                std::cout << "ResidualGlobalCorrectionMakerTwoTrackG4e ### Abort: Propagation Failed!"
+                          << " icons = " << icons << " iiter = " << iiter
+                          << " id = " << id << " ihit = " << ihit
+                          << " seed0: q=" << itrack->charge() << " pt=" << itrack->pt() << " eta=" << itrack->eta()
+                          << " seed1: q=" << jtrack->charge() << " pt=" << jtrack->pt() << " eta=" << jtrack->eta()
+                          << std::endl;
+                ++fitFailProp_;
                 valid = false;
                 break;
               }
@@ -1878,6 +1934,21 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
               updtsos = std::get<1>(propresult);
               const Matrix<double, 5, 5> Qcurv = std::get<2>(propresult);
+
+              if (debugPerIterDump_) {
+                const auto& sp = surface.position();
+                std::cout << "dbgHit: icons=" << icons << " iiter=" << iiter
+                          << " id=" << id << " ihit=" << ihit
+                          << " detid=" << hit->geographicalId().rawId()
+                          << " valid=" << hit->isValid()
+                          << " surf(r,z)=(" << std::hypot(sp.x(), sp.y()) << "," << sp.z() << ")"
+                          << " in(r,z,p)=(" << std::hypot(propInputState[0], propInputState[1])
+                          << "," << propInputState[2] << "," << propInputState.segment<3>(3).norm() << ")"
+                          << " out(r,z,p)=(" << std::hypot(updtsos[0], updtsos[1])
+                          << "," << updtsos[2] << "," << updtsos.segment<3>(3).norm() << ")"
+                          << " dEdxlast=" << std::get<4>(propresult)
+                          << std::endl;
+              }
               const Matrix<double, 5, 9> FdFm = std::get<3>(propresult);
               const double dEdxlast = std::get<4>(propresult);
 
@@ -2157,6 +2228,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
                 if (!preciseHit->isValid()) {
                   std::cout << "Abort: Failed updating hit" << std::endl;
+                  ++fitFailHitUpdate_;
                   valid = false;
                   break;
                 }
@@ -2619,6 +2691,21 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
           dxfree = -Cinvd.solve(VinvF.transpose() * rfull);
 
+          // Fail fast on a non-finite update: a drained/runaway propagation
+          // leg (or a singular normal matrix) yields NaN/inf here, which
+          // previously leaked into the charge-sum check and was miscounted
+          // as a charge flip.
+          if (!dxfree.allFinite()) {
+            std::cout << "Abort: non-finite parameter update from solve!"
+                      << " icons = " << icons << " iiter = " << iiter
+                      << " seed0(q,pt,eta)=(" << itrack->charge() << "," << itrack->pt() << "," << itrack->eta() << ")"
+                      << " seed1(q,pt,eta)=(" << jtrack->charge() << "," << jtrack->pt() << "," << jtrack->eta() << ")"
+                      << std::endl;
+            ++fitFailNaN_;
+            valid = false;
+            break;
+          }
+
           dxfull = VectorXd::Zero(nstateparms);
           dxfull(freestateidxs) = dxfree;
           
@@ -2857,6 +2944,14 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           
           // *TODO* better handling of this case?
           if ( (muchargearr[0] + muchargearr[1]) != 0) {
+            std::cout << "Abort: charge flip in parameter update!"
+                      << " qbp0 = " << mucurvarr[0][0]
+                      << " qbp1 = " << mucurvarr[1][0]
+                      << " icons = " << icons << " iiter = " << iiter
+                      << " seedq0 = " << itrack->charge() << " seedq1 = " << jtrack->charge()
+                      << " seedpt0 = " << itrack->pt() << " seedpt1 = " << jtrack->pt()
+                      << std::endl;
+            ++fitFailChargeFlip_;
             valid = false;
             break;
           }
@@ -3249,6 +3344,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
           if (std::isnan(edmval) || std::isinf(edmval)) {
             std::cout << "WARNING: invalid parameter update!!!" << " edmval = " << edmval << " deltachisqval = " << deltachisqval << std::endl;
+            ++fitFailNaN_;
             valid = false;
             break;
           }
@@ -3264,6 +3360,18 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           // candidate. Pushed before the convergence-break check so the
           // break-triggering iteration is included.
           if (debugPerIterDump_) {
+            // stdout mirror of the per-iter trace: unlike the tree branches
+            // this also survives for candidates whose fit later aborts.
+            std::cout << "dbgIter: icons=" << icons << " iiter=" << iiter
+                      << " chisq=" << chisqval
+                      << " deltachisq=" << deltachisqval
+                      << " edmval=" << edmval
+                      << " dxvtx10max=" << dxfull.head<10>().cwiseAbs().maxCoeff()
+                      << " ref0(r,z,p)=(" << std::hypot(refftsarr[0][0], refftsarr[0][1])
+                      << "," << refftsarr[0][2] << "," << refftsarr[0].segment<3>(3).norm() << ")"
+                      << " ref1(r,z,p)=(" << std::hypot(refftsarr[1][0], refftsarr[1][1])
+                      << "," << refftsarr[1][2] << "," << refftsarr[1].segment<3>(3).norm() << ")"
+                      << std::endl;
             chisqval_iter.push_back(static_cast<double>(chisqval));
             edmval_iter.push_back(static_cast<double>(edmval));
             deltachisqval_iter.push_back(static_cast<double>(deltachisqval));
@@ -3428,7 +3536,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
       if (!valid) {
         continue;
       }
-      
+      ++fitSucceeded_;
+
 // std::cout << "gradfull rows cols " << gradfull.rows() << " " << gradfull.cols() << "nstateparms = " << nstateparms << std::endl;
     
 // auto const& dchisqdx = gradfull.head(nstateparms);

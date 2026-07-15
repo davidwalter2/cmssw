@@ -114,8 +114,12 @@ private:
 
   // Per-exit-point failure counters for propagateGenericWithJacobianAltD.
   // Indices: 0 = configurePropagation (p < plimit), 1 = Geant4 step ierr != 0,
-  // 2 = max path length / max iterations. Dumped from the destructor.
-  mutable std::array<unsigned long long, 3> propFailCounts_{{0ULL, 0ULL, 0ULL}};
+  // 2 = max path length / max iterations, 3 = in-flight momentum drain
+  // below plimit (runaway leg ground down by material before reaching the
+  // target plane), 4 = propagation reported success but the final state is
+  // off the destination plane (e.g. pinned at the G4 world boundary).
+  // Dumped from the destructor.
+  mutable std::array<unsigned long long, 5> propFailCounts_{{0ULL, 0ULL, 0ULL, 0ULL, 0ULL}};
   mutable unsigned long long propTotalCalls_{0ULL};
 
   // Geant4 11.1 made G4ErrorPropagatorManager / G4ErrorPropagatorData
