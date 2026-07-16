@@ -1168,6 +1168,17 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
                 << ", mono tilt = " << tmono << ", stereo tilt = " << tstereo
                 << "): rebuilt composite frame anchored on the "
                 << (tmono <= tstereo ? "mono" : "stereo") << " face.";
+
+            // Note on the dead face itself: no separate repair is needed.
+            // The parallel-frame reconstruction below rebuilds each face's
+            // plane (normal + out-of-plane position) from the repaired
+            // composite, which is all a hitless module exposes to the fit
+            // (propagation target + material crossing). The face's residual
+            // garbage in-plane DOF (origin offset along the plane, in-plane
+            // rotation) neither move the plane nor are consumed without
+            // hits -- verified bit-identical against an explicit
+            // anchor+ideal-relative face rebuild on 10k events incl. the
+            // hotspot candidates.
           }
           
           //TODO apply partial alignment to surfaceGlued here
