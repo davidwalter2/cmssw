@@ -66,6 +66,13 @@ opts.register('eventsToProcess', '', VarParsing.VarParsing.multiplicity.singleto
               VarParsing.VarParsing.varType.string,
               'comma-separated run:event list to select specific events '
               '(e.g. 278769:15462343,278769:16101980); empty = all')
+opts.register('nIters', 10, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.int,
+              'Gauss-Newton iteration cap per constraint phase (default 10 = baseline)')
+opts.register('edmConvergence', 1e-5, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'EDM convergence threshold on the reference-state block (default 1e-5; '
+              '0 disables early stopping, e.g. for per-iteration trajectory studies)')
 opts.register('propagationDirection', 'anyDirection', VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string,
               'Geant4ePropagator PropagationDirection. "anyDirection" (default) '
@@ -222,6 +229,8 @@ process.globalCor = cms.EDProducer(
     runFDClosure=cms.bool(bool(opts.runFDClosure)),
     epsilonFDClosure=cms.double(float(opts.epsilonFDClosure)),
     debugPerIterDump=cms.bool(bool(opts.debugPerIterDump)),
+    nIters=cms.uint32(int(opts.nIters)),
+    edmConvergence=cms.double(float(opts.edmConvergence)),
     outprefix=cms.untracked.string("globalcor"),
     # MT G4Error master: GlobalCache config for CvhMasterThread. The master
     # spawns a dedicated thread in initializeGlobalCache that builds DDDWorld

@@ -99,6 +99,21 @@ private:
   mutable unsigned long long fitFailHitUpdate_ = 0ULL;  // CPE re-evaluation (cloner) invalid
   mutable unsigned long long fitFailNaN_ = 0ULL;        // NaN/inf parameter update
   mutable unsigned long long fitStepClamped_ = 0ULL;    // fits with >=1 trust-region-clamped GN step
+
+  // Convergence knobs (see ctor). Defaults reproduce the baseline.
+  unsigned int nIters_ = 10;
+  double edmConvergence_ = 1.e-5;
+  unsigned int gnDampAfter_ = 0;   // 0 = damping off
+  double gnDampFactor_ = 0.5;
+
+  // Per-iteration debug dump (mirrors the two-track maker): vector branches
+  // recording the full chi2/EDM trajectory of each fit. Only booked/filled
+  // when debugPerIterDump=true.
+  bool debugPerIterDump_ = false;
+  std::vector<double> chisqval_iter;
+  std::vector<double> edmval_iter;
+  std::vector<double> edmvalref_iter;
+  std::vector<double> deltachisqval_iter;
 };
 
 ResidualGlobalCorrectionMakerG4e::~ResidualGlobalCorrectionMakerG4e() {
@@ -136,6 +151,24 @@ ResidualGlobalCorrectionMakerG4e::ResidualGlobalCorrectionMakerG4e(const edm::Pa
       ? iConfig.getParameter<std::string>("trackParticleName") : std::string("mu");
   trackMass_ = ana_hitanalyzer::getParticleProperties(trackParticleName_).mass;
 
+  // Convergence knobs, mirroring the two-track maker (existsAs-guarded so
+  // legacy cfis keep the baseline behaviour: 10 iterations, EDM < 1e-5).
+  nIters_ = iConfig.existsAs<unsigned int>("nIters")
+      ? iConfig.getParameter<unsigned int>("nIters") : 10u;
+  edmConvergence_ = iConfig.existsAs<double>("edmConvergence")
+      ? iConfig.getParameter<double>("edmConvergence") : 1.e-5;
+  debugPerIterDump_ = iConfig.existsAs<bool>("debugPerIterDump")
+      ? iConfig.getParameter<bool>("debugPerIterDump") : false;
+  // Gauss-Newton step damping from iteration gnDampAfter_ onward (0 = off).
+  // Remedy for limit cycles between nearly-chi2-degenerate states: a
+  // half-step from one cycle endpoint lands on the midpoint, collapsing
+  // 2-cycles onto the true minimum. Applied only after the early
+  // iterations so normal convergence (2-4 full steps) is untouched.
+  gnDampAfter_ = iConfig.existsAs<unsigned int>("gnDampAfter")
+      ? iConfig.getParameter<unsigned int>("gnDampAfter") : 0u;
+  gnDampFactor_ = iConfig.existsAs<double>("gnDampFactor")
+      ? iConfig.getParameter<double>("gnDampFactor") : 0.5;
+
   outputCorPt_ = produces<edm::ValueMap<float>>("corPt");
   outputCorEta_ = produces<edm::ValueMap<float>>("corEta");
   outputCorPhi_ = produces<edm::ValueMap<float>>("corPhi");
@@ -163,6 +196,15 @@ void ResidualGlobalCorrectionMakerG4e::beginStream(edm::StreamID streamid)
     tree->Branch("trackPhi", &trackPhi, basketSize);
     tree->Branch("trackCharge", &trackCharge, basketSize);
     tree->Branch("trackQopErr", &trackQopErr);
+    // Per-iteration trajectory dump (debug): one entry per Gauss-Newton
+    // iteration. edmvalref_iter is the reference-block EDM, i.e. the
+    // actual convergence criterion.
+    if (debugPerIterDump_) {
+      tree->Branch("chisqval_iter",      &chisqval_iter);
+      tree->Branch("edmval_iter",        &edmval_iter);
+      tree->Branch("edmvalref_iter",     &edmvalref_iter);
+      tree->Branch("deltachisqval_iter", &deltachisqval_iter);
+    }
     // Stage-2 per-row B+ candidate index, branched only when the cfi
     // configured bCandIdxSrc (additive, no-op for legacy J/psi/Upsilon/Z).
     if (!bCandIdxSrcTag_.label().empty()) {
@@ -1008,6 +1050,12 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     bool valid = true;
     bool stepClampedThisFit = false;
     ++fitAttempted_;
+    if (debugPerIterDump_) {
+      chisqval_iter.clear();
+      edmval_iter.clear();
+      edmvalref_iter.clear();
+      deltachisqval_iter.clear();
+    }
 
     const bool islikelihood = false;
 
@@ -1020,7 +1068,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     
     const bool anomDebug = false;
     
-    const unsigned int niters = (dogen && !dolocalupdate) || (dogen && fitFromSimParms_) ? 1 : 10;
+    const unsigned int niters = (dogen && !dolocalupdate) || (dogen && fitFromSimParms_) ? 1 : nIters_;
     
     for (unsigned int iiter=0; iiter<niters; ++iiter) {
       if (debugprintout_) {
@@ -2575,8 +2623,31 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         }
       }
 
+      // Limit-cycle damping (see ctor comment). Applied after the momentum
+      // floor and before the EDM bookkeeping so the recorded edmval refers
+      // to the step actually taken.
+      if (gnDampAfter_ > 0 && iiter >= gnDampAfter_) {
+        dxfree *= gnDampFactor_;
+        dxfull *= gnDampFactor_;
+      }
+
       const double deltachisq = rfull.transpose()*VinvF*dxfree;
       edmval = -deltachisq;
+
+      // Realized chi2 tracking (this maker historically never filled the
+      // chisqval/deltachisqval members in-loop -- they were stale storage;
+      // the always-stored chisqval branch is still overwritten with the
+      // final residual-projector value after the loop as before). chi2 at
+      // the current linearization point plus the predicted change of this
+      // step, mirroring the two-track maker; deltachisqval is the realized
+      // iteration-to-iteration change (per-iteration debug dump).
+      {
+        const double chisq0val = rfull.dot(Vinvsparse * rfull);
+        const double chisqcur = chisq0val + deltachisq;
+        deltachisqval = chisqcur - chisqvalold;
+        chisqvalold = chisqcur;
+        chisqval = chisqcur;
+      }
 
       const Vector5d dxref = dxfull.head<5>();
 
@@ -2653,7 +2724,16 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         
       
       niter = iiter + 1;
-      
+
+      // Per-iteration trajectory record (pushed before the convergence
+      // break so the break-triggering iteration is included).
+      if (debugPerIterDump_) {
+        chisqval_iter.push_back(static_cast<double>(chisqval));
+        edmval_iter.push_back(static_cast<double>(edmval));
+        edmvalref_iter.push_back(static_cast<double>(edmvalref));
+        deltachisqval_iter.push_back(static_cast<double>(deltachisqval));
+      }
+
       if (std::isnan(edmval) || std::isinf(edmval)) {
         std::cout << "WARNING: invalid parameter update!!!" << " edmval = " << edmval << " lamupd = " << lamupd << " deltachisqval = " << deltachisqval << std::endl;
         ++fitFailNaN_;
@@ -2669,10 +2749,10 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       }
 
       
-      if (iiter > 0 && dolocalupdate && edmval < 1e-5) {
+      if (iiter > 0 && dolocalupdate && edmval < edmConvergence_) {
         break;
       }
-      else if (iiter > 0 && !dolocalupdate && edmvalref < 1e-5) {
+      else if (iiter > 0 && !dolocalupdate && edmvalref < edmConvergence_) {
         break;
       }
     

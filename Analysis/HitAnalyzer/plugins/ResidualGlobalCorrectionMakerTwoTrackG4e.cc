@@ -147,6 +147,7 @@ private:
   // Spans both icons=0 and icons=1 phases (concatenated in iteration order).
   std::vector<double> chisqval_iter;
   std::vector<double> edmval_iter;
+  std::vector<double> edmvalref_iter;   // reference-block EDM = the convergence criterion
   std::vector<double> deltachisqval_iter;
   std::vector<double> mu_qoverp_iter;       // 2 entries per iter (muplus, muminus)
   std::vector<double> Jpsi_mass_iter;       // 1 entry per iter
@@ -723,6 +724,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::beginStream(edm::StreamID streami
     if (debugPerIterDump_) {
       tree->Branch("chisqval_iter",       &chisqval_iter);
       tree->Branch("edmval_iter",         &edmval_iter);
+      tree->Branch("edmvalref_iter",      &edmvalref_iter);
       tree->Branch("deltachisqval_iter",  &deltachisqval_iter);
       tree->Branch("mu_qoverp_iter",      &mu_qoverp_iter);
       tree->Branch("Jpsi_mass_iter",      &Jpsi_mass_iter);
@@ -1455,6 +1457,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
       if (debugPerIterDump_) {
         chisqval_iter.clear();
         edmval_iter.clear();
+        edmvalref_iter.clear();
         deltachisqval_iter.clear();
         mu_qoverp_iter.clear();
         Jpsi_mass_iter.clear();
@@ -3374,6 +3377,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                       << std::endl;
             chisqval_iter.push_back(static_cast<double>(chisqval));
             edmval_iter.push_back(static_cast<double>(edmval));
+            edmvalref_iter.push_back(static_cast<double>(edmvalref));
             deltachisqval_iter.push_back(static_cast<double>(deltachisqval));
             for (unsigned int id = 0; id < 2; ++id) {
               const double px = refftsarr[id][3];

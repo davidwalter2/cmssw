@@ -36,6 +36,22 @@ opts.register('propagationDirection', 'anyDirection', VarParsing.VarParsing.mult
               'Geant4ePropagator PropagationDirection (anyDirection = per-leg '
               'forward/backward choice, default; alongMomentum = legacy '
               'forward-only)')
+opts.register('nIters', 10, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.int,
+              'Gauss-Newton iteration cap (default 10 = baseline)')
+opts.register('edmConvergence', 1e-5, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'EDM convergence threshold on the reference-state block (default 1e-5)')
+opts.register('debugPerIterDump', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'store per-iteration chi2/EDM trajectory vectors in the tree')
+opts.register('gnDampAfter', 0, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.int,
+              'damp Gauss-Newton steps from this iteration on (0 = off); '
+              'collapses limit cycles between chi2-degenerate states')
+opts.register('gnDampFactor', 0.5, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'damping factor applied to the GN step when gnDampAfter is active')
 opts.parseArguments()
 if not opts.scalarPot3DInitFile:
     raise SystemExit(
@@ -144,6 +160,11 @@ process.globalCor = cms.EDProducer(
     triggers=cms.vstring(*JPSI_TRIGGERS),
     MagneticFieldLabel=cms.string(""),
     scalarPotentialInitFile=cms.string(opts.scalarPot3DInitFile),
+    nIters=cms.uint32(int(opts.nIters)),
+    edmConvergence=cms.double(float(opts.edmConvergence)),
+    debugPerIterDump=cms.bool(bool(opts.debugPerIterDump)),
+    gnDampAfter=cms.uint32(int(opts.gnDampAfter)),
+    gnDampFactor=cms.double(float(opts.gnDampFactor)),
     outprefix=cms.untracked.string("globalcor_single"),
     # MT G4Error master (GlobalCache) -- owns the G4 world / master field.
     # Muon-only particle set: this driver refits muon tracks only.
