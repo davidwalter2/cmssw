@@ -265,6 +265,10 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
     tree->Branch("event", &event);
     
     tree->Branch("edmval", &edmval);
+    // Reference-block EDM at the final iteration -- the actual convergence
+    // criterion (edmval is the full-state EDM incl. per-hit scattering DOF,
+    // which is large by construction). Always-on so convergence quality is
+    // auditable offline together with niter.
     tree->Branch("edmvalref", &edmvalref);
     tree->Branch("deltachisqval", &deltachisqval);
     tree->Branch("niter", &niter);
@@ -873,7 +877,58 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       if (isglued) {
         GloballyPositioned<double> surfaceGlued = surfaceToDouble(parmDet->surface());
 
+        // Garbage-alignment guard: modules that were off during data-taking
+        // have no hits and hence unconstrained alignment; the persisted
+        // constants can be arbitrary (observed: one TIB face rotated by
+        // ~49 deg, which contaminates the composite frame used as the
+        // anchor of the reconstruction below). If the aligned composite
+        // orientation deviates from the ideal one by more than 50 mrad --
+        // far beyond any genuine alignment correction -- rebuild the
+        // composite frame from the sane component: anchor on the component
+        // whose aligned orientation is closest to its ideal one, composed
+        // with the ideal component->composite transform.
         if (alignGlued_) {
+          const GluedGeomDet *gluedDet = dynamic_cast<const GluedGeomDet*>(parmDet);
+          const Surface &gluedIdealSurf = globalGeometryIdeal->idToDet(parmDet->geographicalId())->surface();
+          auto tilt = [](const Surface &a, const Surface &b) {
+            const auto na = a.rotation().z();
+            const auto nb = b.rotation().z();
+            const double c = std::abs(na.x()*nb.x() + na.y()*nb.y() + na.z()*nb.z());
+            return std::sqrt(std::max(0., 1. - c*c));
+          };
+          if (gluedDet != nullptr && tilt(parmDet->surface(), gluedIdealSurf) > 0.05) {
+            const GeomDetUnit *monoDet = gluedDet->monoDet();
+            const GeomDetUnit *stereoDet = gluedDet->stereoDet();
+            const Surface &monoIdeal = globalGeometryIdeal->idToDet(monoDet->geographicalId())->surface();
+            const Surface &stereoIdeal = globalGeometryIdeal->idToDet(stereoDet->geographicalId())->surface();
+            const double tmono = tilt(monoDet->surface(), monoIdeal);
+            const double tstereo = tilt(stereoDet->surface(), stereoIdeal);
+            const GeomDet *anchor = tmono <= tstereo ? monoDet : stereoDet;
+            const Surface &anchorIdeal = tmono <= tstereo ? monoIdeal : stereoIdeal;
+
+            const GloballyPositioned<double> anchorD = surfaceToDouble(anchor->surface());
+            const GloballyPositioned<double> anchorIdealD = surfaceToDouble(anchorIdeal);
+            const GloballyPositioned<double> gluedIdealD = surfaceToDouble(gluedIdealSurf);
+
+            const Point3DBase<double, GlobalTag> posGlobal =
+                anchorD.toGlobal(anchorIdealD.toLocal(gluedIdealD.position()));
+            auto mapAxis = [&](const Basic3DVector<double> &v) {
+              return anchorD.toGlobal(anchorIdealD.toLocal(Vector3DBase<double, GlobalTag>(v.x(), v.y(), v.z())));
+            };
+            const Vector3DBase<double, GlobalTag> gxn = mapAxis(gluedIdealD.rotation().x());
+            const Vector3DBase<double, GlobalTag> gyn = mapAxis(gluedIdealD.rotation().y());
+            const Vector3DBase<double, GlobalTag> gzn = mapAxis(gluedIdealD.rotation().z());
+            const TkRotation<double> tkrotRepair(gxn.x(), gxn.y(), gxn.z(),
+                                                 gyn.x(), gyn.y(), gyn.z(),
+                                                 gzn.x(), gzn.y(), gzn.z());
+            surfaceGlued = GloballyPositioned<double>(posGlobal, tkrotRepair);
+            edm::LogWarning("ResidualGlobalCorrectionMakerBase")
+                << "Garbage-aligned glued module " << parmdetid.rawId()
+                << " (composite tilt vs ideal = " << tilt(parmDet->surface(), gluedIdealSurf)
+                << ", mono tilt = " << tmono << ", stereo tilt = " << tstereo
+                << "): rebuilt composite frame anchored on the "
+                << (tmono <= tstereo ? "mono" : "stereo") << " face.";
+          }
           
           //TODO apply partial alignment to surfaceGlued here
           
