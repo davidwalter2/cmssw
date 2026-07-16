@@ -110,6 +110,8 @@
 #include <iostream>
 #include <functional>
 
+#include "TrackPropagation/Geant4e/interface/MaterialGroupModel.h"
+
 using namespace Eigen;
 
 constexpr unsigned int max_n = 25; //!< In order to avoid use of dynamic memory
@@ -540,6 +542,16 @@ protected:
   // loaded from a coefficient dump file (mfs/dump_coeffs_for_cmssw.py).
   std::string scalarPotentialInitFile_;
   std::unique_ptr<ana_hitanalyzer::ScalarPotentialFieldCorrection> fieldCorrection_;
+
+  // Global material model (doc/global-material-model-plan.md).
+  // materialGroupsFile loads a grouping-tier rules file (Phase A
+  // validation hook usable on its own); globalMaterialModel=true
+  // additionally REPLACES the per-module material parameters (parmtype 7)
+  // with parmtype-15 sentinel entries, one per group (exclusive switch).
+  bool globalMaterialModel_ = false;
+  std::string materialGroupsFile_;
+  std::unique_ptr<MaterialGroupModel> matModel_;
+  std::vector<unsigned int> matGroupGlobalIdx_;  // groupId -> corparms_ index
 
   // Numerical-FD closure (debug only; one-shot per job).
   bool runFDClosure_ = false;

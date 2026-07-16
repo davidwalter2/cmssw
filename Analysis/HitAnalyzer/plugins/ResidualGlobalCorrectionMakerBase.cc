@@ -224,6 +224,19 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
       ? iConfig.getParameter<bool>("keepPixelEdgeHits") : false;
   pixelMinSizeX_ = iConfig.existsAs<int>("pixelMinSizeX")
       ? iConfig.getParameter<int>("pixelMinSizeX") : 2;
+
+  // Global material model (see member docs in the header).
+  materialGroupsFile_ = iConfig.existsAs<std::string>("materialGroupsFile")
+      ? iConfig.getParameter<std::string>("materialGroupsFile") : std::string();
+  globalMaterialModel_ = iConfig.existsAs<bool>("globalMaterialModel")
+      ? iConfig.getParameter<bool>("globalMaterialModel") : false;
+  if (globalMaterialModel_ && materialGroupsFile_.empty()) {
+    throw cms::Exception("Configuration")
+        << "globalMaterialModel=True requires materialGroupsFile";
+  }
+  if (!materialGroupsFile_.empty()) {
+    matModel_ = std::make_unique<MaterialGroupModel>(materialGroupsFile_);
+  }
   doMuons_ = iConfig.getParameter<bool>("doMuons");
   doTrigger_ = iConfig.getParameter<bool>("doTrigger");
   doRes_ = iConfig.getParameter<bool>("doRes");
@@ -628,10 +641,14 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
         parmset.emplace(1, det->geographicalId());
       }
 
-      // material parameter is per-module (glued detid where applicable). The
+      // material parameter is per-module (glued detid where applicable),
+      // unless the global material model replaces the whole block with
+      // parmtype-15 group entries (exclusive switch, appended below). The
       // B-field block has been replaced with a global scalar-potential
       // expansion — see fieldCorrection_->appendParmsetEntries below.
-      parmset.emplace(7, parmdetid);
+      if (!globalMaterialModel_) {
+        parmset.emplace(7, parmdetid);
+      }
       
       if (doRes_) {
         // hit resolution parameters are associated to individual modules
@@ -657,6 +674,15 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
   // Register global scalar-potential B-field modes as sentinel parmset
   // entries (parmtype = ParmTypeBfieldGlobal, DetId(modeIdx)).
   fieldCorrection_->appendParmsetEntries(parmset);
+
+  // Register global material groups as sentinel parmset entries
+  // (parmtype = ParmTypeMaterialGlobal, DetId(groupIdx)), replacing the
+  // per-module parmtype-7 block.
+  if (globalMaterialModel_) {
+    for (int g = 0; g < matModel_->nGroups(); ++g) {
+      parmset.emplace(MaterialGroupModel::ParmTypeMaterialGlobal, DetId(g));
+    }
+  }
 
 // const unsigned int netabins = 48;
 // const unsigned int nphibins = 36;
@@ -768,13 +794,15 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       iidx = globalidx;
       parmtype = key.first;
       
-      // Sentinel parmtype-14 entries are global scalar-potential modes —
-      // they have no geometry, so skip the per-module geometry / runtree
-      // bookkeeping for them.
+      // Sentinel parmtype-14 (global scalar-potential modes) and
+      // parmtype-15 (global material groups) entries have no geometry, so
+      // skip the per-module geometry / runtree bookkeeping for them.
       const bool isGlobalBfieldMode =
           (parmtype == ana_hitanalyzer::ScalarPotentialFieldCorrection::ParmTypeBfieldGlobal);
+      const bool isGlobalMaterialGroup =
+          (parmtype == MaterialGroupModel::ParmTypeMaterialGlobal);
 
-      if (isGlobalBfieldMode) {
+      if (isGlobalBfieldMode || isGlobalMaterialGroup) {
         rawdetid = key.second.rawId();
         subdet = -99;
         layer = -99;
@@ -987,6 +1015,18 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
     // Resolve scalar-potential basis global indices now that detidparms is built.
     fieldCorrection_->resolveGlobalIndices(detidparms);
     std::cout << "scalar-potential field correction: " << fieldCorrection_->nModes() << " modes" << std::endl;
+
+    // Resolve the material groups' global indices (parmtype-15 sentinels).
+    matGroupGlobalIdx_.clear();
+    if (globalMaterialModel_) {
+      matGroupGlobalIdx_.reserve(matModel_->nGroups());
+      for (int g = 0; g < matModel_->nGroups(); ++g) {
+        matGroupGlobalIdx_.push_back(
+            detidparms.at(std::make_pair(MaterialGroupModel::ParmTypeMaterialGlobal, DetId(g))));
+      }
+      std::cout << "global material model: " << matModel_->nGroups() << " groups from "
+                << materialGroupsFile_ << std::endl;
+    }
     
     //initialize gradient
     if (!gradagg.size()) {

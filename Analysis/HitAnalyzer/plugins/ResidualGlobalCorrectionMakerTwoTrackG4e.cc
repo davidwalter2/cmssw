@@ -154,6 +154,10 @@ private:
   mutable unsigned long long fitFailNaN_ = 0ULL;         // NaN/inf parameter update
   mutable unsigned long long fitSkippedSameSign_ = 0ULL; // same-sign pairs skipped pre-fit (not failures)
 
+  // Global material model: per-leg per-group dxi columns from the
+  // propagator (reused buffer; see doc/global-material-model-plan.md).
+  mutable std::vector<std::pair<int, Eigen::Matrix<double, 5, 1>>> groupJacs_;
+
   // Pixel hit-quality accounting (valid pixel hits entering the quality cut).
   mutable unsigned long long pixHitsSeen_ = 0ULL;
   mutable unsigned long long pixHitsEdge_ = 0ULL;       // cluster on the sensor boundary (isOnEdge)
@@ -765,7 +769,14 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::beginStream(edm::StreamID streami
 // ------------ method called for each event ------------
 void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const edm::EventSetup &iSetup)
 {
-  
+  // Sync the material-group k values from corparms_ into the model so the
+  // propagator's per-step provider applies the current calibration.
+  if (globalMaterialModel_) {
+    for (unsigned int g = 0; g < matGroupGlobalIdx_.size(); ++g) {
+      matModel_->setKValue(g, corparms_[matGroupGlobalIdx_[g]]);
+    }
+  }
+
   const bool dogen = fitFromGenParms_;
  
   constexpr bool dolocalupdate = false;
@@ -1431,8 +1442,11 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
       const unsigned int nparsAlignment = 5*nvalid + nvalidalign2d;
       const unsigned int nFieldModes = fieldCorrection_->nModes();
       const unsigned int nparsBfield = nhits * nFieldModes;
-      const unsigned int nparsEloss = nhits;
-// const unsigned int nparsEloss = nhits + 2;
+      // Global material model: one slot per group per hit (uncrossed groups
+      // contribute zero columns; shared global indices collapse like the
+      // field-mode block). Legacy: one per-module eloss slot per hit.
+      const unsigned int nMatGroups = globalMaterialModel_ ? matModel_->nGroups() : 0;
+      const unsigned int nparsEloss = globalMaterialModel_ ? nhits * nMatGroups : nhits;
       const unsigned int npars = nparsAlignment + nparsBfield + nparsEloss;
       
       const unsigned int nstateparms = 10 + 5*nhits;
@@ -1925,7 +1939,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
               const DetId aligndetid = alignGlued_ ? parmdetid : hit->geographicalId();
 
-              const unsigned int elossglobalidx = detidparms.at(std::make_pair(7, parmdetid));
+              const unsigned int elossglobalidx =
+                  globalMaterialModel_ ? 0 : detidparms.at(std::make_pair(7, parmdetid));
 
               // 3D field correction at the propagation start. The per-mode
               // (Bx, By, Bz) basis values feed the chain-rule scaling of the
@@ -1938,7 +1953,10 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               fieldCorrection_->getByBasisAt(propStartPos, dByPerMode);
               fieldCorrection_->getBzBasisAt(propStartPos, dBzPerMode);
 
-              const double dxival = corparms_[elossglobalidx];
+              // Global material model: leg-constant dxi is zero; per-step
+              // group values are applied by the propagator's provider path
+              // (k values synced from corparms_ at the top of produce).
+              const double dxival = globalMaterialModel_ ? 0. : corparms_[elossglobalidx];
 
               const GloballyPositioned<double> &surface = surfacemapD_.at(hit->geographicalId());
 
@@ -1947,7 +1965,9 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               const Eigen::Matrix<double, 7, 1> propInputState = updtsos;
 
               auto propresult = g4prop->propagateGenericWithJacobianAltD(updtsos, surface, dB, dxival,
-                                                                          0., 0., -1., g4PartName);
+                                                                          0., 0., -1., g4PartName,
+                                                                          matModel_.get(),
+                                                                          matModel_ ? &groupJacs_ : nullptr);
               if (!std::get<0>(propresult)) {
                 std::cout << "ResidualGlobalCorrectionMakerTwoTrackG4e ### Abort: Propagation Failed!"
                           << " icons = " << icons << " iiter = " << iiter
@@ -2036,7 +2056,9 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               // Bx/By/Bz basis values at the propagation start; the last
               // column is d/dxi (FdFm.col(8) unchanged).
               const unsigned int nlocalbfield = nFieldModes;
-              const unsigned int nlocaleloss = 1;
+              // Eloss block: one column per material group (global model) or
+              // the single per-module dxi column (legacy).
+              const unsigned int nlocaleloss = globalMaterialModel_ ? nMatGroups : 1;
               const unsigned int nlocalparms = nlocalbfield + nlocaleloss;
 
               Matrix<double, 5, Dynamic> dStateDparams(5, nlocalparms);
@@ -2045,7 +2067,16 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                                          + FdFm.col(6) * dByPerMode[imode]
                                          + FdFm.col(7) * dBzPerMode[imode];
               }
-              dStateDparams.col(nlocalbfield) = FdFm.col(8);
+              if (globalMaterialModel_) {
+                // per-group dxi columns from the propagator (zero for groups
+                // this leg did not cross)
+                dStateDparams.rightCols(nlocaleloss).setZero();
+                for (auto const &gc : groupJacs_) {
+                  dStateDparams.col(nlocalbfield + gc.first) = gc.second;
+                }
+              } else {
+                dStateDparams.col(nlocalbfield) = FdFm.col(8);
+              }
 
               // ----- Numerical-FD closure (debug) ---------------
               // FDs only the basis-invariant curvilinear components
@@ -2240,7 +2271,14 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               for (unsigned int imode = 0; imode < nlocalbfield; ++imode) {
                 globalidxv[parmidx++] = fieldCorrection_->basisGlobalIdx(imode);
               }
-              globalidxv[parmidx++] = elossglobalidx;
+              if (globalMaterialModel_) {
+                // One slot per material group, shared global indices
+                for (unsigned int g = 0; g < nMatGroups; ++g) {
+                  globalidxv[parmidx++] = matGroupGlobalIdx_[g];
+                }
+              } else {
+                globalidxv[parmidx++] = elossglobalidx;
+              }
 
               if (hit->isValid()) {
 
