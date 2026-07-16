@@ -73,6 +73,16 @@ opts.register('edmConvergence', 1e-5, VarParsing.VarParsing.multiplicity.singlet
               VarParsing.VarParsing.varType.float,
               'EDM convergence threshold on the reference-state block (default 1e-5; '
               '0 disables early stopping, e.g. for per-iteration trajectory studies)')
+opts.register('keepPixelEdgeHits', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'keep pixel hits whose cluster touches the sensor boundary '
+              '(isOnEdge) in the fit instead of demoting them to inactive; '
+              'the pixelMinSizeX CPE-quality cut applies independently '
+              '(default False = baseline)')
+opts.register('pixelMinSizeX', 2, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.int,
+              'minimum pixel cluster size in x for a hit to stay in the fit '
+              '(default 2 = baseline sizeX>1 cut; 1 admits all clusters)')
 opts.register('propagationDirection', 'anyDirection', VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string,
               'Geant4ePropagator PropagationDirection. "anyDirection" (default) '
@@ -211,6 +221,8 @@ process.globalCor = cms.EDProducer(
     useIdealGeometry=cms.bool(bool(opts.useIdealGeometry)),
     bsConstraint=cms.bool(False),
     applyHitQuality=cms.bool(True),
+    keepPixelEdgeHits=cms.bool(bool(opts.keepPixelEdgeHits)),
+    pixelMinSizeX=cms.int32(int(opts.pixelMinSizeX)),
     doVtxConstraint=cms.bool(False),
     doMassConstraint=cms.bool(bool(opts.doMassConstraint)),
     massConstraint=cms.double(3.0969),

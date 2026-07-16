@@ -516,7 +516,17 @@ protected:
   bool bsConstraint_;
   
   bool applyHitQuality_;
-  
+
+  // Keep pixel hits whose cluster touches the sensor boundary (isOnEdge) in
+  // the fit instead of demoting them to inactive. The sizeX CPE-quality
+  // requirement (below) is unaffected. Default false = legacy behaviour.
+  bool keepPixelEdgeHits_ = false;
+
+  // Minimum pixel cluster size in x for a hit to stay in the fit
+  // (CPE x-resolution needs charge sharing between >=2 pixels).
+  // Default 2 = legacy sizeX>1 cut; 1 admits all clusters.
+  int pixelMinSizeX_ = 2;
+
   bool doRes_ = false;
   bool useIdealGeometry_ = false;
 

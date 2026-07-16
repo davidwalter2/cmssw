@@ -220,6 +220,10 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   doSim_ = iConfig.getParameter<bool>("doSim");
   bsConstraint_ = iConfig.getParameter<bool>("bsConstraint");
   applyHitQuality_ = iConfig.getParameter<bool>("applyHitQuality");
+  keepPixelEdgeHits_ = iConfig.existsAs<bool>("keepPixelEdgeHits")
+      ? iConfig.getParameter<bool>("keepPixelEdgeHits") : false;
+  pixelMinSizeX_ = iConfig.existsAs<int>("pixelMinSizeX")
+      ? iConfig.getParameter<int>("pixelMinSizeX") : 2;
   doMuons_ = iConfig.getParameter<bool>("doMuons");
   doTrigger_ = iConfig.getParameter<bool>("doTrigger");
   doRes_ = iConfig.getParameter<bool>("doRes");

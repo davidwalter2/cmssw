@@ -79,6 +79,19 @@ public:
                 << "  fail[nan]=" << fitFailNaN_
                 << "  skipped[samesign]=" << fitSkippedSameSign_
                 << std::endl;
+      if (pixHitsSeen_ > 0ULL) {
+        std::cout << "ResidualGlobalCorrectionMakerTwoTrackG4e pixel hit-quality summary"
+                  << "  seen=" << pixHitsSeen_
+                  << "  onEdge=" << pixHitsEdge_
+                  << " (" << (100. * pixHitsEdge_ / pixHitsSeen_) << "%)"
+                  << "  sizeX1=" << pixHitsSizeX1_
+                  << " (" << (100. * pixHitsSizeX1_ / pixHitsSeen_) << "%)"
+                  << "  demoted=" << pixHitsDemoted_
+                  << " (" << (100. * pixHitsDemoted_ / pixHitsSeen_) << "%)"
+                  << "  keepPixelEdgeHits=" << keepPixelEdgeHits_
+                  << "  pixelMinSizeX=" << pixelMinSizeX_
+                  << std::endl;
+      }
     }
   }
 
@@ -140,6 +153,12 @@ private:
   mutable unsigned long long fitFailChargeFlip_ = 0ULL;  // q/p sign flip in parameter update
   mutable unsigned long long fitFailNaN_ = 0ULL;         // NaN/inf parameter update
   mutable unsigned long long fitSkippedSameSign_ = 0ULL; // same-sign pairs skipped pre-fit (not failures)
+
+  // Pixel hit-quality accounting (valid pixel hits entering the quality cut).
+  mutable unsigned long long pixHitsSeen_ = 0ULL;
+  mutable unsigned long long pixHitsEdge_ = 0ULL;       // cluster on the sensor boundary (isOnEdge)
+  mutable unsigned long long pixHitsSizeX1_ = 0ULL;     // cluster sizeX == 1
+  mutable unsigned long long pixHitsDemoted_ = 0ULL;    // demoted to inactive by the quality cut
   bool         debugPerIterDump_;   // emit per-iter vector branches when true
 
   // Per-iteration debug vectors (filled only when debugPerIterDump_=true).
@@ -1225,7 +1244,14 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 // std::cout << "id = " << id << " detid = " << (*it)->geographicalId().rawId() << " minPixelRow = " << cluster.minPixelRow() << " maxPixelRow = " << cluster.maxPixelRow() << " minPixelCol = " << cluster.minPixelCol() << " maxPixelCol = " << cluster.maxPixelCol() << std::endl;
 // }
                 
-                hitquality = !pixhit->isOnEdge() && cluster.sizeX() > 1;
+                ++pixHitsSeen_;
+                const bool onEdge = pixhit->isOnEdge();
+                if (onEdge) ++pixHitsEdge_;
+                if (cluster.sizeX() <= 1) ++pixHitsSizeX1_;
+                // Boundary veto configurable via keepPixelEdgeHits; sizeX
+                // threshold configurable via pixelMinSizeX (default 2 = legacy).
+                hitquality = (keepPixelEdgeHits_ || !onEdge) && cluster.sizeX() >= pixelMinSizeX_;
+                if (!hitquality) ++pixHitsDemoted_;
 // hitquality = !pixhit->isOnEdge() && cluster.sizeX() > 1 && pixhit->qBin() < 2;
 // hitquality = !pixhit->isOnEdge() && cluster.sizeX() > 1 && cluster.sizeY() > 1;
               }

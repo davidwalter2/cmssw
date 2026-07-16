@@ -36,6 +36,16 @@ opts.register('propagationDirection', 'anyDirection', VarParsing.VarParsing.mult
               'Geant4ePropagator PropagationDirection (anyDirection = per-leg '
               'forward/backward choice, default; alongMomentum = legacy '
               'forward-only)')
+opts.register('keepPixelEdgeHits', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'keep pixel hits whose cluster touches the sensor boundary '
+              '(isOnEdge) in the fit instead of demoting them to inactive; '
+              'the pixelMinSizeX CPE-quality cut applies independently '
+              '(default False = baseline)')
+opts.register('pixelMinSizeX', 2, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.int,
+              'minimum pixel cluster size in x for a hit to stay in the fit '
+              '(default 2 = baseline sizeX>1 cut; 1 admits all clusters)')
 opts.register('nIters', 10, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.int,
               'Gauss-Newton iteration cap (default 10 = baseline)')
@@ -156,6 +166,8 @@ process.globalCor = cms.EDProducer(
     useIdealGeometry=cms.bool(bool(opts.useIdealGeometry)),
     bsConstraint=cms.bool(False),
     applyHitQuality=cms.bool(True),
+    keepPixelEdgeHits=cms.bool(bool(opts.keepPixelEdgeHits)),
+    pixelMinSizeX=cms.int32(int(opts.pixelMinSizeX)),
     corFiles=cms.vstring(),
     triggers=cms.vstring(*JPSI_TRIGGERS),
     MagneticFieldLabel=cms.string(""),

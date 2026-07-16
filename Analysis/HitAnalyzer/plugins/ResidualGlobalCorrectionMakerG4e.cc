@@ -100,6 +100,12 @@ private:
   mutable unsigned long long fitFailNaN_ = 0ULL;        // NaN/inf parameter update
   mutable unsigned long long fitStepClamped_ = 0ULL;    // fits with >=1 trust-region-clamped GN step
 
+  // Pixel hit-quality accounting (valid pixel hits entering the quality cut).
+  mutable unsigned long long pixHitsSeen_ = 0ULL;
+  mutable unsigned long long pixHitsEdge_ = 0ULL;       // cluster on the sensor boundary (isOnEdge)
+  mutable unsigned long long pixHitsSizeX1_ = 0ULL;     // cluster sizeX == 1
+  mutable unsigned long long pixHitsDemoted_ = 0ULL;    // demoted to inactive by the quality cut
+
   // Convergence knobs (see ctor). Defaults reproduce the baseline.
   unsigned int nIters_ = 10;
   double edmConvergence_ = 1.e-5;
@@ -129,6 +135,19 @@ ResidualGlobalCorrectionMakerG4e::~ResidualGlobalCorrectionMakerG4e() {
               << "  fail[nan]=" << fitFailNaN_
               << "  clamped[step]=" << fitStepClamped_
               << std::endl;
+    if (pixHitsSeen_ > 0ULL) {
+      std::cout << "ResidualGlobalCorrectionMakerG4e pixel hit-quality summary"
+                << "  seen=" << pixHitsSeen_
+                << "  onEdge=" << pixHitsEdge_
+                << " (" << (100. * pixHitsEdge_ / pixHitsSeen_) << "%)"
+                << "  sizeX1=" << pixHitsSizeX1_
+                << " (" << (100. * pixHitsSizeX1_ / pixHitsSeen_) << "%)"
+                << "  demoted=" << pixHitsDemoted_
+                << " (" << (100. * pixHitsDemoted_ / pixHitsSeen_) << "%)"
+                << "  keepPixelEdgeHits=" << keepPixelEdgeHits_
+                << "  pixelMinSizeX=" << pixelMinSizeX_
+                << std::endl;
+    }
   }
 }
 
@@ -772,7 +791,14 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             const SiPixelCluster& cluster = *tkhit->cluster_pixel();
             assert(pixhit != nullptr);
             
-            hitquality = !pixhit->isOnEdge() && cluster.sizeX() > 1;
+            ++pixHitsSeen_;
+            const bool onEdge = pixhit->isOnEdge();
+            if (onEdge) ++pixHitsEdge_;
+            if (cluster.sizeX() <= 1) ++pixHitsSizeX1_;
+            // Boundary veto configurable via keepPixelEdgeHits; sizeX
+            // threshold configurable via pixelMinSizeX (default 2 = legacy).
+            hitquality = (keepPixelEdgeHits_ || !onEdge) && cluster.sizeX() >= pixelMinSizeX_;
+            if (!hitquality) ++pixHitsDemoted_;
 // hitquality = false;
           }
           else {
