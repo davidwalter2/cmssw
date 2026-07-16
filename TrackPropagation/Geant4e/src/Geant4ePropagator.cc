@@ -1,9 +1,11 @@
+#include <algorithm>
 #include <sstream>
 
 // Geant4e
 #include "TrackPropagation/Geant4e/interface/ConvertFromToCLHEP.h"
 #include "TrackPropagation/Geant4e/interface/Geant4ePropagator.h"
 #include "TrackPropagation/Geant4e/interface/G4ErrorPhysicsListForCVH.h"
+#include "TrackPropagation/Geant4e/interface/MaterialGroupModel.h"
 
 // CMSSW
 #include "DataFormats/TrajectorySeed/interface/PropagationDirection.h"
@@ -625,7 +627,10 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
                                                     double dms,
                                                     double dioni,
                                                     double pforced,
-                                                    const std::string &particleNameOverride) const {
+                                                    const std::string &particleNameOverride,
+                                                    const MaterialGroupModel *matGroups,
+                                                    std::vector<std::pair<int, Eigen::Matrix<double, 5, 1>>>
+                                                        *groupJacOut) const {
   using namespace Eigen;
 
   // Deferred per-thread Geant4e init under mutex (see propagateGeneric).
@@ -666,10 +671,17 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
 
   cmsField->SetOffset(dB.x(), dB.y(), dB.z());
   cmsField->SetMaterialOffset(dxi);
+  // Global material model: volume-resolved k_g applied per step by
+  // G4ErrorEnergyLossForCVH on top of the leg-constant dxi.
+  cmsField->SetMaterialOffsetProvider(matGroups);
+  if (groupJacOut != nullptr) {
+    groupJacOut->clear();
+  }
 
   auto retDefault = [cmsField]() {
     cmsField->SetOffset(0., 0., 0.);
     cmsField->SetMaterialOffset(0.);
+    cmsField->SetMaterialOffsetProvider(nullptr);
     return std::tuple<bool,
                       Matrix<double, 7, 1>,
                       Matrix<double, 5, 5>,
@@ -952,6 +964,31 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
     //b-field (dBx, dBy, dBz) and material (dxi) contributions to jacobian
     jac.rightCols<4>() += transportJac.rightCols<4>();
 
+    // Global material model: per-group split of the dxi column. Same
+    // recursion as the integrated column above (transport previous
+    // accumulations by this step's state Jacobian, add this step's dxi
+    // column to the group of the step's volume), so the sum over groups
+    // equals jac.col(8) exactly.
+    if (matGroups != nullptr && groupJacOut != nullptr) {
+      for (auto &gc : *groupJacOut) {
+        gc.second = (transportJac.leftCols<5>() * gc.second).eval();
+      }
+      const G4Step *stp = g4eTrajState.GetG4Track()->GetStep();
+      const G4ThreeVector midp =
+          0.5 * (stp->GetPreStepPoint()->GetPosition() + stp->GetPostStepPoint()->GetPosition());
+      const G4LogicalVolume *lvstep =
+          stp->GetPreStepPoint()->GetTouchableHandle()->GetVolume()->GetLogicalVolume();
+      const int gstep =
+          matGroups->classify(lvstep, midp.perp() / CLHEP::cm, midp.z() / CLHEP::cm);
+      auto it = std::find_if(groupJacOut->begin(), groupJacOut->end(),
+                             [gstep](auto const &e) { return e.first == gstep; });
+      if (it == groupJacOut->end()) {
+        groupJacOut->emplace_back(gstep, transportJac.col(8));
+      } else {
+        it->second += transportJac.col(8);
+      }
+    }
+
     Matrix<double, 5, 5> errMS = errMSIout;
     errMS(0, 0) = 0.;
 
@@ -1091,6 +1128,12 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
 
     jac.leftCols<5>() = (Pflip * jac.leftCols<5>() * Pflip).eval();
     jac.rightCols<4>() = (Pflip * jac.rightCols<4>()).eval();
+    // per-group dxi columns transform like the integrated dxi column
+    if (groupJacOut != nullptr) {
+      for (auto &gc : *groupJacOut) {
+        gc.second = (Pflip * gc.second).eval();
+      }
+    }
     g4errorEnd = (Pflip * g4errorEnd * Pflip).eval();
     dQ = (Pflip * dQ * Pflip).eval();
     dQ2 = (Pflip * dQ2 * Pflip).eval();
@@ -1101,6 +1144,7 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
 
   cmsField->SetOffset(0., 0., 0.);
   cmsField->SetMaterialOffset(0.);
+  cmsField->SetMaterialOffsetProvider(nullptr);
 
   return std::tuple<bool,
                     Matrix<double, 7, 1>,

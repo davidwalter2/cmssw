@@ -2,6 +2,8 @@
 #define TrackPropagation_Geant4ePropagator_h
 
 #include <memory>
+#include <utility>
+#include <vector>
 
 // CMS includes
 // - Propagator
@@ -15,6 +17,8 @@
 #include <Eigen/Core>
 
 #include "TrackPropagation/Geant4e/interface/G4UniversalFluctuationForExtrapolator.hh"
+
+class MaterialGroupModel;
 
 /** Propagator based on the Geant4e package. Uses the Propagator class
  *  in the TrackingTools/GeomPropagators package to define the interface.
@@ -96,7 +100,17 @@ public:
                                    double dms = 0.,
                                    double dioni = 0.,
                                    double pforced = -1.,
-                                   const std::string &particleNameOverride = std::string()) const;
+                                   const std::string &particleNameOverride = std::string(),
+                                   // Global material model (Phase A): when matGroups is set,
+                                   // the energy loss of every step is scaled by the step
+                                   // volume's group value k_g (on top of dxi), and, when
+                                   // groupJacOut is also set, the per-group transported
+                                   // d(state)/dk_g columns are accumulated into it (the sum
+                                   // over groups equals the integrated dxi column of the 5x9
+                                   // Jacobian exactly). See doc/global-material-model-plan.md.
+                                   const MaterialGroupModel *matGroups = nullptr,
+                                   std::vector<std::pair<int, Eigen::Matrix<double, 5, 1>>>
+                                       *groupJacOut = nullptr) const;
 
   static void CalculateEffectiveZandA(const G4Material *mate, G4double &effZ, G4double &effA);
 

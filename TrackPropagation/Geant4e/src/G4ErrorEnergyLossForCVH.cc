@@ -63,8 +63,18 @@ G4VParticleChange* G4ErrorEnergyLossForCVH::AlongStepDoIt(const G4Track& aTrack,
 
   const G4Field* field = G4TransportationManager::GetTransportationManager()->GetFieldManager()->GetDetectorField();
   const sim::Field* cmsField = static_cast<const sim::Field*>(field);
-  const double dxi = cmsField->GetMaterialOffset();
-  const double xifact = std::exp(dxi);
+  double dxieff = cmsField->GetMaterialOffset();
+  // Global material model: volume-resolved scaling on top of the
+  // leg-constant offset. The step's group is resolved from the pre-step
+  // volume and the step midpoint (see MaterialGroupModel).
+  if (const sim::MaterialOffsetProvider* prov = cmsField->GetMaterialOffsetProvider()) {
+    const G4StepPoint* pre = aStep.GetPreStepPoint();
+    const G4StepPoint* post = aStep.GetPostStepPoint();
+    const G4ThreeVector mid = 0.5 * (pre->GetPosition() + post->GetPosition());
+    const G4LogicalVolume* lv = pre->GetTouchableHandle()->GetVolume()->GetLogicalVolume();
+    dxieff += prov->materialOffset(lv, mid.perp() / CLHEP::cm, mid.z() / CLHEP::cm);
+  }
+  const double xifact = std::exp(dxieff);
 
   G4double kinEnergyStart = aTrack.GetKineticEnergy();
   G4double step_length = aStep.GetStepLength();

@@ -9,7 +9,22 @@
 
 #include <CLHEP/Units/SystemOfUnits.h>
 
+class G4LogicalVolume;
+
 namespace sim {
+  // Volume-resolved material-scaling provider (global material model,
+  // Analysis/HitAnalyzer/doc/global-material-model-plan.md). When a
+  // provider is attached to the field wrapper, the CVH energy-loss
+  // process adds materialOffset(volume, r, z) of the step's volume to
+  // the leg-constant dxi. Implemented by
+  // TrackPropagation/Geant4e MaterialGroupModel; the abstract base
+  // lives here so SimG4Core does not depend on TrackPropagation.
+  class MaterialOffsetProvider {
+  public:
+    virtual ~MaterialOffsetProvider() = default;
+    virtual double materialOffset(const G4LogicalVolume *lv, double r_cm, double z_cm) const = 0;
+  };
+
   class Field final : public G4MagneticField {
   public:
     Field(const MagneticField *f, double d);
@@ -18,6 +33,8 @@ namespace sim {
     void SetOffset(double x, double y, double z);
     void SetMaterialOffset(double offset) { dxi = offset; }
     double GetMaterialOffset() const { return dxi; }
+    void SetMaterialOffsetProvider(const MaterialOffsetProvider *p) { offsetProvider = p; }
+    const MaterialOffsetProvider *GetMaterialOffsetProvider() const { return offsetProvider; }
 
   private:
     const MagneticField *theCMSMagneticField;
@@ -28,6 +45,7 @@ namespace sim {
 
     double offset[3];
     double dxi;
+    const MaterialOffsetProvider *offsetProvider = nullptr;
   };
 };  // namespace sim
 
