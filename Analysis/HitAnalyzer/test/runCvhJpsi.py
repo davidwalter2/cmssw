@@ -83,6 +83,15 @@ opts.register('pixelMinSizeX', 2, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.int,
               'minimum pixel cluster size in x for a hit to stay in the fit '
               '(default 2 = baseline sizeX>1 cut; 1 admits all clusters)')
+opts.register('materialGroupsFile', '', VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.string,
+              'global material model grouping-tier rules file '
+              '(Analysis/HitAnalyzer/data/materialGroups{50,100}.txt); empty = off')
+opts.register('globalMaterialModel', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'replace the per-module material parameters (parmtype 7) with the '
+              'parmtype-15 global material groups of materialGroupsFile '
+              '(exclusive switch; requires materialGroupsFile)')
 opts.register('propagationDirection', 'anyDirection', VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string,
               'Geant4ePropagator PropagationDirection. "anyDirection" (default) '
@@ -243,6 +252,8 @@ process.globalCor = cms.EDProducer(
     debugPerIterDump=cms.bool(bool(opts.debugPerIterDump)),
     nIters=cms.uint32(int(opts.nIters)),
     edmConvergence=cms.double(float(opts.edmConvergence)),
+    materialGroupsFile=cms.string(opts.materialGroupsFile),
+    globalMaterialModel=cms.bool(bool(opts.globalMaterialModel)),
     outprefix=cms.untracked.string("globalcor"),
     # MT G4Error master: GlobalCache config for CvhMasterThread. The master
     # spawns a dedicated thread in initializeGlobalCache that builds DDDWorld
@@ -279,6 +290,13 @@ if opts.useOpera3D:
     fieldlabel = "grid_160812_3_8t"
     process.Opera3DMagneticFieldProducer.label = fieldlabel
     process.Opera3DMagneticFieldProducer.useParametrizedTrackerField = cms.bool(False)
+    # Route the labelled field into the CPEs as in the production data refit
+    # (nano_cff.nanoAOD_customizeData) and the 10_6 cross-release driver:
+    # the Lorentz-drift in the hit re-evaluation then uses the same field.
+    for _cpe in ("stripCPEESProducer", "StripCPEfromTrackAngleESProducer",
+                 "siPixelTemplateDBObjectESProducer", "templates"):
+        if hasattr(process, _cpe):
+            getattr(process, _cpe).MagneticFieldLabel = fieldlabel
 elif not opts.useScalarPot3D:
     raise RuntimeError(
         "useScalarPot3D=False is no longer supported; the legacy non-thread-safe "

@@ -62,6 +62,24 @@ opts.register('gnDampAfter', 0, VarParsing.VarParsing.multiplicity.singleton,
 opts.register('gnDampFactor', 0.5, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.float,
               'damping factor applied to the GN step when gnDampAfter is active')
+opts.register('materialGroupsFile', '', VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.string,
+              'global material model grouping-tier rules file '
+              '(Analysis/HitAnalyzer/data/materialGroups{50,100}.txt); empty = off. '
+              'Phase A validation hook: accumulates per-group dxi columns and '
+              'checks the V2 sum identity per leg')
+opts.register('globalMaterialModel', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'replace the ~15k per-module material parameters (parmtype 7) with '
+              'the parmtype-15 global material groups of materialGroupsFile '
+              '(exclusive switch; requires materialGroupsFile)')
+opts.register('materialFDGroup', -1, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.int,
+              'one-shot V1 FD closure: re-propagate the first leg crossing this '
+              'group with k_g += materialFDEps and compare d(q/p)/dk (-1 = off)')
+opts.register('materialFDEps', 1e-3, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'epsilon for the material FD closure')
 opts.parseArguments()
 if not opts.scalarPot3DInitFile:
     raise SystemExit(
@@ -177,6 +195,10 @@ process.globalCor = cms.EDProducer(
     debugPerIterDump=cms.bool(bool(opts.debugPerIterDump)),
     gnDampAfter=cms.uint32(int(opts.gnDampAfter)),
     gnDampFactor=cms.double(float(opts.gnDampFactor)),
+    materialGroupsFile=cms.string(opts.materialGroupsFile),
+    globalMaterialModel=cms.bool(bool(opts.globalMaterialModel)),
+    materialFDGroup=cms.int32(int(opts.materialFDGroup)),
+    materialFDEps=cms.double(float(opts.materialFDEps)),
     outprefix=cms.untracked.string("globalcor_single"),
     # MT G4Error master (GlobalCache) -- owns the G4 world / master field.
     # Muon-only particle set: this driver refits muon tracks only.
@@ -193,6 +215,12 @@ if opts.useOpera3D:
     fieldlabel = "grid_160812_3_8t"
     process.Opera3DMagneticFieldProducer.label = fieldlabel
     process.Opera3DMagneticFieldProducer.useParametrizedTrackerField = cms.bool(False)
+    # Route the labelled field into the CPEs as in the production data refit
+    # (nano_cff.nanoAOD_customizeData) and the 10_6 cross-release driver.
+    for _cpe in ("stripCPEESProducer", "StripCPEfromTrackAngleESProducer",
+                 "siPixelTemplateDBObjectESProducer", "templates"):
+        if hasattr(process, _cpe):
+            getattr(process, _cpe).MagneticFieldLabel = fieldlabel
 elif not opts.useScalarPot3D:
     raise RuntimeError("useScalarPot3D=False not supported; use ScalarPot3D or Opera3D")
 else:
