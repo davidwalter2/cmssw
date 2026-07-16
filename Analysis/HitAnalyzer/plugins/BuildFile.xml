@@ -45,6 +45,8 @@
 <use name="MagneticField/ParametrizedEngine"/>
 <use name="CondFormats/L1TObjects"/>
 <use name="CondFormats/DataRecord"/>
+<use name="CalibFormats/SiStripObjects"/>
+<use name="CalibTracker/Records"/>
 
 <!-- <use   name="geant4"/> -->
 
