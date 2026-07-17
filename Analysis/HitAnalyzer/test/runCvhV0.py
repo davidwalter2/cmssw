@@ -54,6 +54,12 @@ opts.register('skipHitlessSurfaces', True, VarParsing.VarParsing.multiplicity.si
 opts.register('perStepFieldModes', True, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'per-step field-mode application/attribution')
+opts.register('clampMomentumFloor', 0.1, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'momentum floor (GeV) of the Gauss-Newton step clamp: fatal updates '
+              '(charge flip / momentum collapse) are rescaled instead of aborted. '
+              '0.1 GeV sits above the propagation floor but below the soft '
+              'V0-daughter spectrum (the J/psi makers use 2 GeV)')
 opts.register('useStartingState', 'perigee', VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string,
               "iteration-0 reference state. Default 'perigee': measured BETTER than "
@@ -139,6 +145,7 @@ process.globalCor = _v0maker.clone(
     skipHitlessSurfaces=cms.bool(bool(opts.skipHitlessSurfaces) and bool(opts.globalMaterialModel)),
     perStepFieldModes=cms.bool(bool(opts.perStepFieldModes)),
     useStartingState=cms.string(opts.useStartingState),
+    clampMomentumFloor=cms.double(float(opts.clampMomentumFloor)),
     outprefix=cms.untracked.string("globalcor_" + opts.mode),
     CvhMaster=CvhMasterPSet.clone(Particles=cms.vstring(*_particles)),
 )

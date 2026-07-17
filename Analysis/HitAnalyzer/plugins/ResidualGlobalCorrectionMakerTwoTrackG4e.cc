@@ -78,6 +78,7 @@ public:
                 << "  fail[chargeflip]=" << fitFailChargeFlip_
                 << "  fail[nan]=" << fitFailNaN_
                 << "  skipped[samesign]=" << fitSkippedSameSign_
+                << "  clamped[step]=" << fitStepClamped_
                 << std::endl;
       if (pixHitsSeen_ > 0ULL) {
         std::cout << "ResidualGlobalCorrectionMakerTwoTrackG4e pixel hit-quality summary"
@@ -151,6 +152,11 @@ private:
   mutable unsigned long long fitFailProp_ = 0ULL;        // Geant4e propagation failed
   mutable unsigned long long fitFailHitUpdate_ = 0ULL;   // CPE re-evaluation (cloner) invalid
   mutable unsigned long long fitFailChargeFlip_ = 0ULL;  // q/p sign flip in parameter update
+  mutable unsigned long long fitStepClamped_ = 0ULL;     // fits with >=1 momentum-floor-clamped GN step
+  // Momentum floor for the Gauss-Newton step clamp (GeV). 2 GeV suits
+  // J/psi muons (as in the single-track maker); V0 drivers lower it to
+  // sit above the propagation floor but below the soft-daughter spectrum.
+  double clampMomentumFloor_ = 2.0;
   mutable unsigned long long fitFailNaN_ = 0ULL;         // NaN/inf parameter update
   mutable unsigned long long fitSkippedSameSign_ = 0ULL; // same-sign pairs skipped pre-fit (not failures)
 
@@ -420,6 +426,8 @@ ResidualGlobalCorrectionMakerTwoTrackG4e::ResidualGlobalCorrectionMakerTwoTrackG
       ? iConfig.getParameter<unsigned int>("nIters") : 10u;
   edmConvergence_ = iConfig.existsAs<double>("edmConvergence")
       ? iConfig.getParameter<double>("edmConvergence") : 1.e-5;
+  clampMomentumFloor_ = iConfig.existsAs<double>("clampMomentumFloor")
+      ? iConfig.getParameter<double>("clampMomentumFloor") : 2.0;
   useStartingState_ = iConfig.existsAs<std::string>("useStartingState")
       ? iConfig.getParameter<std::string>("useStartingState") : std::string("perigee");
   if (useStartingState_ != "perigee" && useStartingState_ != "midPropagated") {
@@ -1486,6 +1494,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
       const unsigned int nstatefree = freestateidxs.size();
 
       bool valid = true;
+      bool stepClampedThisFit = false;
       ++fitAttempted_;
       
       
@@ -2797,8 +2806,55 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
           dxfull = VectorXd::Zero(nstateparms);
           dxfull(freestateidxs) = dxfree;
-          
-          
+
+          // Momentum-floor safeguard on the Gauss-Newton step (port of the
+          // single-track clamp). Only fatal update outcomes are prevented --
+          // a daughter's q/p sign flipping, or its momentum dropping below
+          // the configurable floor -- by scaling the WHOLE joint step vector
+          // (both tracks + vertex are one coupled system: one common scale,
+          // direction preserved). Converts most hard aborts at the
+          // charge-sum check below into recoverable (or cleanly at-cap)
+          // fits; essential for soft V0 daughters.
+          {
+            const Matrix<double, 10, 1> statepcaref =
+                twoTrackCart2pca(refftsarr[0], refftsarr[1]);
+            double stepscale = 1.;
+            for (unsigned int id = 0; id < 2; ++id) {
+              const double qopref = statepcaref[3 * id];
+              const double dqop = dxfull[3 * id];
+              if (qopref == 0. || dqop == 0.) {
+                continue;
+              }
+              const double qopupd = qopref + dqop;
+              double s = 1.;
+              if (qopupd * qopref <= 0.) {
+                // sign flip: stop half-way toward q/p = 0
+                s = -0.5 * qopref / dqop;
+              } else if (std::abs(qopupd) > 1. / clampMomentumFloor_) {
+                // p_upd below the floor: land exactly on p = floor, same charge
+                s = (std::copysign(1. / clampMomentumFloor_, qopref) - qopref) / dqop;
+              }
+              if (s < stepscale) {
+                stepscale = s;
+              }
+            }
+            if (stepscale < 1.) {
+              stepscale = std::max(stepscale, 0.);
+              dxfree *= stepscale;
+              dxfull *= stepscale;
+              if (!stepClampedThisFit) {
+                stepClampedThisFit = true;
+                ++fitStepClamped_;
+              }
+              std::cout << "GN step clamped (two-track): icons = " << icons
+                        << " iiter = " << iiter << " scale = " << stepscale
+                        << " seed0(q,pt,eta)=(" << itrack->charge() << "," << itrack->pt()
+                        << "," << itrack->eta() << ")"
+                        << " seed1(q,pt,eta)=(" << jtrack->charge() << "," << jtrack->pt()
+                        << "," << jtrack->eta() << ")" << std::endl;
+            }
+          }
+
 // std::cout << "dxfull vtx: " << dxfull.head<3>() << std::endl;
           
   // dxdparms = -Cinvd.solve(d2chisqdxdparms).transpose();
