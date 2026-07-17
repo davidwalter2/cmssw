@@ -51,6 +51,16 @@ sees. Staged scope:
   are propagated into the Q matrix at the next refit iteration, never
   fitted through the weights; adoption gated on a resolution-closure
   comparison before/after M0.
+  IMPLEMENTED (2026-07-17): the propagator scales each step's MS and
+  ionization-fluctuation variances by e^{k_g} of the step's volume group
+  (same classification and current-k lookup as the mean; injection
+  included coherently). Gates: k = 0 bit-identical incl. covariances;
+  k = +5% on tib_support grows sigma(q/p) by +0.69% in the barrel,
+  +0.52% transition, +0.00% forward — the exact eta footprint and
+  magnitude of the TIB-support MS share. This supersedes the per-module
+  resolution parmtypes 10/11 for the material-driven part; decoupled
+  per-group variance parameters remain a fallback if the M1 resolution
+  closure fails (see section 10).
 
 The correction enters the propagation exactly where the per-module xi
 enters today; only the lookup changes from "per leg" to "per step, by

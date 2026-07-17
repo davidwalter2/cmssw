@@ -961,10 +961,28 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
     dQ = (transportJac.leftCols<5>() * dQ * transportJac.leftCols<5>().transpose()).eval();
     dQ2 = (transportJac.leftCols<5>() * dQ2 * transportJac.leftCols<5>().transpose()).eval();
 
+    // Global material model, step group + coherent (M1) scaling: the same
+    // per-step k_g that scales the mean energy loss (applied by the eloss
+    // process via the provider) coherently scales the step's MS and
+    // ionization-fluctuation variances -- e^k more material means e^k more
+    // scattering and fluctuation power. Only the CURRENT k values enter
+    // (two-step scheme: the fit never differentiates through the weights).
+    int stepGroup = -1;
+    double matStepFact = 1.;
+    if (matGroups != nullptr) {
+      const G4Step *stpm = g4eTrajState.GetG4Track()->GetStep();
+      const G4ThreeVector midm =
+          0.5 * (stpm->GetPreStepPoint()->GetPosition() + stpm->GetPostStepPoint()->GetPosition());
+      const G4LogicalVolume *lvm =
+          stpm->GetPreStepPoint()->GetTouchableHandle()->GetVolume()->GetLogicalVolume();
+      stepGroup = matGroups->classify(lvm, midm.perp() / CLHEP::cm, midm.z() / CLHEP::cm);
+      matStepFact = std::exp(matGroups->offsetOf(stepGroup));
+    }
+
     Matrix<double, 5, 5> errMSIout = PropagateErrorMSC(g4eTrajState.GetG4Track(), pforced);
 
     // scaling only affects MS
-    const double msfact = std::exp(dms);
+    const double msfact = std::exp(dms) * matStepFact;
 
     errMSIout *= msfact;
 
@@ -972,7 +990,7 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
     const double X0 = mate->GetRadlen() / CLHEP::cm;
     RItotal += msfact * thisPathLength / X0;
 
-    const double ionifact = std::exp(dioni);
+    const double ionifact = std::exp(dioni) * matStepFact;
 
     errMSIout(0, 0) = ionifact * computeErrorIoni(g4eTrajState.GetG4Track(), pforced);
 
@@ -1015,17 +1033,11 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
       for (auto &gc : *groupJacOut) {
         gc.second = (transportJac.leftCols<5>() * gc.second).eval();
       }
-      const G4Step *stp = g4eTrajState.GetG4Track()->GetStep();
-      const G4ThreeVector midp =
-          0.5 * (stp->GetPreStepPoint()->GetPosition() + stp->GetPostStepPoint()->GetPosition());
-      const G4LogicalVolume *lvstep =
-          stp->GetPreStepPoint()->GetTouchableHandle()->GetVolume()->GetLogicalVolume();
-      const int gstep =
-          matGroups->classify(lvstep, midp.perp() / CLHEP::cm, midp.z() / CLHEP::cm);
+      // stepGroup classified above (M1 block)
       auto it = std::find_if(groupJacOut->begin(), groupJacOut->end(),
-                             [gstep](auto const &e) { return e.first == gstep; });
+                             [stepGroup](auto const &e) { return e.first == stepGroup; });
       if (it == groupJacOut->end()) {
-        groupJacOut->emplace_back(gstep, transportJac.col(8));
+        groupJacOut->emplace_back(stepGroup, transportJac.col(8));
       } else {
         it->second += transportJac.col(8);
       }

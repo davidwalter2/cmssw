@@ -45,6 +45,10 @@ public:
   // k of the step's group plus any FD-closure injection
   double materialOffset(const G4LogicalVolume *lv, double r_cm, double z_cm) const override;
 
+  // same value for an already-classified group (used by the propagator to
+  // avoid a second classification per step)
+  double offsetOf(int g) const { return kval_[g] + (g == injGroup_ ? injEps_ : 0.); }
+
   int nGroups() const { return nGroups_; }
   const std::string &groupName(int g) const { return gnames_[g]; }
   double kValue(int g) const { return kval_[g]; }
