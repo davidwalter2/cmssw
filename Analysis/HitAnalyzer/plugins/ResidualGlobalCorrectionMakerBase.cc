@@ -237,10 +237,15 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   if (!materialGroupsFile_.empty()) {
     matModel_ = std::make_unique<MaterialGroupModel>(materialGroupsFile_);
   }
+  // Default ON: per-step application/attribution is strictly more accurate
+  // than the per-leg chain rule (removes the piecewise-constant sampling
+  // error) and is bit-identical for the fitted states at zero coefficients.
   perStepFieldModes_ = iConfig.existsAs<bool>("perStepFieldModes")
-      ? iConfig.getParameter<bool>("perStepFieldModes") : false;
+      ? iConfig.getParameter<bool>("perStepFieldModes") : true;
+  // Default ON whenever the global material model is on (hit-to-hit
+  // propagation is only well-defined without per-module leg attribution).
   skipHitlessSurfaces_ = iConfig.existsAs<bool>("skipHitlessSurfaces")
-      ? iConfig.getParameter<bool>("skipHitlessSurfaces") : false;
+      ? iConfig.getParameter<bool>("skipHitlessSurfaces") : globalMaterialModel_;
   if (skipHitlessSurfaces_ && !globalMaterialModel_) {
     throw cms::Exception("Configuration")
         << "skipHitlessSurfaces=True requires globalMaterialModel=True "

@@ -87,16 +87,17 @@ opts.register('materialGroupsFile', '', VarParsing.VarParsing.multiplicity.singl
               VarParsing.VarParsing.varType.string,
               'global material model grouping-tier rules file '
               '(Analysis/HitAnalyzer/data/materialGroups{50,100}.txt); empty = off')
-opts.register('perStepFieldModes', False, VarParsing.VarParsing.multiplicity.singleton,
+opts.register('perStepFieldModes', True, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'apply the scalar-potential correction and attribute the per-mode '
               'derivatives per Geant4 step instead of piecewise-constant per leg '
-              '(leg-structure-free field attribution)')
-opts.register('skipHitlessSurfaces', False, VarParsing.VarParsing.multiplicity.singleton,
+              '(leg-structure-free field attribution; default True)')
+opts.register('skipHitlessSurfaces', True, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'drop hitless module surfaces (dead-module placeholders, '
               'quality-demoted hits) from the fit; propagation goes hit to hit. '
-              'Requires globalMaterialModel=True')
+              'Default True; effective only with globalMaterialModel=True '
+              '(auto-disabled otherwise)')
 opts.register('globalMaterialModel', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'replace the per-module material parameters (parmtype 7) with the '
@@ -265,7 +266,7 @@ process.globalCor = cms.EDProducer(
     materialGroupsFile=cms.string(opts.materialGroupsFile),
     globalMaterialModel=cms.bool(bool(opts.globalMaterialModel)),
     perStepFieldModes=cms.bool(bool(opts.perStepFieldModes)),
-    skipHitlessSurfaces=cms.bool(bool(opts.skipHitlessSurfaces)),
+    skipHitlessSurfaces=cms.bool(bool(opts.skipHitlessSurfaces) and bool(opts.globalMaterialModel)),
     outprefix=cms.untracked.string("globalcor"),
     # MT G4Error master: GlobalCache config for CvhMasterThread. The master
     # spawns a dedicated thread in initializeGlobalCache that builds DDDWorld
