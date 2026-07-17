@@ -5,6 +5,7 @@
 ## as a lighter-weight cross-check of the propagator / residual chain.
 import FWCore.ParameterSet.Config as cms
 import FWCore.ParameterSet.VarParsing as VarParsing
+import os
 
 from Configuration.Eras.Era_Run2_2016_cff import Run2_2016
 from Configuration.AlCa.GlobalTag import GlobalTag
@@ -62,7 +63,9 @@ opts.register('gnDampAfter', 0, VarParsing.VarParsing.multiplicity.singleton,
 opts.register('gnDampFactor', 0.5, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.float,
               'damping factor applied to the GN step when gnDampAfter is active')
-opts.register('materialGroupsFile', '', VarParsing.VarParsing.multiplicity.singleton,
+_defaultGroupsFile = os.path.join(os.environ.get('CMSSW_BASE', ''),
+                                  'src/Analysis/HitAnalyzer/data/materialGroups50.txt')
+opts.register('materialGroupsFile', _defaultGroupsFile, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string,
               'global material model grouping-tier rules file '
               '(Analysis/HitAnalyzer/data/materialGroups{50,100}.txt); empty = off. '
@@ -86,11 +89,12 @@ opts.register('skipHitlessSurfaces', True, VarParsing.VarParsing.multiplicity.si
               'quality-demoted hits) from the fit; propagation goes hit to hit. '
               'Default True; effective only with globalMaterialModel=True '
               '(auto-disabled otherwise)')
-opts.register('globalMaterialModel', False, VarParsing.VarParsing.multiplicity.singleton,
+opts.register('globalMaterialModel', True, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
-              'replace the ~15k per-module material parameters (parmtype 7) with '
-              'the parmtype-15 global material groups of materialGroupsFile '
-              '(exclusive switch; requires materialGroupsFile)')
+              'replace the per-module material parameters (parmtype 7) with the '
+              'parmtype-15 global material groups of materialGroupsFile '
+              '(exclusive switch). Default True (tier-50 groups file from the '
+              'release); set False for the legacy per-module parameterisation')
 opts.register('materialFDGroup', -1, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.int,
               'one-shot V1 FD closure: re-propagate the first leg crossing this '

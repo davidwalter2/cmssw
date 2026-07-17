@@ -7,6 +7,7 @@
 ## calls below for the full list. Driven by calibration_studies/slurm/.
 import FWCore.ParameterSet.Config as cms
 import FWCore.ParameterSet.VarParsing as VarParsing
+import os
 
 from Configuration.Eras.Era_Run2_2016_cff import Run2_2016
 from Configuration.AlCa.GlobalTag import GlobalTag
@@ -83,7 +84,9 @@ opts.register('pixelMinSizeX', 2, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.int,
               'minimum pixel cluster size in x for a hit to stay in the fit '
               '(default 2 = baseline sizeX>1 cut; 1 admits all clusters)')
-opts.register('materialGroupsFile', '', VarParsing.VarParsing.multiplicity.singleton,
+_defaultGroupsFile = os.path.join(os.environ.get('CMSSW_BASE', ''),
+                                  'src/Analysis/HitAnalyzer/data/materialGroups50.txt')
+opts.register('materialGroupsFile', _defaultGroupsFile, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string,
               'global material model grouping-tier rules file '
               '(Analysis/HitAnalyzer/data/materialGroups{50,100}.txt); empty = off')
@@ -98,11 +101,12 @@ opts.register('skipHitlessSurfaces', True, VarParsing.VarParsing.multiplicity.si
               'quality-demoted hits) from the fit; propagation goes hit to hit. '
               'Default True; effective only with globalMaterialModel=True '
               '(auto-disabled otherwise)')
-opts.register('globalMaterialModel', False, VarParsing.VarParsing.multiplicity.singleton,
+opts.register('globalMaterialModel', True, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'replace the per-module material parameters (parmtype 7) with the '
               'parmtype-15 global material groups of materialGroupsFile '
-              '(exclusive switch; requires materialGroupsFile)')
+              '(exclusive switch). Default True (tier-50 groups file from the '
+              'release); set False for the legacy per-module parameterisation')
 opts.register('propagationDirection', 'anyDirection', VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string,
               'Geant4ePropagator PropagationDirection. "anyDirection" (default) '
