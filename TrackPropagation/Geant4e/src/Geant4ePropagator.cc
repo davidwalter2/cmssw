@@ -630,7 +630,9 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
                                                     const std::string &particleNameOverride,
                                                     const MaterialGroupModel *matGroups,
                                                     std::vector<std::pair<int, Eigen::Matrix<double, 5, 1>>>
-                                                        *groupJacOut) const {
+                                                        *groupJacOut,
+                                                    const sim::FieldModeProvider *fieldModes,
+                                                    std::vector<Eigen::Matrix<double, 5, 1>> *modeJacOut) const {
   using namespace Eigen;
 
   // Deferred per-thread Geant4e init under mutex (see propagateGeneric).
@@ -676,6 +678,9 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
   cmsField->SetMaterialOffsetProvider(matGroups);
   if (groupJacOut != nullptr) {
     groupJacOut->clear();
+  }
+  if (fieldModes != nullptr && modeJacOut != nullptr) {
+    modeJacOut->assign(fieldModes->nModes(), Matrix<double, 5, 1>::Zero());
   }
 
   auto retDefault = [cmsField]() {
@@ -832,6 +837,28 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
     statepre[5] = g4eTrajState.GetMomentum().z() / CLHEP::GeV;
     statepre[6] = charge;
 
+    // Per-step field-mode application: one basis sample per step at the
+    // predicted step midpoint (half the 10 mm step-length cap ahead along
+    // the momentum -- steps in the tracker essentially always run at the
+    // cap). The SAME sample provides the applied offset for this step and,
+    // below, the per-mode derivative columns, so application and
+    // derivatives are consistent by construction. The constant dB argument
+    // stays available on top for FD perturbations.
+    Eigen::Vector3d dBstep = dB;
+    const double *modeBx = nullptr;
+    const double *modeBy = nullptr;
+    const double *modeBz = nullptr;
+    if (fieldModes != nullptr) {
+      const double pmag = statepre.segment<3>(3).norm();
+      const double look = 0.5;  // cm, half the 10 mm step cap
+      const Eigen::Vector3d peval =
+          statepre.head<3>() + (look / pmag) * statepre.segment<3>(3);
+      double cstep[3];
+      fieldModes->sampleAt(peval[0], peval[1], peval[2], cstep, modeBx, modeBy, modeBz);
+      dBstep += Eigen::Vector3d(cstep[0], cstep[1], cstep[2]);
+      cmsField->SetOffset(dBstep.x(), dBstep.y(), dBstep.z());
+    }
+
     //set the error matrix to null to disentangle MS and ionization contributions
     g4eTrajState.SetError(errnull);
     const int ierr = theG4eManager->PropagateOneStep(&g4eTrajState, mode);
@@ -926,7 +953,7 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
       dEdxlast = dEdx;
     }
 
-    const Matrix<double, 5, 9> transportJac = transportJacobianBxByBzD(statepre, thisPathLength, dEdx, mass, dB);
+    const Matrix<double, 5, 9> transportJac = transportJacobianBxByBzD(statepre, thisPathLength, dEdx, mass, dBstep);
 
     // transport contribution to error
     g4errorEnd = (transportJac.leftCols<5>() * g4errorEnd * transportJac.leftCols<5>().transpose()).eval();
@@ -963,6 +990,21 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
     //TODO assess relevance of approximations (does the order matter? position/momentum before or after step?)
     //b-field (dBx, dBy, dBz) and material (dxi) contributions to jacobian
     jac.rightCols<4>() += transportJac.rightCols<4>();
+
+    // Per-step field modes: transport the accumulated per-mode columns and
+    // add this step's contribution, scaled by the SAME basis sample the
+    // applied offset used above -- exact consistency between application
+    // and derivative (the FD closure probes precisely this).
+    if (fieldModes != nullptr && modeJacOut != nullptr) {
+      for (auto &mc : *modeJacOut) {
+        mc = (transportJac.leftCols<5>() * mc).eval();
+      }
+      const unsigned int nmodes = fieldModes->nModes();
+      for (unsigned int im = 0; im < nmodes; ++im) {
+        (*modeJacOut)[im] += transportJac.col(5) * modeBx[im] + transportJac.col(6) * modeBy[im] +
+                             transportJac.col(7) * modeBz[im];
+      }
+    }
 
     // Global material model: per-group split of the dxi column. Same
     // recursion as the integrated column above (transport previous
@@ -1132,6 +1174,12 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
     if (groupJacOut != nullptr) {
       for (auto &gc : *groupJacOut) {
         gc.second = (Pflip * gc.second).eval();
+      }
+    }
+    // per-mode field columns transform like the dB columns
+    if (modeJacOut != nullptr) {
+      for (auto &mc : *modeJacOut) {
+        mc = (Pflip * mc).eval();
       }
     }
     g4errorEnd = (Pflip * g4errorEnd * Pflip).eval();

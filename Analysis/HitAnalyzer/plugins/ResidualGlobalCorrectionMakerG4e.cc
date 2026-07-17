@@ -123,6 +123,8 @@ private:
   int materialFDGroup_ = -1;
   double materialFDEps_ = 1e-3;
   mutable std::vector<std::pair<int, Eigen::Matrix<double, 5, 1>>> groupJacs_;
+  // per-step field-mode columns from the propagator (reused buffer)
+  mutable std::vector<Eigen::Matrix<double, 5, 1>> modeJacs_;
   mutable double v2MaxRelDiff_ = 0.;
   mutable unsigned long long v2Checks_ = 0ULL;
   mutable bool fdMatDone_ = false;
@@ -775,6 +777,15 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         continue;
       }
 
+      // Leg-structure-free mode: hitless surfaces (dead-module placeholders)
+      // carry no measurement and, with the global models, no parameter
+      // attribution either -- drop them so propagation goes hit to hit.
+      // The material of the skipped modules is still crossed by the G4
+      // steps of the longer leg.
+      if (skipHitlessSurfaces_ && !(*it)->isValid()) {
+        continue;
+      }
+
       const GeomDet* detectorG = globalGeometry->idToDet((*it)->geographicalId());
       const GluedGeomDet* detglued = dynamic_cast<const GluedGeomDet*>(detectorG);
       
@@ -862,7 +873,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         if (hitquality) {
           hits.push_back((*it)->cloneForFit(*detectorG));
         }
-        else {
+        else if (!skipHitlessSurfaces_) {
           hits.push_back(TrackingRecHit::RecHitPointer(new InvalidTrackingRecHit(*detectorG, TrackingRecHit::inactive)));
         }
       }
@@ -1514,11 +1525,18 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         // chain-rule scaling for the transport-Jacobian dBx/dBy/dBz columns
         // (cols 5,6,7 of the 5x9 transportJacobianBxByBzD).
         const GlobalPoint propStartPos(updtsos[0], updtsos[1], updtsos[2]);
-        const Eigen::Vector3d dB = fieldCorrection_->getCorrectionAt(propStartPos, corparms_);
+        // Per-step mode: the provider applies the correction inside the
+        // propagator (dB argument stays zero for FD perturbations) and the
+        // per-leg basis samples are not needed.
+        const Eigen::Vector3d dB = perStepFieldModes_
+            ? Eigen::Vector3d::Zero()
+            : fieldCorrection_->getCorrectionAt(propStartPos, corparms_);
         std::vector<double> dBxPerMode, dByPerMode, dBzPerMode;
-        fieldCorrection_->getBxBasisAt(propStartPos, dBxPerMode);
-        fieldCorrection_->getByBasisAt(propStartPos, dByPerMode);
-        fieldCorrection_->getBzBasisAt(propStartPos, dBzPerMode);
+        if (!perStepFieldModes_) {
+          fieldCorrection_->getBxBasisAt(propStartPos, dBxPerMode);
+          fieldCorrection_->getByBasisAt(propStartPos, dByPerMode);
+          fieldCorrection_->getBzBasisAt(propStartPos, dBzPerMode);
+        }
 
         // Global material model: the leg-constant dxi is zero; the per-step
         // group values k_g (synced from corparms_ into the model at the top
@@ -1573,9 +1591,13 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
         auto const &propresult = simhitdebug
             ? g4prop->propagateGenericWithJacobianAltD(propfromtsos, surface, dB, dxival, dmsval, dionival, -1., g4PartName,
-                                                       matModel_.get(), matModel_ ? &groupJacs_ : nullptr)
+                                                       matModel_.get(), matModel_ ? &groupJacs_ : nullptr,
+                                                       fieldModeProvider_.get(),
+                                                       fieldModeProvider_ ? &modeJacs_ : nullptr)
             : g4prop->propagateGenericWithJacobianAltD(updtsos,      surface, dB, dxival, dmsval, dionival, -1., g4PartName,
-                                                       matModel_.get(), matModel_ ? &groupJacs_ : nullptr);
+                                                       matModel_.get(), matModel_ ? &groupJacs_ : nullptr,
+                                                       fieldModeProvider_.get(),
+                                                       fieldModeProvider_ ? &modeJacs_ : nullptr);
 
 
         if (simhitdebug && simhit) {
@@ -1855,10 +1877,18 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           // mode's Bx/By/Bz basis values at the propagation start; the last
           // column is the unchanged d/dxi column FdFm.col(8).
           Matrix<double, 5, Dynamic> dStateDparams(5, nlocalparms);
-          for (unsigned int imode = 0; imode < nlocalbfield; ++imode) {
-            dStateDparams.col(imode) = FdFm.col(5) * dBxPerMode[imode]
-                                     + FdFm.col(6) * dByPerMode[imode]
-                                     + FdFm.col(7) * dBzPerMode[imode];
+          if (perStepFieldModes_) {
+            // per-step columns from the propagator, already leg-integrated
+            // with the basis sampled at every step midpoint
+            for (unsigned int imode = 0; imode < nlocalbfield; ++imode) {
+              dStateDparams.col(imode) = modeJacs_[imode];
+            }
+          } else {
+            for (unsigned int imode = 0; imode < nlocalbfield; ++imode) {
+              dStateDparams.col(imode) = FdFm.col(5) * dBxPerMode[imode]
+                                       + FdFm.col(6) * dByPerMode[imode]
+                                       + FdFm.col(7) * dBzPerMode[imode];
+            }
           }
           if (globalMaterialModel_) {
             // per-group dxi columns from the propagator (zero for groups
@@ -1882,7 +1912,78 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           // finite-differencing the 5-component endpoint state. Compares
           // against dStateDparams.col(imode). Runs once per job at the first
           // chain-rule site that has nlocalbfield > 0.
-          if (runFDClosure_ && !didFDClosure_ && nlocalbfield > 0) {
+          // Per-step variant: perturb the provider's applied field by
+          // eps * basis_i and re-propagate with the provider active --
+          // the FD then probes the same per-step application the analytic
+          // columns describe.
+          // Compares the basis-invariant curvilinear components (qop,
+          // lambda, phi), per-mode eps scaled to a target |dB| at the leg
+          // start, top modes by basis amplitude -- mirroring the per-leg
+          // closure in the two-track maker.
+          if (runFDClosure_ && !didFDClosure_ && perStepFieldModes_ && nlocalbfield > 0) {
+            didFDClosure_ = true;
+            auto qopLamPhi = [](const Eigen::Matrix<double, 7, 1> &s) {
+              const double px = s(3), py = s(4), pz = s(5), q = s(6);
+              const double pT = std::sqrt(px * px + py * py);
+              const double pmag = std::sqrt(pT * pT + pz * pz);
+              return Eigen::Vector3d(q / pmag, std::atan2(pz, pT), std::atan2(py, px));
+            };
+            const Eigen::Vector3d cNom = qopLamPhi(updtsos);
+            const double dBtarget = epsilonFDClosure_;
+            const double *bxs = nullptr;
+            const double *bys = nullptr;
+            const double *bzs = nullptr;
+            double bdummy[3];
+            fieldModeProvider_->sampleAt(propInputState[0], propInputState[1], propInputState[2],
+                                         bdummy, bxs, bys, bzs);
+            std::vector<std::pair<double, unsigned int>> sorted;
+            sorted.reserve(nlocalbfield);
+            for (unsigned int i = 0; i < nlocalbfield; ++i) {
+              sorted.emplace_back(
+                  std::sqrt(bxs[i] * bxs[i] + bys[i] * bys[i] + bzs[i] * bzs[i]), i);
+            }
+            std::sort(sorted.begin(), sorted.end(),
+                      std::greater<std::pair<double, unsigned int>>());
+            const unsigned int nTest = std::min<unsigned int>(10u, nlocalbfield);
+            std::cout << "===== Per-step field FD closure =====  nModes=" << nlocalbfield
+                      << "  testing top-" << nTest << " by basis amplitude  dB_target="
+                      << dBtarget << " T  comparing (qop, lambda, phi)" << std::endl;
+            std::cout << std::scientific << std::setprecision(4);
+            double worstRel = 0.0;
+            for (unsigned int j = 0; j < nTest; ++j) {
+              const double basisAmp = sorted[j].first;
+              const unsigned int imode = sorted[j].second;
+              if (basisAmp < 1e-15) {
+                continue;
+              }
+              const double eps = dBtarget / basisAmp;
+              const Eigen::Vector3d anac = modeJacs_[imode].head<3>();
+              fieldModeProvider_->setInjection(imode, eps);
+              auto const &pertResult = g4prop->propagateGenericWithJacobianAltD(
+                  propInputState, surface, dB, dxival, dmsval, dionival, -1., g4PartName,
+                  matModel_.get(), nullptr, fieldModeProvider_.get(), nullptr);
+              fieldModeProvider_->setInjection(-1, 0.);
+              if (!std::get<0>(pertResult)) {
+                std::cout << "  mode " << imode << ": perturbed propagation failed" << std::endl;
+                continue;
+              }
+              const Eigen::Vector3d dCFD = (qopLamPhi(std::get<1>(pertResult)) - cNom) / eps;
+              Eigen::Vector3d rel;
+              for (int k = 0; k < 3; ++k) {
+                rel(k) = std::abs(dCFD(k) - anac(k)) / std::max(std::abs(anac(k)), 1e-30);
+                if (rel(k) > worstRel) {
+                  worstRel = rel(k);
+                }
+              }
+              std::cout << "  mode " << imode << " (basis=" << basisAmp
+                        << ")  rel(qop,lam,phi) = " << rel.transpose() << std::endl;
+            }
+            std::cout << "===== per-step FD closure: worst rel = " << worstRel << " ====="
+                      << std::endl;
+            std::cout.unsetf(std::ios_base::floatfield);
+          }
+
+          if (runFDClosure_ && !didFDClosure_ && !perStepFieldModes_ && nlocalbfield > 0) {
             const Matrix<double, 5, 1> stateNom =
                 Eigen::Matrix<double, 5, 1>(updtsos.head<5>());
             const double eps = epsilonFDClosure_;

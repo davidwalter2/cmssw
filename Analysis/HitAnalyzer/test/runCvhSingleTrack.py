@@ -68,6 +68,23 @@ opts.register('materialGroupsFile', '', VarParsing.VarParsing.multiplicity.singl
               '(Analysis/HitAnalyzer/data/materialGroups{50,100}.txt); empty = off. '
               'Phase A validation hook: accumulates per-group dxi columns and '
               'checks the V2 sum identity per leg')
+opts.register('runFDClosure', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'one-shot numerical-FD closure of the field-mode chain rule '
+              '(per-leg or per-step depending on perStepFieldModes)')
+opts.register('epsilonFDClosure', 1e-4, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'eps for the FD closure')
+opts.register('perStepFieldModes', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'apply the scalar-potential correction and attribute the per-mode '
+              'derivatives per Geant4 step instead of piecewise-constant per leg '
+              '(leg-structure-free field attribution)')
+opts.register('skipHitlessSurfaces', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'drop hitless module surfaces (dead-module placeholders, '
+              'quality-demoted hits) from the fit; propagation goes hit to hit. '
+              'Requires globalMaterialModel=True')
 opts.register('globalMaterialModel', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'replace the ~15k per-module material parameters (parmtype 7) with '
@@ -196,7 +213,11 @@ process.globalCor = cms.EDProducer(
     gnDampAfter=cms.uint32(int(opts.gnDampAfter)),
     gnDampFactor=cms.double(float(opts.gnDampFactor)),
     materialGroupsFile=cms.string(opts.materialGroupsFile),
+    runFDClosure=cms.bool(bool(opts.runFDClosure)),
+    epsilonFDClosure=cms.double(float(opts.epsilonFDClosure)),
     globalMaterialModel=cms.bool(bool(opts.globalMaterialModel)),
+    perStepFieldModes=cms.bool(bool(opts.perStepFieldModes)),
+    skipHitlessSurfaces=cms.bool(bool(opts.skipHitlessSurfaces)),
     materialFDGroup=cms.int32(int(opts.materialFDGroup)),
     materialFDEps=cms.double(float(opts.materialFDEps)),
     outprefix=cms.untracked.string("globalcor_single"),

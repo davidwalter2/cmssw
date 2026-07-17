@@ -17,6 +17,7 @@
 #include <Eigen/Core>
 
 #include "TrackPropagation/Geant4e/interface/G4UniversalFluctuationForExtrapolator.hh"
+#include "SimG4Core/MagneticField/interface/Field.h"
 
 class MaterialGroupModel;
 
@@ -110,7 +111,17 @@ public:
                                    // Jacobian exactly). See doc/global-material-model-plan.md.
                                    const MaterialGroupModel *matGroups = nullptr,
                                    std::vector<std::pair<int, Eigen::Matrix<double, 5, 1>>>
-                                       *groupJacOut = nullptr) const;
+                                       *groupJacOut = nullptr,
+                                   // Per-step field modes (leg-structure-free attribution):
+                                   // when fieldModes is set, the correction field is applied
+                                   // per step (evaluated at the step start, on top of the
+                                   // constant dB argument) and, when modeJacOut is also set,
+                                   // the per-mode transported d(state)/dc_i columns are
+                                   // accumulated with the basis evaluated at each step
+                                   // midpoint -- replacing the maker-side per-leg chain rule.
+                                   const sim::FieldModeProvider *fieldModes = nullptr,
+                                   std::vector<Eigen::Matrix<double, 5, 1>> *modeJacOut =
+                                       nullptr) const;
 
   static void CalculateEffectiveZandA(const G4Material *mate, G4double &effZ, G4double &effA);
 

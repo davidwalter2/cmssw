@@ -157,6 +157,8 @@ private:
   // Global material model: per-leg per-group dxi columns from the
   // propagator (reused buffer; see doc/global-material-model-plan.md).
   mutable std::vector<std::pair<int, Eigen::Matrix<double, 5, 1>>> groupJacs_;
+  // per-step field-mode columns from the propagator (reused buffer)
+  mutable std::vector<Eigen::Matrix<double, 5, 1>> modeJacs_;
 
   // Pixel hit-quality accounting (valid pixel hits entering the quality cut).
   mutable unsigned long long pixHitsSeen_ = 0ULL;
@@ -1212,6 +1214,12 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             continue;
           }
 
+          // Leg-structure-free mode: drop hitless surfaces (see the
+          // single-track maker for the rationale).
+          if (skipHitlessSurfaces_ && !(*it)->isValid()) {
+            continue;
+          }
+
           const GeomDet* detectorG = globalGeometry->idToDet((*it)->geographicalId());
           const GluedGeomDet* detglued = dynamic_cast<const GluedGeomDet*>(detectorG);
           
@@ -1291,9 +1299,9 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
             
             if (hitquality) {
-              hits.push_back((*it)->cloneForFit(*detectorG));              
+              hits.push_back((*it)->cloneForFit(*detectorG));
             }
-            else {
+            else if (!skipHitlessSurfaces_) {
               hits.push_back(TrackingRecHit::RecHitPointer(new InvalidTrackingRecHit(*detectorG, TrackingRecHit::inactive)));
             }
           }          
@@ -1947,11 +1955,17 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               // transport-Jacobian dBx/dBy/dBz columns (cols 5,6,7 of the
               // 5x9 transportJacobianBxByBzD).
               const GlobalPoint propStartPos(updtsos[0], updtsos[1], updtsos[2]);
-              const Eigen::Vector3d dB = fieldCorrection_->getCorrectionAt(propStartPos, corparms_);
+              // Per-step mode: the provider applies the correction inside
+              // the propagator; per-leg basis samples not needed.
+              const Eigen::Vector3d dB = perStepFieldModes_
+                  ? Eigen::Vector3d::Zero()
+                  : fieldCorrection_->getCorrectionAt(propStartPos, corparms_);
               std::vector<double> dBxPerMode, dByPerMode, dBzPerMode;
-              fieldCorrection_->getBxBasisAt(propStartPos, dBxPerMode);
-              fieldCorrection_->getByBasisAt(propStartPos, dByPerMode);
-              fieldCorrection_->getBzBasisAt(propStartPos, dBzPerMode);
+              if (!perStepFieldModes_) {
+                fieldCorrection_->getBxBasisAt(propStartPos, dBxPerMode);
+                fieldCorrection_->getByBasisAt(propStartPos, dByPerMode);
+                fieldCorrection_->getBzBasisAt(propStartPos, dBzPerMode);
+              }
 
               // Global material model: leg-constant dxi is zero; per-step
               // group values are applied by the propagator's provider path
@@ -1967,7 +1981,9 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               auto propresult = g4prop->propagateGenericWithJacobianAltD(updtsos, surface, dB, dxival,
                                                                           0., 0., -1., g4PartName,
                                                                           matModel_.get(),
-                                                                          matModel_ ? &groupJacs_ : nullptr);
+                                                                          matModel_ ? &groupJacs_ : nullptr,
+                                                                          fieldModeProvider_.get(),
+                                                                          fieldModeProvider_ ? &modeJacs_ : nullptr);
               if (!std::get<0>(propresult)) {
                 std::cout << "ResidualGlobalCorrectionMakerTwoTrackG4e ### Abort: Propagation Failed!"
                           << " icons = " << icons << " iiter = " << iiter
@@ -2062,10 +2078,16 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               const unsigned int nlocalparms = nlocalbfield + nlocaleloss;
 
               Matrix<double, 5, Dynamic> dStateDparams(5, nlocalparms);
-              for (unsigned int imode = 0; imode < nlocalbfield; ++imode) {
-                dStateDparams.col(imode) = FdFm.col(5) * dBxPerMode[imode]
-                                         + FdFm.col(6) * dByPerMode[imode]
-                                         + FdFm.col(7) * dBzPerMode[imode];
+              if (perStepFieldModes_) {
+                for (unsigned int imode = 0; imode < nlocalbfield; ++imode) {
+                  dStateDparams.col(imode) = modeJacs_[imode];
+                }
+              } else {
+                for (unsigned int imode = 0; imode < nlocalbfield; ++imode) {
+                  dStateDparams.col(imode) = FdFm.col(5) * dBxPerMode[imode]
+                                           + FdFm.col(6) * dByPerMode[imode]
+                                           + FdFm.col(7) * dBzPerMode[imode];
+                }
               }
               if (globalMaterialModel_) {
                 // per-group dxi columns from the propagator (zero for groups
@@ -2093,7 +2115,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               // Tests the 10 modes with the largest basis amplitude at this
               // point so the FD signal is well-conditioned across mode
               // counts. Runs once per job.
-              if (runFDClosure_ && !didFDClosure_ && nlocalbfield > 0) {
+              if (runFDClosure_ && !didFDClosure_ && !perStepFieldModes_ && nlocalbfield > 0) {
                 auto qopLamPhi = [](const Eigen::Matrix<double, 7, 1>& s) {
                   const double px = s(3), py = s(4), pz = s(5), q = s(6);
                   const double pT = std::sqrt(px * px + py * py);

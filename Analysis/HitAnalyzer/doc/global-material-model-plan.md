@@ -204,6 +204,32 @@ Changes:
 Development in the 15_0 port (CMSSW_15_0_19_patch2_dev branch); PR after
 Phase B, mirroring the scalar-potential development flow.
 
+## 9b. Leg-structure-free extension (IMPLEMENTED 2026-07-17)
+
+With both global models the leg boundaries carry no parameter attribution,
+so two further options exist (both default-off, validated):
+
+- **perStepFieldModes**: the scalar-potential correction is applied per
+  Geant4 step and the per-mode derivative columns are accumulated in the
+  propagator (sim::FieldModeProvider + ScalarPotFieldModeProvider). ONE
+  basis sample per step, taken at the predicted step midpoint (5 mm
+  lookahead at the 10 mm step cap), feeds BOTH the applied offset and the
+  derivative columns -- consistent by construction; the FD closure probes
+  exactly this (phi at the forward-FD limit for all modes, lambda at 1e-6
+  where non-vanishing; qop/uniform-mode-lambda ratios are small-denominator
+  artifacts, as in the B.5 per-leg closure). Removes the per-leg
+  piecewise-constant sampling error (~0.04 mT at 2 cm legs -- same order
+  as the NMR accuracy target).
+- **skipHitlessSurfaces** (requires globalMaterialModel): dead-module
+  placeholders and quality-demoted hits are dropped from the fit list;
+  propagation goes hit to hit. Exact by the Markov property (process
+  noise composes across the merged leg). Validated: tracks without
+  hitless surfaces bit-identical; the rest shift by median 4e-7 relative
+  q/p; <nHits> 18.3 -> 16.5; at-cap unchanged; the 11 hotspot candidates
+  all succeed with production defaults. The three forward-only hotspot
+  failures that remain are marginal order flips of VALID-hit planes
+  (fieldbound exits), cured by anyDirection, not by skipping.
+
 ## 10. Decisions (2026-07-16) and remaining open points
 
 Decided:

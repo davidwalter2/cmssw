@@ -111,6 +111,7 @@
 #include <functional>
 
 #include "TrackPropagation/Geant4e/interface/MaterialGroupModel.h"
+#include "Analysis/HitAnalyzer/interface/ScalarPotFieldModeProvider.h"
 
 using namespace Eigen;
 
@@ -552,6 +553,18 @@ protected:
   std::string materialGroupsFile_;
   std::unique_ptr<MaterialGroupModel> matModel_;
   std::vector<unsigned int> matGroupGlobalIdx_;  // groupId -> corparms_ index
+
+  // Per-step field modes (leg-structure-free attribution): when true, the
+  // scalar-potential correction is applied per Geant4 step via the
+  // provider, and the per-mode derivative columns come from the propagator
+  // instead of the per-leg chain rule.
+  bool perStepFieldModes_ = false;
+  std::unique_ptr<ana_hitanalyzer::ScalarPotFieldModeProvider> fieldModeProvider_;
+
+  // Skip hitless module surfaces in the fit hit list (dead-module
+  // placeholders and quality-demoted hits): valid only with the global
+  // material model (per-module leg attribution would otherwise break).
+  bool skipHitlessSurfaces_ = false;
 
   // Numerical-FD closure (debug only; one-shot per job).
   bool runFDClosure_ = false;

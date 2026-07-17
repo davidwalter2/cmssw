@@ -237,6 +237,15 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   if (!materialGroupsFile_.empty()) {
     matModel_ = std::make_unique<MaterialGroupModel>(materialGroupsFile_);
   }
+  perStepFieldModes_ = iConfig.existsAs<bool>("perStepFieldModes")
+      ? iConfig.getParameter<bool>("perStepFieldModes") : false;
+  skipHitlessSurfaces_ = iConfig.existsAs<bool>("skipHitlessSurfaces")
+      ? iConfig.getParameter<bool>("skipHitlessSurfaces") : false;
+  if (skipHitlessSurfaces_ && !globalMaterialModel_) {
+    throw cms::Exception("Configuration")
+        << "skipHitlessSurfaces=True requires globalMaterialModel=True "
+           "(per-module leg attribution would otherwise break)";
+  }
   doMuons_ = iConfig.getParameter<bool>("doMuons");
   doTrigger_ = iConfig.getParameter<bool>("doTrigger");
   doRes_ = iConfig.getParameter<bool>("doRes");
@@ -268,6 +277,12 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   }
   fieldCorrection_ = std::make_unique<ana_hitanalyzer::ScalarPotentialFieldCorrection>(
       scalarPotentialInitFile_);
+  if (perStepFieldModes_) {
+    // corparms_ is a member, so its address is stable for the maker's
+    // lifetime; the provider always sees the current coefficients.
+    fieldModeProvider_ = std::make_unique<ana_hitanalyzer::ScalarPotFieldModeProvider>(
+        fieldCorrection_.get(), &corparms_);
+  }
 
   // Numerical-FD closure flags (debug; both makers honour them).
   runFDClosure_ = iConfig.existsAs<bool>("runFDClosure")

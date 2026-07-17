@@ -25,6 +25,27 @@ namespace sim {
     virtual double materialOffset(const G4LogicalVolume *lv, double r_cm, double z_cm) const = 0;
   };
 
+  // Per-step field-mode provider (leg-structure-free B-field correction):
+  // supplies the current correction field and the per-mode basis values at
+  // arbitrary points, so the propagator can apply the correction and
+  // attribute the per-mode derivatives per Geant4 step instead of
+  // piecewise-constant per leg. Implemented maker-side on top of the
+  // scalar-potential basis evaluator; the abstract base lives here so
+  // SimG4Core/TrackPropagation do not depend on Analysis/HitAnalyzer.
+  class FieldModeProvider {
+  public:
+    virtual ~FieldModeProvider() = default;
+    virtual unsigned int nModes() const = 0;
+    // One evaluation per step: the applied correction field b [T]
+    // (coefficients contracted with the basis, plus any FD injection) AND
+    // the per-mode basis values at the same global point (cm). Using one
+    // sample for both the application and the derivative columns makes
+    // them consistent by construction. The returned pointers stay valid
+    // until the next call on the same provider instance.
+    virtual void sampleAt(double x_cm, double y_cm, double z_cm, double b[3],
+                          const double *&bx, const double *&by, const double *&bz) const = 0;
+  };
+
   class Field final : public G4MagneticField {
   public:
     Field(const MagneticField *f, double d);
