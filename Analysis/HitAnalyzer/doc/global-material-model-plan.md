@@ -230,11 +230,24 @@ Decided:
   deferred until those samples are produced.
 
 Open, with owner/trigger:
-- **Application contract (linear analysis-level correction vs re-seeded
-  refit; where the linearity of the stored Jacobians breaks): decision
-  deferred to Phase B/C design time.** To be brought back to David with
-  a concrete recommendation and the V3 numbers (injected-k_g size at
-  which the linear application diverges from the refit) in hand.
+- **Application contract — RESOLVED with V3 numbers (2026-07-16),
+  recommendation to David:** keep the two-level scheme the field modes
+  already use. (a) Fitted k_g are applied by re-seeding the refit
+  (corparms -> per-step provider) once per calibration iteration.
+  (b) Between refits, the linearized analysis-level application
+  (jacref * delta_k) is safe for |delta_k| <~ 1%: at an injected
+  k = 0.01 the linear prediction reproduces the true refit response to
+  ~1% of the correction (recovered k_hat = 0.01013 single-track,
+  -0.0089 dimuon unconstrained); the error grows linearly (~3% of the
+  correction at k = 0.05) -- pure second-order behaviour. (c) One
+  caveat, measured exactly: the stored Hessians are Gauss-Newton
+  (2 J^T R J); with the exponential parameterisation dJ/dk = J, so the
+  own-parameter gradient response is (H + g) k, and a SINGLE linear
+  solve started far from the minimum (large g, e.g. the raw +0.12
+  tib_support pull on uncalibrated data) under-corrects -- verified to
+  3 significant figures (predicted ratio -0.591 vs measured -0.592).
+  The corFiles iteration converges regardless (g -> 0 at the fixed
+  point); just do not interpret iteration-1 deltas as final.
 - Geant4/DDD description as the accuracy ceiling: shape errors (missing
   or misplaced elements) are not representable by any k_g; diagnosed by
   localized, channel-dependent pulls that splitting does not cure, and

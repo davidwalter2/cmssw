@@ -1068,6 +1068,19 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
                 << std::endl;
     }
 
+    // Seed the material-group entries with the k_init column of the groups
+    // file. Unlike the parmtype-14 absolute coefficients above, these are
+    // genuine multiplicative deltas on the nominal energy loss (k = 0 is
+    // the unmodified geometry), so seeding is semantically clean. corFiles
+    // deltas accumulate on top; the produce-time sync copies the summed
+    // values back into the model for the per-step provider. Also used to
+    // inject known k_g for the V3 MC-closure test.
+    if (globalMaterialModel_) {
+      for (int g = 0; g < matModel_->nGroups(); ++g) {
+        corparms_[matGroupGlobalIdx_[g]] = matModel_->kValue(g);
+      }
+    }
+
     // Build a quick lookup of which global indices belong to parmtype-14
     // (the scalar-potential block) so we can skip those entries when loading
     // corFiles. The other parmtypes (per-module alignment, dxi, etc.) are
