@@ -2073,7 +2073,25 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                 Q = Hm*Qcurv*Hm.transpose();
               }
 
-              const Matrix<double, 5, 5> Qinv = Q.inverse();
+              // Guarded inversion of the process noise: a (near-)zero-length
+              // leg -- a displaced V0 vertex sitting on the first-hit layer --
+              // has Q ~ 0, and a plain inverse poisons the solve with inf
+              // (observed as the fail[nan] class: finite r and F, non-finite
+              // Vinv, daughters with 1-3 valid hits at refR ~ 5 cm). Floor
+              // the eigenvalues so the leg becomes an extremely stiff, rather
+              // than exact, constraint.
+              Matrix<double, 5, 5> Qinv;
+              {
+                const SelfAdjointEigenSolver<Matrix<double, 5, 5>> esq(Q);
+                const double lmax = esq.eigenvalues()(4);
+                const double lfloor = std::max(1e-10 * std::max(lmax, 0.), 1e-16);
+                Matrix<double, 5, 1> linv;
+                for (int k = 0; k < 5; ++k) {
+                  linv(k) = 1. / std::max(esq.eigenvalues()(k), lfloor);
+                }
+                Qinv = esq.eigenvectors() * linv.asDiagonal() *
+                       esq.eigenvectors().transpose();
+              }
 
               // Build the per-hit field+eloss Jacobian: per-mode columns sum
               // the dBx, dBy, dBz transport-Jacobian columns (cols 5,6,7 of
@@ -2794,8 +2812,19 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           // previously leaked into the charge-sum check and was miscounted
           // as a charge flip.
           if (!dxfree.allFinite()) {
+            // Localize the poison: which solve input went non-finite, and
+            // the displaced-vertex geometry of the candidate.
+            const bool rOk = rfull.allFinite();
+            const bool fOk = Eigen::MatrixXd(Ffull).allFinite();
+            const bool vOk = Eigen::MatrixXd(Vinvfull).allFinite();
+            const double r0 = std::hypot(refftsarr[0][0], refftsarr[0][1]);
+            const double r1 = std::hypot(refftsarr[1][0], refftsarr[1][1]);
             std::cout << "Abort: non-finite parameter update from solve!"
                       << " icons = " << icons << " iiter = " << iiter
+                      << " finite(r,F,Vinv)=(" << rOk << "," << fOk << "," << vOk << ")"
+                      << " refR=(" << r0 << "," << r1 << ")"
+                      << " nhits=(" << nhitsarr[0] << "," << nhitsarr[1] << ")"
+                      << " nvalid=(" << nvalidarr[0] << "," << nvalidarr[1] << ")"
                       << " seed0(q,pt,eta)=(" << itrack->charge() << "," << itrack->pt() << "," << itrack->eta() << ")"
                       << " seed1(q,pt,eta)=(" << jtrack->charge() << "," << jtrack->pt() << "," << jtrack->eta() << ")"
                       << std::endl;
