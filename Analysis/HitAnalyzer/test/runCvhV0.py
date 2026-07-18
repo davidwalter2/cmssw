@@ -60,6 +60,12 @@ opts.register('clampMomentumFloor', 0.1, VarParsing.VarParsing.multiplicity.sing
               '(charge flip / momentum collapse) are rescaled instead of aborted. '
               '0.1 GeV sits above the propagation floor but below the soft '
               'V0-daughter spectrum (the J/psi makers use 2 GeV)')
+opts.register('maxBacktracks', 4, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.int,
+              'per-candidate budget of GN step halvings after a failed leg')
+opts.register('maxSeedInflations', 2, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.int,
+              'per-candidate budget of iteration-0 seed-momentum inflations (x1.25 each)')
 opts.register('useStartingState', 'perigee', VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string,
               "iteration-0 reference state. Default 'perigee': measured BETTER than "
@@ -146,6 +152,8 @@ process.globalCor = _v0maker.clone(
     perStepFieldModes=cms.bool(bool(opts.perStepFieldModes)),
     useStartingState=cms.string(opts.useStartingState),
     clampMomentumFloor=cms.double(float(opts.clampMomentumFloor)),
+    maxBacktracks=cms.uint32(int(opts.maxBacktracks)),
+    maxSeedInflations=cms.uint32(int(opts.maxSeedInflations)),
     outprefix=cms.untracked.string("globalcor_" + opts.mode),
     CvhMaster=CvhMasterPSet.clone(Particles=cms.vstring(*_particles)),
 )

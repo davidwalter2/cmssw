@@ -161,6 +161,9 @@ private:
   // J/psi muons (as in the single-track maker); V0 drivers lower it to
   // sit above the propagation floor but below the soft-daughter spectrum.
   double clampMomentumFloor_ = 2.0;
+  // Per-candidate leg-failure retry budgets (see the recovery block).
+  unsigned int maxBacktracks_ = 4;
+  unsigned int maxSeedInflations_ = 2;
   mutable unsigned long long fitFailNaN_ = 0ULL;         // NaN/inf parameter update
   mutable unsigned long long fitSkippedSameSign_ = 0ULL; // same-sign pairs skipped pre-fit (not failures)
 
@@ -432,6 +435,10 @@ ResidualGlobalCorrectionMakerTwoTrackG4e::ResidualGlobalCorrectionMakerTwoTrackG
       ? iConfig.getParameter<double>("edmConvergence") : 1.e-5;
   clampMomentumFloor_ = iConfig.existsAs<double>("clampMomentumFloor")
       ? iConfig.getParameter<double>("clampMomentumFloor") : 2.0;
+  maxBacktracks_ = iConfig.existsAs<unsigned int>("maxBacktracks")
+      ? iConfig.getParameter<unsigned int>("maxBacktracks") : 4u;
+  maxSeedInflations_ = iConfig.existsAs<unsigned int>("maxSeedInflations")
+      ? iConfig.getParameter<unsigned int>("maxSeedInflations") : 2u;
   useStartingState_ = iConfig.existsAs<std::string>("useStartingState")
       ? iConfig.getParameter<std::string>("useStartingState") : std::string("perigee");
   if (useStartingState_ != "perigee" && useStartingState_ != "midPropagated") {
@@ -2024,7 +2031,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                 // the too-large update is the culprit) or an inflated seed
                 // momentum for the failing daughter (iiter == 0). Only when
                 // the retry budget is exhausted is the candidate lost.
-                if ((iiter > 0 && nBacktracks < 4) || (iiter == 0 && nSeedInflations < 2)) {
+                if ((iiter > 0 && nBacktracks < maxBacktracks_) || (iiter == 0 && nSeedInflations < maxSeedInflations_)) {
                   retryIter = true;
                   retryFailId = id;
                 } else {
