@@ -362,7 +362,7 @@ def _cvhScalarVars(extVars, tag, suffix, note):
     setattr(extVars, "cvh%sNValidPixelHits" % suffix, ExtVar(cms.InputTag(tag + ":nValidPixelHits"), int, doc="Number of valid pixel hits in refit" + note))
 
 
-def nanoAOD_addCvhMuonBranches(process, initFile=None, isMC=False):
+def nanoAOD_addCvhMuonBranches(process, initFile=None, isMC=False, useScalarPot3D=None):
     """Attach the CVH-refit muon branches (Muon_cvh*) to the muon table.
 
     Wires the single-muon-track CVH refit into the NanoAOD muon tables:
@@ -384,8 +384,14 @@ def nanoAOD_addCvhMuonBranches(process, initFile=None, isMC=False):
     initFile: scalar-potential coefficient dump (mfs/dump_coeffs_for_cmssw.py
     output). If None, setup3DFieldForRefit falls back to CVH_SCALARPOT_INITFILE
     / its built-in default.
+
+    useScalarPot3D: baseline field for the refit. None (default) means data uses
+    the accurate ScalarPot3D map and MC keeps the DEFAULT CMSSW field (consistent
+    with the field the simulation used); pass True/False to override.
     """
     from PhysicsTools.NanoAOD.nano_cff import setup3DFieldForRefit
+    if useScalarPot3D is None:
+        useScalarPot3D = not isMC
     extVars = process.muonTable.externalVariables
     vecVars = muonExternalVecVarsTable.variables
 
@@ -416,8 +422,9 @@ def nanoAOD_addCvhMuonBranches(process, initFile=None, isMC=False):
     _producers.append(process.muonExternalVecVarsTable)
     process.muonTablesTask.add(*_producers)
 
-    # 3D scalar-potential field + Geant4e propagator setup (shared G4 master).
-    setup3DFieldForRefit(process, initFile=initFile)
+    # Field + Geant4e propagator + shared G4 master. Data -> ScalarPot3D map;
+    # MC -> default (sim-consistent) field.
+    setup3DFieldForRefit(process, initFile=initFile, useScalarPot3D=useScalarPot3D)
     return process
 
 

@@ -328,19 +328,27 @@ _DEFAULT_SCALARPOT_INITFILE = (
     "polyfit3d_full_coeffs_lmax18_cmsswnorm.txt")
 
 
-def setup3DFieldForRefit(process, initFile=None):
-    """Set up the 3D scalar-potential B-field + Geant4e propagator that the CVH
-    muon refit (process.trackrefit) consumes.
+def setup3DFieldForRefit(process, initFile=None, useScalarPot3D=True):
+    """Set up the Geant4e propagator + shared G4 master the CVH muon refit needs,
+    and choose the baseline magnetic field.
 
-    Mirrors the standalone driver setup (Analysis/HitAnalyzer/test/runCvhJpsi.py,
-    the ScalarPot3D branch): loads the Geant4e propagator, brings up a labelled
-    ScalarPot3D IdealMagneticFieldRecord, and routes that label into every
-    CVH-side consumer (the propagator, the strip/pixel CPEs, the refit producer,
-    and its CvhMaster G4 world). geopro is loaded (for the propagator) but is
-    NOT scheduled -- the refit's CvhMasterThread GlobalCache owns the G4 world.
+    useScalarPot3D=True (DATA): replace the baseline field with the accurate 3D
+    scalar-potential map (ScalarPot3D), routed into every CVH-side consumer (the
+    propagator, the strip/pixel CPEs, the refit makers, and the shared G4
+    master). useScalarPot3D=False (MC): keep the DEFAULT CMSSW field -- it must
+    stay consistent with the field the simulation used (see CLAUDE.md, "custom
+    field map for data only"); only the geometry / propagator / master are set
+    up, with no field override.
 
-    initFile: scalar-potential coefficient dump. Falls back to
-    CVH_SCALARPOT_INITFILE then _DEFAULT_SCALARPOT_INITFILE.
+    The parmtype-14 correction-mode basis (scalarPotentialInitFile on the
+    makers) is set in BOTH cases -- it defines the Jacobian modes stored in
+    NanoAOD and is independent of the baseline field.
+
+    geopro is loaded (for the propagator) but is NOT scheduled -- the shared
+    CvhMasterThread ES product owns the G4 world.
+
+    initFile: scalar-potential coefficient dump (basis + coefficients). Falls
+    back to CVH_SCALARPOT_INITFILE then _DEFAULT_SCALARPOT_INITFILE.
     """
     if initFile is None:
         initFile = os.environ.get("CVH_SCALARPOT_INITFILE",
@@ -368,30 +376,34 @@ def setup3DFieldForRefit(process, initFile=None):
 
     process.load("TrackPropagation.Geant4e.geantRefit_cff")
 
-    # Labelled 3D scalar-potential field.
-    from MagneticField.ParametrizedEngine.parametrizedMagneticField_ScalarPot3D_cfi \
-        import ParametrizedMagneticFieldProducer as ScalarPot3DMagneticFieldProducer
-    process.ScalarPot3DMagneticFieldProducer = ScalarPot3DMagneticFieldProducer.clone()
-    process.ScalarPot3DMagneticFieldProducer.parameters.InitFile = initFile
-    fieldlabel = "ScalarPot3DMf"
-    process.ScalarPot3DMagneticFieldProducer.label = fieldlabel
-
-    # Route the labelled field into every CVH-side consumer (ES producers +
-    # each CVH refit maker instance that is present: nominal, and the MC-only
-    # ideal / beamspot variants).
     _refits = ("trackrefit", "trackrefitideal", "trackrefitbs")
-    for _consumer in ("geopro", "Geant4ePropagator",
-                      "stripCPEESProducer", "StripCPEfromTrackAngleESProducer",
-                      "siPixelTemplateDBObjectESProducer", "templates") + _refits:
-        if hasattr(process, _consumer):
-            getattr(process, _consumer).MagneticFieldLabel = cms.string(fieldlabel)
+    # The parmtype-14 correction-mode basis is needed by the makers in both
+    # data and MC (it defines the Jacobians stored in NanoAOD) and is
+    # independent of the baseline field.
     for _refit in _refits:
         if hasattr(process, _refit):
             getattr(process, _refit).scalarPotentialInitFile = cms.string(initFile)
 
-    # Shared CVH Geant4 master as an EventSetup product (CvhMasterRecord),
-    # consumed by every CVH maker via esConsumes. One per job; wired to the
-    # same labelled field. Replaces the per-producer CvhMaster GlobalCache.
+    # Baseline field. DATA: the accurate ScalarPot3D map, routed into every
+    # CVH-side consumer. MC: keep the default CMSSW field (label "") so the
+    # refit stays consistent with the field the simulation used -- no override.
+    fieldlabel = ""
+    if useScalarPot3D:
+        from MagneticField.ParametrizedEngine.parametrizedMagneticField_ScalarPot3D_cfi \
+            import ParametrizedMagneticFieldProducer as ScalarPot3DMagneticFieldProducer
+        process.ScalarPot3DMagneticFieldProducer = ScalarPot3DMagneticFieldProducer.clone()
+        process.ScalarPot3DMagneticFieldProducer.parameters.InitFile = initFile
+        fieldlabel = "ScalarPot3DMf"
+        process.ScalarPot3DMagneticFieldProducer.label = fieldlabel
+        for _consumer in ("geopro", "Geant4ePropagator",
+                          "stripCPEESProducer", "StripCPEfromTrackAngleESProducer",
+                          "siPixelTemplateDBObjectESProducer", "templates") + _refits:
+            if hasattr(process, _consumer):
+                getattr(process, _consumer).MagneticFieldLabel = cms.string(fieldlabel)
+
+    # Shared CVH Geant4 master (CvhMasterRecord), consumed by every CVH maker
+    # via esConsumes. Uses the same baseline field as the refit -- ScalarPot3D
+    # for data, the default field (label "") for MC.
     from TrackPropagation.Geant4e.cvhMasterESProducer_cfi import cvhMasterESProducer
     process.cvhMasterESProducer = cvhMasterESProducer.clone()
     process.cvhMasterESProducer.MagneticFieldLabel = cms.string(fieldlabel)
