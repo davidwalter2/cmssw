@@ -79,6 +79,8 @@ public:
                 << "  fail[nan]=" << fitFailNaN_
                 << "  skipped[samesign]=" << fitSkippedSameSign_
                 << "  clamped[step]=" << fitStepClamped_
+                << "  backtracked[step]=" << fitStepBacktracked_
+                << "  inflated[seed]=" << fitSeedInflated_
                 << std::endl;
       if (pixHitsSeen_ > 0ULL) {
         std::cout << "ResidualGlobalCorrectionMakerTwoTrackG4e pixel hit-quality summary"
@@ -153,6 +155,8 @@ private:
   mutable unsigned long long fitFailHitUpdate_ = 0ULL;   // CPE re-evaluation (cloner) invalid
   mutable unsigned long long fitFailChargeFlip_ = 0ULL;  // q/p sign flip in parameter update
   mutable unsigned long long fitStepClamped_ = 0ULL;     // fits with >=1 momentum-floor-clamped GN step
+  mutable unsigned long long fitStepBacktracked_ = 0ULL; // step halvings after a failed-leg iteration (retries)
+  mutable unsigned long long fitSeedInflated_ = 0ULL;    // iteration-0 seed-momentum inflations (retries)
   // Momentum floor for the Gauss-Newton step clamp (GeV). 2 GeV suits
   // J/psi muons (as in the single-track maker); V0 drivers lower it to
   // sit above the propagation floor but below the soft-daughter spectrum.
@@ -1495,6 +1499,10 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
       bool valid = true;
       bool stepClampedThisFit = false;
+      // Leg-failure recovery budgets (per candidate): step halvings for
+      // failures at iiter > 0, seed-momentum inflations at iiter == 0.
+      unsigned int nBacktracks = 0;
+      unsigned int nSeedInflations = 0;
       ++fitAttempted_;
       
       
@@ -1706,6 +1714,17 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           // iter's pass count -- exactly what "Final" semantically denotes.
           nvalidFinalarr = {{ 0, 0 }};
           nvalidpixelFinalarr = {{ 0, 0 }};
+
+          // Backtracking snapshot: the linearization state at iteration
+          // entry, BEFORE the reference update below applies dxfull. On a
+          // failed propagation leg the iteration is redone from this state
+          // with a halved step (iiter > 0) or an inflated seed momentum for
+          // the failing daughter (iiter == 0: end-of-range protons whose
+          // modeled dE/dx drains the seed trajectory).
+          const std::array<Matrix<double, 7, 1>, 2> refftsarrSnap = refftsarr;
+          const std::array<std::vector<Matrix<double, 7, 1>>, 2> layerStatesSnap = layerStatesarr;
+          bool retryIter = false;
+          int retryFailId = -1;
 
           // Sparse GBL assembly buffers (replaces dense gradfull/hessfull).
           // Ffull = d(residual)/d(state)  [ncons x nstateparms]
@@ -2000,8 +2019,18 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                           << " seed0: q=" << itrack->charge() << " pt=" << itrack->pt() << " eta=" << itrack->eta()
                           << " seed1: q=" << jtrack->charge() << " pt=" << jtrack->pt() << " eta=" << jtrack->eta()
                           << std::endl;
-                ++fitFailProp_;
-                valid = false;
+                // Leg-failure recovery: redo the iteration with a halved
+                // step (iiter > 0: the previous iterate propagated fine, so
+                // the too-large update is the culprit) or an inflated seed
+                // momentum for the failing daughter (iiter == 0). Only when
+                // the retry budget is exhausted is the candidate lost.
+                if ((iiter > 0 && nBacktracks < 4) || (iiter == 0 && nSeedInflations < 2)) {
+                  retryIter = true;
+                  retryFailId = id;
+                } else {
+                  ++fitFailProp_;
+                  valid = false;
+                }
                 break;
               }
 
@@ -2619,13 +2648,35 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               }
             }
 
-            if (!valid) {
+            if (!valid || retryIter) {
               break;
             }
-            
+
             trackstateidx += 5*tracknhits;
           }
-          
+
+          if (retryIter) {
+            // Restore the iteration-entry linearization state and redo this
+            // iteration with the adjusted input.
+            refftsarr = refftsarrSnap;
+            layerStatesarr = layerStatesSnap;
+            if (iiter > 0) {
+              dxfull *= 0.5;
+              ++nBacktracks;
+              ++fitStepBacktracked_;
+              iiter -= 1;  // loop ++ redoes the same iteration
+            } else {
+              // end-of-range daughter: inflate its seed momentum and let the
+              // hits pull it back down
+              refftsarr[retryFailId].segment<3>(3) *= 1.25;
+              ++nSeedInflations;
+              ++fitSeedInflated_;
+              // unsigned wrap: ++ brings iiter back to 0
+              iiter = std::numeric_limits<unsigned int>::max();
+            }
+            continue;
+          }
+
           if (!valid) {
             break;
           }
