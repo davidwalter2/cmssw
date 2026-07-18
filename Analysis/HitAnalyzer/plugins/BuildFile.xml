@@ -34,6 +34,7 @@
 <use name="Utilities/General"/>
 <use name="TrackPropagation/RungeKutta"/>
 <use name="CommonTools/UtilAlgos"/>
+<use name="CommonTools/CandUtils"/>
 <use name="RecoLocalTracker/SiStripClusterizer"/>
 <use name="TrackingTools/TransientTrack"/>
 <use name="RecoVertex/LinearizationPointFinders"/>

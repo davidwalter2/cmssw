@@ -164,6 +164,20 @@ private:
   // Per-candidate leg-failure retry budgets (see the recovery block).
   unsigned int maxBacktracks_ = 4;
   unsigned int maxSeedInflations_ = 2;
+
+  // Optional per-candidate EDM ValueMap output for the NanoAOD path, keyed to
+  // the srcCandidates collection. Off by default so the ALCARECO TTree drivers
+  // are unaffected. Kinematics are emitted whenever produceValueMaps_ is set;
+  // the (large) global-fit payload (globalIdxs / jacRef / jacMass / factored
+  // Hessian) is emitted additionally only when fillGradsFactored_ is set.
+  bool produceValueMaps_ = false;
+  edm::EDPutTokenT<edm::ValueMap<float>> vmCorMass_, vmCorMassErr_, vmCorPt_, vmCorEta_, vmCorPhi_;
+  edm::EDPutTokenT<edm::ValueMap<float>> vmMuPlusPt_, vmMuPlusEta_, vmMuPlusPhi_;
+  edm::EDPutTokenT<edm::ValueMap<float>> vmMuMinusPt_, vmMuMinusEta_, vmMuMinusPhi_;
+  edm::EDPutTokenT<edm::ValueMap<float>> vmEdmval_;
+  edm::EDPutTokenT<edm::ValueMap<std::vector<int>>> vmGlobalIdxs_;
+  edm::EDPutTokenT<edm::ValueMap<std::vector<float>>> vmJacRefMuPlus_, vmJacRefMuMinus_, vmJacMass_, vmHessFactor_;
+
   mutable unsigned long long fitFailNaN_ = 0ULL;         // NaN/inf parameter update
   mutable unsigned long long fitSkippedSameSign_ = 0ULL; // same-sign pairs skipped pre-fit (not failures)
 
@@ -439,6 +453,34 @@ ResidualGlobalCorrectionMakerTwoTrackG4e::ResidualGlobalCorrectionMakerTwoTrackG
       ? iConfig.getParameter<unsigned int>("maxBacktracks") : 4u;
   maxSeedInflations_ = iConfig.existsAs<unsigned int>("maxSeedInflations")
       ? iConfig.getParameter<unsigned int>("maxSeedInflations") : 2u;
+
+  // NanoAOD path: emit per-candidate ValueMaps keyed to srcCandidates. Only
+  // meaningful in the candidate-driven mode. Kinematics always; the global-fit
+  // payload additionally when fillGradsFactored_ is set.
+  produceValueMaps_ = iConfig.existsAs<bool>("produceValueMaps")
+      ? iConfig.getParameter<bool>("produceValueMaps") : false;
+  if (produceValueMaps_) {
+    vmCorMass_    = produces<edm::ValueMap<float>>("corMass");
+    vmCorMassErr_ = produces<edm::ValueMap<float>>("corMassErr");
+    vmCorPt_      = produces<edm::ValueMap<float>>("corPt");
+    vmCorEta_     = produces<edm::ValueMap<float>>("corEta");
+    vmCorPhi_     = produces<edm::ValueMap<float>>("corPhi");
+    vmMuPlusPt_   = produces<edm::ValueMap<float>>("muPlusPt");
+    vmMuPlusEta_  = produces<edm::ValueMap<float>>("muPlusEta");
+    vmMuPlusPhi_  = produces<edm::ValueMap<float>>("muPlusPhi");
+    vmMuMinusPt_  = produces<edm::ValueMap<float>>("muMinusPt");
+    vmMuMinusEta_ = produces<edm::ValueMap<float>>("muMinusEta");
+    vmMuMinusPhi_ = produces<edm::ValueMap<float>>("muMinusPhi");
+    vmEdmval_     = produces<edm::ValueMap<float>>("edmval");
+    if (fillGradsFactored_) {
+      vmGlobalIdxs_    = produces<edm::ValueMap<std::vector<int>>>("globalIdxs");
+      vmJacRefMuPlus_  = produces<edm::ValueMap<std::vector<float>>>("jacRefMuPlus");
+      vmJacRefMuMinus_ = produces<edm::ValueMap<std::vector<float>>>("jacRefMuMinus");
+      vmJacMass_       = produces<edm::ValueMap<std::vector<float>>>("jacMass");
+      vmHessFactor_    = produces<edm::ValueMap<std::vector<float>>>("hessFactor");
+    }
+  }
+
   useStartingState_ = iConfig.existsAs<std::string>("useStartingState")
       ? iConfig.getParameter<std::string>("useStartingState") : std::string("perigee");
   if (useStartingState_ != "perigee" && useStartingState_ != "midPropagated") {
@@ -1080,11 +1122,21 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
   // per-pair loop below can fill bCandIdx positionally. Empty when no
   // bCandIdxSrc was configured -- per-row Fill() sees -1.
   std::vector<int> bCandIdxPerPair;
+  // Index into the srcCandidates collection for each pair (candidate-driven
+  // mode), so per-candidate ValueMap outputs can be written back positionally
+  // (one entry per input candidate, sentinel for skipped/failed). -1 in the
+  // legacy fallback (no candidate collection to key to).
+  std::vector<int> candCollIdxPerPair;
+  // The srcCandidates handle, kept at produce() scope so the ValueMaps can be
+  // sized and keyed to it after the pair loop.
+  Handle<reco::VertexCompositeCandidateCollection> vmCandH;
   if (!inputCandidatesTag_.label().empty()) {
     Handle<reco::VertexCompositeCandidateCollection> candH;
     iEvent.getByToken(inputCandidates_, candH);
+    vmCandH = candH;
     trackPairs.reserve(candH->size());
     bCandIdxPerPair.reserve(candH->size());
+    candCollIdxPerPair.reserve(candH->size());
     for (std::size_t ic = 0; ic < candH->size(); ++ic) {
       const auto& cand = (*candH)[ic];
       if (cand.numberOfDaughters() < 2) continue;
@@ -1094,6 +1146,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
       trackPairs.push_back({{&*d0->track(), &*d1->track()}});
       bCandIdxPerPair.push_back(
           (bCandIdxH.isValid() && ic < bCandIdxH->size()) ? (*bCandIdxH)[ic] : -1);
+      candCollIdxPerPair.push_back(static_cast<int>(ic));
     }
   } else {
     if (trackOrigH->size() >= 2) {
@@ -1103,12 +1156,27 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
       for (auto jtrack = itrack + 1; jtrack != trackOrigH->end(); ++jtrack) {
         trackPairs.push_back({{&*itrack, &*jtrack}});
         bCandIdxPerPair.push_back(-1);  // no candidate-level index in the legacy outer-product
+        candCollIdxPerPair.push_back(-1);
       }
   }
+
+  // Per-candidate ValueMap accumulators (sentinel-initialised to one entry per
+  // input candidate; filled at the point the per-candidate tree row is written).
+  const bool doVM = produceValueMaps_ && vmCandH.isValid();
+  const std::size_t nVMCand = doVM ? vmCandH->size() : 0;
+  std::vector<float> vmCorMassV(nVMCand, -99.f), vmCorMassErrV(nVMCand, -99.f),
+      vmCorPtV(nVMCand, -99.f), vmCorEtaV(nVMCand, -99.f), vmCorPhiV(nVMCand, -99.f),
+      vmMuPlusPtV(nVMCand, -99.f), vmMuPlusEtaV(nVMCand, -99.f), vmMuPlusPhiV(nVMCand, -99.f),
+      vmMuMinusPtV(nVMCand, -99.f), vmMuMinusEtaV(nVMCand, -99.f), vmMuMinusPhiV(nVMCand, -99.f),
+      vmEdmvalV(nVMCand, -99.f);
+  std::vector<std::vector<int>> vmGlobalIdxsV(nVMCand);
+  std::vector<std::vector<float>> vmJacRefMuPlusV(nVMCand), vmJacRefMuMinusV(nVMCand),
+      vmJacMassV(nVMCand), vmHessFactorV(nVMCand);
 
   for (std::size_t ipair = 0; ipair < trackPairs.size(); ++ipair) {
     auto& trackPair = trackPairs[ipair];
     bCandIdx = bCandIdxPerPair[ipair];
+    const int candCollIdx = candCollIdxPerPair[ipair];
     const reco::Track* itrack = trackPair[0];
     const reco::Track* jtrack = trackPair[1];
     if (itrack->isLooper() || jtrack->isLooper()) {
@@ -3966,7 +4034,36 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
 // hessv.resize(nparsfinal*nparsfinal);
 // Map<Matrix<float, Dynamic, Dynamic, RowMajor>>(hessv.data(), nparsfinal, nparsfinal) = hess.cast<float>();
-      
+
+      // NanoAOD path: capture this candidate's refit result into the ValueMap
+      // accumulators, positionally by srcCandidates index. This point is after
+      // the icons loop (once per candidate); the Jpsi_*/Mu* members hold the
+      // unconstrained (icons==0) result. Reached only when the candidate
+      // completed the fit -- skipped/failed candidates keep their sentinel.
+      // Kinematics always; the global-fit payload only when fillGradsFactored_
+      // populated it.
+      if (doVM && candCollIdx >= 0) {
+        vmCorMassV[candCollIdx]    = Jpsi_mass;
+        vmCorMassErrV[candCollIdx] = Jpsi_sigmamass;
+        vmCorPtV[candCollIdx]      = Jpsi_pt;
+        vmCorEtaV[candCollIdx]     = Jpsi_eta;
+        vmCorPhiV[candCollIdx]     = Jpsi_phi;
+        vmMuPlusPtV[candCollIdx]   = Muplus_pt;
+        vmMuPlusEtaV[candCollIdx]  = Muplus_eta;
+        vmMuPlusPhiV[candCollIdx]  = Muplus_phi;
+        vmMuMinusPtV[candCollIdx]  = Muminus_pt;
+        vmMuMinusEtaV[candCollIdx] = Muminus_eta;
+        vmMuMinusPhiV[candCollIdx] = Muminus_phi;
+        vmEdmvalV[candCollIdx]     = edmval;
+        if (fillGradsFactored_) {
+          vmGlobalIdxsV[candCollIdx].assign(globalidxvfinal.begin(), globalidxvfinal.end());
+          vmJacRefMuPlusV[candCollIdx]  = Muplus_jacRef;
+          vmJacRefMuMinusV[candCollIdx] = Muminus_jacRef;
+          vmJacMassV[candCollIdx]       = Jpsi_jacMass;
+          vmHessFactorV[candCollIdx]    = hessfactorv;
+        }
+      }
+
       if (fillTrackTree_) {
         tree->Fill();
       }
@@ -4035,7 +4132,58 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
       
     }
   }
-  
+
+  // NanoAOD path: put the per-candidate ValueMaps, keyed to the srcCandidates
+  // collection (one entry per input candidate). Products are always put when
+  // produceValueMaps_ is set (empty maps if there were no candidates).
+  if (produceValueMaps_) {
+    auto putF = [&](edm::EDPutTokenT<edm::ValueMap<float>>& tok, std::vector<float>& v) {
+      edm::ValueMap<float> m;
+      if (doVM) {
+        edm::ValueMap<float>::Filler f(m);
+        f.insert(vmCandH, v.begin(), v.end());
+        f.fill();
+      }
+      iEvent.emplace(tok, std::move(m));
+    };
+    putF(vmCorMass_, vmCorMassV);
+    putF(vmCorMassErr_, vmCorMassErrV);
+    putF(vmCorPt_, vmCorPtV);
+    putF(vmCorEta_, vmCorEtaV);
+    putF(vmCorPhi_, vmCorPhiV);
+    putF(vmMuPlusPt_, vmMuPlusPtV);
+    putF(vmMuPlusEta_, vmMuPlusEtaV);
+    putF(vmMuPlusPhi_, vmMuPlusPhiV);
+    putF(vmMuMinusPt_, vmMuMinusPtV);
+    putF(vmMuMinusEta_, vmMuMinusEtaV);
+    putF(vmMuMinusPhi_, vmMuMinusPhiV);
+    putF(vmEdmval_, vmEdmvalV);
+    if (fillGradsFactored_) {
+      {
+        edm::ValueMap<std::vector<int>> m;
+        if (doVM) {
+          edm::ValueMap<std::vector<int>>::Filler f(m);
+          f.insert(vmCandH, vmGlobalIdxsV.begin(), vmGlobalIdxsV.end());
+          f.fill();
+        }
+        iEvent.emplace(vmGlobalIdxs_, std::move(m));
+      }
+      auto putVF = [&](edm::EDPutTokenT<edm::ValueMap<std::vector<float>>>& tok,
+                       std::vector<std::vector<float>>& v) {
+        edm::ValueMap<std::vector<float>> m;
+        if (doVM) {
+          edm::ValueMap<std::vector<float>>::Filler f(m);
+          f.insert(vmCandH, v.begin(), v.end());
+          f.fill();
+        }
+        iEvent.emplace(tok, std::move(m));
+      };
+      putVF(vmJacRefMuPlus_, vmJacRefMuPlusV);
+      putVF(vmJacRefMuMinus_, vmJacRefMuMinusV);
+      putVF(vmJacMass_, vmJacMassV);
+      putVF(vmHessFactor_, vmHessFactorV);
+    }
+  }
 }
 
 

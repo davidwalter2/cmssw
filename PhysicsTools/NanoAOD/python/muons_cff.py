@@ -336,6 +336,55 @@ mergedGlobalIdxs = cms.EDProducer("GlobalIdxProducer",
     src1 = cms.InputTag("trackrefitideal", "globalIdxs"),
 )
 
+# --- Dimuon (two-track) CVH refit ------------------------------------------
+# Opposite-sign muon-track pairs in a mass window -> generic two-track CVH refit
+# (no mass constraint, resonance-agnostic) -> per-pair "Dimuon" NanoAOD table.
+# Shares the one G4 master with the single-track refit (Stage A2). Data + MC.
+from Analysis.HitAnalyzer.diMuonTrackVertexCandidates_cfi import diMuonTrackVertexCandidates  # noqa: E402
+from Analysis.HitAnalyzer.ResidualGlobalCorrectionMakerDiMuonG4e_cfi import ResidualGlobalCorrectionMakerDiMuonG4e  # noqa: E402
+
+trackrefitdimuon = ResidualGlobalCorrectionMakerDiMuonG4e.clone()
+
+dimuonTable = cms.EDProducer("SimpleCandidateFlatTableProducer",
+    src = cms.InputTag("diMuonTrackVertexCandidates"),
+    cut = cms.string(""),
+    name = cms.string("Dimuon"),
+    doc = cms.string("Opposite-sign dimuon pairs with the CVH two-track refit"),
+    singleton = cms.bool(False),
+    extension = cms.bool(False),
+    variables = cms.PSet(CandVars),
+    externalVariables = cms.PSet(
+        cvhMass = ExtVar(cms.InputTag("trackrefitdimuon:corMass"), float, doc="CVH two-track refit dimuon mass", precision=-1),
+        cvhMassErr = ExtVar(cms.InputTag("trackrefitdimuon:corMassErr"), float, doc="CVH refit dimuon mass uncertainty", precision=10),
+        cvhPt = ExtVar(cms.InputTag("trackrefitdimuon:corPt"), float, doc="CVH refit dimuon pt", precision=-1),
+        cvhEta = ExtVar(cms.InputTag("trackrefitdimuon:corEta"), float, doc="CVH refit dimuon eta", precision=12),
+        cvhPhi = ExtVar(cms.InputTag("trackrefitdimuon:corPhi"), float, doc="CVH refit dimuon phi", precision=12),
+        cvhMuPlusPt = ExtVar(cms.InputTag("trackrefitdimuon:muPlusPt"), float, doc="CVH refit mu+ pt", precision=-1),
+        cvhMuPlusEta = ExtVar(cms.InputTag("trackrefitdimuon:muPlusEta"), float, doc="CVH refit mu+ eta", precision=12),
+        cvhMuPlusPhi = ExtVar(cms.InputTag("trackrefitdimuon:muPlusPhi"), float, doc="CVH refit mu+ phi", precision=12),
+        cvhMuMinusPt = ExtVar(cms.InputTag("trackrefitdimuon:muMinusPt"), float, doc="CVH refit mu- pt", precision=-1),
+        cvhMuMinusEta = ExtVar(cms.InputTag("trackrefitdimuon:muMinusEta"), float, doc="CVH refit mu- eta", precision=12),
+        cvhMuMinusPhi = ExtVar(cms.InputTag("trackrefitdimuon:muMinusPhi"), float, doc="CVH refit mu- phi", precision=12),
+        cvhEdmval = ExtVar(cms.InputTag("trackrefitdimuon:edmval"), float, doc="CVH refit estimated distance to minimum", precision=10),
+    ),
+)
+
+# Global-fit payload (large): attached only when the refit's fillGradsFactored
+# flag is on. Full precision (the downstream global fit needs it).
+dimuonVecVarsTable = cms.EDProducer("FlattenedCandValueMapVectorTableProducer",
+    name = cms.string("Dimuon"),
+    src = cms.InputTag("diMuonTrackVertexCandidates"),
+    cut = cms.string(""),
+    doc = cms.string("CVH two-track refit global-fit payload"),
+    variables = cms.PSet(
+        cvhGlobalIdxs = ExtVar(cms.InputTag("trackrefitdimuon:globalIdxs"), "std::vector<int>", doc="global correction-parameter indices", precision=16),
+        cvhJacRefMuPlus = ExtVar(cms.InputTag("trackrefitdimuon:jacRefMuPlus"), "std::vector<float>", doc="d(mu+ refParms)/d(globalparms)", precision=-1),
+        cvhJacRefMuMinus = ExtVar(cms.InputTag("trackrefitdimuon:jacRefMuMinus"), "std::vector<float>", doc="d(mu- refParms)/d(globalparms)", precision=-1),
+        cvhJacMass = ExtVar(cms.InputTag("trackrefitdimuon:jacMass"), "std::vector<float>", doc="d(mass)/d(globalparms)", precision=-1),
+        cvhHessFactor = ExtVar(cms.InputTag("trackrefitdimuon:hessFactor"), "std::vector<float>", doc="factored Hessian B (row-major nRank x nParms)", precision=-1),
+    )
+)
+
 muonExternalVecVarsTable = cms.EDProducer("FlattenedCandValueMapVectorTableProducer",
     name = cms.string(muonTable.name.value()),
     src = muonTable.src,
@@ -420,6 +469,17 @@ def nanoAOD_addCvhMuonBranches(process, initFile=None, isMC=False, useScalarPot3
 
     process.muonExternalVecVarsTable = muonExternalVecVarsTable
     _producers.append(process.muonExternalVecVarsTable)
+
+    # Dimuon (two-track) CVH refit + Dimuon table (data + MC). Shares the one
+    # G4 master with the single-track refit.
+    process.diMuonTrackVertexCandidates = diMuonTrackVertexCandidates
+    process.trackrefitdimuon = trackrefitdimuon
+    process.dimuonTable = dimuonTable
+    _producers += [process.diMuonTrackVertexCandidates, process.trackrefitdimuon, process.dimuonTable]
+    if trackrefitdimuon.fillGradsFactored.value():
+        process.dimuonVecVarsTable = dimuonVecVarsTable
+        _producers.append(process.dimuonVecVarsTable)
+
     process.muonTablesTask.add(*_producers)
 
     # Field + Geant4e propagator + shared G4 master. Data -> ScalarPot3D map;

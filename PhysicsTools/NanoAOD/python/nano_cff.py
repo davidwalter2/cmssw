@@ -376,7 +376,7 @@ def setup3DFieldForRefit(process, initFile=None, useScalarPot3D=True):
 
     process.load("TrackPropagation.Geant4e.geantRefit_cff")
 
-    _refits = ("trackrefit", "trackrefitideal", "trackrefitbs")
+    _refits = ("trackrefit", "trackrefitideal", "trackrefitbs", "trackrefitdimuon")
     # The parmtype-14 correction-mode basis is needed by the makers in both
     # data and MC (it defines the Jacobians stored in NanoAOD) and is
     # independent of the baseline field.
@@ -419,7 +419,8 @@ def setup3DFieldForRefit(process, initFile=None, useScalarPot3D=True):
         process.load("Configuration.StandardSequences.Services_cff")
     for _refit, _seed in (("trackrefit", 123456789),
                           ("trackrefitideal", 223456789),
-                          ("trackrefitbs", 323456789)):
+                          ("trackrefitbs", 323456789),
+                          ("trackrefitdimuon", 423456789)):
         if hasattr(process, _refit):
             setattr(process.RandomNumberGeneratorService, _refit, cms.PSet(
                 initialSeed=cms.untracked.uint32(_seed),
