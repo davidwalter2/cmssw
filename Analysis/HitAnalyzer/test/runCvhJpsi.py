@@ -331,9 +331,13 @@ else:
     process.ScalarPot3DMagneticFieldProducer.label = fieldlabel
 process.geopro.MagneticFieldLabel = fieldlabel
 process.Geant4ePropagator.MagneticFieldLabel = fieldlabel
-# CvhMaster builds its master G4 field via SimG4Core's FieldBuilder on top
-# of the same labelled magnetic field that the propagator consumes.
-process.globalCor.CvhMaster.MagneticFieldLabel = cms.string(fieldlabel)
+# The Geant4 master is now the shared EventSetup product from
+# cvhMasterESProducer (CvhMasterRecord), consumed by globalCor via esConsumes.
+# It builds its master G4 field via SimG4Core's FieldBuilder on top of the same
+# labelled magnetic field the propagator consumes.
+from TrackPropagation.Geant4e.cvhMasterESProducer_cfi import cvhMasterESProducer
+process.cvhMasterESProducer = cvhMasterESProducer.clone()
+process.cvhMasterESProducer.MagneticFieldLabel = cms.string(fieldlabel)
 # Activate the CVH-specific propagator path: instantiates the custom fluct
 # (G4UniversalFluctuationForExtrapolator) and routes its table pointer via
 # SetParticleAndCharge. Without this, computeErrorIoni dereferences a null

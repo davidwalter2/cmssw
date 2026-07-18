@@ -318,6 +318,128 @@ def nanoAOD_customizeCommon(process):
     return process
 
 ###increasing the precision of selected GenParticles.
+import os
+
+# Default scalar-potential coefficient dump for the CVH refit field model.
+# Override with the CVH_SCALARPOT_INITFILE env var (cmsDriver --customise
+# cannot pass function arguments).
+_DEFAULT_SCALARPOT_INITFILE = (
+    "/work/submit/david_w/ZMass/mfs/data/fitresults/"
+    "polyfit3d_full_coeffs_lmax18_cmsswnorm.txt")
+
+
+def setup3DFieldForRefit(process, initFile=None):
+    """Set up the 3D scalar-potential B-field + Geant4e propagator that the CVH
+    muon refit (process.trackrefit) consumes.
+
+    Mirrors the standalone driver setup (Analysis/HitAnalyzer/test/runCvhJpsi.py,
+    the ScalarPot3D branch): loads the Geant4e propagator, brings up a labelled
+    ScalarPot3D IdealMagneticFieldRecord, and routes that label into every
+    CVH-side consumer (the propagator, the strip/pixel CPEs, the refit producer,
+    and its CvhMaster G4 world). geopro is loaded (for the propagator) but is
+    NOT scheduled -- the refit's CvhMasterThread GlobalCache owns the G4 world.
+
+    initFile: scalar-potential coefficient dump. Falls back to
+    CVH_SCALARPOT_INITFILE then _DEFAULT_SCALARPOT_INITFILE.
+    """
+    if initFile is None:
+        initFile = os.environ.get("CVH_SCALARPOT_INITFILE",
+                                  _DEFAULT_SCALARPOT_INITFILE)
+    if not initFile:
+        raise RuntimeError(
+            "setup3DFieldForRefit: no scalar-potential coefficient file "
+            "(pass initFile= or set CVH_SCALARPOT_INITFILE)")
+
+    # DDD sim geometry (DDCompactView on IdealGeometryRecord) needed by the
+    # Geant4e propagator / CvhMaster G4 world. The stock NANO process only
+    # provides the DB reco tracker geometry, not the DDD sim geometry, so load
+    # it here (matches the standalone drivers). Additive: DDCompactView is a
+    # different data type in IdealGeometryRecord than the DB GeometricDet.
+    process.load("Configuration.StandardSequences.GeometrySimDB_cff")
+    process.GlobalTag.toGet.append(
+        cms.PSet(
+            record=cms.string("GeometryFileRcd"),
+            tag=cms.string("XMLFILE_Geometry_2016_81YV1_Extended2016_mc"),
+            label=cms.untracked.string("Extended"),
+        )
+    )
+    if hasattr(process, "XMLFromDBSource"):
+        process.XMLFromDBSource.label = cms.string("Extended")
+
+    process.load("TrackPropagation.Geant4e.geantRefit_cff")
+
+    # Labelled 3D scalar-potential field.
+    from MagneticField.ParametrizedEngine.parametrizedMagneticField_ScalarPot3D_cfi \
+        import ParametrizedMagneticFieldProducer as ScalarPot3DMagneticFieldProducer
+    process.ScalarPot3DMagneticFieldProducer = ScalarPot3DMagneticFieldProducer.clone()
+    process.ScalarPot3DMagneticFieldProducer.parameters.InitFile = initFile
+    fieldlabel = "ScalarPot3DMf"
+    process.ScalarPot3DMagneticFieldProducer.label = fieldlabel
+
+    # Route the labelled field into every CVH-side consumer (ES producers +
+    # each CVH refit maker instance that is present: nominal, and the MC-only
+    # ideal / beamspot variants).
+    _refits = ("trackrefit", "trackrefitideal", "trackrefitbs")
+    for _consumer in ("geopro", "Geant4ePropagator",
+                      "stripCPEESProducer", "StripCPEfromTrackAngleESProducer",
+                      "siPixelTemplateDBObjectESProducer", "templates") + _refits:
+        if hasattr(process, _consumer):
+            getattr(process, _consumer).MagneticFieldLabel = cms.string(fieldlabel)
+    for _refit in _refits:
+        if hasattr(process, _refit):
+            getattr(process, _refit).scalarPotentialInitFile = cms.string(initFile)
+
+    # Shared CVH Geant4 master as an EventSetup product (CvhMasterRecord),
+    # consumed by every CVH maker via esConsumes. One per job; wired to the
+    # same labelled field. Replaces the per-producer CvhMaster GlobalCache.
+    from TrackPropagation.Geant4e.cvhMasterESProducer_cfi import cvhMasterESProducer
+    process.cvhMasterESProducer = cvhMasterESProducer.clone()
+    process.cvhMasterESProducer.MagneticFieldLabel = cms.string(fieldlabel)
+
+    # Activate the CVH-specific propagator path (custom fluctuation table) and
+    # the per-leg forward/backward propagation choice.
+    process.Geant4ePropagator.ForCVH = cms.bool(True)
+    process.Geant4ePropagator.PropagationDirection = cms.string("anyDirection")
+
+    # Per-stream CLHEP engine for each refit (Geant4 thread-local RNG). Seeds
+    # kept < 9e8 (CLHEP HepJamesRandom range) and distinct per instance.
+    if not hasattr(process, "RandomNumberGeneratorService"):
+        process.load("Configuration.StandardSequences.Services_cff")
+    for _refit, _seed in (("trackrefit", 123456789),
+                          ("trackrefitideal", 223456789),
+                          ("trackrefitbs", 323456789)):
+        if hasattr(process, _refit):
+            setattr(process.RandomNumberGeneratorService, _refit, cms.PSet(
+                initialSeed=cms.untracked.uint32(_seed),
+                engineName=cms.untracked.string("HepJamesRandom"),
+            ))
+    return process
+
+
+def nanoAOD_addCvhMuon(process, initFile=None):
+    """cmsDriver --customise entry point (DATA): nominal CVH muon refit only.
+
+    Usage:
+      cmsDriver.py ... --customise PhysicsTools/NanoAOD/nano_cff.nanoAOD_addCvhMuon
+    (set the coefficient dump via the CVH_SCALARPOT_INITFILE env var).
+    """
+    from PhysicsTools.NanoAOD.muons_cff import nanoAOD_addCvhMuonBranches
+    return nanoAOD_addCvhMuonBranches(process, initFile=initFile, isMC=False)
+
+
+def nanoAOD_addCvhMuonMC(process, initFile=None):
+    """cmsDriver --customise entry point (MC): nominal + ideal + beamspot refits.
+
+    Adds the MC-only trackrefitideal / trackrefitbs variants and mergedGlobalIdxs
+    on top of the nominal refit. All three share the one EventSetup G4 master.
+
+    Usage:
+      cmsDriver.py ... --customise PhysicsTools/NanoAOD/nano_cff.nanoAOD_addCvhMuonMC
+    """
+    from PhysicsTools.NanoAOD.muons_cff import nanoAOD_addCvhMuonBranches
+    return nanoAOD_addCvhMuonBranches(process, initFile=initFile, isMC=True)
+
+
 def nanoWmassGenCustomize(process):
     pdgSelection="?(abs(pdgId) == 11|| abs(pdgId)==13 || abs(pdgId)==15 ||abs(pdgId)== 12 || abs(pdgId)== 14 || abs(pdgId)== 16|| abs(pdgId)== 24|| pdgId== 23)"
     # Keep precision same as default RECO for selected particles

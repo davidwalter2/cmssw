@@ -284,7 +284,11 @@ if opts.useScalarPot3D:
     process.Geant4ePropagator.MagneticFieldLabel = fieldlabel
     for m in (process.globalCorJpsiK, process.globalCorJpsiKKaon):
         m.MagneticFieldLabel = cms.string(fieldlabel)
-        m.CvhMaster.MagneticFieldLabel = cms.string(fieldlabel)
+    # Shared CVH G4 master (EventSetup product), consumed by both makers via
+    # esConsumes -- both run in one job on the one master.
+    from TrackPropagation.Geant4e.cvhMasterESProducer_cfi import cvhMasterESProducer
+    process.cvhMasterESProducer = cvhMasterESProducer.clone()
+    process.cvhMasterESProducer.MagneticFieldLabel = cms.string(fieldlabel)
 else:
     # Standard CMSSW field. Leave MagneticFieldLabel at its cfi default (empty
     # string -> default ESProducer). ForCVH on the propagator stays on.

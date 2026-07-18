@@ -24,7 +24,7 @@
 class ResidualGlobalCorrectionMakerG4e : public ResidualGlobalCorrectionMakerBase
 {
 public:
-  ResidualGlobalCorrectionMakerG4e(const edm::ParameterSet &, const CvhMasterThread *);
+  ResidualGlobalCorrectionMakerG4e(const edm::ParameterSet &);
   ~ResidualGlobalCorrectionMakerG4e();
 
 // static void fillDescriptions(edm::ConfigurationDescriptions &descriptions);
@@ -175,9 +175,8 @@ ResidualGlobalCorrectionMakerG4e::~ResidualGlobalCorrectionMakerG4e() {
 }
 
 
-ResidualGlobalCorrectionMakerG4e::ResidualGlobalCorrectionMakerG4e(const edm::ParameterSet &iConfig,
-                                                                   const CvhMasterThread *master)
-    : ResidualGlobalCorrectionMakerBase(iConfig, master),
+ResidualGlobalCorrectionMakerG4e::ResidualGlobalCorrectionMakerG4e(const edm::ParameterSet &iConfig)
+    : ResidualGlobalCorrectionMakerBase(iConfig),
       ttrhToken_(esConsumes(edm::ESInputTag("", "WithAngleAndTemplate"))),
       g4ePropToken_(esConsumes(edm::ESInputTag("", "Geant4ePropagator"))),
       siStripClusterInfo_(consumesCollector())
@@ -473,7 +472,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   // MT: bootstrap this TBB worker thread's G4 environment from the master
   // (world + per-thread navigator + per-thread magnetic field). Idempotent
   // per thread; runs on every produce() but only does work on the first.
-  worker_->ensureInitialized(globalCache()->cvhMaster());
+  worker_->ensureInitialized(iSetup.getData(cvhMasterToken_).cvhMaster());
   // Bind this thread's G4 RNG to the stream's CLHEP engine for this event.
   setG4RandomEngineForStream(iEvent.streamID());
   // Lazy-init the per-stream propagator clone on first call. Clone now is

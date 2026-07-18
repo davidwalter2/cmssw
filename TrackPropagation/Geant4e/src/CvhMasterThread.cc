@@ -1,8 +1,6 @@
 #include "TrackPropagation/Geant4e/interface/CvhMasterThread.h"
 #include "TrackPropagation/Geant4e/interface/CvhMaster.h"
 
-#include "FWCore/Framework/interface/ConsumesCollector.h"
-#include "FWCore/Framework/interface/EventSetup.h"
 #include "FWCore/MessageLogger/interface/MessageLogger.h"
 #include "FWCore/Utilities/interface/Exception.h"
 
@@ -80,59 +78,33 @@ CvhMasterThread::~CvhMasterThread() {
   }
 }
 
-void CvhMasterThread::callConsumes(edm::ConsumesCollector&& iC) const {
-  if (m_hasToken) {
-    return;
-  }
-  if (m_pGeoFromDD4hep) {
-    m_DD4hep = iC.esConsumes<cms::DDCompactView, IdealGeometryRecord, edm::Transition::BeginRun>();
-  } else {
-    m_DDD = iC.esConsumes<DDCompactView, IdealGeometryRecord, edm::Transition::BeginRun>();
-  }
-  if (m_pUseMagneticField) {
-    m_MagField = iC.esConsumes<MagneticField, IdealMagneticFieldRecord, edm::Transition::BeginRun>(
-        edm::ESInputTag("", m_magFieldLabel));
-  }
-  m_hasToken = true;
-}
-
-void CvhMasterThread::ensureG4Started(const edm::EventSetup& iSetup) const {
+void CvhMasterThread::ensureG4Started(const DDCompactView* ddd,
+                                      const cms::DDCompactView* dd4hep,
+                                      const MagneticField* mf) const {
   std::lock_guard<std::mutex> lk(m_protectMutex);
 
   // Job-scoped lazy start: the first call builds the G4 world; every later
-  // call (subsequent runs) is a no-op. The ES products captured here stay in
-  // use for the whole job -- valid only while their IOVs are unchanged, so
-  // a mid-job conditions change is refused loudly below (G4 cannot be
-  // rebuilt; silently keeping the stale field/geometry pointers would be
-  // physics corruption or a dangling pointer).
+  // call (e.g. a subsequent IOV that re-invokes the ESProducer) is a no-op.
+  // The products captured here stay in use for the whole job -- G4 holds the
+  // raw pointers and cannot be rebuilt -- so a genuinely changed geometry or
+  // field product is refused loudly (a dangling pointer or silent physics
+  // corruption otherwise). A re-produce that hands back the SAME objects
+  // (the normal single-IOV case: a file-based labelled field is produced once
+  // and the EventSetup keeps returning the same cached object) is accepted.
   if (m_g4Started) {
-    if (iSetup.get<IdealGeometryRecord>().cacheIdentifier() != m_geometryCacheId) {
+    const void* geoNew = m_pGeoFromDD4hep ? static_cast<const void*>(dd4hep)
+                                          : static_cast<const void*>(ddd);
+    const void* geoOld = m_pGeoFromDD4hep ? static_cast<const void*>(m_pDD4hep)
+                                          : static_cast<const void*>(m_pDDD);
+    if (geoNew != geoOld) {
       throw cms::Exception("Conditions")
-          << "CvhMasterThread: the geometry payload changed at a run boundary, but the G4 world "
-          << "was built from the previous one and cannot be rebuilt. Process one geometry IOV per job.";
+          << "CvhMasterThread: the geometry product changed after the G4 world was built from the "
+          << "previous one, and G4 cannot be rebuilt. Process one geometry IOV per job.";
     }
-    if (m_pUseMagneticField &&
-        iSetup.get<IdealMagneticFieldRecord>().cacheIdentifier() != m_magFieldCacheId) {
-      // The record-level cache identifier rolls at every run boundary where
-      // ANY product in IdealMagneticFieldRecord has a run-limited IOV (e.g.
-      // AutoMagneticFieldESProducer following RunInfo). That alone does not
-      // mean OUR field product changed: a file-based labelled field (e.g.
-      // ScalarPot3D) is produced once and the EventSetup keeps returning the
-      // same cached object. Re-fetch the product and accept the boundary iff
-      // it is literally the same object the G4 world (master + workers) was
-      // built with; only a genuinely rebuilt product is fatal, since G4
-      // holds the raw pointer for the whole job and cannot be re-pointed.
-      const MagneticField* mfNew = &iSetup.getData(m_MagField);
-      if (mfNew != m_pMF) {
-        throw cms::Exception("Conditions")
-            << "CvhMasterThread: the magnetic-field product was rebuilt at a run boundary (e.g. a "
-            << "magnet-current change picked up by AutoMagneticFieldESProducer), but the G4 world "
-            << "was built with the previous field object and cannot be rebuilt. Process one field "
-            << "IOV per job.";
-      }
-      m_magFieldCacheId = iSetup.get<IdealMagneticFieldRecord>().cacheIdentifier();
-      edm::LogInfo("Geant4e") << "CvhMasterThread: magnetic-field record IOV rolled at a run "
-                              << "boundary but the field product is unchanged; continuing.";
+    if (m_pUseMagneticField && mf != m_pMF) {
+      throw cms::Exception("Conditions")
+          << "CvhMasterThread: the magnetic-field product changed after the G4 world was built with "
+          << "the previous field object, and G4 cannot be rebuilt. Process one field IOV per job.";
     }
     return;
   }
@@ -140,15 +112,13 @@ void CvhMasterThread::ensureG4Started(const edm::EventSetup& iSetup) const {
   std::unique_lock<std::mutex> lk2(m_threadMutex);
 
   if (m_pGeoFromDD4hep) {
-    m_pDD4hep = &(*iSetup.getTransientHandle(m_DD4hep));
+    m_pDD4hep = dd4hep;
   } else {
-    m_pDDD = &(*iSetup.getTransientHandle(m_DDD));
+    m_pDDD = ddd;
   }
   if (m_pUseMagneticField) {
-    m_pMF = &iSetup.getData(m_MagField);
-    m_magFieldCacheId = iSetup.get<IdealMagneticFieldRecord>().cacheIdentifier();
+    m_pMF = mf;
   }
-  m_geometryCacheId = iSetup.get<IdealGeometryRecord>().cacheIdentifier();
 
   m_masterThreadState = ThreadState::BeginRun;
   m_masterCanProceed = true;

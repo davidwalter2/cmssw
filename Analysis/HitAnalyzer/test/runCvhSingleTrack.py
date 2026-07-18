@@ -262,7 +262,10 @@ process.Geant4ePropagator.MagneticFieldLabel = fieldlabel
 process.Geant4ePropagator.ForCVH = cms.bool(True)
 process.Geant4ePropagator.PropagationDirection = cms.string(opts.propagationDirection)
 process.globalCor.MagneticFieldLabel = cms.string(fieldlabel)
-process.globalCor.CvhMaster.MagneticFieldLabel = cms.string(fieldlabel)
+# Shared CVH G4 master (EventSetup product), consumed by globalCor via esConsumes.
+from TrackPropagation.Geant4e.cvhMasterESProducer_cfi import cvhMasterESProducer
+process.cvhMasterESProducer = cvhMasterESProducer.clone()
+process.cvhMasterESProducer.MagneticFieldLabel = cms.string(fieldlabel)
 
 process.reconstruction_step = cms.Path(
     # geopro removed: CvhMasterThread (GlobalCache) owns the G4 world setup.

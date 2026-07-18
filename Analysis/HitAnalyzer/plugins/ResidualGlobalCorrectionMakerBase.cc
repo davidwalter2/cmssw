@@ -112,61 +112,22 @@
 //
 // constructors and destructor
 //
-// GlobalCache lifecycle. initializeGlobalCache runs ONCE per job, on the
-// framework's main thread, before any stream::EDProducer instance is
-// constructed -- so the dedicated G4 master thread (which builds DDDWorld
-// and the master magnetic field) exists before any TBB worker spins up.
-std::unique_ptr<CvhMasterThread>
-ResidualGlobalCorrectionMakerBase::initializeGlobalCache(const edm::ParameterSet &iConfig) {
-  return std::make_unique<CvhMasterThread>(iConfig.getParameter<edm::ParameterSet>("CvhMaster"));
-}
-
-std::shared_ptr<int>
-ResidualGlobalCorrectionMakerBase::globalBeginRun(const edm::Run &,
-                                                  const edm::EventSetup &iSetup,
-                                                  const CvhMasterThread *master) {
-  // Lazy job-scoped G4 start: the first run builds DDDWorld + master
-  // magnetic field in the master thread's state loop before this call
-  // returns (so the G4 world is in place before any stream's produce());
-  // subsequent runs are no-ops -- G4 stays alive for the whole job.
-  master->ensureG4Started(iSetup);
-  return std::shared_ptr<int>();
-}
-
-void ResidualGlobalCorrectionMakerBase::globalEndRun(const edm::Run &,
-                                                     const edm::EventSetup &,
-                                                     const RunContext *) {
-  // Framework-required stub (declaring a RunCache makes the framework call
-  // this). The G4 world is job-scoped -- torn down in globalEndJob.
-}
-
-void ResidualGlobalCorrectionMakerBase::globalEndJob(CvhMasterThread *master) {
-  master->stopThread();
-}
-
-ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::ParameterSet &iConfig,
-                                                                     const CvhMasterThread *master)
+ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::ParameterSet &iConfig)
     : globalGeometryToken_(esConsumes<edm::Transition::BeginRun>()),
       trackerGeomIdealToken_(esConsumes<edm::Transition::BeginRun>(edm::ESInputTag("", "idealForDigi"))),
       trackerTopologyToken_(esConsumes<edm::Transition::BeginRun>()),
       magfieldToken_(esConsumes<edm::Transition::BeginRun>()),
       globalGeometryEventToken_(esConsumes()),
-      trackerTopologyEventToken_(esConsumes())
+      trackerTopologyEventToken_(esConsumes()),
+      // The shared CVH G4 master (CvhMasterESProducer -> CvhMasterRecord),
+      // consumed per-event; worker_->ensureInitialized attaches this thread's
+      // G4 state to it on first produce().
+      cvhMasterToken_(esConsumes())
 {
-  // Register the BeginRun-transition ES consumers that the GlobalCache
-  // (CvhMasterThread) needs to populate the master G4 world + field.
-  // Idempotent across streams thanks to the m_hasToken guard inside.
-  master->callConsumes(consumesCollector());
-
   // Per-stream CvhWorker: lazy first-produce() per TBB worker thread sets
-  // up that thread's G4 world / field. Constructed empty here; no G4
-  // touched yet.
+  // up that thread's G4 world / field from the shared master. Constructed
+  // empty here; no G4 touched yet.
   worker_ = std::make_unique<CvhWorker>();
-
-  // MT: this is now a stream::EDProducer<GlobalCache<CvhMasterThread>> --
-  // GlobalCache owns the G4 master thread, the per-stream instance owns a
-  // CvhWorker, and each stream's produce() bootstraps its TBB worker
-  // thread's G4 state on first call before any propagation runs.
   //now do what ever initialization is needed
 // inputTraj_ = consumes<std::vector<Trajectory>>(edm::InputTag("TrackRefitter"));
 // inputTrack_ = consumes<TrajTrackAssociationCollection>(edm::InputTag("TrackRefitter"));

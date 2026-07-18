@@ -47,7 +47,7 @@
 class ResidualGlobalCorrectionMakerTwoTrackG4e : public ResidualGlobalCorrectionMakerBase
 {
 public:
-  ResidualGlobalCorrectionMakerTwoTrackG4e(const edm::ParameterSet &, const CvhMasterThread *);
+  ResidualGlobalCorrectionMakerTwoTrackG4e(const edm::ParameterSet &);
   ~ResidualGlobalCorrectionMakerTwoTrackG4e() {
     // fix-cvh-displaced-starting-state: report per-job counters for the
     // midPropagated mode. Total = number of (icons-phase × candidate) tries
@@ -390,8 +390,8 @@ private:
 
 
 ResidualGlobalCorrectionMakerTwoTrackG4e::ResidualGlobalCorrectionMakerTwoTrackG4e(
-    const edm::ParameterSet &iConfig, const CvhMasterThread *master)
-    : ResidualGlobalCorrectionMakerBase(iConfig, master),
+    const edm::ParameterSet &iConfig)
+    : ResidualGlobalCorrectionMakerBase(iConfig),
       ttrhToken_(esConsumes(edm::ESInputTag("", "WithAngleAndTemplate"))),
       g4ePropToken_(esConsumes(edm::ESInputTag("", "Geant4ePropagator"))),
       transTrackBuilderToken_(esConsumes(edm::ESInputTag("", "TransientTrackBuilder"))),
@@ -829,7 +829,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
   // MT: bootstrap this TBB worker thread's G4 environment from the master
   // (world + per-thread navigator + per-thread magnetic field). Idempotent
   // per thread.
-  worker_->ensureInitialized(globalCache()->cvhMaster());
+  worker_->ensureInitialized(iSetup.getData(cvhMasterToken_).cvhMaster());
   setG4RandomEngineForStream(iEvent.streamID());
   // Lazy-init the per-stream propagator clone. Safe AFTER ensureInitialized
   // has put the world in place on this thread.

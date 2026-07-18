@@ -96,6 +96,7 @@
 #include "FWCore/Utilities/interface/Exception.h"
 #include "TrackPropagation/Geant4e/interface/Geant4ePropagator.h"
 #include "TrackPropagation/Geant4e/interface/CvhMasterThread.h"
+#include "TrackPropagation/Geant4e/interface/CvhMasterRecord.h"
 #include "TrackPropagation/Geant4e/interface/CvhWorker.h"
 
 
@@ -169,41 +170,20 @@ template<typename T, int N>
 using AANT = AutoDiffScalar<Matrix<AutoDiffScalar<Matrix<T, N, 1>>, Dynamic, 1, 0, N, 1>>;
 
 class ResidualGlobalCorrectionMakerBase
-    : public edm::stream::EDProducer<edm::GlobalCache<CvhMasterThread>,
-                                     edm::RunCache<int>>
+    : public edm::stream::EDProducer<>
 {
 public:
-  // Two-arg ctor: the framework passes the GlobalCache pointer here. The
-  // master thread / G4 master kernel has already been constructed in
-  // initializeGlobalCache by the time this is called.
-  ResidualGlobalCorrectionMakerBase(const edm::ParameterSet &, const CvhMasterThread *);
+  // The shared CVH G4 master (CvhMasterThread) is now an EventSetup product on
+  // CvhMasterRecord (built once per job by CvhMasterESProducer). Each maker
+  // simply esConsumes it (cvhMasterToken_) and, on the first produce() of each
+  // TBB worker thread, bootstraps that thread's G4 state from the shared
+  // master via worker_->ensureInitialized. This replaces the old
+  // edm::GlobalCache<CvhMasterThread> ownership (which was per-module-label and
+  // therefore could not be shared across multiple CVH producers in one job).
+  ResidualGlobalCorrectionMakerBase(const edm::ParameterSet &);
   ~ResidualGlobalCorrectionMakerBase();
 
   static void fillDescriptions(edm::ConfigurationDescriptions &descriptions);
-
-  // GlobalCache lifecycle (called once per job by the framework, on the
-  // main thread, before/after any stream is constructed). Owning the
-  // CvhMasterThread here is what lets it spawn the dedicated G4 master
-  // thread BEFORE any TBB worker is started -- the fix for the Navigator-
-  // NULL-world abort that previously blocked numberOfThreads >= 2.
-  static std::unique_ptr<CvhMasterThread>
-  initializeGlobalCache(const edm::ParameterSet &);
-
-  // RunCache. `int` is a placeholder -- we don't actually need per-run
-  // shared state; declaring a RunCache is what makes the framework
-  // dispatch globalBeginRun, which lazily starts the job-scoped G4 world
-  // (needs the EventSetup, so it can't happen in initializeGlobalCache;
-  // must happen before any stream's first produce()).
-  static std::shared_ptr<int>
-  globalBeginRun(const edm::Run &, const edm::EventSetup &,
-                 const CvhMasterThread *);
-
-  // Framework-required stub (comes with the RunCache ability). G4 is
-  // job-scoped: teardown happens in globalEndJob, not at run boundaries.
-  static void globalEndRun(const edm::Run &, const edm::EventSetup &,
-                           const RunContext *);
-
-  static void globalEndJob(CvhMasterThread *);
 
 protected:
 
@@ -324,6 +304,10 @@ protected:
   // BeginRun-scoped tokens above serve beginRun() in this base class.
   edm::ESGetToken<GlobalTrackingGeometry, GlobalTrackingGeometryRecord> globalGeometryEventToken_;
   edm::ESGetToken<TrackerTopology, TrackerTopologyRcd> trackerTopologyEventToken_;
+
+  // The shared CVH G4 master, consumed per-event; worker_->ensureInitialized
+  // attaches this thread's G4 state to it on the first produce() per thread.
+  edm::ESGetToken<CvhMasterThread, CvhMasterRecord> cvhMasterToken_;
   
   
   std::vector<std::string> corFiles_;
