@@ -70,6 +70,8 @@ private:
   edm::EDPutTokenT<edm::ValueMap<float>> outputCorEta_;
   edm::EDPutTokenT<edm::ValueMap<float>> outputCorPhi_;
   edm::EDPutTokenT<edm::ValueMap<int>> outputCorCharge_;
+  edm::EDPutTokenT<edm::ValueMap<float>> outputCorDxy_;
+  edm::EDPutTokenT<edm::ValueMap<float>> outputCorDz_;
   edm::EDPutTokenT<edm::ValueMap<float>> outputEdmval_;
   edm::EDPutTokenT<edm::ValueMap<int>> outputNValidHits_;
   edm::EDPutTokenT<edm::ValueMap<int>> outputNValidPixelHits_;
@@ -220,6 +222,8 @@ ResidualGlobalCorrectionMakerG4e::ResidualGlobalCorrectionMakerG4e(const edm::Pa
   outputCorPt_ = produces<edm::ValueMap<float>>("corPt");
   outputCorEta_ = produces<edm::ValueMap<float>>("corEta");
   outputCorPhi_ = produces<edm::ValueMap<float>>("corPhi");
+  outputCorDxy_ = produces<edm::ValueMap<float>>("corDxy");
+  outputCorDz_ = produces<edm::ValueMap<float>>("corDz");
   outputCorCharge_ = produces<edm::ValueMap<int>>("corCharge");
   outputEdmval_ = produces<edm::ValueMap<float>>("edmval");
   outputNValidHits_ = produces<edm::ValueMap<int>>("nValidHits");
@@ -552,6 +556,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   std::vector<float> corEtaV;
   std::vector<float> corPhiV;
   std::vector<int> corChargeV;
+  std::vector<float> corDxyV;
+  std::vector<float> corDzV;
   std::vector<float> edmvalV;
   std::vector<int> nValidHitsV;
   std::vector<int> nValidPixelHitsV;
@@ -567,6 +573,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     corEtaV.assign(muonAssoc->ref()->size(), -99.);
     corPhiV.assign(muonAssoc->ref()->size(), -99.);
     corChargeV.assign(muonAssoc->ref()->size(), -99);
+    corDxyV.assign(muonAssoc->ref()->size(), -99.);
+    corDzV.assign(muonAssoc->ref()->size(), -99.);
     edmvalV.assign(muonAssoc->ref()->size(), -99.);
     nValidHitsV.assign(muonAssoc->ref()->size(), -99);
     nValidPixelHitsV.assign(muonAssoc->ref()->size(), -99);
@@ -2948,7 +2956,13 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       refParms[0] = qbpupd;
       refParms[1] = lamupd;
       refParms[2] = phiupd;
-      //TODO (longstanding) fix filling of position parameters
+      // Position (impact) parameters at the PCA to the beamspot: d0 (=dxy) and
+      // z0 (=dz). Reference value from the converged state (cart2pca of refFts)
+      // plus the reference-block update, mirroring the momentum fill above.
+      // Resolves the longstanding "fill position parameters" TODO.
+      const Matrix<double, 5, 1> statepcaRef = cart2pca(refFts, *bsH);
+      refParms[3] = statepcaRef[3] + dxref[3];
+      refParms[4] = statepcaRef[4] + dxref[4];
 
       refParmsMomD[0] = qbpupd;
       refParmsMomD[1] = lamupd;
@@ -3563,6 +3577,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       corEtaV[muonref.index()] = etaupd;
       corPhiV[muonref.index()] = phiupd;
       corChargeV[muonref.index()] = chargeupd;
+      corDxyV[muonref.index()] = refParms[3];
+      corDzV[muonref.index()] = refParms[4];
       edmvalV[muonref.index()] = edmval;
       nValidHitsV[muonref.index()] = nvalid;
       nValidPixelHitsV[muonref.index()] = nvalidpixel;
@@ -3598,6 +3614,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   edm::ValueMap<float> corEtaMap;
   edm::ValueMap<float> corPhiMap;
   edm::ValueMap<int> corChargeMap;
+  edm::ValueMap<float> corDxyMap;
+  edm::ValueMap<float> corDzMap;
   edm::ValueMap<float> edmvalMap;
   edm::ValueMap<int> nValidHitsMap;
   edm::ValueMap<int> nValidPixelHitsMap;
@@ -3623,6 +3641,14 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     edm::ValueMap<int>::Filler corChargeMapFiller(corChargeMap);
     corChargeMapFiller.insert(muonAssoc->ref(), std::make_move_iterator(corChargeV.begin()), std::make_move_iterator(corChargeV.end()));
     corChargeMapFiller.fill();
+
+    edm::ValueMap<float>::Filler corDxyMapFiller(corDxyMap);
+    corDxyMapFiller.insert(muonAssoc->ref(), std::make_move_iterator(corDxyV.begin()), std::make_move_iterator(corDxyV.end()));
+    corDxyMapFiller.fill();
+
+    edm::ValueMap<float>::Filler corDzMapFiller(corDzMap);
+    corDzMapFiller.insert(muonAssoc->ref(), std::make_move_iterator(corDzV.begin()), std::make_move_iterator(corDzV.end()));
+    corDzMapFiller.fill();
 
     edm::ValueMap<float>::Filler edmvalMapFiller(edmvalMap);
     edmvalMapFiller.insert(muonAssoc->ref(), std::make_move_iterator(edmvalV.begin()), std::make_move_iterator(edmvalV.end()));
@@ -3653,6 +3679,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   iEvent.emplace(outputCorEta_, std::move(corEtaMap));
   iEvent.emplace(outputCorPhi_, std::move(corPhiMap));
   iEvent.emplace(outputCorCharge_, std::move(corChargeMap));
+  iEvent.emplace(outputCorDxy_, std::move(corDxyMap));
+  iEvent.emplace(outputCorDz_, std::move(corDzMap));
   iEvent.emplace(outputEdmval_, std::move(edmvalMap));
   iEvent.emplace(outputNValidHits_, std::move(nValidHitsMap));
   iEvent.emplace(outputNValidPixelHits_, std::move(nValidPixelHitsMap));

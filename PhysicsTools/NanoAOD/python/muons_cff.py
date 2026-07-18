@@ -406,6 +406,8 @@ def _cvhScalarVars(extVars, tag, suffix, note):
     setattr(extVars, "cvh%sEta" % suffix, ExtVar(cms.InputTag(tag + ":corEta"), float, doc="Refitted track eta" + note, precision=12))
     setattr(extVars, "cvh%sPhi" % suffix, ExtVar(cms.InputTag(tag + ":corPhi"), float, doc="Refitted track phi" + note, precision=12))
     setattr(extVars, "cvh%sCharge" % suffix, ExtVar(cms.InputTag(tag + ":corCharge"), int, doc="Refitted track charge" + note))
+    setattr(extVars, "cvh%sDxy" % suffix, ExtVar(cms.InputTag(tag + ":corDxy"), float, doc="Refitted track dxy (d0) wrt beamspot" + note, precision=12))
+    setattr(extVars, "cvh%sDz" % suffix, ExtVar(cms.InputTag(tag + ":corDz"), float, doc="Refitted track dz (z0) wrt beamspot" + note, precision=12))
     setattr(extVars, "cvh%sEdmval" % suffix, ExtVar(cms.InputTag(tag + ":edmval"), float, doc="Refitted estimated distance to minimum" + note, precision=10))
     setattr(extVars, "cvh%sNValidHits" % suffix, ExtVar(cms.InputTag(tag + ":nValidHits"), int, doc="Number of valid hits in refit" + note))
     setattr(extVars, "cvh%sNValidPixelHits" % suffix, ExtVar(cms.InputTag(tag + ":nValidPixelHits"), int, doc="Number of valid pixel hits in refit" + note))
