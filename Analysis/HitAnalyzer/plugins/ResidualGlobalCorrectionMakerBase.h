@@ -597,6 +597,13 @@ protected:
   float edmvalref;
   float deltachisqval;
   unsigned int niter;
+  // per-track count of GN iterations where the clamp caught a q/p sign
+  // crossing (charge-flip protection through p->inf). >0 flags a track that
+  // "wanted" the opposite charge -> trigger the two-hypothesis second fit.
+  unsigned int nChargeFlipProtect;
+  // 1 if the two-hypothesis fit kept the OPPOSITE charge (opposite converged
+  // with lower chi2 than the nominal seed), 0 otherwise.
+  unsigned int chargeHypFlipped;
   
   float chisqval;
   unsigned int ndof;

@@ -407,6 +407,8 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
     tree->Branch("edmvalref", &edmvalref);
     tree->Branch("deltachisqval", &deltachisqval);
     tree->Branch("niter", &niter);
+    tree->Branch("nChargeFlipProtect", &nChargeFlipProtect);
+    tree->Branch("chargeHypFlipped", &chargeHypFlipped);
     
     tree->Branch("chisqval", &chisqval);
     tree->Branch("ndof", &ndof);

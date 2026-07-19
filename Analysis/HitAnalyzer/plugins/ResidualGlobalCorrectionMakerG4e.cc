@@ -102,6 +102,8 @@ private:
   mutable unsigned long long fitFailHitUpdate_ = 0ULL;  // CPE re-evaluation (cloner) invalid
   mutable unsigned long long fitFailNaN_ = 0ULL;        // NaN/inf parameter update
   mutable unsigned long long fitStepClamped_ = 0ULL;    // fits with >=1 trust-region-clamped GN step
+  mutable unsigned long long fitChargeFlipAllowed_ = 0ULL;  // GN steps permitted to cross q/p=0 (high-p)
+  mutable unsigned long long fitChargeHypTaken_ = 0ULL;  // tracks where the two-hyp fit kept the opposite charge
 
   // Pixel hit-quality accounting (valid pixel hits entering the quality cut).
   mutable unsigned long long pixHitsSeen_ = 0ULL;
@@ -114,6 +116,35 @@ private:
   double edmConvergence_ = 1.e-5;
   unsigned int gnDampAfter_ = 0;   // 0 = damping off
   double gnDampFactor_ = 0.5;
+  // Momentum above which the Gauss-Newton step is ALLOWED to cross q/p = 0
+  // (a genuine charge flip). Crossing q/p = 0 is p -> inf, harmless at high p
+  // where the seed charge is ambiguous; the sign-flip clamp is only a
+  // divergence guard for stiffer (lower-p) tracks. Default 1e9 GeV = never
+  // allow = legacy behaviour. The hard p >= 2 GeV momentum floor always applies.
+  double allowChargeFlipAboveP_ = 1.e9;
+  // Two-hypothesis charge resolution in one pass: when the nominal fit's clamp
+  // catches a q/p sign crossing (nChargeFlipProtect>0), re-fit the opposite
+  // charge and keep the lower-chi2 result. Inert for well-measured (low/mod p)
+  // tracks whose fit never tries to cross q/p=0. Default on.
+  bool twoHypothesisCharge_ = true;
+  // Cosmic seeding: default (false) seeds from the inner (near-beamline) state
+  // and propagates OUTWARD, so the upper half of a down-going cosmic propagates
+  // BACKWARD (against the muon). When true, seed from the muon-ENTRY end (higher
+  // y) and iterate hits along the muon (downward) -> the whole leg propagates
+  // FORWARD. Moves the report point to the entry end; validates the backward
+  // energy-loss handling (forward-only vs mixed on the same track).
+  bool cosmicSeedFromEntry_ = false;
+  // Force the outside-in cosmic handling regardless of track algo (needed for
+  // split-track legs from cosmicTrackSplitter, whose algo 'cosmic' is not
+  // recognised as ctf/cosmics). Default false.
+  bool forceCosmic_ = false;
+  // Two-hypothesis charge test: seed the fit with sign(q) * seedChargeSign_
+  // (applied consistently to the G4 particle and the initial state), so the
+  // fit converges to the OPPOSITE-charge minimum (the clamp keeps it there).
+  // Run +1 and -1 and compare chi2 per track to identify genuine mis-ID
+  // (opposite hypothesis fits better) vs correct seed (opposite diverges).
+  // Default +1 = nominal seed.
+  int seedChargeSign_ = 1;
 
   // Global material model validation knobs (Phase A; the model itself and
   // the parmtype-15 registration live in the base class). With a model
@@ -153,6 +184,8 @@ ResidualGlobalCorrectionMakerG4e::~ResidualGlobalCorrectionMakerG4e() {
               << "  fail[hitupdate]=" << fitFailHitUpdate_
               << "  fail[nan]=" << fitFailNaN_
               << "  clamped[step]=" << fitStepClamped_
+              << "  chargeflip[allowed]=" << fitChargeFlipAllowed_
+              << "  chargehyp[flipped]=" << fitChargeHypTaken_
               << std::endl;
     if (pixHitsSeen_ > 0ULL) {
       std::cout << "ResidualGlobalCorrectionMakerG4e pixel hit-quality summary"
@@ -211,6 +244,24 @@ ResidualGlobalCorrectionMakerG4e::ResidualGlobalCorrectionMakerG4e(const edm::Pa
       ? iConfig.getParameter<unsigned int>("gnDampAfter") : 0u;
   gnDampFactor_ = iConfig.existsAs<double>("gnDampFactor")
       ? iConfig.getParameter<double>("gnDampFactor") : 0.5;
+  // Allow the GN step to cross q/p = 0 (charge flip) for tracks stiffer than
+  // this momentum (default 1e9 GeV = never = legacy). Motivated by high-p
+  // cosmics whose seed charge is ambiguous: freezing the seed sign can pin a
+  // mis-identified track in a wrong-sign chi2 minimum.
+  allowChargeFlipAboveP_ = iConfig.existsAs<double>("allowChargeFlipAboveP")
+      ? iConfig.getParameter<double>("allowChargeFlipAboveP") : 1.e9;
+  // Two-hypothesis charge test: +1 = nominal seed, -1 = opposite-charge seed.
+  seedChargeSign_ = iConfig.existsAs<int>("seedChargeSign")
+      ? iConfig.getParameter<int>("seedChargeSign") : 1;
+  // One-pass two-hypothesis charge resolution (default on).
+  twoHypothesisCharge_ = iConfig.existsAs<bool>("twoHypothesisCharge")
+      ? iConfig.getParameter<bool>("twoHypothesisCharge") : true;
+  // Seed cosmic legs from the muon-entry end (fully forward propagation).
+  cosmicSeedFromEntry_ = iConfig.existsAs<bool>("cosmicSeedFromEntry")
+      ? iConfig.getParameter<bool>("cosmicSeedFromEntry") : false;
+  // Force cosmic (outside-in) handling regardless of track algo.
+  forceCosmic_ = iConfig.existsAs<bool>("forceCosmic")
+      ? iConfig.getParameter<bool>("forceCosmic") : false;
 
   // Global material model validation knobs (the model itself is loaded by
   // the base class from materialGroupsFile).
@@ -593,13 +644,15 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     bCandIdx = (bCandIdxH.isValid() && itrack < bCandIdxH->size())
         ? (*bCandIdxH)[itrack] : -1;
 
-    // Build the per-track Geant4 particle-name override once. Naming logic
-    // shared with the two-track ntuplizer via the base-class helper.
-    const std::string g4PartName = ana_hitanalyzer::g4ParticleName(trackParticleName_, track.charge());
+    // Note: the Geant4 particle name (charge-dependent) is built per fit
+    // attempt inside the runHypothesis lambda below, so the two-hypothesis
+    // fit can flip the charge consistently with refFts[6].
 
     const edm::Ref<std::vector<pat::Muon>> muonref = doMuonAssoc_ ? (*muonAssoc)[trackref] : edm::Ref<std::vector<pat::Muon>>();
 
-    const bool iscosmic = track.algo() == reco::TrackBase::ctf || track.algo() == reco::TrackBase::cosmics;
+    // forceCosmic_ makes split-leg tracks (algo 'cosmic', not matched below) use
+    // the outside-in cosmic handling instead of the beamline-PCA parameterisation.
+    const bool iscosmic = forceCosmic_ || track.algo() == reco::TrackBase::ctf || track.algo() == reco::TrackBase::cosmics;
     
     const bool dopca = !dogen && !iscosmic;
     
@@ -894,6 +947,23 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
     nHits = nhits;
 
+    // Cosmic forward-seeding option: if the muon enters at the OUTER end (higher
+    // y than the inner end), reverse the hit order so the fit propagates from
+    // the entry end along the muon (downward) = fully forward. The seed state
+    // is chosen accordingly below. Default off (inner seed, upper half backward).
+    bool cosmicFromOuter = false;
+    if (cosmicSeedFromEntry_ && iscosmic && track.extra().isNonnull()) {
+      // seed from whichever end is higher (the down-going muon's entry), so the
+      // propagation follows the muon downward = forward. For split legs the
+      // inner end is already the higher one (no-op); for a full cosmic the
+      // outer extremity may be on top, in which case seed there + reverse hits.
+      cosmicFromOuter =
+          track.extra()->outerPosition().y() > track.extra()->innerPosition().y();
+      if (cosmicFromOuter) {
+        std::reverse(hits.begin(), hits.end());
+      }
+    }
+
     unsigned int nvalid = 0;
     unsigned int nvalidpixel = 0;
     unsigned int nvalidalign2d = 0;
@@ -1065,20 +1135,24 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       refFts[3] = trackmom.x();
       refFts[4] = trackmom.y();
       refFts[5] = trackmom.z();
-      
-      refFts[6] = track.charge();
-      
+
+      // seedChargeSign_ (default +1) flips the charge hypothesis (two-hypothesis test)
+      refFts[6] = seedChargeSign_ * track.charge();
+
       // special case for cosmics, start from "inner" state with straight line extrapolation back 1cm to preserve the propagation logic
       // (the reference point is instead the PCA to the beamline and is therefore in the middle of the trajectory and not compatible
       // with the fitter/propagation logic
       // TODO change this so that cosmics directly use a local parameterization on the first hit?
       if (iscosmic) {
-        auto const& startpoint = track.extra()->innerPosition();
-        auto const& startmom = track.extra()->innerMomentum();
-        
+        // seed from the outer (entry) end when cosmicFromOuter, else the inner end
+        auto const& startpoint = cosmicFromOuter ? track.extra()->outerPosition()
+                                                 : track.extra()->innerPosition();
+        auto const& startmom = cosmicFromOuter ? track.extra()->outerMomentum()
+                                               : track.extra()->innerMomentum();
+
         const Eigen::Vector3d startpointv(startpoint.x(), startpoint.y(), startpoint.z());
         const Eigen::Vector3d startmomv(startmom.x(), startmom.y(), startmom.z());
-        
+
         refFts.head<3>() = startpointv - 1.0*startmomv.normalized();
         refFts.segment<3>(3) = startmomv;
 
@@ -1117,6 +1191,22 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                 << "  track.parameters() = " << track.parameters() << std::endl;
     }
 
+    // ---- Two-hypothesis charge fit in one pass --------------------------
+    // Snapshot the seed state (spatial parts fixed; refFts[6] set per attempt)
+    // and run the whole fit as a lambda parameterised by the seed-charge sign.
+    // The nominal attempt runs first; if its clamp caught a q/p sign crossing
+    // (nChargeFlipProtect>0 -- the fit "wanted" the opposite charge, the
+    // signature of a high-p charge mis-ID) the opposite hypothesis is fit and
+    // the lower-chi2 result is kept. All fit products are written to member
+    // branch buffers, so the members hold the winning attempt at tree->Fill.
+    const Matrix<double, 7, 1> refFtsSeed = refFts;
+    ++fitAttempted_;
+    auto runHypothesis = [&](int effSeedSign) -> std::pair<bool, double> {
+    // reset the mutable reference state to the seed and apply this attempt's charge
+    refFts = refFtsSeed;
+    refFts[6] = effSeedSign * track.charge();
+    const std::string g4PartName = ana_hitanalyzer::g4ParticleName(trackParticleName_, effSeedSign * track.charge());
+
     if (dopca) {
       // enforce that reference state is really a consistent PCA to the beamline (by adjusting the reference position if needed)
       const Matrix<double, 5, 1> statepca = cart2pca(refFts, *bsH);
@@ -1134,7 +1224,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     
     bool valid = true;
     bool stepClampedThisFit = false;
-    ++fitAttempted_;
+    nChargeFlipProtect = 0;
     if (debugPerIterDump_) {
       chisqval_iter.clear();
       edmval_iter.clear();
@@ -2833,28 +2923,42 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       // Momentum-floor safeguard on the Gauss-Newton step. Large relative
       // q/p steps are legitimate (forward tracks routinely repull q/p by
       // O(100%) in the first iterations), so a generic step cap would bind
-      // on healthy fits. Only two outcomes of an update are fatal, and only
-      // those are prevented, by scaling the whole step vector (direction
-      // preserved):
+      // on healthy fits. Two update outcomes are guarded, by scaling the
+      // whole step vector (direction preserved):
       //  - the updated momentum drops below pFloor (2 GeV, safely above the
-      //    1 GeV propagation refusal that killed such fits), or
-      //  - q/p changes sign (charge flip of a seeded reconstructed track --
-      //    always a diverging step, and 1/p blows up on the way).
+      //    1 GeV propagation refusal that killed such fits) -- ALWAYS clamped;
+      //  - q/p changes sign (charge flip). Crossing q/p = 0 is p -> inf, so a
+      //    flip is only dangerous for a stiff track (where it signals a
+      //    diverging step). For a high-p track (p > allowChargeFlipAboveP_)
+      //    the seed charge is genuinely ambiguous and the flip is a legitimate
+      //    correction, so it is PERMITTED (subject to the momentum floor on the
+      //    far side). Default allowChargeFlipAboveP_ = 1e9 GeV -> never allowed.
       {
         const double pref = refFts.segment<3>(3).norm();
         const double qopref = pref > 0. ? refFts[6] / pref : 0.;
         const double dqop = dxfull[0];
         const double qopupd = qopref + dqop;
         constexpr double pFloor = 2.0;  // GeV
+        // |q/p| threshold below which a sign flip is allowed (high p, stiff track)
+        const double qopFlipAllow = 1. / std::max(allowChargeFlipAboveP_, pFloor);
         double stepscale = 1.;
         if (qopref != 0. && dqop != 0.) {
-          if (qopupd * qopref <= 0.) {
-            // sign flip: stop half-way toward q/p = 0
-            stepscale = -0.5 * qopref / dqop;
-          } else if (std::abs(qopupd) > 1. / pFloor) {
-            // p_upd below the floor: land exactly on p = pFloor, same charge
+          if (std::abs(qopupd) > 1. / pFloor) {
+            // far-side momentum below the floor: land on p = pFloor, same
+            // charge (catches diverging steps, incl. sign flips toward low p)
             stepscale = (std::copysign(1. / pFloor, qopref) - qopref) / dqop;
+          } else if (qopupd * qopref <= 0. && std::abs(qopref) > qopFlipAllow) {
+            // sign flip of a track too stiff for the flip to be ambiguous:
+            // treat as divergence, stop half-way toward q/p = 0. This track
+            // "wanted" the opposite charge -> flag for the two-hypothesis fit.
+            stepscale = -0.5 * qopref / dqop;
+            ++nChargeFlipProtect;
           }
+          // else: benign same-sign step, or a high-p (ambiguous) charge flip
+          // with far-side p >= pFloor -> allowed unchanged
+        }
+        if (qopref != 0. && dqop != 0. && qopupd * qopref <= 0. && stepscale >= 1.) {
+          ++fitChargeFlipAllowed_;
         }
         if (stepscale < 1.) {
           stepscale = std::max(stepscale, 0.);
@@ -3014,12 +3118,10 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     }
     
     if (!valid) {
-      // chisqval = -99.;
-      // tree->Fill();
-      continue;
+      // this hypothesis failed to converge; caller decides what to keep
+      return {false, std::numeric_limits<double>::max()};
     }
-    ++fitSucceeded_;
-        
+
     std::unordered_map<unsigned int, unsigned int> idxmap;
     
     globalidxvfinal.clear();
@@ -3556,12 +3658,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
 // std::cout << "refParms[0]: " << refParms[0] << std::endl;
 
-    if (fillTrackTree_) {
-      tree->Fill();
-    }
-
-
-
+    // Muon-association outputs (written per attempt; the winning attempt's
+    // values persist since the fit is re-run to restore the nominal if the
+    // opposite loses). Inert for cosmics/single-track (muonref null).
     if (muonref.isNonnull()) {
       const double qbpupd = refParmsMomD[0];
       const double lamupd = refParmsMomD[1];
@@ -3600,13 +3699,42 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       imomCov.assign(3*3, 0.);
       Map<Matrix<float, 3, 3, RowMajor>> momCovout(imomCov.data(), 3, 3);
       momCovout.triangularView<Upper>() = covfull.topLeftCorner<3,3>().cast<float>();
-// std::cout << "covfull.topLeftCorner<3,3>()" << std::endl;
-// std::cout << covfull.topLeftCorner<3,3>() << std::endl;
-// std::cout << "momcovout" << std::endl;
-// std::cout << momCovout << std::endl;
     }
 
+    return {true, static_cast<double>(chisqval)};
+    };  // ---- end runHypothesis lambda --------------------------------------
 
+    // Attempt 1: nominal seed charge.
+    std::pair<bool, double> fitres = runHypothesis(seedChargeSign_);
+    const unsigned int flipProtectNom = nChargeFlipProtect;
+    chargeHypFlipped = 0u;
+    // Attempt 2: only if the nominal fit converged but its clamp caught a q/p
+    // sign crossing (it wanted the opposite charge -- the high-p mis-ID
+    // signature). Keep whichever hypothesis has the lower chi2.
+    if (twoHypothesisCharge_ && fitres.first && flipProtectNom > 0u) {
+      const double chisqNom = fitres.second;
+      const std::pair<bool, double> fitresOpp = runHypothesis(-seedChargeSign_);
+      if (fitresOpp.first && fitresOpp.second < chisqNom) {
+        // opposite charge fits better: member buffers already hold it
+        fitres = fitresOpp;
+        chargeHypFlipped = 1u;
+        ++fitChargeHypTaken_;
+      } else {
+        // opposite worse or failed: re-run the nominal to restore its outputs
+        fitres = runHypothesis(seedChargeSign_);
+      }
+    }
+    // restore the diagnostic flag to the nominal attempt's value
+    nChargeFlipProtect = flipProtectNom;
+
+    if (!fitres.first) {
+      continue;
+    }
+    ++fitSucceeded_;
+
+    if (fillTrackTree_) {
+      tree->Fill();
+    }
 
   }
 
