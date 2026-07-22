@@ -74,6 +74,11 @@ typedef SimpleFlatTableProducer<pat::CompositeCandidate> SimpleCompositeCandidat
 #include "DataFormats/MuonReco/interface/Muon.h"
 typedef SimpleFlatTableProducer<reco::Muon> SimpleMuonFlatTableProducer;
 
+// Detector conditions carried by the AlCaReco (scalersRawToDigi): the magnet
+// current is what the CVH calibration cares about. One row per DcsStatus.
+#include "DataFormats/Scalers/interface/DcsStatus.h"
+typedef SimpleFlatTableProducer<DcsStatus> SimpleDcsStatusFlatTableProducer;
+
 // RECO-tier composite candidates (V0s, quarkonia, B candidates). Needed
 // because string expressions on a reco::Candidate view cannot reach daughters
 // ("method daughter returned void"); the concrete type can.
@@ -106,4 +111,5 @@ DEFINE_FWK_MODULE(SimpleTriggerTrackFlatTableProducer);
 DEFINE_FWK_MODULE(SimpleGsfTrackFlatTableProducer);
 DEFINE_FWK_MODULE(SimpleCompositeCandidateFlatTableProducer);
 DEFINE_FWK_MODULE(SimpleMuonFlatTableProducer);
+DEFINE_FWK_MODULE(SimpleDcsStatusFlatTableProducer);
 DEFINE_FWK_MODULE(SimpleVertexCompositeCandidateFlatTableProducer);

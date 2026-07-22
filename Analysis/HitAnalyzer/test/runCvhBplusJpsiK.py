@@ -522,15 +522,37 @@ if opts.nanoOut:
         ),
     )
 
+    # Detector conditions: magnet current is what the CVH calibration wants.
+    # DcsStatus is tiny (two floats + a 25-bit partition mask).
+    process.dcsTable = cms.EDProducer(
+        'SimpleDcsStatusFlatTableProducer',
+        src=cms.InputTag('scalersRawToDigi'),
+        cut=cms.string(''), name=cms.string('Dcs'),
+        doc=cms.string('DcsStatus from scalersRawToDigi'),
+        singleton=cms.bool(False), extension=cms.bool(False),
+        variables=cms.PSet(
+            magnetCurrent=Var('magnetCurrent', float, doc='magnet current [A]'),
+            magnetTemperature=Var('magnetTemperature', float, doc='magnet temperature'),
+            ready=Var('ready', 'uint', doc='per-partition ready bitmask'),
+        ),
+    )
+
     process.nanoTables = cms.Task(
-        process.bplusTable, process.trackTable, process.muonTable, process.pvTable)
+        process.bplusTable, process.trackTable, process.muonTable,
+        process.pvTable, process.dcsTable)
     process.nano_step = cms.Path(process.nanoTables)
 
     process.nanoOutput = cms.OutputModule(
         'NanoAODOutputModule',
         fileName=cms.untracked.string(opts.nanoOut if opts.nanoOut.startswith('file:')
                                       else 'file:' + opts.nanoOut),
-        outputCommands=cms.untracked.vstring('drop *', 'keep nanoaodFlatTable_*_*_*'),
+        # NanoAODOutputModule turns edm::TriggerResults into HLT_* decision
+        # branches on its own, so keeping the product is all the HLT bits need.
+        outputCommands=cms.untracked.vstring(
+            'drop *',
+            'keep nanoaodFlatTable_*_*_*',
+            'keep edmTriggerResults_*_*_*',
+        ),
         compressionLevel=cms.untracked.int32(9),
         compressionAlgorithm=cms.untracked.string('LZMA'),
     )
