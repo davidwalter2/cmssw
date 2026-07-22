@@ -1,9 +1,16 @@
 ## Stage-2 unified CVH refit driver for B+ -> J/psi K+.
 ##
-## Composes: JpsiKCandidateSplitter -> two-track CVH refit of the J/psi
-## (mass-constraint ON, dimuon-side) and single-track CVH refit of the
-## bachelor kaon (kaon hypothesis), then writes each maker's sidecar
-## TFile separately (offline-join recipe; see §5).
+## Composes the two-track CVH refit of the J/psi (mass-constraint ON) and the
+## single-track CVH refit of the bachelor kaon (kaon hypothesis). Since the
+## shared Geant4 master landed (e33c8d, `cvhMasterESProducer` -> one master per
+## job consumed by every maker), both makers run in ONE cmsRun job -- see
+## mode="both", now the default. The legacy per-maker modes are kept for A/B
+## work; they are what required the offline join.
+##
+## The two-track maker reads the nested stage-1 candidate directly
+## (`ALCARECOTkAlJpsiXBPlusResonances`, whose daughter(0) is the J/psi VCC):
+## the maker descends composite daughters itself, so no candidate splitter is
+## needed on the dimuon side.
 ##
 ## Driver design follows runCvhJpsi.py for the framework/B-field plumbing
 ## and runCvhJpsiXSmoke.py for the cross-release single-track maker
@@ -16,14 +23,14 @@
 ##   nEvents             : events to process (-1 = all)
 ##   fillJac             : store per-track Jacobians (default True)
 ##   scalarPot3DInitFile : coefficient dump path (default = David W. mfs file)
-##   mode                : "dimuon" (default) or "kaon" -- ONE maker per
-##                         cmsRun job. The two makers cannot co-exist in the
-##                         same process: each `CvhMasterThread` constructs
-##                         its own `G4MTRunManagerKernel`, which trips the
-##                         G4 single-master singleton (Geant4's
-##                         `G4Region` ctor segfaults on the second instance,
-##                         confirmed empirically). "both" is therefore
-##                         rejected at config time; run two jobs instead.
+##   mode                : "both" (default), "dimuon", or "kaon".
+##                         "both" schedules the two makers in one process.
+##                         This used to be rejected: each maker built its own
+##                         `CvhMasterThread` / `G4MTRunManagerKernel` and
+##                         tripped the G4 single-master singleton. That is
+##                         fixed -- `cvhMasterESProducer` now supplies ONE
+##                         master as an EventSetup product and both makers
+##                         consume it via esConsumes.
 import os
 
 import FWCore.ParameterSet.Config as cms
@@ -48,10 +55,17 @@ opts.register('scalarPot3DInitFile',
               VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string,
               'scalar-potential coefficient dump')
-opts.register('mode', 'dimuon', VarParsing.VarParsing.multiplicity.singleton,
+opts.register('mode', 'both', VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string,
-              'which maker to schedule: "dimuon" or "kaon" (one per cmsRun job; '
-              'the two makers cannot coexist -- single G4 master per process)')
+              'which maker(s) to schedule: "both" (default, one job -- the '
+              'makers share the one CvhMaster ES product), "dimuon", or "kaon"')
+opts.register('srcCandidates', 'ALCARECOTkAlJpsiXBPlusResonances',
+              VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.string,
+              'stage-1 candidate collection for the two-track maker. Default is '
+              'the nested B+ VCC read directly (the maker descends composite '
+              'daughters); set to "jpsiKCandidateSplitter:dimuon" for the '
+              'legacy pre-split input')
 opts.register('runFDClosure', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'enable the maker\'s finite-difference Jacobian closure test '
@@ -102,6 +116,36 @@ opts.register('debug', False, VarParsing.VarParsing.multiplicity.singleton,
               'when True, write per-iter vector branches (chisqval_iter, edmval_iter, '
               'deltachisqval_iter, mu_qoverp_iter, Jpsi_mass_iter) for the dimuon-side '
               'maker. Use only for the matrix per-iter deep dive; bloats output ~80 B/event.')
+# openspec/add-btojpsik-cvh-global-calibration: global-correction calibration
+# output. Defaults are all OFF/empty so the diagnostic offline-join behaviour
+# (the only prior use of this driver) stays bit-identical.
+opts.register('fillGrads', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'write the per-candidate gradient/Hessian sidecar branches '
+              '(nParms, globalidxv, gradv, hesspackedv/hessfactorv) needed by '
+              'the global-correction aggregation. Default False = diagnostic '
+              'offline-join output only.')
+opts.register('fillGradsFactored', True, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'store the per-candidate Hessian as its matrix square root '
+              '(hessfactorv, H = B^T B) instead of the packed upper triangle. '
+              'Only meaningful when fillGrads=True.')
+opts.register('fillRunTree', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'write the runtree global-parameter catalog (one row per global '
+              'parameter). Needed once per production; the aggregation and '
+              'solve stages read it to interpret globalidxv.')
+opts.register('globalMaterialModel', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'fit material as ~50 grouped scales (parmtype 15) instead of the '
+              'per-module energy-loss form (parmtype 7). Requires '
+              'materialGroupsFile. Implies skipHitlessSurfaces=True.')
+opts.register('materialGroupsFile', '', VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.string,
+              'path to the material grouping rules file (e.g. materialGroups50.txt). '
+              'Required when globalMaterialModel=True. MUST be identical across '
+              'every maker whose grads are summed, or the parameter catalogs '
+              'will not line up.')
 opts.register('globalTag', 'auto:run2_data', VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string,
               'CMSSW GlobalTag string. Default auto:run2_data for the R2016H ALCARECO. '
@@ -169,10 +213,8 @@ print('[runCvhBplusJpsiK.py] resolved CVH config:', flush=True)
 print('  muon: useIdealGeometry={}, corFiles={}'.format(_muon_ideal_geom, _muon_corfiles), flush=True)
 print('  kaon: useIdealGeometry={}, corFiles={}'.format(_kaon_ideal_geom, _kaon_corfiles), flush=True)
 assert opts.input, 'must set input=<path>'
-assert opts.mode in ('dimuon', 'kaon'), \
-    f'mode must be dimuon|kaon (one maker per cmsRun job: each maker GlobalCache ' \
-    f'owns its own G4 master kernel and G4 allows a single master per process), ' \
-    f'got {opts.mode!r}'
+assert opts.mode in ('both', 'dimuon', 'kaon'), \
+    f'mode must be both|dimuon|kaon, got {opts.mode!r}'
 
 process = cms.Process('CVHBPLUS', Run2_2016)
 
@@ -214,6 +256,41 @@ process.options = cms.untracked.PSet(
 )
 process.MessageLogger.cerr.FwkReport.reportEvery = 50
 
+# ---- calibration (global-correction) output -------------------------------
+# Shared by BOTH makers: the dimuon and kaon grads are summed downstream in a
+# common global-parameter index space, so the material model and grouping file
+# must be byte-identical between them (and with any other production whose
+# grads enter the same fit).
+if opts.globalMaterialModel and not opts.materialGroupsFile:
+    raise ValueError(
+        'globalMaterialModel=True requires materialGroupsFile=<path> '
+        '(e.g. materialGroups50.txt)')
+if opts.materialGroupsFile and not os.path.isfile(opts.materialGroupsFile):
+    raise EnvironmentError(
+        f'materialGroupsFile not found: {opts.materialGroupsFile}')
+
+_calib_pset = dict(
+    fillGrads=cms.bool(bool(opts.fillGrads)),
+    # NOTE: the maker reads this one with getUntrackedParameter, so it must be
+    # cms.untracked.bool -- a tracked bool lands in a different namespace and
+    # would silently fall back to False (packed instead of factored Hessian).
+    fillGradsFactored=cms.untracked.bool(bool(opts.fillGradsFactored)),
+    fillRunTree=cms.bool(bool(opts.fillRunTree)),
+    globalMaterialModel=cms.bool(bool(opts.globalMaterialModel)),
+    materialGroupsFile=cms.string(str(opts.materialGroupsFile)),
+)
+if opts.globalMaterialModel:
+    # the maker defaults skipHitlessSurfaces to globalMaterialModel, but set it
+    # explicitly so the configuration is self-documenting in the job log
+    _calib_pset['skipHitlessSurfaces'] = cms.bool(True)
+
+print('[runCvhBplusJpsiK] calibration output: '
+      f'fillGrads={bool(opts.fillGrads)} '
+      f'fillGradsFactored={bool(opts.fillGradsFactored)} '
+      f'fillRunTree={bool(opts.fillRunTree)} '
+      f'globalMaterialModel={bool(opts.globalMaterialModel)} '
+      f'materialGroupsFile="{opts.materialGroupsFile}"')
+
 # ---- splitter --------------------------------------------------------------
 from Analysis.HitAnalyzer.JpsiKCandidateSplitter_cfi import jpsiKCandidateSplitter
 process.jpsiKCandidateSplitter = jpsiKCandidateSplitter.clone()
@@ -224,7 +301,15 @@ process.offlineBeamSpot = cms.EDProducer('BeamSpotProducer')
 # ---- two-track maker (J/psi side, mass-constraint ON) ---------------------
 from Analysis.HitAnalyzer.ResidualGlobalCorrectionMakerTwoTrackJpsiKMuMuG4e_cfi \
     import globalCorJpsiK
+_src_cands = cms.InputTag(*opts.srcCandidates.split(':')) \
+    if ':' in opts.srcCandidates else cms.InputTag(opts.srcCandidates)
+# Reading the nested stage-1 B+ VCC directly: the maker descends daughter(0)
+# (the J/psi composite) itself, so bCandIdx bookkeeping is unnecessary -- the
+# ValueMaps key straight to this collection.
+_uses_splitter = 'jpsiKCandidateSplitter' in opts.srcCandidates
 process.globalCorJpsiK = globalCorJpsiK.clone(
+    srcCandidates=_src_cands,
+    bCandIdxSrc=(globalCorJpsiK.bCandIdxSrc if _uses_splitter else cms.InputTag('')),
     scalarPotentialInitFile=cms.string(opts.scalarPot3DInitFile),
     fillJac=cms.bool(bool(opts.fillJac)),
     runFDClosure=cms.bool(bool(opts.runFDClosure)),
@@ -243,6 +328,7 @@ process.globalCorJpsiK = globalCorJpsiK.clone(
     # (massConstraint=true here, trackParticleName=kaon below).
     CvhMaster=CvhMasterPSet.clone(
         Particles=cms.vstring('mu+', 'mu-', 'kaon+', 'kaon-')),
+    **_calib_pset,
 )
 process.RandomNumberGeneratorService.globalCorJpsiK = cms.PSet(
     initialSeed=cms.untracked.uint32(123456789),
@@ -264,6 +350,7 @@ process.globalCorJpsiKKaon = globalCorJpsiKKaon.clone(
     trackParticleName=cms.string('mu' if opts.kaonAsMuon else 'kaon'),
     CvhMaster=CvhMasterPSet.clone(
         Particles=cms.vstring('mu+', 'mu-', 'kaon+', 'kaon-')),
+    **_calib_pset,
 )
 process.RandomNumberGeneratorService.globalCorJpsiKKaon = cms.PSet(
     # HepJamesRandom requires the seed in [0, 900_000_000]; pick a distinct
@@ -289,33 +376,40 @@ if opts.useScalarPot3D:
     process.Geant4ePropagator.MagneticFieldLabel = fieldlabel
     for m in (process.globalCorJpsiK, process.globalCorJpsiKKaon):
         m.MagneticFieldLabel = cms.string(fieldlabel)
-    # Shared CVH G4 master (EventSetup product), consumed by both makers via
-    # esConsumes -- both run in one job on the one master.
-    from TrackPropagation.Geant4e.cvhMasterESProducer_cfi import cvhMasterESProducer
-    process.cvhMasterESProducer = cvhMasterESProducer.clone()
-    process.cvhMasterESProducer.MagneticFieldLabel = cms.string(fieldlabel)
 else:
     # Standard CMSSW field. Leave MagneticFieldLabel at its cfi default (empty
     # string -> default ESProducer). ForCVH on the propagator stays on.
-    pass
+    fieldlabel = ''
+
+# Shared CVH G4 master (EventSetup product on CvhMasterRecord), consumed by
+# every maker via esConsumes -- so it must exist whichever field is in use, and
+# it is what lets both makers run in one job on one G4 master.
+from TrackPropagation.Geant4e.cvhMasterESProducer_cfi import cvhMasterESProducer
+process.cvhMasterESProducer = cvhMasterESProducer.clone()
+process.cvhMasterESProducer.MagneticFieldLabel = cms.string(fieldlabel)
 process.Geant4ePropagator.ForCVH = cms.bool(True)
 process.Geant4ePropagator.PropagationPtotLimit = cms.double(opts.plimit)
 
 # ---- path / schedule -------------------------------------------------------
 # geopro is intentionally NOT on the path: CvhMasterThread (residual-maker
 # GlobalCache) owns the G4 world / master magnetic field MT-safely.
-if opts.mode == 'dimuon':
-    process.reconstruction_step = cms.Path(
-        process.offlineBeamSpot
-        * process.jpsiKCandidateSplitter
-        * process.globalCorJpsiK
-    )
-else:  # kaon
-    process.reconstruction_step = cms.Path(
-        process.offlineBeamSpot
-        * process.jpsiKCandidateSplitter
-        * process.globalCorJpsiKKaon
-    )
+#
+# mode="both" runs the two makers in ONE process: `cvhMasterESProducer`
+# supplies a single Geant4 master as an EventSetup product and both makers
+# consume it, so there is no second G4 kernel and no offline join.
+#
+# The splitter is still scheduled while the single-track (kaon) maker consumes
+# its `bachelor` TrackCollection; the dimuon side no longer needs it (the maker
+# descends the nested candidate itself). It drops out entirely once the
+# single-track maker reads leaf daughters straight off the candidate.
+_seq = process.offlineBeamSpot
+if _uses_splitter or opts.mode in ('both', 'kaon'):
+    _seq = _seq * process.jpsiKCandidateSplitter
+if opts.mode in ('both', 'dimuon'):
+    _seq = _seq * process.globalCorJpsiK
+if opts.mode in ('both', 'kaon'):
+    _seq = _seq * process.globalCorJpsiKKaon
+process.reconstruction_step = cms.Path(_seq)
 process.schedule = cms.Schedule(process.reconstruction_step)
 
 from PhysicsTools.PatAlgos.tools.helpers import associatePatAlgosToolsTask

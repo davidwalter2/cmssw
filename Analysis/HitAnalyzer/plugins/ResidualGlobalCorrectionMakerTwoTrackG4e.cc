@@ -43,6 +43,37 @@
 #include <limits>
 #include <sstream>
 
+namespace {
+
+// Generic VertexCompositeCandidate decomposition.
+//
+// The candidate tree already encodes the fit structure, so no per-channel
+// adapter is needed: a LEAF daughter (RecoChargedCandidate) is a single track,
+// a COMPOSITE daughter is a two-track joint-fit subsystem. These two helpers
+// are the whole of that rule.
+
+// The track behind a leaf daughter, or nullptr if the node is not a leaf
+// charged candidate (i.e. it is composite) or carries a null TrackRef.
+const reco::Track* leafTrack(const reco::Candidate* c) {
+  const auto* rcc = dynamic_cast<const reco::RecoChargedCandidate*>(c);
+  if (!rcc || rcc->track().isNull()) return nullptr;
+  return &*rcc->track();
+}
+
+// The two leaf tracks of a node's first two daughters. Fails (returns false,
+// leaving `out` untouched) when the node has fewer than two daughters or when
+// either of them is composite / trackless.
+bool subsystemPair(const reco::Candidate* c, std::array<const reco::Track*, 2>& out) {
+  if (!c || c->numberOfDaughters() < 2) return false;
+  const reco::Track* t0 = leafTrack(c->daughter(0));
+  const reco::Track* t1 = leafTrack(c->daughter(1));
+  if (!t0 || !t1) return false;
+  out = {{t0, t1}};
+  return true;
+}
+
+}  // namespace
+
 
 class ResidualGlobalCorrectionMakerTwoTrackG4e : public ResidualGlobalCorrectionMakerBase
 {
@@ -164,6 +195,21 @@ private:
   // Per-candidate leg-failure retry budgets (see the recovery block).
   unsigned int maxBacktracks_ = 4;
   unsigned int maxSeedInflations_ = 2;
+
+  // Which two-track subsystem of each srcCandidates entry this instance fits.
+  //
+  // A VertexCompositeCandidate decomposes generically: a COMPOSITE daughter is
+  // a joint-fit two-track subsystem (J/psi, K*0, phi, Ks, Lambda, pipi, D0), a
+  // LEAF RecoChargedCandidate daughter is a single track (handled by the
+  // single-track maker). This index selects which daughter to descend into, so
+  // channels with two composite daughters (e.g. B0 -> J/psi K*0) are served by
+  // two instances of this module rather than a per-channel splitter.
+  //
+  //   -1 (default) : legacy/auto -- fit the candidate directly when its first
+  //                  two daughters are leaves, otherwise descend into
+  //                  daughter(0). Keeps every existing driver bit-identical.
+  //   >= 0         : descend into that daughter index and fit its two leaves.
+  int subsystemDaughter_ = -1;
 
   // Optional per-candidate EDM ValueMap output for the NanoAOD path, keyed to
   // the srcCandidates collection. Off by default so the ALCARECO TTree drivers
@@ -453,6 +499,11 @@ ResidualGlobalCorrectionMakerTwoTrackG4e::ResidualGlobalCorrectionMakerTwoTrackG
       ? iConfig.getParameter<unsigned int>("maxBacktracks") : 4u;
   maxSeedInflations_ = iConfig.existsAs<unsigned int>("maxSeedInflations")
       ? iConfig.getParameter<unsigned int>("maxSeedInflations") : 2u;
+
+  // Which two-track subsystem of each candidate to fit (see member comment).
+  // Default -1 keeps the legacy flat-candidate behaviour.
+  subsystemDaughter_ = iConfig.existsAs<int>("subsystemDaughter")
+      ? iConfig.getParameter<int>("subsystemDaughter") : -1;
 
   // NanoAOD path: emit per-candidate ValueMaps keyed to srcCandidates. Only
   // meaningful in the candidate-driven mode. Kinematics always; the global-fit
@@ -1140,10 +1191,26 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
     for (std::size_t ic = 0; ic < candH->size(); ++ic) {
       const auto& cand = (*candH)[ic];
       if (cand.numberOfDaughters() < 2) continue;
-      const auto* d0 = dynamic_cast<const reco::RecoChargedCandidate*>(cand.daughter(0));
-      const auto* d1 = dynamic_cast<const reco::RecoChargedCandidate*>(cand.daughter(1));
-      if (!d0 || !d1 || d0->track().isNull() || d1->track().isNull()) continue;
-      trackPairs.push_back({{&*d0->track(), &*d1->track()}});
+
+      // Resolve this instance's two-track subsystem from the candidate tree.
+      std::array<const reco::Track*, 2> pair{{nullptr, nullptr}};
+      bool ok = false;
+      if (subsystemDaughter_ >= 0) {
+        // Explicit selection: descend into the named composite daughter. Used
+        // to give a second instance the X subsystem of a J/psi + X candidate.
+        if (subsystemDaughter_ < static_cast<int>(cand.numberOfDaughters()))
+          ok = subsystemPair(cand.daughter(subsystemDaughter_), pair);
+      } else {
+        // Auto: a flat candidate (both daughters leaves) is fit directly --
+        // this is the legacy path and stays bit-identical. Otherwise the
+        // candidate is nested (e.g. B+ -> [J/psi] K+), so descend into
+        // daughter(0), which the stage-1 layout fixes as the composite.
+        ok = subsystemPair(&cand, pair);
+        if (!ok) ok = subsystemPair(cand.daughter(0), pair);
+      }
+      if (!ok) continue;
+
+      trackPairs.push_back(pair);
       bCandIdxPerPair.push_back(
           (bCandIdxH.isValid() && ic < bCandIdxH->size()) ? (*bCandIdxH)[ic] : -1);
       candCollIdxPerPair.push_back(static_cast<int>(ic));
