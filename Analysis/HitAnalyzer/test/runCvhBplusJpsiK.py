@@ -122,6 +122,11 @@ opts.register('debug', False, VarParsing.VarParsing.multiplicity.singleton,
               'when True, write per-iter vector branches (chisqval_iter, edmval_iter, '
               'deltachisqval_iter, mu_qoverp_iter, Jpsi_mass_iter) for the dimuon-side '
               'maker. Use only for the matrix per-iter deep dive; bloats output ~80 B/event.')
+opts.register('globalTag', 'auto:run2_data', VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.string,
+              'CMSSW GlobalTag string. Default auto:run2_data for the R2016H ALCARECO. '
+              'For MC ALCARECO pass the MC GT that produced the sample, e.g. '
+              '106X_mcRun2_asymptotic_v17 for 2016 postVFP.')
 opts.register('useIdealGeometry', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'Default False (btojpsik option (B)): propagate against the aligned geometry '
@@ -199,7 +204,7 @@ process.load('Configuration.StandardSequences.EndOfProcess_cff')
 process.load('Configuration.StandardSequences.FrontierConditions_GlobalTag_cff')
 process.load('Configuration.StandardSequences.GeometrySimDB_cff')
 
-process.GlobalTag = GlobalTag(process.GlobalTag, 'auto:run2_data', '')
+process.GlobalTag = GlobalTag(process.GlobalTag, opts.globalTag, '')
 process.GlobalTag.toGet = cms.VPSet(
     cms.PSet(
         record=cms.string('GeometryFileRcd'),
