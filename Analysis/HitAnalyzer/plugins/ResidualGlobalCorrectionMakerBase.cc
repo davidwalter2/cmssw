@@ -1,4 +1,5 @@
 // system include files
+#include <algorithm>
 #include <memory>
 
 #include "ResidualGlobalCorrectionMakerBase.h"
@@ -81,7 +82,6 @@
 // #include "DataFormats/Math/interface/Point3D.h"
 
 
-// #include "../interface/OffsetMagneticField.h"
 // #include "../interface/ParmInfo.h"
 
 
@@ -112,61 +112,22 @@
 //
 // constructors and destructor
 //
-// GlobalCache lifecycle. initializeGlobalCache runs ONCE per job, on the
-// framework's main thread, before any stream::EDProducer instance is
-// constructed -- so the dedicated G4 master thread (which builds DDDWorld
-// and the master magnetic field) exists before any TBB worker spins up.
-std::unique_ptr<CvhMasterThread>
-ResidualGlobalCorrectionMakerBase::initializeGlobalCache(const edm::ParameterSet &iConfig) {
-  return std::make_unique<CvhMasterThread>(iConfig.getParameter<edm::ParameterSet>("CvhMaster"));
-}
-
-std::shared_ptr<int>
-ResidualGlobalCorrectionMakerBase::globalBeginRun(const edm::Run &,
-                                                  const edm::EventSetup &iSetup,
-                                                  const CvhMasterThread *master) {
-  // Forward to the dedicated master thread; it builds DDDWorld + master
-  // magnetic field in its state loop before this call returns. By the
-  // time any stream's produce() runs, the G4 world is in place.
-  master->beginRun(iSetup);
-  return std::shared_ptr<int>();
-}
-
-void ResidualGlobalCorrectionMakerBase::globalEndRun(const edm::Run &,
-                                                     const edm::EventSetup &,
-                                                     const RunContext *iContext) {
-  if (iContext != nullptr && iContext->global() != nullptr) {
-    iContext->global()->endRun();
-  }
-}
-
-void ResidualGlobalCorrectionMakerBase::globalEndJob(CvhMasterThread *master) {
-  master->stopThread();
-}
-
-ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::ParameterSet &iConfig,
-                                                                     const CvhMasterThread *master)
+ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::ParameterSet &iConfig)
     : globalGeometryToken_(esConsumes<edm::Transition::BeginRun>()),
       trackerGeomIdealToken_(esConsumes<edm::Transition::BeginRun>(edm::ESInputTag("", "idealForDigi"))),
       trackerTopologyToken_(esConsumes<edm::Transition::BeginRun>()),
       magfieldToken_(esConsumes<edm::Transition::BeginRun>()),
       globalGeometryEventToken_(esConsumes()),
-      trackerTopologyEventToken_(esConsumes())
+      trackerTopologyEventToken_(esConsumes()),
+      // The shared CVH G4 master (CvhMasterESProducer -> CvhMasterRecord),
+      // consumed per-event; worker_->ensureInitialized attaches this thread's
+      // G4 state to it on first produce().
+      cvhMasterToken_(esConsumes())
 {
-  // Register the BeginRun-transition ES consumers that the GlobalCache
-  // (CvhMasterThread) needs to populate the master G4 world + field.
-  // Idempotent across streams thanks to the m_hasToken guard inside.
-  master->callConsumes(consumesCollector());
-
   // Per-stream CvhWorker: lazy first-produce() per TBB worker thread sets
-  // up that thread's G4 world / field. Constructed empty here; no G4
-  // touched yet.
+  // up that thread's G4 world / field from the shared master. Constructed
+  // empty here; no G4 touched yet.
   worker_ = std::make_unique<CvhWorker>();
-
-  // MT: this is now a stream::EDProducer<GlobalCache<CvhMasterThread>> --
-  // GlobalCache owns the G4 master thread, the per-stream instance owns a
-  // CvhWorker, and each stream's produce() bootstraps its TBB worker
-  // thread's G4 state on first call before any propagation runs.
   //now do what ever initialization is needed
 // inputTraj_ = consumes<std::vector<Trajectory>>(edm::InputTag("TrackRefitter"));
 // inputTrack_ = consumes<TrajTrackAssociationCollection>(edm::InputTag("TrackRefitter"));
@@ -199,6 +160,20 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   fitFromSimParms_ = iConfig.getParameter<bool>("fitFromSimParms");
   fillTrackTree_ = iConfig.getParameter<bool>("fillTrackTree");
   fillGrads_ = iConfig.getParameter<bool>("fillGrads");
+  // Factored (low-rank) storage of the per-candidate global-parameter
+  // Hessian; see the branch definitions in beginStream. Untracked with a
+  // default so existing cfi fragments stay valid.
+  fillGradsFactored_ = iConfig.getUntrackedParameter<bool>("fillGradsFactored", false);
+  // Relative eigenvalue cutoff for the rank truncation. 1e-8 matches the
+  // fidelity floor of the float32 packed storage: any mode below
+  // 1e-8*lambda_max is indistinguishable from the quantization noise of
+  // hesspackedv, so the factored branch at this tolerance is at least as
+  // faithful as the packed one.
+  hessFactorTol_ = iConfig.getUntrackedParameter<double>("hessFactorTol", 1e-8);
+  // only the two-track maker fills these; keep them zeroed elsewhere
+  nRank = 0;
+  nFactor = 0;
+  hessdroppedmass = 0.;
   fillJac_ = iConfig.getParameter<bool>("fillJac");
   fillRunTree_ = iConfig.getParameter<bool>("fillRunTree");
   doGen_ = iConfig.getParameter<bool>("doGen");
@@ -206,6 +181,37 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   doSim_ = iConfig.getParameter<bool>("doSim");
   bsConstraint_ = iConfig.getParameter<bool>("bsConstraint");
   applyHitQuality_ = iConfig.getParameter<bool>("applyHitQuality");
+  keepPixelEdgeHits_ = iConfig.existsAs<bool>("keepPixelEdgeHits")
+      ? iConfig.getParameter<bool>("keepPixelEdgeHits") : false;
+  pixelMinSizeX_ = iConfig.existsAs<int>("pixelMinSizeX")
+      ? iConfig.getParameter<int>("pixelMinSizeX") : 2;
+
+  // Global material model (see member docs in the header).
+  materialGroupsFile_ = iConfig.existsAs<std::string>("materialGroupsFile")
+      ? iConfig.getParameter<std::string>("materialGroupsFile") : std::string();
+  globalMaterialModel_ = iConfig.existsAs<bool>("globalMaterialModel")
+      ? iConfig.getParameter<bool>("globalMaterialModel") : false;
+  if (globalMaterialModel_ && materialGroupsFile_.empty()) {
+    throw cms::Exception("Configuration")
+        << "globalMaterialModel=True requires materialGroupsFile";
+  }
+  if (!materialGroupsFile_.empty()) {
+    matModel_ = std::make_unique<MaterialGroupModel>(materialGroupsFile_);
+  }
+  // Default ON: per-step application/attribution is strictly more accurate
+  // than the per-leg chain rule (removes the piecewise-constant sampling
+  // error) and is bit-identical for the fitted states at zero coefficients.
+  perStepFieldModes_ = iConfig.existsAs<bool>("perStepFieldModes")
+      ? iConfig.getParameter<bool>("perStepFieldModes") : true;
+  // Default ON whenever the global material model is on (hit-to-hit
+  // propagation is only well-defined without per-module leg attribution).
+  skipHitlessSurfaces_ = iConfig.existsAs<bool>("skipHitlessSurfaces")
+      ? iConfig.getParameter<bool>("skipHitlessSurfaces") : globalMaterialModel_;
+  if (skipHitlessSurfaces_ && !globalMaterialModel_) {
+    throw cms::Exception("Configuration")
+        << "skipHitlessSurfaces=True requires globalMaterialModel=True "
+           "(per-module leg attribution would otherwise break)";
+  }
   doMuons_ = iConfig.getParameter<bool>("doMuons");
   doTrigger_ = iConfig.getParameter<bool>("doTrigger");
   doRes_ = iConfig.getParameter<bool>("doRes");
@@ -237,6 +243,12 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   }
   fieldCorrection_ = std::make_unique<ana_hitanalyzer::ScalarPotentialFieldCorrection>(
       scalarPotentialInitFile_);
+  if (perStepFieldModes_) {
+    // corparms_ is a member, so its address is stable for the maker's
+    // lifetime; the provider always sees the current coefficients.
+    fieldModeProvider_ = std::make_unique<ana_hitanalyzer::ScalarPotFieldModeProvider>(
+        fieldCorrection_.get(), &corparms_);
+  }
 
   // Numerical-FD closure flags (debug; both makers honour them).
   runFDClosure_ = iConfig.existsAs<bool>("runFDClosure")
@@ -363,13 +375,24 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
     }
 
     
-    if (fillGrads_) {
+    if (fillGrads_ || fillGradsFactored_) {
       tree->Branch("gradv", gradv.data(), "gradv[nParms]/F", basketSize);
-      tree->Branch("nSym", &nSym, basketSize);
-      tree->Branch("hesspackedv", hesspackedv.data(), "hesspackedv[nSym]/F", basketSize);
-      
+
       tree->Branch("gradmax", &gradmax);
       tree->Branch("hessmax", &hessmax);
+    }
+
+    if (fillGrads_) {
+      tree->Branch("nSym", &nSym, basketSize);
+      tree->Branch("hesspackedv", hesspackedv.data(), "hesspackedv[nSym]/F", basketSize);
+    }
+
+    if (fillGradsFactored_) {
+      // H = B^T B with B row-major (nRank x nParms); nFactor = nRank*nParms
+      tree->Branch("nRank", &nRank, basketSize);
+      tree->Branch("nFactor", &nFactor, basketSize);
+      tree->Branch("hessfactorv", hessfactorv.data(), "hessfactorv[nFactor]/F", basketSize);
+      tree->Branch("hessdroppedmass", &hessdroppedmass);
     }
     
     tree->Branch("run", &run);
@@ -377,9 +400,15 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
     tree->Branch("event", &event);
     
     tree->Branch("edmval", &edmval);
+    // Reference-block EDM at the final iteration -- the actual convergence
+    // criterion (edmval is the full-state EDM incl. per-hit scattering DOF,
+    // which is large by construction). Always-on so convergence quality is
+    // auditable offline together with niter.
     tree->Branch("edmvalref", &edmvalref);
     tree->Branch("deltachisqval", &deltachisqval);
     tree->Branch("niter", &niter);
+    tree->Branch("nChargeFlipProtect", &nChargeFlipProtect);
+    tree->Branch("chargeHypFlipped", &chargeHypFlipped);
     
     tree->Branch("chisqval", &chisqval);
     tree->Branch("ndof", &ndof);
@@ -595,10 +624,14 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
         parmset.emplace(1, det->geographicalId());
       }
 
-      // material parameter is per-module (glued detid where applicable). The
+      // material parameter is per-module (glued detid where applicable),
+      // unless the global material model replaces the whole block with
+      // parmtype-15 group entries (exclusive switch, appended below). The
       // B-field block has been replaced with a global scalar-potential
       // expansion — see fieldCorrection_->appendParmsetEntries below.
-      parmset.emplace(7, parmdetid);
+      if (!globalMaterialModel_) {
+        parmset.emplace(7, parmdetid);
+      }
       
       if (doRes_) {
         // hit resolution parameters are associated to individual modules
@@ -624,6 +657,15 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
   // Register global scalar-potential B-field modes as sentinel parmset
   // entries (parmtype = ParmTypeBfieldGlobal, DetId(modeIdx)).
   fieldCorrection_->appendParmsetEntries(parmset);
+
+  // Register global material groups as sentinel parmset entries
+  // (parmtype = ParmTypeMaterialGlobal, DetId(groupIdx)), replacing the
+  // per-module parmtype-7 block.
+  if (globalMaterialModel_) {
+    for (int g = 0; g < matModel_->nGroups(); ++g) {
+      parmset.emplace(MaterialGroupModel::ParmTypeMaterialGlobal, DetId(g));
+    }
+  }
 
 // const unsigned int netabins = 48;
 // const unsigned int nphibins = 36;
@@ -735,13 +777,15 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       iidx = globalidx;
       parmtype = key.first;
       
-      // Sentinel parmtype-14 entries are global scalar-potential modes —
-      // they have no geometry, so skip the per-module geometry / runtree
-      // bookkeeping for them.
+      // Sentinel parmtype-14 (global scalar-potential modes) and
+      // parmtype-15 (global material groups) entries have no geometry, so
+      // skip the per-module geometry / runtree bookkeeping for them.
       const bool isGlobalBfieldMode =
           (parmtype == ana_hitanalyzer::ScalarPotentialFieldCorrection::ParmTypeBfieldGlobal);
+      const bool isGlobalMaterialGroup =
+          (parmtype == MaterialGroupModel::ParmTypeMaterialGlobal);
 
-      if (isGlobalBfieldMode) {
+      if (isGlobalBfieldMode || isGlobalMaterialGroup) {
         rawdetid = key.second.rawId();
         subdet = -99;
         layer = -99;
@@ -781,7 +825,7 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
         const Vector3DBase<double, GlobalTag> xglob = surfaceD.toGlobal(localx);
         const Vector3DBase<double, GlobalTag> xglobIdeal = surfaceDIdeal.toGlobal(localx);
         
-        const double dtheta = std::acos(xglob.dot(xglobIdeal));
+        dtheta = std::acos(std::clamp(xglob.dot(xglobIdeal), -1., 1.));
         
         
     // if (detid.rawId() == 302122272) {
@@ -954,6 +998,18 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
     // Resolve scalar-potential basis global indices now that detidparms is built.
     fieldCorrection_->resolveGlobalIndices(detidparms);
     std::cout << "scalar-potential field correction: " << fieldCorrection_->nModes() << " modes" << std::endl;
+
+    // Resolve the material groups' global indices (parmtype-15 sentinels).
+    matGroupGlobalIdx_.clear();
+    if (globalMaterialModel_) {
+      matGroupGlobalIdx_.reserve(matModel_->nGroups());
+      for (int g = 0; g < matModel_->nGroups(); ++g) {
+        matGroupGlobalIdx_.push_back(
+            detidparms.at(std::make_pair(MaterialGroupModel::ParmTypeMaterialGlobal, DetId(g))));
+      }
+      std::cout << "global material model: " << matModel_->nGroups() << " groups from "
+                << materialGroupsFile_ << std::endl;
+    }
     
     //initialize gradient
     if (!gradagg.size()) {
@@ -993,6 +1049,19 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       std::cout << "scalar-potential init: corparms_ left at ZERO "
                    "(FIXME: seeding disabled pending proper delta-basis fix)"
                 << std::endl;
+    }
+
+    // Seed the material-group entries with the k_init column of the groups
+    // file. Unlike the parmtype-14 absolute coefficients above, these are
+    // genuine multiplicative deltas on the nominal energy loss (k = 0 is
+    // the unmodified geometry), so seeding is semantically clean. corFiles
+    // deltas accumulate on top; the produce-time sync copies the summed
+    // values back into the model for the per-step provider. Also used to
+    // inject known k_g for the V3 MC-closure test.
+    if (globalMaterialModel_) {
+      for (int g = 0; g < matModel_->nGroups(); ++g) {
+        corparms_[matGroupGlobalIdx_[g]] = matModel_->kValue(g);
+      }
     }
 
     // Build a quick lookup of which global indices belong to parmtype-14
@@ -1084,7 +1153,69 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       if (isglued) {
         GloballyPositioned<double> surfaceGlued = surfaceToDouble(parmDet->surface());
 
+        // Garbage-alignment guard: modules that were off during data-taking
+        // have no hits and hence unconstrained alignment; the persisted
+        // constants can be arbitrary (observed: one TIB face rotated by
+        // ~49 deg, which contaminates the composite frame used as the
+        // anchor of the reconstruction below). If the aligned composite
+        // orientation deviates from the ideal one by more than 50 mrad --
+        // far beyond any genuine alignment correction -- rebuild the
+        // composite frame from the sane component: anchor on the component
+        // whose aligned orientation is closest to its ideal one, composed
+        // with the ideal component->composite transform.
         if (alignGlued_) {
+          const GluedGeomDet *gluedDet = dynamic_cast<const GluedGeomDet*>(parmDet);
+          const Surface &gluedIdealSurf = globalGeometryIdeal->idToDet(parmDet->geographicalId())->surface();
+          auto tilt = [](const Surface &a, const Surface &b) {
+            const auto na = a.rotation().z();
+            const auto nb = b.rotation().z();
+            const double c = std::abs(na.x()*nb.x() + na.y()*nb.y() + na.z()*nb.z());
+            return std::sqrt(std::max(0., 1. - c*c));
+          };
+          if (gluedDet != nullptr && tilt(parmDet->surface(), gluedIdealSurf) > 0.05) {
+            const GeomDetUnit *monoDet = gluedDet->monoDet();
+            const GeomDetUnit *stereoDet = gluedDet->stereoDet();
+            const Surface &monoIdeal = globalGeometryIdeal->idToDet(monoDet->geographicalId())->surface();
+            const Surface &stereoIdeal = globalGeometryIdeal->idToDet(stereoDet->geographicalId())->surface();
+            const double tmono = tilt(monoDet->surface(), monoIdeal);
+            const double tstereo = tilt(stereoDet->surface(), stereoIdeal);
+            const GeomDet *anchor = tmono <= tstereo ? monoDet : stereoDet;
+            const Surface &anchorIdeal = tmono <= tstereo ? monoIdeal : stereoIdeal;
+
+            const GloballyPositioned<double> anchorD = surfaceToDouble(anchor->surface());
+            const GloballyPositioned<double> anchorIdealD = surfaceToDouble(anchorIdeal);
+            const GloballyPositioned<double> gluedIdealD = surfaceToDouble(gluedIdealSurf);
+
+            const Point3DBase<double, GlobalTag> posGlobal =
+                anchorD.toGlobal(anchorIdealD.toLocal(gluedIdealD.position()));
+            auto mapAxis = [&](const Basic3DVector<double> &v) {
+              return anchorD.toGlobal(anchorIdealD.toLocal(Vector3DBase<double, GlobalTag>(v.x(), v.y(), v.z())));
+            };
+            const Vector3DBase<double, GlobalTag> gxn = mapAxis(gluedIdealD.rotation().x());
+            const Vector3DBase<double, GlobalTag> gyn = mapAxis(gluedIdealD.rotation().y());
+            const Vector3DBase<double, GlobalTag> gzn = mapAxis(gluedIdealD.rotation().z());
+            const TkRotation<double> tkrotRepair(gxn.x(), gxn.y(), gxn.z(),
+                                                 gyn.x(), gyn.y(), gyn.z(),
+                                                 gzn.x(), gzn.y(), gzn.z());
+            surfaceGlued = GloballyPositioned<double>(posGlobal, tkrotRepair);
+            edm::LogWarning("ResidualGlobalCorrectionMakerBase")
+                << "Garbage-aligned glued module " << parmdetid.rawId()
+                << " (composite tilt vs ideal = " << tilt(parmDet->surface(), gluedIdealSurf)
+                << ", mono tilt = " << tmono << ", stereo tilt = " << tstereo
+                << "): rebuilt composite frame anchored on the "
+                << (tmono <= tstereo ? "mono" : "stereo") << " face.";
+
+            // Note on the dead face itself: no separate repair is needed.
+            // The parallel-frame reconstruction below rebuilds each face's
+            // plane (normal + out-of-plane position) from the repaired
+            // composite, which is all a hitless module exposes to the fit
+            // (propagation target + material crossing). The face's residual
+            // garbage in-plane DOF (origin offset along the plane, in-plane
+            // rotation) neither move the plane nor are consumed without
+            // hits -- verified bit-identical against an explicit
+            // anchor+ideal-relative face rebuild on 10k events incl. the
+            // hotspot candidates.
+          }
           
           //TODO apply partial alignment to surfaceGlued here
           

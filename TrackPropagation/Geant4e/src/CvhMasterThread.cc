@@ -1,8 +1,6 @@
 #include "TrackPropagation/Geant4e/interface/CvhMasterThread.h"
 #include "TrackPropagation/Geant4e/interface/CvhMaster.h"
 
-#include "FWCore/Framework/interface/ConsumesCollector.h"
-#include "FWCore/Framework/interface/EventSetup.h"
 #include "FWCore/MessageLogger/interface/MessageLogger.h"
 #include "FWCore/Utilities/interface/Exception.h"
 
@@ -80,36 +78,46 @@ CvhMasterThread::~CvhMasterThread() {
   }
 }
 
-void CvhMasterThread::callConsumes(edm::ConsumesCollector&& iC) const {
-  if (m_hasToken) {
+void CvhMasterThread::ensureG4Started(const DDCompactView* ddd,
+                                      const cms::DDCompactView* dd4hep,
+                                      const MagneticField* mf) const {
+  std::lock_guard<std::mutex> lk(m_protectMutex);
+
+  // Job-scoped lazy start: the first call builds the G4 world; every later
+  // call (e.g. a subsequent IOV that re-invokes the ESProducer) is a no-op.
+  // The products captured here stay in use for the whole job -- G4 holds the
+  // raw pointers and cannot be rebuilt -- so a genuinely changed geometry or
+  // field product is refused loudly (a dangling pointer or silent physics
+  // corruption otherwise). A re-produce that hands back the SAME objects
+  // (the normal single-IOV case: a file-based labelled field is produced once
+  // and the EventSetup keeps returning the same cached object) is accepted.
+  if (m_g4Started) {
+    const void* geoNew = m_pGeoFromDD4hep ? static_cast<const void*>(dd4hep)
+                                          : static_cast<const void*>(ddd);
+    const void* geoOld = m_pGeoFromDD4hep ? static_cast<const void*>(m_pDD4hep)
+                                          : static_cast<const void*>(m_pDDD);
+    if (geoNew != geoOld) {
+      throw cms::Exception("Conditions")
+          << "CvhMasterThread: the geometry product changed after the G4 world was built from the "
+          << "previous one, and G4 cannot be rebuilt. Process one geometry IOV per job.";
+    }
+    if (m_pUseMagneticField && mf != m_pMF) {
+      throw cms::Exception("Conditions")
+          << "CvhMasterThread: the magnetic-field product changed after the G4 world was built with "
+          << "the previous field object, and G4 cannot be rebuilt. Process one field IOV per job.";
+    }
     return;
   }
-  if (m_pGeoFromDD4hep) {
-    m_DD4hep = iC.esConsumes<cms::DDCompactView, IdealGeometryRecord, edm::Transition::BeginRun>();
-  } else {
-    m_DDD = iC.esConsumes<DDCompactView, IdealGeometryRecord, edm::Transition::BeginRun>();
-  }
-  if (m_pUseMagneticField) {
-    m_MagField = iC.esConsumes<MagneticField, IdealMagneticFieldRecord, edm::Transition::BeginRun>(
-        edm::ESInputTag("", m_magFieldLabel));
-  }
-  m_hasToken = true;
-}
 
-void CvhMasterThread::beginRun(const edm::EventSetup& iSetup) const {
-  std::lock_guard<std::mutex> lk(m_protectMutex);
   std::unique_lock<std::mutex> lk2(m_threadMutex);
 
-  if (m_firstRun) {
-    if (m_pGeoFromDD4hep) {
-      m_pDD4hep = &(*iSetup.getTransientHandle(m_DD4hep));
-    } else {
-      m_pDDD = &(*iSetup.getTransientHandle(m_DDD));
-    }
-    if (m_pUseMagneticField) {
-      m_pMF = &iSetup.getData(m_MagField);
-    }
-    m_firstRun = false;
+  if (m_pGeoFromDD4hep) {
+    m_pDD4hep = dd4hep;
+  } else {
+    m_pDDD = ddd;
+  }
+  if (m_pUseMagneticField) {
+    m_pMF = mf;
   }
 
   m_masterThreadState = ThreadState::BeginRun;
@@ -117,16 +125,21 @@ void CvhMasterThread::beginRun(const edm::EventSetup& iSetup) const {
   m_mainCanProceed = false;
   m_notifyMasterCv.notify_one();
   m_notifyMainCv.wait(lk2, [&]() { return m_mainCanProceed; });
+  m_g4Started = true;
 }
 
-void CvhMasterThread::endRun() const {
+void CvhMasterThread::stopG4() const {
   std::lock_guard<std::mutex> lk(m_protectMutex);
+  if (!m_g4Started) {
+    return;
+  }
   std::unique_lock<std::mutex> lk2(m_threadMutex);
   m_masterThreadState = ThreadState::EndRun;
   m_mainCanProceed = false;
   m_masterCanProceed = true;
   m_notifyMasterCv.notify_one();
   m_notifyMainCv.wait(lk2, [&]() { return m_mainCanProceed; });
+  m_g4Started = false;
 }
 
 void CvhMasterThread::stopThread() {
@@ -134,6 +147,8 @@ void CvhMasterThread::stopThread() {
     return;
   }
   edm::LogVerbatim("Geant4e") << "CvhMasterThread::stopThread";
+  // The state loop requires the EndRun handshake before Destruct.
+  stopG4();
   std::unique_lock<std::mutex> lk2(m_threadMutex);
   m_masterThreadState = ThreadState::Destruct;
   m_masterCanProceed = true;

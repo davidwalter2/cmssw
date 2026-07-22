@@ -90,13 +90,13 @@
 
 #include "SimDataFormats/PileupSummaryInfo/interface/PileupSummaryInfo.h"
 
-// #include "../interface/OffsetMagneticField.h"
 // #include "../interface/ParmInfo.h"
 
 #include "Analysis/HitAnalyzer/interface/ScalarPotentialFieldCorrection.h"
 #include "FWCore/Utilities/interface/Exception.h"
 #include "TrackPropagation/Geant4e/interface/Geant4ePropagator.h"
 #include "TrackPropagation/Geant4e/interface/CvhMasterThread.h"
+#include "TrackPropagation/Geant4e/interface/CvhMasterRecord.h"
 #include "TrackPropagation/Geant4e/interface/CvhWorker.h"
 
 
@@ -110,6 +110,9 @@
 #include<Eigen/StdVector>
 #include <iostream>
 #include <functional>
+
+#include "TrackPropagation/Geant4e/interface/MaterialGroupModel.h"
+#include "Analysis/HitAnalyzer/interface/ScalarPotFieldModeProvider.h"
 
 using namespace Eigen;
 
@@ -167,42 +170,20 @@ template<typename T, int N>
 using AANT = AutoDiffScalar<Matrix<AutoDiffScalar<Matrix<T, N, 1>>, Dynamic, 1, 0, N, 1>>;
 
 class ResidualGlobalCorrectionMakerBase
-    : public edm::stream::EDProducer<edm::GlobalCache<CvhMasterThread>,
-                                     edm::RunCache<int>>
+    : public edm::stream::EDProducer<>
 {
 public:
-  // Two-arg ctor: the framework passes the GlobalCache pointer here. The
-  // master thread / G4 master kernel has already been constructed in
-  // initializeGlobalCache by the time this is called.
-  ResidualGlobalCorrectionMakerBase(const edm::ParameterSet &, const CvhMasterThread *);
+  // The shared CVH G4 master (CvhMasterThread) is now an EventSetup product on
+  // CvhMasterRecord (built once per job by CvhMasterESProducer). Each maker
+  // simply esConsumes it (cvhMasterToken_) and, on the first produce() of each
+  // TBB worker thread, bootstraps that thread's G4 state from the shared
+  // master via worker_->ensureInitialized. This replaces the old
+  // edm::GlobalCache<CvhMasterThread> ownership (which was per-module-label and
+  // therefore could not be shared across multiple CVH producers in one job).
+  ResidualGlobalCorrectionMakerBase(const edm::ParameterSet &);
   ~ResidualGlobalCorrectionMakerBase();
 
   static void fillDescriptions(edm::ConfigurationDescriptions &descriptions);
-
-  // GlobalCache lifecycle (called once per job by the framework, on the
-  // main thread, before/after any stream is constructed). Owning the
-  // CvhMasterThread here is what lets it spawn the dedicated G4 master
-  // thread BEFORE any TBB worker is started -- the fix for the Navigator-
-  // NULL-world abort that previously blocked numberOfThreads >= 2.
-  static std::unique_ptr<CvhMasterThread>
-  initializeGlobalCache(const edm::ParameterSet &);
-
-  // RunCache. `int` is a placeholder -- we don't actually need per-run
-  // shared state; declaring a RunCache is what makes the framework
-  // dispatch globalBeginRun / globalEndRun so we can forward them to the
-  // master thread's state loop (the G4 world / field setup must happen
-  // before any stream's first produce()).
-  static std::shared_ptr<int>
-  globalBeginRun(const edm::Run &, const edm::EventSetup &,
-                 const CvhMasterThread *);
-
-  // globalEndRun: the framework passes a RunContext that bundles both the
-  // GlobalCache and the (placeholder) RunCache. We just forward EndRun
-  // to the master thread so its state loop tears down G4 between runs.
-  static void globalEndRun(const edm::Run &, const edm::EventSetup &,
-                           const RunContext *);
-
-  static void globalEndJob(CvhMasterThread *);
 
 protected:
 
@@ -323,6 +304,10 @@ protected:
   // BeginRun-scoped tokens above serve beginRun() in this base class.
   edm::ESGetToken<GlobalTrackingGeometry, GlobalTrackingGeometryRecord> globalGeometryEventToken_;
   edm::ESGetToken<TrackerTopology, TrackerTopologyRcd> trackerTopologyEventToken_;
+
+  // The shared CVH G4 master, consumed per-event; worker_->ensureInitialized
+  // attaches this thread's G4 state to it on the first produce() per thread.
+  edm::ESGetToken<CvhMasterThread, CvhMasterRecord> cvhMasterToken_;
   
   
   std::vector<std::string> corFiles_;
@@ -359,9 +344,17 @@ protected:
   unsigned int nParms;
   unsigned int nJacRef;
   unsigned int nSym;
-  
-  unsigned int nValidHitsFinal;
-  unsigned int nValidPixelHitsFinal;
+
+  // Factored Hessian storage (fillGradsFactored_): the reduced Hessian
+  // wrt the global params has rank ~ ndof + nconstraints << nParms, so
+  // it is stored as B (nRank x nParms, row-major, H = B^T B summed over
+  // rows) instead of the packed dense upper triangle. nFactor =
+  // nRank*nParms is the flat branch dimension.
+  unsigned int nRank;
+  unsigned int nFactor;
+  // relative eigenvalue mass dropped by the rank truncation,
+  // sum(dropped lambda)/sum(kept lambda) -- monitoring quantity
+  float hessdroppedmass;
 
   // Stage-2 per-row B+ candidate index (filled per Fill() call when the
   // optional bCandIdxToken_ is configured; -1 sentinel otherwise).
@@ -394,7 +387,8 @@ protected:
   std::vector<unsigned int> globalidxvfinal;
   
   std::vector<float> hesspackedv;
-  
+  std::vector<float> hessfactorv;
+
   std::vector<unsigned int> hitidxv;
   std::vector<float> dxrecgen;
   std::vector<float> dyrecgen;
@@ -493,6 +487,8 @@ protected:
   bool fitFromSimParms_;
   bool fillTrackTree_;
   bool fillGrads_;
+  bool fillGradsFactored_;
+  double hessFactorTol_;
   bool fillJac_;
   bool fillRunTree_;
   bool alignGlued_ = true;
@@ -507,7 +503,17 @@ protected:
   bool bsConstraint_;
   
   bool applyHitQuality_;
-  
+
+  // Keep pixel hits whose cluster touches the sensor boundary (isOnEdge) in
+  // the fit instead of demoting them to inactive. The sizeX CPE-quality
+  // requirement (below) is unaffected. Default false = legacy behaviour.
+  bool keepPixelEdgeHits_ = false;
+
+  // Minimum pixel cluster size in x for a hit to stay in the fit
+  // (CPE x-resolution needs charge sharing between >=2 pixels).
+  // Default 2 = legacy sizeX>1 cut; 1 admits all clusters.
+  int pixelMinSizeX_ = 2;
+
   bool doRes_ = false;
   bool useIdealGeometry_ = false;
 
@@ -521,6 +527,28 @@ protected:
   // loaded from a coefficient dump file (mfs/dump_coeffs_for_cmssw.py).
   std::string scalarPotentialInitFile_;
   std::unique_ptr<ana_hitanalyzer::ScalarPotentialFieldCorrection> fieldCorrection_;
+
+  // Global material model (doc/global-material-model-plan.md).
+  // materialGroupsFile loads a grouping-tier rules file (Phase A
+  // validation hook usable on its own); globalMaterialModel=true
+  // additionally REPLACES the per-module material parameters (parmtype 7)
+  // with parmtype-15 sentinel entries, one per group (exclusive switch).
+  bool globalMaterialModel_ = false;
+  std::string materialGroupsFile_;
+  std::unique_ptr<MaterialGroupModel> matModel_;
+  std::vector<unsigned int> matGroupGlobalIdx_;  // groupId -> corparms_ index
+
+  // Per-step field modes (leg-structure-free attribution): when true, the
+  // scalar-potential correction is applied per Geant4 step via the
+  // provider, and the per-mode derivative columns come from the propagator
+  // instead of the per-leg chain rule.
+  bool perStepFieldModes_ = false;
+  std::unique_ptr<ana_hitanalyzer::ScalarPotFieldModeProvider> fieldModeProvider_;
+
+  // Skip hitless module surfaces in the fit hit list (dead-module
+  // placeholders and quality-demoted hits): valid only with the global
+  // material model (per-module leg attribution would otherwise break).
+  bool skipHitlessSurfaces_ = false;
 
   // Numerical-FD closure (debug only; one-shot per job).
   bool runFDClosure_ = false;
@@ -569,6 +597,13 @@ protected:
   float edmvalref;
   float deltachisqval;
   unsigned int niter;
+  // per-track count of GN iterations where the clamp caught a q/p sign
+  // crossing (charge-flip protection through p->inf). >0 flags a track that
+  // "wanted" the opposite charge -> trigger the two-hypothesis second fit.
+  unsigned int nChargeFlipProtect;
+  // 1 if the two-hypothesis fit kept the OPPOSITE charge (opposite converged
+  // with lower chi2 than the nominal seed), 0 otherwise.
+  unsigned int chargeHypFlipped;
   
   float chisqval;
   unsigned int ndof;

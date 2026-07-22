@@ -34,6 +34,7 @@
 <use name="Utilities/General"/>
 <use name="TrackPropagation/RungeKutta"/>
 <use name="CommonTools/UtilAlgos"/>
+<use name="CommonTools/CandUtils"/>
 <use name="RecoLocalTracker/SiStripClusterizer"/>
 <use name="TrackingTools/TransientTrack"/>
 <use name="RecoVertex/LinearizationPointFinders"/>
@@ -45,6 +46,12 @@
 <use name="MagneticField/ParametrizedEngine"/>
 <use name="CondFormats/L1TObjects"/>
 <use name="CondFormats/DataRecord"/>
+<use name="CalibFormats/SiStripObjects"/>
+<use name="CalibTracker/Records"/>
+<use name="SimG4Core/Geometry"/>
+<use name="DetectorDescription/Core"/>
+<use name="geant4"/>
+<use name="CLHEP"/>
 
 <!-- <use   name="geant4"/> -->
 

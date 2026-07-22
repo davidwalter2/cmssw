@@ -22,10 +22,8 @@
 ##                         its own `G4MTRunManagerKernel`, which trips the
 ##                         G4 single-master singleton (Geant4's
 ##                         `G4Region` ctor segfaults on the second instance,
-##                         confirmed empirically). "both" is still accepted
-##                         for future-proofing if CvhMasterThread ever gets
-##                         a shared-singleton refactor, but at present it
-##                         WILL crash; run two jobs instead.
+##                         confirmed empirically). "both" is therefore
+##                         rejected at config time; run two jobs instead.
 import os
 
 import FWCore.ParameterSet.Config as cms
@@ -37,24 +35,6 @@ from Configuration.AlCa.GlobalTag import GlobalTag
 # AN2021_131_v8 §3.3-3.4 canonical correction file. Located relative to
 # $WREM_BASE (set by setup.sh); a clear EnvironmentError is raised at
 # driver-parse time if the env var is unset or the file is missing.
-def _resolve_default_corfile():
-    wrem_base = os.environ.get('WREM_BASE')
-    if not wrem_base:
-        raise EnvironmentError(
-            'WREM_BASE environment variable is not set. Source setup.sh at the '
-            'repo root before invoking cmsRun so the default corFiles path can '
-            'be resolved. (Explicit override: pass corFiles=<path> on the CLI.)'
-        )
-    rel = 'wremnants-data/data/calibration/correctionResults_v721_recjpsidata.root'
-    p = os.path.join(wrem_base, rel)
-    if not os.path.isfile(p):
-        raise EnvironmentError(
-            'Default correction file not found at: {}. Either restore the '
-            'wremnants-data submodule (git submodule update --init) or override '
-            'via corFiles=<path> on the CLI.'.format(p)
-        )
-    return p
-
 opts = VarParsing.VarParsing('analysis')
 opts.register('input', '', VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string,
@@ -70,8 +50,8 @@ opts.register('scalarPot3DInitFile',
               'scalar-potential coefficient dump')
 opts.register('mode', 'dimuon', VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string,
-              'which maker to schedule: "dimuon" or "kaon" (one per cmsRun; '
-              '"both" reserved, currently crashes on G4 singleton)')
+              'which maker to schedule: "dimuon" or "kaon" (one per cmsRun job; '
+              'the two makers cannot coexist -- single G4 master per process)')
 opts.register('runFDClosure', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'enable the maker\'s finite-difference Jacobian closure test '
@@ -114,9 +94,9 @@ opts.register('edmConvergence', 1e-5, VarParsing.VarParsing.multiplicity.singlet
               'matches the previous hard-coded constant; matrix sweeps {1e-5, 1e-3, 1e-2}.')
 opts.register('useStartingState', 'perigee', VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string,
-              'CVH iter-0 reference state. Currently only "perigee" is implemented; '
-              '"midPropagated" is wired but throws cms::Exception until the propagation '
-              'helper lands (openspec/improve-cvh-refit-convergence task 1.4).')
+              'CVH iter-0 reference state: "perigee" (default) or "midPropagated" '
+              '(analytical extrapolation of both daughter perigee states to their '
+              'midpoint, with per-event perigee fallback).')
 opts.register('debug', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'when True, write per-iter vector branches (chisqval_iter, edmval_iter, '
@@ -161,7 +141,7 @@ opts.register('disableCorFiles', False, VarParsing.VarParsing.multiplicity.singl
               'broken-baseline point P3 and for the (B) side of the (A)-vs-(B) overlay.')
 opts.parseArguments()
 
-# Resolve corFiles: empty on the CLI --> driver default (v721); non-empty --> take as-is.
+# Resolve corFiles: empty on the CLI --> no corrections; non-empty --> take as-is.
 # `disableCorFiles=True` --> force empty on both legs regardless of other opts.
 def _resolve_corfiles(opts_value, base_default):
     if opts.disableCorFiles:
@@ -189,8 +169,10 @@ print('[runCvhBplusJpsiK.py] resolved CVH config:', flush=True)
 print('  muon: useIdealGeometry={}, corFiles={}'.format(_muon_ideal_geom, _muon_corfiles), flush=True)
 print('  kaon: useIdealGeometry={}, corFiles={}'.format(_kaon_ideal_geom, _kaon_corfiles), flush=True)
 assert opts.input, 'must set input=<path>'
-assert opts.mode in ('both', 'dimuon', 'kaon'), \
-    f'mode must be both|dimuon|kaon, got {opts.mode!r}'
+assert opts.mode in ('dimuon', 'kaon'), \
+    f'mode must be dimuon|kaon (one maker per cmsRun job: each maker GlobalCache ' \
+    f'owns its own G4 master kernel and G4 allows a single master per process), ' \
+    f'got {opts.mode!r}'
 
 process = cms.Process('CVHBPLUS', Run2_2016)
 
@@ -307,7 +289,11 @@ if opts.useScalarPot3D:
     process.Geant4ePropagator.MagneticFieldLabel = fieldlabel
     for m in (process.globalCorJpsiK, process.globalCorJpsiKKaon):
         m.MagneticFieldLabel = cms.string(fieldlabel)
-        m.CvhMaster.MagneticFieldLabel = cms.string(fieldlabel)
+    # Shared CVH G4 master (EventSetup product), consumed by both makers via
+    # esConsumes -- both run in one job on the one master.
+    from TrackPropagation.Geant4e.cvhMasterESProducer_cfi import cvhMasterESProducer
+    process.cvhMasterESProducer = cvhMasterESProducer.clone()
+    process.cvhMasterESProducer.MagneticFieldLabel = cms.string(fieldlabel)
 else:
     # Standard CMSSW field. Leave MagneticFieldLabel at its cfi default (empty
     # string -> default ESProducer). ForCVH on the propagator stays on.
@@ -318,14 +304,7 @@ process.Geant4ePropagator.PropagationPtotLimit = cms.double(opts.plimit)
 # ---- path / schedule -------------------------------------------------------
 # geopro is intentionally NOT on the path: CvhMasterThread (residual-maker
 # GlobalCache) owns the G4 world / master magnetic field MT-safely.
-if opts.mode == 'both':
-    process.reconstruction_step = cms.Path(
-        process.offlineBeamSpot
-        * process.jpsiKCandidateSplitter
-        * process.globalCorJpsiK
-        * process.globalCorJpsiKKaon
-    )
-elif opts.mode == 'dimuon':
+if opts.mode == 'dimuon':
     process.reconstruction_step = cms.Path(
         process.offlineBeamSpot
         * process.jpsiKCandidateSplitter

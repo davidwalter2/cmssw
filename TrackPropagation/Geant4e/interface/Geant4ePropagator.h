@@ -2,6 +2,8 @@
 #define TrackPropagation_Geant4ePropagator_h
 
 #include <memory>
+#include <utility>
+#include <vector>
 
 // CMS includes
 // - Propagator
@@ -15,6 +17,9 @@
 #include <Eigen/Core>
 
 #include "TrackPropagation/Geant4e/interface/G4UniversalFluctuationForExtrapolator.hh"
+#include "SimG4Core/MagneticField/interface/Field.h"
+
+class MaterialGroupModel;
 
 /** Propagator based on the Geant4e package. Uses the Propagator class
  *  in the TrackingTools/GeomPropagators package to define the interface.
@@ -96,7 +101,27 @@ public:
                                    double dms = 0.,
                                    double dioni = 0.,
                                    double pforced = -1.,
-                                   const std::string &particleNameOverride = std::string()) const;
+                                   const std::string &particleNameOverride = std::string(),
+                                   // Global material model (Phase A): when matGroups is set,
+                                   // the energy loss of every step is scaled by the step
+                                   // volume's group value k_g (on top of dxi), and, when
+                                   // groupJacOut is also set, the per-group transported
+                                   // d(state)/dk_g columns are accumulated into it (the sum
+                                   // over groups equals the integrated dxi column of the 5x9
+                                   // Jacobian exactly). See doc/global-material-model-plan.md.
+                                   const MaterialGroupModel *matGroups = nullptr,
+                                   std::vector<std::pair<int, Eigen::Matrix<double, 5, 1>>>
+                                       *groupJacOut = nullptr,
+                                   // Per-step field modes (leg-structure-free attribution):
+                                   // when fieldModes is set, the correction field is applied
+                                   // per step (evaluated at the step start, on top of the
+                                   // constant dB argument) and, when modeJacOut is also set,
+                                   // the per-mode transported d(state)/dc_i columns are
+                                   // accumulated with the basis evaluated at each step
+                                   // midpoint -- replacing the maker-side per-leg chain rule.
+                                   const sim::FieldModeProvider *fieldModes = nullptr,
+                                   std::vector<Eigen::Matrix<double, 5, 1>> *modeJacOut =
+                                       nullptr) const;
 
   static void CalculateEffectiveZandA(const G4Material *mate, G4double &effZ, G4double &effA);
 
@@ -114,9 +139,18 @@ private:
 
   // Per-exit-point failure counters for propagateGenericWithJacobianAltD.
   // Indices: 0 = configurePropagation (p < plimit), 1 = Geant4 step ierr != 0,
-  // 2 = max path length / max iterations. Dumped from the destructor.
-  mutable std::array<unsigned long long, 3> propFailCounts_{{0ULL, 0ULL, 0ULL}};
+  // 2 = max path length / max iterations, 3 = in-flight momentum drain
+  // below plimit (runaway leg ground down by material before reaching the
+  // target plane), 4 = propagation reported success but the final state is
+  // off the destination plane (e.g. pinned at the G4 world boundary),
+  // 5 = state left the field model's validity region (all tracker modules
+  // lie inside it, so exiting is unambiguous proof of a runaway leg --
+  // fires earliest of the runaway guards). Dumped from the destructor.
+  mutable std::array<unsigned long long, 6> propFailCounts_{{0ULL, 0ULL, 0ULL, 0ULL, 0ULL, 0ULL}};
   mutable unsigned long long propTotalCalls_{0ULL};
+  // Successful backward legs (anyDirection mode): counted so the frequency
+  // of the momentum-flipped frame conversion stays observable per job.
+  mutable unsigned long long propBackwardLegs_{0ULL};
 
   // Geant4 11.1 made G4ErrorPropagatorManager / G4ErrorPropagatorData
   // singletons G4ThreadLocal. Fetch them per-call via the static accessors

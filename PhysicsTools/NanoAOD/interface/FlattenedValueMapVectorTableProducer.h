@@ -109,6 +109,13 @@ class FlattenedValueMapVectorTableProducer : public edm::stream::EDProducer<> {
             }
             floatsizetab->template addColumn<int>("FloatCounts", sizes, "Number of entries per object", countPrecision_);
 
+            // The vec tables are only constructed inside the loops above; a
+            // configuration with zero int-type or zero float-type variables
+            // must still put a (empty) table for every declared product.
+            if (!intvectab)
+                intvectab = std::make_unique<nanoaod::FlatTable>(0, this->name_+"_IntVals", false, false);
+            if (!floatvectab)
+                floatvectab = std::make_unique<nanoaod::FlatTable>(0, this->name_+"_FloatVals", false, false);
 
             intsizetab->setDoc(doc_);
             floatsizetab->setDoc(doc_);

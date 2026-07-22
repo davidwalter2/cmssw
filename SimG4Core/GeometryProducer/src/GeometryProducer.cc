@@ -56,7 +56,10 @@ static void createWatchers(const edm::ParameterSet &iP,
 
 GeometryProducer::GeometryProducer(edm::ParameterSet const &p)
     : m_kernel(nullptr),
-      m_fieldlabel(p.getParameter<std::string>("MagneticFieldLabel")),
+      // default "" (standard unlabelled field) so pre-existing configs
+      // without the parameter keep working
+      m_fieldlabel(p.existsAs<std::string>("MagneticFieldLabel") ? p.getParameter<std::string>("MagneticFieldLabel")
+                                                                 : std::string()),
       m_pField(p.getParameter<edm::ParameterSet>("MagneticField")),
       m_p(p),
       m_pDD(nullptr),

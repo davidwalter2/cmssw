@@ -1,5 +1,4 @@
 #include "ResidualGlobalCorrectionMakerBase.h"
-#include "MagneticFieldOffset.h"
 #include "Analysis/HitAnalyzer/interface/ParticleProperties.h"
 
 // Sparse GBL design-matrix formulation (ported from the single-track
@@ -48,7 +47,7 @@
 class ResidualGlobalCorrectionMakerTwoTrackG4e : public ResidualGlobalCorrectionMakerBase
 {
 public:
-  ResidualGlobalCorrectionMakerTwoTrackG4e(const edm::ParameterSet &, const CvhMasterThread *);
+  ResidualGlobalCorrectionMakerTwoTrackG4e(const edm::ParameterSet &);
   ~ResidualGlobalCorrectionMakerTwoTrackG4e() {
     // fix-cvh-displaced-starting-state: report per-job counters for the
     // midPropagated mode. Total = number of (icons-phase × candidate) tries
@@ -62,6 +61,40 @@ public:
           << "midPropagated summary: total=" << midPropagatedTotalCount_
           << "  fallback=" << midPropagatedFallbackCount_
           << " (" << fallbackPct << "%)";
+    }
+    // Per-stream fit-outcome accounting (see counters below): attempted =
+    // track pairs entering the icons/iteration loops; succeeded = pairs
+    // whose fit survived all phases (tree filled).
+    if (fitAttempted_ > 0ULL) {
+      const unsigned long long failTotal = fitAttempted_ - fitSucceeded_;
+      std::cout << "ResidualGlobalCorrectionMakerTwoTrackG4e fit summary"
+                << "  attempted=" << fitAttempted_
+                << "  succeeded=" << fitSucceeded_
+                << "  failed=" << failTotal
+                << " (" << (100. * failTotal / fitAttempted_) << "%)"
+                << "  fail[kinfit]=" << fitFailKinFit_
+                << "  fail[prop]=" << fitFailProp_
+                << "  fail[hitupdate]=" << fitFailHitUpdate_
+                << "  fail[chargeflip]=" << fitFailChargeFlip_
+                << "  fail[nan]=" << fitFailNaN_
+                << "  skipped[samesign]=" << fitSkippedSameSign_
+                << "  clamped[step]=" << fitStepClamped_
+                << "  backtracked[step]=" << fitStepBacktracked_
+                << "  inflated[seed]=" << fitSeedInflated_
+                << std::endl;
+      if (pixHitsSeen_ > 0ULL) {
+        std::cout << "ResidualGlobalCorrectionMakerTwoTrackG4e pixel hit-quality summary"
+                  << "  seen=" << pixHitsSeen_
+                  << "  onEdge=" << pixHitsEdge_
+                  << " (" << (100. * pixHitsEdge_ / pixHitsSeen_) << "%)"
+                  << "  sizeX1=" << pixHitsSizeX1_
+                  << " (" << (100. * pixHitsSizeX1_ / pixHitsSeen_) << "%)"
+                  << "  demoted=" << pixHitsDemoted_
+                  << " (" << (100. * pixHitsDemoted_ / pixHitsSeen_) << "%)"
+                  << "  keepPixelEdgeHits=" << keepPixelEdgeHits_
+                  << "  pixelMinSizeX=" << pixelMinSizeX_
+                  << std::endl;
+      }
     }
   }
 
@@ -113,6 +146,52 @@ private:
   // path. Logged from EndJob.
   mutable unsigned long long midPropagatedFallbackCount_ = 0ULL;
   mutable unsigned long long midPropagatedTotalCount_    = 0ULL;
+
+  // Per-stream fit-outcome accounting, printed from the destructor.
+  mutable unsigned long long fitAttempted_ = 0ULL;
+  mutable unsigned long long fitSucceeded_ = 0ULL;
+  mutable unsigned long long fitFailKinFit_ = 0ULL;      // seed kinematic vertex fit empty/inconsistent
+  mutable unsigned long long fitFailProp_ = 0ULL;        // Geant4e propagation failed
+  mutable unsigned long long fitFailHitUpdate_ = 0ULL;   // CPE re-evaluation (cloner) invalid
+  mutable unsigned long long fitFailChargeFlip_ = 0ULL;  // q/p sign flip in parameter update
+  mutable unsigned long long fitStepClamped_ = 0ULL;     // fits with >=1 momentum-floor-clamped GN step
+  mutable unsigned long long fitStepBacktracked_ = 0ULL; // step halvings after a failed-leg iteration (retries)
+  mutable unsigned long long fitSeedInflated_ = 0ULL;    // iteration-0 seed-momentum inflations (retries)
+  // Momentum floor for the Gauss-Newton step clamp (GeV). 2 GeV suits
+  // J/psi muons (as in the single-track maker); V0 drivers lower it to
+  // sit above the propagation floor but below the soft-daughter spectrum.
+  double clampMomentumFloor_ = 2.0;
+  // Per-candidate leg-failure retry budgets (see the recovery block).
+  unsigned int maxBacktracks_ = 4;
+  unsigned int maxSeedInflations_ = 2;
+
+  // Optional per-candidate EDM ValueMap output for the NanoAOD path, keyed to
+  // the srcCandidates collection. Off by default so the ALCARECO TTree drivers
+  // are unaffected. Kinematics are emitted whenever produceValueMaps_ is set;
+  // the (large) global-fit payload (globalIdxs / jacRef / jacMass / factored
+  // Hessian) is emitted additionally only when fillGradsFactored_ is set.
+  bool produceValueMaps_ = false;
+  edm::EDPutTokenT<edm::ValueMap<float>> vmCorMass_, vmCorMassErr_, vmCorPt_, vmCorEta_, vmCorPhi_;
+  edm::EDPutTokenT<edm::ValueMap<float>> vmMuPlusPt_, vmMuPlusEta_, vmMuPlusPhi_;
+  edm::EDPutTokenT<edm::ValueMap<float>> vmMuMinusPt_, vmMuMinusEta_, vmMuMinusPhi_;
+  edm::EDPutTokenT<edm::ValueMap<float>> vmEdmval_;
+  edm::EDPutTokenT<edm::ValueMap<std::vector<int>>> vmGlobalIdxs_;
+  edm::EDPutTokenT<edm::ValueMap<std::vector<float>>> vmJacRefMuPlus_, vmJacRefMuMinus_, vmJacMass_, vmHessFactor_;
+
+  mutable unsigned long long fitFailNaN_ = 0ULL;         // NaN/inf parameter update
+  mutable unsigned long long fitSkippedSameSign_ = 0ULL; // same-sign pairs skipped pre-fit (not failures)
+
+  // Global material model: per-leg per-group dxi columns from the
+  // propagator (reused buffer; see doc/global-material-model-plan.md).
+  mutable std::vector<std::pair<int, Eigen::Matrix<double, 5, 1>>> groupJacs_;
+  // per-step field-mode columns from the propagator (reused buffer)
+  mutable std::vector<Eigen::Matrix<double, 5, 1>> modeJacs_;
+
+  // Pixel hit-quality accounting (valid pixel hits entering the quality cut).
+  mutable unsigned long long pixHitsSeen_ = 0ULL;
+  mutable unsigned long long pixHitsEdge_ = 0ULL;       // cluster on the sensor boundary (isOnEdge)
+  mutable unsigned long long pixHitsSizeX1_ = 0ULL;     // cluster sizeX == 1
+  mutable unsigned long long pixHitsDemoted_ = 0ULL;    // demoted to inactive by the quality cut
   bool         debugPerIterDump_;   // emit per-iter vector branches when true
 
   // Per-iteration debug vectors (filled only when debugPerIterDump_=true).
@@ -120,6 +199,7 @@ private:
   // Spans both icons=0 and icons=1 phases (concatenated in iteration order).
   std::vector<double> chisqval_iter;
   std::vector<double> edmval_iter;
+  std::vector<double> edmvalref_iter;   // reference-block EDM = the convergence criterion
   std::vector<double> deltachisqval_iter;
   std::vector<double> mu_qoverp_iter;       // 2 entries per iter (muplus, muminus)
   std::vector<double> Jpsi_mass_iter;       // 1 entry per iter
@@ -327,8 +407,8 @@ private:
 
 
 ResidualGlobalCorrectionMakerTwoTrackG4e::ResidualGlobalCorrectionMakerTwoTrackG4e(
-    const edm::ParameterSet &iConfig, const CvhMasterThread *master)
-    : ResidualGlobalCorrectionMakerBase(iConfig, master),
+    const edm::ParameterSet &iConfig)
+    : ResidualGlobalCorrectionMakerBase(iConfig),
       ttrhToken_(esConsumes(edm::ESInputTag("", "WithAngleAndTemplate"))),
       g4ePropToken_(esConsumes(edm::ESInputTag("", "Geant4ePropagator"))),
       transTrackBuilderToken_(esConsumes(edm::ESInputTag("", "TransientTrackBuilder"))),
@@ -367,6 +447,40 @@ ResidualGlobalCorrectionMakerTwoTrackG4e::ResidualGlobalCorrectionMakerTwoTrackG
       ? iConfig.getParameter<unsigned int>("nIters") : 10u;
   edmConvergence_ = iConfig.existsAs<double>("edmConvergence")
       ? iConfig.getParameter<double>("edmConvergence") : 1.e-5;
+  clampMomentumFloor_ = iConfig.existsAs<double>("clampMomentumFloor")
+      ? iConfig.getParameter<double>("clampMomentumFloor") : 2.0;
+  maxBacktracks_ = iConfig.existsAs<unsigned int>("maxBacktracks")
+      ? iConfig.getParameter<unsigned int>("maxBacktracks") : 4u;
+  maxSeedInflations_ = iConfig.existsAs<unsigned int>("maxSeedInflations")
+      ? iConfig.getParameter<unsigned int>("maxSeedInflations") : 2u;
+
+  // NanoAOD path: emit per-candidate ValueMaps keyed to srcCandidates. Only
+  // meaningful in the candidate-driven mode. Kinematics always; the global-fit
+  // payload additionally when fillGradsFactored_ is set.
+  produceValueMaps_ = iConfig.existsAs<bool>("produceValueMaps")
+      ? iConfig.getParameter<bool>("produceValueMaps") : false;
+  if (produceValueMaps_) {
+    vmCorMass_    = produces<edm::ValueMap<float>>("corMass");
+    vmCorMassErr_ = produces<edm::ValueMap<float>>("corMassErr");
+    vmCorPt_      = produces<edm::ValueMap<float>>("corPt");
+    vmCorEta_     = produces<edm::ValueMap<float>>("corEta");
+    vmCorPhi_     = produces<edm::ValueMap<float>>("corPhi");
+    vmMuPlusPt_   = produces<edm::ValueMap<float>>("muPlusPt");
+    vmMuPlusEta_  = produces<edm::ValueMap<float>>("muPlusEta");
+    vmMuPlusPhi_  = produces<edm::ValueMap<float>>("muPlusPhi");
+    vmMuMinusPt_  = produces<edm::ValueMap<float>>("muMinusPt");
+    vmMuMinusEta_ = produces<edm::ValueMap<float>>("muMinusEta");
+    vmMuMinusPhi_ = produces<edm::ValueMap<float>>("muMinusPhi");
+    vmEdmval_     = produces<edm::ValueMap<float>>("edmval");
+    if (fillGradsFactored_) {
+      vmGlobalIdxs_    = produces<edm::ValueMap<std::vector<int>>>("globalIdxs");
+      vmJacRefMuPlus_  = produces<edm::ValueMap<std::vector<float>>>("jacRefMuPlus");
+      vmJacRefMuMinus_ = produces<edm::ValueMap<std::vector<float>>>("jacRefMuMinus");
+      vmJacMass_       = produces<edm::ValueMap<std::vector<float>>>("jacMass");
+      vmHessFactor_    = produces<edm::ValueMap<std::vector<float>>>("hessFactor");
+    }
+  }
+
   useStartingState_ = iConfig.existsAs<std::string>("useStartingState")
       ? iConfig.getParameter<std::string>("useStartingState") : std::string("perigee");
   if (useStartingState_ != "perigee" && useStartingState_ != "midPropagated") {
@@ -696,6 +810,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::beginStream(edm::StreamID streami
     if (debugPerIterDump_) {
       tree->Branch("chisqval_iter",       &chisqval_iter);
       tree->Branch("edmval_iter",         &edmval_iter);
+      tree->Branch("edmvalref_iter",      &edmvalref_iter);
       tree->Branch("deltachisqval_iter",  &deltachisqval_iter);
       tree->Branch("mu_qoverp_iter",      &mu_qoverp_iter);
       tree->Branch("Jpsi_mass_iter",      &Jpsi_mass_iter);
@@ -717,7 +832,14 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::beginStream(edm::StreamID streami
 // ------------ method called for each event ------------
 void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const edm::EventSetup &iSetup)
 {
-  
+  // Sync the material-group k values from corparms_ into the model so the
+  // propagator's per-step provider applies the current calibration.
+  if (globalMaterialModel_) {
+    for (unsigned int g = 0; g < matGroupGlobalIdx_.size(); ++g) {
+      matModel_->setKValue(g, corparms_[matGroupGlobalIdx_[g]]);
+    }
+  }
+
   const bool dogen = fitFromGenParms_;
  
   constexpr bool dolocalupdate = false;
@@ -756,7 +878,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
   // MT: bootstrap this TBB worker thread's G4 environment from the master
   // (world + per-thread navigator + per-thread magnetic field). Idempotent
   // per thread.
-  worker_->ensureInitialized(globalCache()->cvhMaster());
+  worker_->ensureInitialized(iSetup.getData(cvhMasterToken_).cvhMaster());
   setG4RandomEngineForStream(iEvent.streamID());
   // Lazy-init the per-stream propagator clone. Safe AFTER ensureInitialized
   // has put the world in place on this thread.
@@ -1000,11 +1122,21 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
   // per-pair loop below can fill bCandIdx positionally. Empty when no
   // bCandIdxSrc was configured -- per-row Fill() sees -1.
   std::vector<int> bCandIdxPerPair;
+  // Index into the srcCandidates collection for each pair (candidate-driven
+  // mode), so per-candidate ValueMap outputs can be written back positionally
+  // (one entry per input candidate, sentinel for skipped/failed). -1 in the
+  // legacy fallback (no candidate collection to key to).
+  std::vector<int> candCollIdxPerPair;
+  // The srcCandidates handle, kept at produce() scope so the ValueMaps can be
+  // sized and keyed to it after the pair loop.
+  Handle<reco::VertexCompositeCandidateCollection> vmCandH;
   if (!inputCandidatesTag_.label().empty()) {
     Handle<reco::VertexCompositeCandidateCollection> candH;
     iEvent.getByToken(inputCandidates_, candH);
+    vmCandH = candH;
     trackPairs.reserve(candH->size());
     bCandIdxPerPair.reserve(candH->size());
+    candCollIdxPerPair.reserve(candH->size());
     for (std::size_t ic = 0; ic < candH->size(); ++ic) {
       const auto& cand = (*candH)[ic];
       if (cand.numberOfDaughters() < 2) continue;
@@ -1014,6 +1146,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
       trackPairs.push_back({{&*d0->track(), &*d1->track()}});
       bCandIdxPerPair.push_back(
           (bCandIdxH.isValid() && ic < bCandIdxH->size()) ? (*bCandIdxH)[ic] : -1);
+      candCollIdxPerPair.push_back(static_cast<int>(ic));
     }
   } else {
     if (trackOrigH->size() >= 2) {
@@ -1023,15 +1156,40 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
       for (auto jtrack = itrack + 1; jtrack != trackOrigH->end(); ++jtrack) {
         trackPairs.push_back({{&*itrack, &*jtrack}});
         bCandIdxPerPair.push_back(-1);  // no candidate-level index in the legacy outer-product
+        candCollIdxPerPair.push_back(-1);
       }
   }
+
+  // Per-candidate ValueMap accumulators (sentinel-initialised to one entry per
+  // input candidate; filled at the point the per-candidate tree row is written).
+  const bool doVM = produceValueMaps_ && vmCandH.isValid();
+  const std::size_t nVMCand = doVM ? vmCandH->size() : 0;
+  std::vector<float> vmCorMassV(nVMCand, -99.f), vmCorMassErrV(nVMCand, -99.f),
+      vmCorPtV(nVMCand, -99.f), vmCorEtaV(nVMCand, -99.f), vmCorPhiV(nVMCand, -99.f),
+      vmMuPlusPtV(nVMCand, -99.f), vmMuPlusEtaV(nVMCand, -99.f), vmMuPlusPhiV(nVMCand, -99.f),
+      vmMuMinusPtV(nVMCand, -99.f), vmMuMinusEtaV(nVMCand, -99.f), vmMuMinusPhiV(nVMCand, -99.f),
+      vmEdmvalV(nVMCand, -99.f);
+  std::vector<std::vector<int>> vmGlobalIdxsV(nVMCand);
+  std::vector<std::vector<float>> vmJacRefMuPlusV(nVMCand), vmJacRefMuMinusV(nVMCand),
+      vmJacMassV(nVMCand), vmHessFactorV(nVMCand);
 
   for (std::size_t ipair = 0; ipair < trackPairs.size(); ++ipair) {
     auto& trackPair = trackPairs[ipair];
     bCandIdx = bCandIdxPerPair[ipair];
+    const int candCollIdx = candCollIdxPerPair[ipair];
     const reco::Track* itrack = trackPair[0];
     const reco::Track* jtrack = trackPair[1];
     if (itrack->isLooper() || jtrack->isLooper()) {
+      continue;
+    }
+
+    // All two-track channels fit a neutral parent; a same-sign pair can
+    // never satisfy the charge-sum requirement enforced after the update,
+    // so it would waste a kinematic fit plus a full GN iteration and then
+    // abort deterministically. Skip it up front (counted separately -- these
+    // are not fit failures).
+    if (itrack->charge() + jtrack->charge() != 0) {
+      ++fitSkippedSameSign_;
       continue;
     }
     
@@ -1143,6 +1301,12 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             continue;
           }
 
+          // Leg-structure-free mode: drop hitless surfaces (see the
+          // single-track maker for the rationale).
+          if (skipHitlessSurfaces_ && !(*it)->isValid()) {
+            continue;
+          }
+
           const GeomDet* detectorG = globalGeometry->idToDet((*it)->geographicalId());
           const GluedGeomDet* detglued = dynamic_cast<const GluedGeomDet*>(detectorG);
           
@@ -1186,7 +1350,14 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 // std::cout << "id = " << id << " detid = " << (*it)->geographicalId().rawId() << " minPixelRow = " << cluster.minPixelRow() << " maxPixelRow = " << cluster.maxPixelRow() << " minPixelCol = " << cluster.minPixelCol() << " maxPixelCol = " << cluster.maxPixelCol() << std::endl;
 // }
                 
-                hitquality = !pixhit->isOnEdge() && cluster.sizeX() > 1;
+                ++pixHitsSeen_;
+                const bool onEdge = pixhit->isOnEdge();
+                if (onEdge) ++pixHitsEdge_;
+                if (cluster.sizeX() <= 1) ++pixHitsSizeX1_;
+                // Boundary veto configurable via keepPixelEdgeHits; sizeX
+                // threshold configurable via pixelMinSizeX (default 2 = legacy).
+                hitquality = (keepPixelEdgeHits_ || !onEdge) && cluster.sizeX() >= pixelMinSizeX_;
+                if (!hitquality) ++pixHitsDemoted_;
 // hitquality = !pixhit->isOnEdge() && cluster.sizeX() > 1 && pixhit->qBin() < 2;
 // hitquality = !pixhit->isOnEdge() && cluster.sizeX() > 1 && cluster.sizeY() > 1;
               }
@@ -1215,9 +1386,9 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
             
             if (hitquality) {
-              hits.push_back((*it)->cloneForFit(*detectorG));              
+              hits.push_back((*it)->cloneForFit(*detectorG));
             }
-            else {
+            else if (!skipHitlessSurfaces_) {
               hits.push_back(TrackingRecHit::RecHitPointer(new InvalidTrackingRecHit(*detectorG, TrackingRecHit::inactive)));
             }
           }          
@@ -1366,8 +1537,11 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
       const unsigned int nparsAlignment = 5*nvalid + nvalidalign2d;
       const unsigned int nFieldModes = fieldCorrection_->nModes();
       const unsigned int nparsBfield = nhits * nFieldModes;
-      const unsigned int nparsEloss = nhits;
-// const unsigned int nparsEloss = nhits + 2;
+      // Global material model: one slot per group per hit (uncrossed groups
+      // contribute zero columns; shared global indices collapse like the
+      // field-mode block). Legacy: one per-module eloss slot per hit.
+      const unsigned int nMatGroups = globalMaterialModel_ ? matModel_->nGroups() : 0;
+      const unsigned int nparsEloss = globalMaterialModel_ ? nhits * nMatGroups : nhits;
       const unsigned int npars = nparsAlignment + nparsBfield + nparsEloss;
       
       const unsigned int nstateparms = 10 + 5*nhits;
@@ -1399,6 +1573,12 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
       const unsigned int nstatefree = freestateidxs.size();
 
       bool valid = true;
+      bool stepClampedThisFit = false;
+      // Leg-failure recovery budgets (per candidate): step halvings for
+      // failures at iiter > 0, seed-momentum inflations at iiter == 0.
+      unsigned int nBacktracks = 0;
+      unsigned int nSeedInflations = 0;
+      ++fitAttempted_;
       
       
       if (false) {
@@ -1417,6 +1597,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
       if (debugPerIterDump_) {
         chisqval_iter.clear();
         edmval_iter.clear();
+        edmvalref_iter.clear();
         deltachisqval_iter.clear();
         mu_qoverp_iter.clear();
         Jpsi_mass_iter.clear();
@@ -1466,6 +1647,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
         if (kinTree->isEmpty() || !kinTree->isConsistent()) {
 // continue;
           std::cout << "Abort: invalid kinematic fit!\n";
+          ++fitFailKinFit_;
           valid = false;
           break;
         }
@@ -1473,6 +1655,16 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
         kinTree->movePointerToTheTop();
         RefCountedKinematicParticle dimu_kinfit = kinTree->currentParticle();
         const double m0 = dimu_kinfit->currentState().mass();
+
+        if (debugPerIterDump_) {
+          RefCountedKinematicVertex dbgvtx = kinTree->currentDecayVertex();
+          std::cout << "dbgSeed: icons=" << icons
+                    << " kinvtx=" << dbgvtx->position()
+                    << " kinmass=" << m0
+                    << " seed0(q,pt,eta)=(" << itrack->charge() << "," << itrack->pt() << "," << itrack->eta() << ")"
+                    << " seed1(q,pt,eta)=(" << jtrack->charge() << "," << jtrack->pt() << "," << jtrack->eta() << ")"
+                    << std::endl;
+        }
         
         if (false) {
           // debug output
@@ -1597,6 +1789,17 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           // iter's pass count -- exactly what "Final" semantically denotes.
           nvalidFinalarr = {{ 0, 0 }};
           nvalidpixelFinalarr = {{ 0, 0 }};
+
+          // Backtracking snapshot: the linearization state at iteration
+          // entry, BEFORE the reference update below applies dxfull. On a
+          // failed propagation leg the iteration is redone from this state
+          // with a halved step (iiter > 0) or an inflated seed momentum for
+          // the failing daughter (iiter == 0: end-of-range protons whose
+          // modeled dE/dx drains the seed trajectory).
+          const std::array<Matrix<double, 7, 1>, 2> refftsarrSnap = refftsarr;
+          const std::array<std::vector<Matrix<double, 7, 1>>, 2> layerStatesSnap = layerStatesarr;
+          bool retryIter = false;
+          int retryFailId = -1;
 
           // Sparse GBL assembly buffers (replaces dense gradfull/hessfull).
           // Ffull = d(residual)/d(state)  [ncons x nstateparms]
@@ -1847,20 +2050,30 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
               const DetId aligndetid = alignGlued_ ? parmdetid : hit->geographicalId();
 
-              const unsigned int elossglobalidx = detidparms.at(std::make_pair(7, parmdetid));
+              const unsigned int elossglobalidx =
+                  globalMaterialModel_ ? 0 : detidparms.at(std::make_pair(7, parmdetid));
 
               // 3D field correction at the propagation start. The per-mode
               // (Bx, By, Bz) basis values feed the chain-rule scaling of the
               // transport-Jacobian dBx/dBy/dBz columns (cols 5,6,7 of the
               // 5x9 transportJacobianBxByBzD).
               const GlobalPoint propStartPos(updtsos[0], updtsos[1], updtsos[2]);
-              const Eigen::Vector3d dB = fieldCorrection_->getCorrectionAt(propStartPos, corparms_);
+              // Per-step mode: the provider applies the correction inside
+              // the propagator; per-leg basis samples not needed.
+              const Eigen::Vector3d dB = perStepFieldModes_
+                  ? Eigen::Vector3d::Zero()
+                  : fieldCorrection_->getCorrectionAt(propStartPos, corparms_);
               std::vector<double> dBxPerMode, dByPerMode, dBzPerMode;
-              fieldCorrection_->getBxBasisAt(propStartPos, dBxPerMode);
-              fieldCorrection_->getByBasisAt(propStartPos, dByPerMode);
-              fieldCorrection_->getBzBasisAt(propStartPos, dBzPerMode);
+              if (!perStepFieldModes_) {
+                fieldCorrection_->getBxBasisAt(propStartPos, dBxPerMode);
+                fieldCorrection_->getByBasisAt(propStartPos, dByPerMode);
+                fieldCorrection_->getBzBasisAt(propStartPos, dBzPerMode);
+              }
 
-              const double dxival = corparms_[elossglobalidx];
+              // Global material model: leg-constant dxi is zero; per-step
+              // group values are applied by the propagator's provider path
+              // (k values synced from corparms_ at the top of produce).
+              const double dxival = globalMaterialModel_ ? 0. : corparms_[elossglobalidx];
 
               const GloballyPositioned<double> &surface = surfacemapD_.at(hit->geographicalId());
 
@@ -1869,16 +2082,51 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               const Eigen::Matrix<double, 7, 1> propInputState = updtsos;
 
               auto propresult = g4prop->propagateGenericWithJacobianAltD(updtsos, surface, dB, dxival,
-                                                                          0., 0., -1., g4PartName);
+                                                                          0., 0., -1., g4PartName,
+                                                                          matModel_.get(),
+                                                                          matModel_ ? &groupJacs_ : nullptr,
+                                                                          fieldModeProvider_.get(),
+                                                                          fieldModeProvider_ ? &modeJacs_ : nullptr);
               if (!std::get<0>(propresult)) {
-                std::cout << "ResidualGlobalCorrectionMakerTwoTrackG4e ### Abort: Propagation Failed!" << std::endl;
-                valid = false;
+                std::cout << "ResidualGlobalCorrectionMakerTwoTrackG4e ### Abort: Propagation Failed!"
+                          << " icons = " << icons << " iiter = " << iiter
+                          << " id = " << id << " ihit = " << ihit
+                          << " seed0: q=" << itrack->charge() << " pt=" << itrack->pt() << " eta=" << itrack->eta()
+                          << " seed1: q=" << jtrack->charge() << " pt=" << jtrack->pt() << " eta=" << jtrack->eta()
+                          << std::endl;
+                // Leg-failure recovery: redo the iteration with a halved
+                // step (iiter > 0: the previous iterate propagated fine, so
+                // the too-large update is the culprit) or an inflated seed
+                // momentum for the failing daughter (iiter == 0). Only when
+                // the retry budget is exhausted is the candidate lost.
+                if ((iiter > 0 && nBacktracks < maxBacktracks_) || (iiter == 0 && nSeedInflations < maxSeedInflations_)) {
+                  retryIter = true;
+                  retryFailId = id;
+                } else {
+                  ++fitFailProp_;
+                  valid = false;
+                }
                 break;
               }
 
 
               updtsos = std::get<1>(propresult);
               const Matrix<double, 5, 5> Qcurv = std::get<2>(propresult);
+
+              if (debugPerIterDump_) {
+                const auto& sp = surface.position();
+                std::cout << "dbgHit: icons=" << icons << " iiter=" << iiter
+                          << " id=" << id << " ihit=" << ihit
+                          << " detid=" << hit->geographicalId().rawId()
+                          << " valid=" << hit->isValid()
+                          << " surf(r,z)=(" << std::hypot(sp.x(), sp.y()) << "," << sp.z() << ")"
+                          << " in(r,z,p)=(" << std::hypot(propInputState[0], propInputState[1])
+                          << "," << propInputState[2] << "," << propInputState.segment<3>(3).norm() << ")"
+                          << " out(r,z,p)=(" << std::hypot(updtsos[0], updtsos[1])
+                          << "," << updtsos[2] << "," << updtsos.segment<3>(3).norm() << ")"
+                          << " dEdxlast=" << std::get<4>(propresult)
+                          << std::endl;
+              }
               const Matrix<double, 5, 9> FdFm = std::get<3>(propresult);
               const double dEdxlast = std::get<4>(propresult);
 
@@ -1929,7 +2177,25 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                 Q = Hm*Qcurv*Hm.transpose();
               }
 
-              const Matrix<double, 5, 5> Qinv = Q.inverse();
+              // Guarded inversion of the process noise: a (near-)zero-length
+              // leg -- a displaced V0 vertex sitting on the first-hit layer --
+              // has Q ~ 0, and a plain inverse poisons the solve with inf
+              // (observed as the fail[nan] class: finite r and F, non-finite
+              // Vinv, daughters with 1-3 valid hits at refR ~ 5 cm). Floor
+              // the eigenvalues so the leg becomes an extremely stiff, rather
+              // than exact, constraint.
+              Matrix<double, 5, 5> Qinv;
+              {
+                const SelfAdjointEigenSolver<Matrix<double, 5, 5>> esq(Q);
+                const double lmax = esq.eigenvalues()(4);
+                const double lfloor = std::max(1e-10 * std::max(lmax, 0.), 1e-16);
+                Matrix<double, 5, 1> linv;
+                for (int k = 0; k < 5; ++k) {
+                  linv(k) = 1. / std::max(esq.eigenvalues()(k), lfloor);
+                }
+                Qinv = esq.eigenvectors() * linv.asDiagonal() *
+                       esq.eigenvectors().transpose();
+              }
 
               // Build the per-hit field+eloss Jacobian: per-mode columns sum
               // the dBx, dBy, dBz transport-Jacobian columns (cols 5,6,7 of
@@ -1937,16 +2203,33 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               // Bx/By/Bz basis values at the propagation start; the last
               // column is d/dxi (FdFm.col(8) unchanged).
               const unsigned int nlocalbfield = nFieldModes;
-              const unsigned int nlocaleloss = 1;
+              // Eloss block: one column per material group (global model) or
+              // the single per-module dxi column (legacy).
+              const unsigned int nlocaleloss = globalMaterialModel_ ? nMatGroups : 1;
               const unsigned int nlocalparms = nlocalbfield + nlocaleloss;
 
               Matrix<double, 5, Dynamic> dStateDparams(5, nlocalparms);
-              for (unsigned int imode = 0; imode < nlocalbfield; ++imode) {
-                dStateDparams.col(imode) = FdFm.col(5) * dBxPerMode[imode]
-                                         + FdFm.col(6) * dByPerMode[imode]
-                                         + FdFm.col(7) * dBzPerMode[imode];
+              if (perStepFieldModes_) {
+                for (unsigned int imode = 0; imode < nlocalbfield; ++imode) {
+                  dStateDparams.col(imode) = modeJacs_[imode];
+                }
+              } else {
+                for (unsigned int imode = 0; imode < nlocalbfield; ++imode) {
+                  dStateDparams.col(imode) = FdFm.col(5) * dBxPerMode[imode]
+                                           + FdFm.col(6) * dByPerMode[imode]
+                                           + FdFm.col(7) * dBzPerMode[imode];
+                }
               }
-              dStateDparams.col(nlocalbfield) = FdFm.col(8);
+              if (globalMaterialModel_) {
+                // per-group dxi columns from the propagator (zero for groups
+                // this leg did not cross)
+                dStateDparams.rightCols(nlocaleloss).setZero();
+                for (auto const &gc : groupJacs_) {
+                  dStateDparams.col(nlocalbfield + gc.first) = gc.second;
+                }
+              } else {
+                dStateDparams.col(nlocalbfield) = FdFm.col(8);
+              }
 
               // ----- Numerical-FD closure (debug) ---------------
               // FDs only the basis-invariant curvilinear components
@@ -1963,7 +2246,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               // Tests the 10 modes with the largest basis amplitude at this
               // point so the FD signal is well-conditioned across mode
               // counts. Runs once per job.
-              if (runFDClosure_ && !didFDClosure_ && nlocalbfield > 0) {
+              if (runFDClosure_ && !didFDClosure_ && !perStepFieldModes_ && nlocalbfield > 0) {
                 auto qopLamPhi = [](const Eigen::Matrix<double, 7, 1>& s) {
                   const double px = s(3), py = s(4), pz = s(5), q = s(6);
                   const double pT = std::sqrt(px * px + py * py);
@@ -2141,7 +2424,14 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               for (unsigned int imode = 0; imode < nlocalbfield; ++imode) {
                 globalidxv[parmidx++] = fieldCorrection_->basisGlobalIdx(imode);
               }
-              globalidxv[parmidx++] = elossglobalidx;
+              if (globalMaterialModel_) {
+                // One slot per material group, shared global indices
+                for (unsigned int g = 0; g < nMatGroups; ++g) {
+                  globalidxv[parmidx++] = matGroupGlobalIdx_[g];
+                }
+              } else {
+                globalidxv[parmidx++] = elossglobalidx;
+              }
 
               if (hit->isValid()) {
 
@@ -2158,6 +2448,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
                 if (!preciseHit->isValid()) {
                   std::cout << "Abort: Failed updating hit" << std::endl;
+                  ++fitFailHitUpdate_;
                   valid = false;
                   break;
                 }
@@ -2372,10 +2663,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                   bool morehitquality = true;
 
                   if (morehitquality) {
-                    nValidHitsFinal++;
                     nvalidFinalarr[id]++;
                     if (ispixel) {
-                      nValidPixelHitsFinal++;
                       nvalidpixelFinalarr[id]++;
                     }
                   }
@@ -2434,13 +2723,35 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               }
             }
 
-            if (!valid) {
+            if (!valid || retryIter) {
               break;
             }
-            
+
             trackstateidx += 5*tracknhits;
           }
-          
+
+          if (retryIter) {
+            // Restore the iteration-entry linearization state and redo this
+            // iteration with the adjusted input.
+            refftsarr = refftsarrSnap;
+            layerStatesarr = layerStatesSnap;
+            if (iiter > 0) {
+              dxfull *= 0.5;
+              ++nBacktracks;
+              ++fitStepBacktracked_;
+              iiter -= 1;  // loop ++ redoes the same iteration
+            } else {
+              // end-of-range daughter: inflate its seed momentum and let the
+              // hits pull it back down
+              refftsarr[retryFailId].segment<3>(3) *= 1.25;
+              ++nSeedInflations;
+              ++fitSeedInflated_;
+              // unsigned wrap: ++ brings iiter back to 0
+              iiter = std::numeric_limits<unsigned int>::max();
+            }
+            continue;
+          }
+
           if (!valid) {
             break;
           }
@@ -2622,10 +2933,83 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
           dxfree = -Cinvd.solve(VinvF.transpose() * rfull);
 
+          // Fail fast on a non-finite update: a drained/runaway propagation
+          // leg (or a singular normal matrix) yields NaN/inf here, which
+          // previously leaked into the charge-sum check and was miscounted
+          // as a charge flip.
+          if (!dxfree.allFinite()) {
+            // Localize the poison: which solve input went non-finite, and
+            // the displaced-vertex geometry of the candidate.
+            const bool rOk = rfull.allFinite();
+            const bool fOk = Eigen::MatrixXd(Ffull).allFinite();
+            const bool vOk = Eigen::MatrixXd(Vinvfull).allFinite();
+            const double r0 = std::hypot(refftsarr[0][0], refftsarr[0][1]);
+            const double r1 = std::hypot(refftsarr[1][0], refftsarr[1][1]);
+            std::cout << "Abort: non-finite parameter update from solve!"
+                      << " icons = " << icons << " iiter = " << iiter
+                      << " finite(r,F,Vinv)=(" << rOk << "," << fOk << "," << vOk << ")"
+                      << " refR=(" << r0 << "," << r1 << ")"
+                      << " nhits=(" << nhitsarr[0] << "," << nhitsarr[1] << ")"
+                      << " nvalid=(" << nvalidarr[0] << "," << nvalidarr[1] << ")"
+                      << " seed0(q,pt,eta)=(" << itrack->charge() << "," << itrack->pt() << "," << itrack->eta() << ")"
+                      << " seed1(q,pt,eta)=(" << jtrack->charge() << "," << jtrack->pt() << "," << jtrack->eta() << ")"
+                      << std::endl;
+            ++fitFailNaN_;
+            valid = false;
+            break;
+          }
+
           dxfull = VectorXd::Zero(nstateparms);
           dxfull(freestateidxs) = dxfree;
-          
-          
+
+          // Momentum-floor safeguard on the Gauss-Newton step (port of the
+          // single-track clamp). Only fatal update outcomes are prevented --
+          // a daughter's q/p sign flipping, or its momentum dropping below
+          // the configurable floor -- by scaling the WHOLE joint step vector
+          // (both tracks + vertex are one coupled system: one common scale,
+          // direction preserved). Converts most hard aborts at the
+          // charge-sum check below into recoverable (or cleanly at-cap)
+          // fits; essential for soft V0 daughters.
+          {
+            const Matrix<double, 10, 1> statepcaref =
+                twoTrackCart2pca(refftsarr[0], refftsarr[1]);
+            double stepscale = 1.;
+            for (unsigned int id = 0; id < 2; ++id) {
+              const double qopref = statepcaref[3 * id];
+              const double dqop = dxfull[3 * id];
+              if (qopref == 0. || dqop == 0.) {
+                continue;
+              }
+              const double qopupd = qopref + dqop;
+              double s = 1.;
+              if (qopupd * qopref <= 0.) {
+                // sign flip: stop half-way toward q/p = 0
+                s = -0.5 * qopref / dqop;
+              } else if (std::abs(qopupd) > 1. / clampMomentumFloor_) {
+                // p_upd below the floor: land exactly on p = floor, same charge
+                s = (std::copysign(1. / clampMomentumFloor_, qopref) - qopref) / dqop;
+              }
+              if (s < stepscale) {
+                stepscale = s;
+              }
+            }
+            if (stepscale < 1.) {
+              stepscale = std::max(stepscale, 0.);
+              dxfree *= stepscale;
+              dxfull *= stepscale;
+              if (!stepClampedThisFit) {
+                stepClampedThisFit = true;
+                ++fitStepClamped_;
+              }
+              std::cout << "GN step clamped (two-track): icons = " << icons
+                        << " iiter = " << iiter << " scale = " << stepscale
+                        << " seed0(q,pt,eta)=(" << itrack->charge() << "," << itrack->pt()
+                        << "," << itrack->eta() << ")"
+                        << " seed1(q,pt,eta)=(" << jtrack->charge() << "," << jtrack->pt()
+                        << "," << jtrack->eta() << ")" << std::endl;
+            }
+          }
+
 // std::cout << "dxfull vtx: " << dxfull.head<3>() << std::endl;
           
   // dxdparms = -Cinvd.solve(d2chisqdxdparms).transpose();
@@ -2860,6 +3244,14 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           
           // *TODO* better handling of this case?
           if ( (muchargearr[0] + muchargearr[1]) != 0) {
+            std::cout << "Abort: charge flip in parameter update!"
+                      << " qbp0 = " << mucurvarr[0][0]
+                      << " qbp1 = " << mucurvarr[1][0]
+                      << " icons = " << icons << " iiter = " << iiter
+                      << " seedq0 = " << itrack->charge() << " seedq1 = " << jtrack->charge()
+                      << " seedpt0 = " << itrack->pt() << " seedpt1 = " << jtrack->pt()
+                      << std::endl;
+            ++fitFailChargeFlip_;
             valid = false;
             break;
           }
@@ -3252,6 +3644,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
           if (std::isnan(edmval) || std::isinf(edmval)) {
             std::cout << "WARNING: invalid parameter update!!!" << " edmval = " << edmval << " deltachisqval = " << deltachisqval << std::endl;
+            ++fitFailNaN_;
             valid = false;
             break;
           }
@@ -3267,8 +3660,21 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           // candidate. Pushed before the convergence-break check so the
           // break-triggering iteration is included.
           if (debugPerIterDump_) {
+            // stdout mirror of the per-iter trace: unlike the tree branches
+            // this also survives for candidates whose fit later aborts.
+            std::cout << "dbgIter: icons=" << icons << " iiter=" << iiter
+                      << " chisq=" << chisqval
+                      << " deltachisq=" << deltachisqval
+                      << " edmval=" << edmval
+                      << " dxvtx10max=" << dxfull.head<10>().cwiseAbs().maxCoeff()
+                      << " ref0(r,z,p)=(" << std::hypot(refftsarr[0][0], refftsarr[0][1])
+                      << "," << refftsarr[0][2] << "," << refftsarr[0].segment<3>(3).norm() << ")"
+                      << " ref1(r,z,p)=(" << std::hypot(refftsarr[1][0], refftsarr[1][1])
+                      << "," << refftsarr[1][2] << "," << refftsarr[1].segment<3>(3).norm() << ")"
+                      << std::endl;
             chisqval_iter.push_back(static_cast<double>(chisqval));
             edmval_iter.push_back(static_cast<double>(edmval));
+            edmvalref_iter.push_back(static_cast<double>(edmvalref));
             deltachisqval_iter.push_back(static_cast<double>(deltachisqval));
             for (unsigned int id = 0; id < 2; ++id) {
               const double px = refftsarr[id][3];
@@ -3431,7 +3837,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
       if (!valid) {
         continue;
       }
-      
+      ++fitSucceeded_;
+
 // std::cout << "gradfull rows cols " << gradfull.rows() << " " << gradfull.cols() << "nstateparms = " << nstateparms << std::endl;
     
 // auto const& dchisqdx = gradfull.head(nstateparms);
@@ -3517,8 +3924,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
       gradv.clear();
       gradv.resize(nparsfinal,0.);
-      
-      if (fillTrackTree_ && fillGrads_) {
+
+      if (fillTrackTree_ && (fillGrads_ || fillGradsFactored_)) {
         tree->SetBranchAddress("gradv", gradv.data());
       }
       
@@ -3555,14 +3962,14 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
         
       //fill packed hessian and indices
       const unsigned int nsym = nparsfinal*(1+nparsfinal)/2;
-      hesspackedv.clear();    
+      hesspackedv.clear();
       hesspackedv.resize(nsym, 0.);
-      
+
       nSym = nsym;
       if (fillTrackTree_ && fillGrads_) {
         tree->SetBranchAddress("hesspackedv", hesspackedv.data());
       }
-      
+
       Map<VectorXf> hesspacked(hesspackedv.data(), nsym);
       const Map<const VectorXu> globalidx(globalidxvfinal.data(), nparsfinal);
 
@@ -3572,13 +3979,91 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
         hesspacked.segment(packedidx, segmentsize) = hess.block<1, Dynamic>(ipar, ipar, 1, segmentsize).cast<float>();
         packedidx += segmentsize;
       }
-      
+
+      // Factored (low-rank) Hessian storage: hess = 2 J^T R J with
+      // rank(R) = rank(Vinv) - nstatefree, i.e. the measurement content
+      // ndof (+1 mass row on the constrained pass) plus the deweighted
+      // strip coordinates, which sit at ~1e-9 relative eigenvalue and
+      // carry no fit weight by construction. Keeping eigenmodes above
+      // hessFactorTol_*lambda_max stores nRank*nParms floats instead of
+      // nParms*(nParms+1)/2 -- with the 360-mode scalar potential this
+      // is ~25-40 modes vs nParms~550, a ~9x reduction, faithful to
+      // within the float32 quantization of the packed storage.
+      // Convention: H = B^T B, B row-major (nRank x nParms), row k =
+      // sqrt(lambda_k) * v_k^T.
+      if (fillGradsFactored_) {
+        const SelfAdjointEigenSolver<MatrixXd> eshess(hess);
+        const VectorXd& eigvals = eshess.eigenvalues();  // ascending
+        const double lambdamax = eigvals(nparsfinal - 1);
+        const double lambdacut = hessFactorTol_*lambdamax;
+
+        unsigned int nrank = 0;
+        double keptmass = 0.;
+        double droppedmass = 0.;
+        for (unsigned int ieig = 0; ieig < nparsfinal; ++ieig) {
+          const double lambda = eigvals(ieig);
+          if (lambda > lambdacut) {
+            ++nrank;
+            keptmass += lambda;
+          }
+          else if (lambda > 0.) {
+            droppedmass += lambda;
+          }
+        }
+
+        nRank = nrank;
+        nFactor = nrank*nparsfinal;
+        hessdroppedmass = keptmass > 0. ? droppedmass/keptmass : 0.;
+
+        hessfactorv.clear();
+        hessfactorv.resize(nFactor, 0.);
+        if (fillTrackTree_) {
+          tree->SetBranchAddress("hessfactorv", hessfactorv.data());
+        }
+
+        // rows ordered by decreasing eigenvalue
+        Map<Matrix<float, Dynamic, Dynamic, RowMajor>> hessfactor(hessfactorv.data(), nrank, nparsfinal);
+        for (unsigned int irank = 0; irank < nrank; ++irank) {
+          const unsigned int ieig = nparsfinal - 1 - irank;
+          hessfactor.row(irank) = (std::sqrt(eigvals(ieig))*eshess.eigenvectors().col(ieig)).transpose().cast<float>();
+        }
+      }
+
       
 // assert(globalidxvfinal.size() == (2*Muplus_nhits + 2*Muminus_nhits + 2*Muplus_nvalid + 2*Muminus_nvalid + Muplus_nvalidpixel + Muminus_nvalidpixel));
 
 // hessv.resize(nparsfinal*nparsfinal);
 // Map<Matrix<float, Dynamic, Dynamic, RowMajor>>(hessv.data(), nparsfinal, nparsfinal) = hess.cast<float>();
-      
+
+      // NanoAOD path: capture this candidate's refit result into the ValueMap
+      // accumulators, positionally by srcCandidates index. This point is after
+      // the icons loop (once per candidate); the Jpsi_*/Mu* members hold the
+      // unconstrained (icons==0) result. Reached only when the candidate
+      // completed the fit -- skipped/failed candidates keep their sentinel.
+      // Kinematics always; the global-fit payload only when fillGradsFactored_
+      // populated it.
+      if (doVM && candCollIdx >= 0) {
+        vmCorMassV[candCollIdx]    = Jpsi_mass;
+        vmCorMassErrV[candCollIdx] = Jpsi_sigmamass;
+        vmCorPtV[candCollIdx]      = Jpsi_pt;
+        vmCorEtaV[candCollIdx]     = Jpsi_eta;
+        vmCorPhiV[candCollIdx]     = Jpsi_phi;
+        vmMuPlusPtV[candCollIdx]   = Muplus_pt;
+        vmMuPlusEtaV[candCollIdx]  = Muplus_eta;
+        vmMuPlusPhiV[candCollIdx]  = Muplus_phi;
+        vmMuMinusPtV[candCollIdx]  = Muminus_pt;
+        vmMuMinusEtaV[candCollIdx] = Muminus_eta;
+        vmMuMinusPhiV[candCollIdx] = Muminus_phi;
+        vmEdmvalV[candCollIdx]     = edmval;
+        if (fillGradsFactored_) {
+          vmGlobalIdxsV[candCollIdx].assign(globalidxvfinal.begin(), globalidxvfinal.end());
+          vmJacRefMuPlusV[candCollIdx]  = Muplus_jacRef;
+          vmJacRefMuMinusV[candCollIdx] = Muminus_jacRef;
+          vmJacMassV[candCollIdx]       = Jpsi_jacMass;
+          vmHessFactorV[candCollIdx]    = hessfactorv;
+        }
+      }
+
       if (fillTrackTree_) {
         tree->Fill();
       }
@@ -3647,7 +4132,58 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
       
     }
   }
-  
+
+  // NanoAOD path: put the per-candidate ValueMaps, keyed to the srcCandidates
+  // collection (one entry per input candidate). Products are always put when
+  // produceValueMaps_ is set (empty maps if there were no candidates).
+  if (produceValueMaps_) {
+    auto putF = [&](edm::EDPutTokenT<edm::ValueMap<float>>& tok, std::vector<float>& v) {
+      edm::ValueMap<float> m;
+      if (doVM) {
+        edm::ValueMap<float>::Filler f(m);
+        f.insert(vmCandH, v.begin(), v.end());
+        f.fill();
+      }
+      iEvent.emplace(tok, std::move(m));
+    };
+    putF(vmCorMass_, vmCorMassV);
+    putF(vmCorMassErr_, vmCorMassErrV);
+    putF(vmCorPt_, vmCorPtV);
+    putF(vmCorEta_, vmCorEtaV);
+    putF(vmCorPhi_, vmCorPhiV);
+    putF(vmMuPlusPt_, vmMuPlusPtV);
+    putF(vmMuPlusEta_, vmMuPlusEtaV);
+    putF(vmMuPlusPhi_, vmMuPlusPhiV);
+    putF(vmMuMinusPt_, vmMuMinusPtV);
+    putF(vmMuMinusEta_, vmMuMinusEtaV);
+    putF(vmMuMinusPhi_, vmMuMinusPhiV);
+    putF(vmEdmval_, vmEdmvalV);
+    if (fillGradsFactored_) {
+      {
+        edm::ValueMap<std::vector<int>> m;
+        if (doVM) {
+          edm::ValueMap<std::vector<int>>::Filler f(m);
+          f.insert(vmCandH, vmGlobalIdxsV.begin(), vmGlobalIdxsV.end());
+          f.fill();
+        }
+        iEvent.emplace(vmGlobalIdxs_, std::move(m));
+      }
+      auto putVF = [&](edm::EDPutTokenT<edm::ValueMap<std::vector<float>>>& tok,
+                       std::vector<std::vector<float>>& v) {
+        edm::ValueMap<std::vector<float>> m;
+        if (doVM) {
+          edm::ValueMap<std::vector<float>>::Filler f(m);
+          f.insert(vmCandH, v.begin(), v.end());
+          f.fill();
+        }
+        iEvent.emplace(tok, std::move(m));
+      };
+      putVF(vmJacRefMuPlus_, vmJacRefMuPlusV);
+      putVF(vmJacRefMuMinus_, vmJacRefMuMinusV);
+      putVF(vmJacMass_, vmJacMassV);
+      putVF(vmHessFactor_, vmHessFactorV);
+    }
+  }
 }
 
 

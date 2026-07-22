@@ -92,9 +92,9 @@ void CvhWorker::ensureInitialized(CvhMaster& master) {
 
   // Share the master's G4ErrorPhysicsListForCVH with this worker.
   // InitializeWorker rebuilds the per-thread physics tables; the
-  // physics-list ConstructProcess is idempotent (guards on
-  // pmanager->GetProcess("Transportation") etc.) so the worker side does
-  // NOT double-register processes.
+  // physics-list ConstructProcess is one-shot per worker thread (guarded
+  // by a thread_local flag) so the worker side does NOT double-register
+  // processes.
   G4StateManager::GetStateManager()->SetNewState(G4State_Init);
   G4VUserPhysicsList* physicsList = master.physicsListForWorker();
   physicsList->InitializeWorker();
@@ -114,9 +114,11 @@ void CvhWorker::ensureInitialized(CvhMaster& master) {
   // G4ErrorRunManagerHelper through its own setup -- which is what
   // allocates G4ErrorPropagator (theG4ErrorPropagator) and its internal
   // navigator. Without that allocation InitTrackPropagation segfaults.
-  // Process re-registration is harmless because G4ErrorPhysicsListForCVH
-  // ConstructProcess / ConstructEM are now idempotent (guarded on
-  // pmanager->GetProcess("Transportation") etc.).
+  // Process re-registration cannot happen: G4ErrorPhysicsListForCVH
+  // ConstructProcess is one-shot per worker thread (thread_local flag),
+  // and all physics-list instances in the job share the same particle
+  // set (job-wide registry in G4ErrorPhysicsListForCVH), so the skipped
+  // invocations concern exactly the particles already configured.
   G4StateManager::GetStateManager()->SetNewState(G4State_PreInit);
 
   initializedOnThisThread = true;

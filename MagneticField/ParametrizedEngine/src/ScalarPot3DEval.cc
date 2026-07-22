@@ -90,6 +90,7 @@ ScalarPot3DEval::ScalarPot3DEval(const std::string& dump_path) {
   }
 
   bool basis_ok = false;
+  bool r_scale_ok = false;
   unsigned int n_modes_declared = 0;
   std::string line;
   std::vector<std::string> body;
@@ -113,9 +114,13 @@ ScalarPot3DEval::ScalarPot3DEval(const std::string& dump_path) {
       } else if (key == "l_max") {
         int v;
         iss >> v;
+        if (v < 0) {
+          throw std::runtime_error("ScalarPot3DEval: negative l_max in header");
+        }
         l_max_ = static_cast<unsigned int>(v);
       } else if (key == "r_scale") {
         iss >> r_scale_;
+        r_scale_ok = true;
       } else if (key == "z0") {
         iss >> z0_;
       } else if (key == "cmssw_norm") {
@@ -133,6 +138,11 @@ ScalarPot3DEval::ScalarPot3DEval(const std::string& dump_path) {
 
   if (!basis_ok) {
     throw std::runtime_error("ScalarPot3DEval: missing '# basis_type harmonic' header in " + dump_path);
+  }
+  if (!r_scale_ok) {
+    // Without this check a dump missing the r_scale line would silently
+    // evaluate (R / 1 cm)^l -- a wildly mis-scaled field, not an error.
+    throw std::runtime_error("ScalarPot3DEval: missing '# r_scale <cm>' header in " + dump_path);
   }
   if (z0_ != 0.0) {
     throw std::runtime_error("ScalarPot3DEval: z0!=0 not supported (CMSSW loader assumes z0=0)");

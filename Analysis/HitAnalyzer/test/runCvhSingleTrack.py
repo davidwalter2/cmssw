@@ -5,6 +5,7 @@
 ## as a lighter-weight cross-check of the propagator / residual chain.
 import FWCore.ParameterSet.Config as cms
 import FWCore.ParameterSet.VarParsing as VarParsing
+import os
 
 from Configuration.Eras.Era_Run2_2016_cff import Run2_2016
 from Configuration.AlCa.GlobalTag import GlobalTag
@@ -28,6 +29,79 @@ opts.register('useOpera3D', False, VarParsing.VarParsing.multiplicity.singleton,
 opts.register('scalarPot3DInitFile', '', VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string,
               'coefficient dump file produced by mfs/dump_coeffs_for_cmssw.py (always required)')
+opts.register('numberOfThreads', 1, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.int,
+              'framework numberOfThreads (numberOfStreams follows the same value)')
+opts.register('propagationDirection', 'anyDirection', VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.string,
+              'Geant4ePropagator PropagationDirection (anyDirection = per-leg '
+              'forward/backward choice, default; alongMomentum = legacy '
+              'forward-only)')
+opts.register('keepPixelEdgeHits', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'keep pixel hits whose cluster touches the sensor boundary '
+              '(isOnEdge) in the fit instead of demoting them to inactive; '
+              'the pixelMinSizeX CPE-quality cut applies independently '
+              '(default False = baseline)')
+opts.register('pixelMinSizeX', 2, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.int,
+              'minimum pixel cluster size in x for a hit to stay in the fit '
+              '(default 2 = baseline sizeX>1 cut; 1 admits all clusters)')
+opts.register('nIters', 10, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.int,
+              'Gauss-Newton iteration cap (default 10 = baseline)')
+opts.register('edmConvergence', 1e-5, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'EDM convergence threshold on the reference-state block (default 1e-5)')
+opts.register('debugPerIterDump', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'store per-iteration chi2/EDM trajectory vectors in the tree')
+opts.register('gnDampAfter', 0, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.int,
+              'damp Gauss-Newton steps from this iteration on (0 = off); '
+              'collapses limit cycles between chi2-degenerate states')
+opts.register('gnDampFactor', 0.5, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'damping factor applied to the GN step when gnDampAfter is active')
+_defaultGroupsFile = os.path.join(os.environ.get('CMSSW_BASE', ''),
+                                  'src/Analysis/HitAnalyzer/data/materialGroups50.txt')
+opts.register('materialGroupsFile', _defaultGroupsFile, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.string,
+              'global material model grouping-tier rules file '
+              '(Analysis/HitAnalyzer/data/materialGroups{50,100}.txt); empty = off. '
+              'Phase A validation hook: accumulates per-group dxi columns and '
+              'checks the V2 sum identity per leg')
+opts.register('runFDClosure', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'one-shot numerical-FD closure of the field-mode chain rule '
+              '(per-leg or per-step depending on perStepFieldModes)')
+opts.register('epsilonFDClosure', 1e-4, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'eps for the FD closure')
+opts.register('perStepFieldModes', True, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'apply the scalar-potential correction and attribute the per-mode '
+              'derivatives per Geant4 step instead of piecewise-constant per leg '
+              '(leg-structure-free field attribution; default True)')
+opts.register('skipHitlessSurfaces', True, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'drop hitless module surfaces (dead-module placeholders, '
+              'quality-demoted hits) from the fit; propagation goes hit to hit. '
+              'Default True; effective only with globalMaterialModel=True '
+              '(auto-disabled otherwise)')
+opts.register('globalMaterialModel', True, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'replace the per-module material parameters (parmtype 7) with the '
+              'parmtype-15 global material groups of materialGroupsFile '
+              '(exclusive switch). Default True (tier-50 groups file from the '
+              'release); set False for the legacy per-module parameterisation')
+opts.register('materialFDGroup', -1, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.int,
+              'one-shot V1 FD closure: re-propagate the first leg crossing this '
+              'group with k_g += materialFDEps and compare d(q/p)/dk (-1 = off)')
+opts.register('materialFDEps', 1e-3, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'epsilon for the material FD closure')
 opts.parseArguments()
 if not opts.scalarPot3DInitFile:
     raise SystemExit(
@@ -74,6 +148,7 @@ process.GlobalTag.toGet = cms.VPSet(
 process.XMLFromDBSource.label = cms.string("Extended")
 
 process.load("TrackPropagation.Geant4e.geantRefit_cff")
+from TrackPropagation.Geant4e.cvhMaster_cfi import CvhMasterPSet
 
 process.maxEvents = cms.untracked.PSet(input=cms.untracked.int32(opts.nEvents))
 
@@ -86,11 +161,18 @@ process.source = cms.Source(
 )
 
 process.options = cms.untracked.PSet(
-    numberOfThreads=cms.untracked.uint32(1),
-    numberOfStreams=cms.untracked.uint32(1),
+    numberOfThreads=cms.untracked.uint32(int(opts.numberOfThreads)),
+    numberOfStreams=cms.untracked.uint32(int(opts.numberOfThreads)),
     numberOfConcurrentLuminosityBlocks=cms.untracked.uint32(1),
 )
 process.MessageLogger.cerr.FwkReport.reportEvery = 100
+
+# Per-stream CLHEP engine for the residual-maker (required by the MT-safe
+# CvhMaster path; seeds are derived deterministically per stream).
+process.RandomNumberGeneratorService.globalCor = cms.PSet(
+    initialSeed=cms.untracked.uint32(123456789),
+    engineName=cms.untracked.string('HepJamesRandom'),
+)
 
 process.offlineBeamSpot = cms.EDProducer("BeamSpotProducer")
 
@@ -124,11 +206,29 @@ process.globalCor = cms.EDProducer(
     useIdealGeometry=cms.bool(bool(opts.useIdealGeometry)),
     bsConstraint=cms.bool(False),
     applyHitQuality=cms.bool(True),
+    keepPixelEdgeHits=cms.bool(bool(opts.keepPixelEdgeHits)),
+    pixelMinSizeX=cms.int32(int(opts.pixelMinSizeX)),
     corFiles=cms.vstring(),
     triggers=cms.vstring(*JPSI_TRIGGERS),
     MagneticFieldLabel=cms.string(""),
     scalarPotentialInitFile=cms.string(opts.scalarPot3DInitFile),
+    nIters=cms.uint32(int(opts.nIters)),
+    edmConvergence=cms.double(float(opts.edmConvergence)),
+    debugPerIterDump=cms.bool(bool(opts.debugPerIterDump)),
+    gnDampAfter=cms.uint32(int(opts.gnDampAfter)),
+    gnDampFactor=cms.double(float(opts.gnDampFactor)),
+    materialGroupsFile=cms.string(opts.materialGroupsFile),
+    runFDClosure=cms.bool(bool(opts.runFDClosure)),
+    epsilonFDClosure=cms.double(float(opts.epsilonFDClosure)),
+    globalMaterialModel=cms.bool(bool(opts.globalMaterialModel)),
+    perStepFieldModes=cms.bool(bool(opts.perStepFieldModes)),
+    skipHitlessSurfaces=cms.bool(bool(opts.skipHitlessSurfaces) and bool(opts.globalMaterialModel)),
+    materialFDGroup=cms.int32(int(opts.materialFDGroup)),
+    materialFDEps=cms.double(float(opts.materialFDEps)),
     outprefix=cms.untracked.string("globalcor_single"),
+    # MT G4Error master (GlobalCache) -- owns the G4 world / master field.
+    # Muon-only particle set: this driver refits muon tracks only.
+    CvhMaster=CvhMasterPSet.clone(Particles=cms.vstring("mu+", "mu-")),
 )
 
 if opts.useOpera3D:
@@ -141,6 +241,12 @@ if opts.useOpera3D:
     fieldlabel = "grid_160812_3_8t"
     process.Opera3DMagneticFieldProducer.label = fieldlabel
     process.Opera3DMagneticFieldProducer.useParametrizedTrackerField = cms.bool(False)
+    # Route the labelled field into the CPEs as in the production data refit
+    # (nano_cff.nanoAOD_customizeData) and the 10_6 cross-release driver.
+    for _cpe in ("stripCPEESProducer", "StripCPEfromTrackAngleESProducer",
+                 "siPixelTemplateDBObjectESProducer", "templates"):
+        if hasattr(process, _cpe):
+            getattr(process, _cpe).MagneticFieldLabel = fieldlabel
 elif not opts.useScalarPot3D:
     raise RuntimeError("useScalarPot3D=False not supported; use ScalarPot3D or Opera3D")
 else:
@@ -154,10 +260,16 @@ else:
 process.geopro.MagneticFieldLabel = fieldlabel
 process.Geant4ePropagator.MagneticFieldLabel = fieldlabel
 process.Geant4ePropagator.ForCVH = cms.bool(True)
+process.Geant4ePropagator.PropagationDirection = cms.string(opts.propagationDirection)
 process.globalCor.MagneticFieldLabel = cms.string(fieldlabel)
+# Shared CVH G4 master (EventSetup product), consumed by globalCor via esConsumes.
+from TrackPropagation.Geant4e.cvhMasterESProducer_cfi import cvhMasterESProducer
+process.cvhMasterESProducer = cvhMasterESProducer.clone()
+process.cvhMasterESProducer.MagneticFieldLabel = cms.string(fieldlabel)
 
 process.reconstruction_step = cms.Path(
-    process.hltFilter * process.geopro * process.offlineBeamSpot * process.globalCor
+    # geopro removed: CvhMasterThread (GlobalCache) owns the G4 world setup.
+    process.hltFilter * process.offlineBeamSpot * process.globalCor
 )
 process.schedule = cms.Schedule(process.reconstruction_step)
 

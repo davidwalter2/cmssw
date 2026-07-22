@@ -1,9 +1,11 @@
+#include <algorithm>
 #include <sstream>
 
 // Geant4e
 #include "TrackPropagation/Geant4e/interface/ConvertFromToCLHEP.h"
 #include "TrackPropagation/Geant4e/interface/Geant4ePropagator.h"
 #include "TrackPropagation/Geant4e/interface/G4ErrorPhysicsListForCVH.h"
+#include "TrackPropagation/Geant4e/interface/MaterialGroupModel.h"
 
 // CMSSW
 #include "DataFormats/TrajectorySeed/interface/PropagationDirection.h"
@@ -130,7 +132,8 @@ Geant4ePropagator::~Geant4ePropagator() {
   // called (CVH ntuplizer use case).
   if (propTotalCalls_ > 0ULL) {
     const unsigned long long fail_total =
-        propFailCounts_[0] + propFailCounts_[1] + propFailCounts_[2];
+        propFailCounts_[0] + propFailCounts_[1] + propFailCounts_[2] + propFailCounts_[3] + propFailCounts_[4] +
+        propFailCounts_[5];
     std::cout << "Geant4ePropagator::propagateGenericWithJacobianAltD summary"
               << "  calls="        << propTotalCalls_
               << "  failures="     << fail_total
@@ -138,6 +141,10 @@ Geant4ePropagator::~Geant4ePropagator() {
               << "   exit1[plimit]=" << propFailCounts_[0]
               << "   exit2[ierr]="   << propFailCounts_[1]
               << "   exit3[maxlen]=" << propFailCounts_[2]
+              << "   exit4[pdrain]=" << propFailCounts_[3]
+              << "   exit5[offsurface]=" << propFailCounts_[4]
+              << "   exit6[fieldbound]=" << propFailCounts_[5]
+              << "   backwardLegs=" << propBackwardLegs_
               << std::endl;
   }
 
@@ -385,29 +392,32 @@ std::pair<TrajectoryStateOnSurface, double> Geant4ePropagator::propagateGeneric(
         // forceInit=true to drive G4ErrorRunManagerHelper through its
         // init -- this is what allocates G4ErrorPropagator's internal
         // navigator + transportation, needed before InitTrackPropagation
-        // can run. The physics-list ConstructProcess is idempotent (skips
-        // particles whose ProcessManager already has Transportation), so
+        // can run. The physics-list ConstructProcess is one-shot per
+        // worker thread (thread_local flag), and this instance shares the
+        // job-wide particle set registered by CvhMaster's list, so
         // re-invoking it after CvhWorker's master/worker InitializeWorker
-        // does NOT double-register processes.
+        // neither double-registers processes nor defines extra
+        // process-less particles.
         ensureGeant4eIsInitilizedForCVH(true);
-        // fluct allocation is deferred from the ctors to here so it runs
-        // AFTER the world is installed on this thread (CvhWorker) and the
-        // G4Error physics list is registered (ensureGeant4eIsInitilizedForCVH
-        // above) -- only then is G4WentzelVIModel::Initialise's chained
-        // G4SafetyHelper::InitialiseHelper safe to call from this thread.
-        if (!fluct) {
-          fluct = new G4UniversalFluctuationForExtrapolator();
-        }
-        // Now that the physics list is loaded, G4ParticleTable knows about
-        // mu+ etc., so bind fluct's particle.
-        const G4ParticleDefinition *partdef =
-            G4ParticleTable::GetParticleTable()->FindParticle(generateParticleName(1));
-        fluct->SetParticleAndCharge(partdef, 1.);
       } else {
         ensureGeant4eIsInitilized(true);
       }
       geant4eInitDoneForThread() = true;
     }
+  }
+  // fluct is per-INSTANCE while the init flag above is per-THREAD: another
+  // stream's propagator may already have initialized this thread, so the
+  // allocation must not live inside the guarded block. It is deferred from
+  // the ctors to here so it runs AFTER the world is installed on this thread
+  // (CvhWorker) and the G4Error physics list is registered (guaranteed once
+  // geant4eInitDoneForThread() is true) -- only then is
+  // G4WentzelVIModel::Initialise's chained G4SafetyHelper::InitialiseHelper
+  // safe to call, and only then does G4ParticleTable know about mu+ etc.
+  if (forCVH_ && !fluct) {
+    fluct = new G4UniversalFluctuationForExtrapolator();
+    const G4ParticleDefinition *partdef =
+        G4ParticleTable::GetParticleTable()->FindParticle(generateParticleName(1));
+    fluct->SetParticleAndCharge(partdef, 1.);
   }
   auto *theG4eManager = G4ErrorPropagatorManager::GetErrorPropagatorManager();
   auto *theG4eData = G4ErrorPropagatorData::GetErrorPropagatorData();
@@ -523,6 +533,10 @@ std::pair<TrajectoryStateOnSurface, double> Geant4ePropagator::propagateGeneric(
 
     finalPathLength += thisPathLength;
 
+    // Cap deliberately loosened from the stock/10_6 value of 200 cm: low-pT
+    // curling tracks (e.g. B->J/psiK bachelor kaons, helix radius ~50 cm) can
+    // legitimately accumulate >2 m of path before intersecting the target
+    // surface. 100 m still bounds pathological loopers.
     if (std::fabs(finalPathLength) > 10000.0f) {
       LogDebug("Geant4e") << "ERROR: Quitting propagation: path length mega large" << std::endl;
       theG4eManager->GetPropagator()->InvokePostUserTrackingAction(g4eTrajState.GetG4Track());
@@ -613,7 +627,12 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
                                                     double dms,
                                                     double dioni,
                                                     double pforced,
-                                                    const std::string &particleNameOverride) const {
+                                                    const std::string &particleNameOverride,
+                                                    const MaterialGroupModel *matGroups,
+                                                    std::vector<std::pair<int, Eigen::Matrix<double, 5, 1>>>
+                                                        *groupJacOut,
+                                                    const sim::FieldModeProvider *fieldModes,
+                                                    std::vector<Eigen::Matrix<double, 5, 1>> *modeJacOut) const {
   using namespace Eigen;
 
   // Deferred per-thread Geant4e init under mutex (see propagateGeneric).
@@ -624,25 +643,26 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
         // forceInit=true to drive G4ErrorRunManagerHelper through its
         // init -- this is what allocates G4ErrorPropagator's internal
         // navigator + transportation, needed before InitTrackPropagation
-        // can run. The physics-list ConstructProcess is idempotent (skips
-        // particles whose ProcessManager already has Transportation), so
+        // can run. The physics-list ConstructProcess is one-shot per
+        // worker thread (thread_local flag), and this instance shares the
+        // job-wide particle set registered by CvhMaster's list, so
         // re-invoking it after CvhWorker's master/worker InitializeWorker
-        // does NOT double-register processes.
+        // neither double-registers processes nor defines extra
+        // process-less particles.
         ensureGeant4eIsInitilizedForCVH(true);
-        // fluct allocation deferred from the ctors to here so it runs after
-        // the world is installed on this thread (CvhWorker) and the G4Error
-        // physics list is registered. See propagateGeneric for the rationale.
-        if (!fluct) {
-          fluct = new G4UniversalFluctuationForExtrapolator();
-        }
-        const G4ParticleDefinition *partdef =
-            G4ParticleTable::GetParticleTable()->FindParticle(generateParticleName(1));
-        fluct->SetParticleAndCharge(partdef, 1.);
       } else {
         ensureGeant4eIsInitilized(true);
       }
       geant4eInitDoneForThread() = true;
     }
+  }
+  // Per-instance fluct allocation, outside the per-thread guard.
+  // See propagateGeneric for the rationale.
+  if (forCVH_ && !fluct) {
+    fluct = new G4UniversalFluctuationForExtrapolator();
+    const G4ParticleDefinition *partdef =
+        G4ParticleTable::GetParticleTable()->FindParticle(generateParticleName(1));
+    fluct->SetParticleAndCharge(partdef, 1.);
   }
   auto *theG4eManager = G4ErrorPropagatorManager::GetErrorPropagatorManager();
   auto *theG4eData = G4ErrorPropagatorData::GetErrorPropagatorData();
@@ -653,10 +673,20 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
 
   cmsField->SetOffset(dB.x(), dB.y(), dB.z());
   cmsField->SetMaterialOffset(dxi);
+  // Global material model: volume-resolved k_g applied per step by
+  // G4ErrorEnergyLossForCVH on top of the leg-constant dxi.
+  cmsField->SetMaterialOffsetProvider(matGroups);
+  if (groupJacOut != nullptr) {
+    groupJacOut->clear();
+  }
+  if (fieldModes != nullptr && modeJacOut != nullptr) {
+    modeJacOut->assign(fieldModes->nModes(), Matrix<double, 5, 1>::Zero());
+  }
 
   auto retDefault = [cmsField]() {
     cmsField->SetOffset(0., 0., 0.);
     cmsField->SetMaterialOffset(0.);
+    cmsField->SetMaterialOffsetProvider(nullptr);
     return std::tuple<bool,
                       Matrix<double, 7, 1>,
                       Matrix<double, 5, 5>,
@@ -807,6 +837,28 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
     statepre[5] = g4eTrajState.GetMomentum().z() / CLHEP::GeV;
     statepre[6] = charge;
 
+    // Per-step field-mode application: one basis sample per step at the
+    // predicted step midpoint (half the 10 mm step-length cap ahead along
+    // the momentum -- steps in the tracker essentially always run at the
+    // cap). The SAME sample provides the applied offset for this step and,
+    // below, the per-mode derivative columns, so application and
+    // derivatives are consistent by construction. The constant dB argument
+    // stays available on top for FD perturbations.
+    Eigen::Vector3d dBstep = dB;
+    const double *modeBx = nullptr;
+    const double *modeBy = nullptr;
+    const double *modeBz = nullptr;
+    if (fieldModes != nullptr) {
+      const double pmag = statepre.segment<3>(3).norm();
+      const double look = 0.5;  // cm, half the 10 mm step cap
+      const Eigen::Vector3d peval =
+          statepre.head<3>() + (look / pmag) * statepre.segment<3>(3);
+      double cstep[3];
+      fieldModes->sampleAt(peval[0], peval[1], peval[2], cstep, modeBx, modeBy, modeBz);
+      dBstep += Eigen::Vector3d(cstep[0], cstep[1], cstep[2]);
+      cmsField->SetOffset(dBstep.x(), dBstep.y(), dBstep.z());
+    }
+
     //set the error matrix to null to disentangle MS and ionization contributions
     g4eTrajState.SetError(errnull);
     const int ierr = theG4eManager->PropagateOneStep(&g4eTrajState, mode);
@@ -830,6 +882,66 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
       return retDefault();
     }
 
+    // Field-model validity bound: every tracker module (and therefore every
+    // legitimate module-to-module leg) lies strictly inside the field
+    // model's defined region (ScalarPot3D: sphere R = 320 cm vs. outermost
+    // module corners at R ~ 295 cm). A state outside it is unambiguous
+    // proof of a runaway/wrong-way leg, caught here within one G4 step
+    // (<= 10 mm) of leaving -- metres earlier and thousands of steps
+    // cheaper than the momentum-drain or off-surface checks below. For
+    // field models defined everywhere (volume-based map) isDefined() is
+    // always true and this guard never fires.
+    {
+      const GlobalPoint curPos(g4eTrajState.GetPosition().x() / CLHEP::cm,
+                               g4eTrajState.GetPosition().y() / CLHEP::cm,
+                               g4eTrajState.GetPosition().z() / CLHEP::cm);
+      if (!theField->isDefined(curPos)) {
+        ++propFailCounts_[5];
+        std::cout << "Geant4e fail[fieldbound]"
+                  << "  r="        << curPos.perp()
+                  << "  z="        << curPos.z()
+                  << "  p="        << g4eTrajState.GetMomentum().mag() / CLHEP::GeV
+                  << "  pT0="      << cmsInitMom.perp()
+                  << "  eta0="     << cmsInitMom.eta()
+                  << "  charge="   << charge
+                  << "  surf_r="   << std::hypot(pDest.position().x(), pDest.position().y())
+                  << "  surf_z="   << pDest.position().z()
+                  << "  iter="     << iterations
+                  << "  pathLen="  << finalPathLength
+                  << "  particle=" << g4ParticleName
+                  << std::endl;
+        theG4eManager->GetPropagator()->InvokePostUserTrackingAction(g4eTrajState.GetG4Track());
+        return retDefault();
+      }
+    }
+
+    // In-flight momentum floor: a leg whose momentum drains below plimit_
+    // can only end at the extrapolator table floor (Ekin ~ 1 MeV) after
+    // grinding through meters of dense material -- a runaway/wrong-way leg
+    // that will never reach the intended (bounded) module. Without this
+    // check such a leg is returned as a *success* with p ~ 15 MeV, and the
+    // 1/p^n transport-Jacobian terms poison the downstream fit (NaN state
+    // updates). Fail fast instead, mirroring the entry-point plimit check.
+    if (g4eTrajState.GetMomentum().mag() / CLHEP::GeV < plimit_) {
+      ++propFailCounts_[3];
+      std::cout << "Geant4e fail[pdrain]"
+                << "  p="        << g4eTrajState.GetMomentum().mag() / CLHEP::GeV
+                << "  plimit="   << plimit_
+                << "  pT0="      << cmsInitMom.perp()
+                << "  eta0="     << cmsInitMom.eta()
+                << "  charge="   << charge
+                << "  r="        << g4eTrajState.GetPosition().perp() / CLHEP::cm
+                << "  z="        << g4eTrajState.GetPosition().z() / CLHEP::cm
+                << "  surf_r="   << std::hypot(pDest.position().x(), pDest.position().y())
+                << "  surf_z="   << pDest.position().z()
+                << "  iter="     << iterations
+                << "  pathLen="  << finalPathLength
+                << "  particle=" << g4ParticleName
+                << std::endl;
+      theG4eManager->GetPropagator()->InvokePostUserTrackingAction(g4eTrajState.GetG4Track());
+      return retDefault();
+    }
+
     const double thisPathLength = TrackPropagation::g4doubleToCmsDouble(g4eTrajState.GetG4Track()->GetStepLength());
 
     const double ePre = g4eTrajState.GetG4Track()->GetStep()->GetPreStepPoint()->GetTotalEnergy() / CLHEP::GeV;
@@ -841,7 +953,7 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
       dEdxlast = dEdx;
     }
 
-    const Matrix<double, 5, 9> transportJac = transportJacobianBxByBzD(statepre, thisPathLength, dEdx, mass, dB);
+    const Matrix<double, 5, 9> transportJac = transportJacobianBxByBzD(statepre, thisPathLength, dEdx, mass, dBstep);
 
     // transport contribution to error
     g4errorEnd = (transportJac.leftCols<5>() * g4errorEnd * transportJac.leftCols<5>().transpose()).eval();
@@ -849,10 +961,28 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
     dQ = (transportJac.leftCols<5>() * dQ * transportJac.leftCols<5>().transpose()).eval();
     dQ2 = (transportJac.leftCols<5>() * dQ2 * transportJac.leftCols<5>().transpose()).eval();
 
+    // Global material model, step group + coherent (M1) scaling: the same
+    // per-step k_g that scales the mean energy loss (applied by the eloss
+    // process via the provider) coherently scales the step's MS and
+    // ionization-fluctuation variances -- e^k more material means e^k more
+    // scattering and fluctuation power. Only the CURRENT k values enter
+    // (two-step scheme: the fit never differentiates through the weights).
+    int stepGroup = -1;
+    double matStepFact = 1.;
+    if (matGroups != nullptr) {
+      const G4Step *stpm = g4eTrajState.GetG4Track()->GetStep();
+      const G4ThreeVector midm =
+          0.5 * (stpm->GetPreStepPoint()->GetPosition() + stpm->GetPostStepPoint()->GetPosition());
+      const G4LogicalVolume *lvm =
+          stpm->GetPreStepPoint()->GetTouchableHandle()->GetVolume()->GetLogicalVolume();
+      stepGroup = matGroups->classify(lvm, midm.perp() / CLHEP::cm, midm.z() / CLHEP::cm);
+      matStepFact = std::exp(matGroups->offsetOf(stepGroup));
+    }
+
     Matrix<double, 5, 5> errMSIout = PropagateErrorMSC(g4eTrajState.GetG4Track(), pforced);
 
     // scaling only affects MS
-    const double msfact = std::exp(dms);
+    const double msfact = std::exp(dms) * matStepFact;
 
     errMSIout *= msfact;
 
@@ -860,7 +990,7 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
     const double X0 = mate->GetRadlen() / CLHEP::cm;
     RItotal += msfact * thisPathLength / X0;
 
-    const double ionifact = std::exp(dioni);
+    const double ionifact = std::exp(dioni) * matStepFact;
 
     errMSIout(0, 0) = ionifact * computeErrorIoni(g4eTrajState.GetG4Track(), pforced);
 
@@ -879,6 +1009,40 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
     //b-field (dBx, dBy, dBz) and material (dxi) contributions to jacobian
     jac.rightCols<4>() += transportJac.rightCols<4>();
 
+    // Per-step field modes: transport the accumulated per-mode columns and
+    // add this step's contribution, scaled by the SAME basis sample the
+    // applied offset used above -- exact consistency between application
+    // and derivative (the FD closure probes precisely this).
+    if (fieldModes != nullptr && modeJacOut != nullptr) {
+      for (auto &mc : *modeJacOut) {
+        mc = (transportJac.leftCols<5>() * mc).eval();
+      }
+      const unsigned int nmodes = fieldModes->nModes();
+      for (unsigned int im = 0; im < nmodes; ++im) {
+        (*modeJacOut)[im] += transportJac.col(5) * modeBx[im] + transportJac.col(6) * modeBy[im] +
+                             transportJac.col(7) * modeBz[im];
+      }
+    }
+
+    // Global material model: per-group split of the dxi column. Same
+    // recursion as the integrated column above (transport previous
+    // accumulations by this step's state Jacobian, add this step's dxi
+    // column to the group of the step's volume), so the sum over groups
+    // equals jac.col(8) exactly.
+    if (matGroups != nullptr && groupJacOut != nullptr) {
+      for (auto &gc : *groupJacOut) {
+        gc.second = (transportJac.leftCols<5>() * gc.second).eval();
+      }
+      // stepGroup classified above (M1 block)
+      auto it = std::find_if(groupJacOut->begin(), groupJacOut->end(),
+                             [stepGroup](auto const &e) { return e.first == stepGroup; });
+      if (it == groupJacOut->end()) {
+        groupJacOut->emplace_back(stepGroup, transportJac.col(8));
+      } else {
+        it->second += transportJac.col(8);
+      }
+    }
+
     Matrix<double, 5, 5> errMS = errMSIout;
     errMS(0, 0) = 0.;
 
@@ -893,6 +1057,10 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
 
     finalPathLength += thisPathLength;
 
+    // Cap deliberately loosened from the stock/10_6 value of 200 cm: low-pT
+    // curling tracks (e.g. B->J/psiK bachelor kaons, helix radius ~50 cm) can
+    // legitimately accumulate >2 m of path before intersecting the target
+    // surface. 100 m still bounds pathological loopers.
     if (std::fabs(finalPathLength) > 10000.0f) {
       LogDebug("Geant4e") << "ERROR: Quitting propagation: path length mega large" << std::endl;
       theG4eManager->GetPropagator()->InvokePostUserTrackingAction(g4eTrajState.GetG4Track());
@@ -938,6 +1106,37 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
 
   LogDebug("Geant4e") << "Final position of the Track :" << g4eTrajState.GetPosition() << std::endl;
 
+  // On-surface closure check: G4's target-reached logic (CheckIfLastStep)
+  // can report success without the state being anywhere near the target
+  // plane -- observed when a leg whose target plane is behind the state
+  // escapes to the G4 world boundary (r ~ 17.5 m) and every subsequent leg
+  // returns a zero-step "success" pinned at the world edge. Such states
+  // poison the fit with astronomic residuals. Require the final position
+  // to lie on the destination plane within 1 mm.
+  {
+    const Point3DBase<double, GlobalTag> finalPosCms(finalRecoPos.x() / CLHEP::cm,
+                                                     finalRecoPos.y() / CLHEP::cm,
+                                                     finalRecoPos.z() / CLHEP::cm);
+    const double distToPlane = pDest.toLocal(finalPosCms).z();
+    if (std::abs(distToPlane) > 0.1) {
+      ++propFailCounts_[4];
+      std::cout << "Geant4e fail[offsurface]"
+                << "  dPlane="   << distToPlane
+                << "  pT0="      << cmsInitMom.perp()
+                << "  eta0="     << cmsInitMom.eta()
+                << "  charge="   << charge
+                << "  r="        << finalPosCms.perp()
+                << "  z="        << finalPosCms.z()
+                << "  surf_r="   << std::hypot(pDest.position().x(), pDest.position().y())
+                << "  surf_z="   << pDest.position().z()
+                << "  iter="     << iterations
+                << "  pathLen="  << finalPathLength
+                << "  particle=" << g4ParticleName
+                << std::endl;
+      return retDefault();
+    }
+  }
+
   //////////////////////////////
   // Retrieve the state in the end from Geant4e, convert them to CMS vectors
   // and points, and build global trajectory parameters.
@@ -953,8 +1152,59 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
   ftsEnd[5] = g4eTrajState.GetMomentum().z() / CLHEP::GeV;
   ftsEnd[6] = charge;
 
+  // Backward legs (anyDirection mode picking PropBackwards): the momentum
+  // was flipped before running G4's backward propagation; flip it back so
+  // the returned state has physical (along-track) momentum, mirroring the
+  // TSOS-based propagateGeneric.
+  //
+  // Exact frame conversion of the derivative/noise outputs: everything was
+  // accumulated on the momentum-FLIPPED trajectory, i.e. in the curvilinear
+  // frame of the reversed direction. Under momentum reversal the CMSSW
+  // curvilinear basis transforms as q/p even, lambda odd, dphi even (phi
+  // shifts by the constant pi), xT odd (U = Z x T flips with T), yT even
+  // (V = T x U is invariant) -- the flip map has Jacobian
+  // P = diag(1, -1, 1, -1, 1), which is its own inverse. Hence:
+  //   J_phys(state block) = P * J_flip * P   (rows: end frame, cols: start frame)
+  //   J_phys(dB/dxi cols) = P * cols         (the perturbations are global-frame)
+  //   Q_phys              = P * Q_flip * P   (both indices in the end frame)
+  //   dEdx_phys           = -dEdx_flip       (retraced path gains energy where
+  //                                           the physical track loses it)
+  // With this conversion the per-leg gradients and noise matrices are exact
+  // for backward legs of any length, not only the mm-scale marginal legs.
+  if (mode == G4ErrorMode_PropBackwards) {
+    ftsEnd[3] = -ftsEnd[3];
+    ftsEnd[4] = -ftsEnd[4];
+    ftsEnd[5] = -ftsEnd[5];
+
+    Matrix<double, 5, 5> Pflip = Matrix<double, 5, 5>::Identity();
+    Pflip(1, 1) = -1.;
+    Pflip(3, 3) = -1.;
+
+    jac.leftCols<5>() = (Pflip * jac.leftCols<5>() * Pflip).eval();
+    jac.rightCols<4>() = (Pflip * jac.rightCols<4>()).eval();
+    // per-group dxi columns transform like the integrated dxi column
+    if (groupJacOut != nullptr) {
+      for (auto &gc : *groupJacOut) {
+        gc.second = (Pflip * gc.second).eval();
+      }
+    }
+    // per-mode field columns transform like the dB columns
+    if (modeJacOut != nullptr) {
+      for (auto &mc : *modeJacOut) {
+        mc = (Pflip * mc).eval();
+      }
+    }
+    g4errorEnd = (Pflip * g4errorEnd * Pflip).eval();
+    dQ = (Pflip * dQ * Pflip).eval();
+    dQ2 = (Pflip * dQ2 * Pflip).eval();
+    dEdxlast = -dEdxlast;
+
+    ++propBackwardLegs_;
+  }
+
   cmsField->SetOffset(0., 0., 0.);
   cmsField->SetMaterialOffset(0.);
+  cmsField->SetMaterialOffsetProvider(nullptr);
 
   return std::tuple<bool,
                     Matrix<double, 7, 1>,

@@ -42,7 +42,7 @@ public:
   GlobalVector inTesla(const GlobalPoint& gp) const override;
   GlobalVector inTeslaUnchecked(const GlobalPoint& gp) const override;
 
-  bool isDefined(const GlobalPoint& gp) const;
+  bool isDefined(const GlobalPoint& gp) const override;
 
 private:
   std::unique_ptr<magfieldparam::ScalarPot3DEval> eval_;

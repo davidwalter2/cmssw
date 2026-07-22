@@ -1,6 +1,7 @@
 #include "ResidualGlobalCorrectionMakerBase.h"
 #include "DataFormats/MuonReco/interface/Muon.h"
 #include "TrackPropagation/Geant4e/interface/Geant4ePropagator.h"
+#include "TrackPropagation/Geant4e/interface/MaterialGroupModel.h"
 #include "Analysis/HitAnalyzer/interface/ParticleProperties.h"
 
 
@@ -23,8 +24,8 @@
 class ResidualGlobalCorrectionMakerG4e : public ResidualGlobalCorrectionMakerBase
 {
 public:
-  ResidualGlobalCorrectionMakerG4e(const edm::ParameterSet &, const CvhMasterThread *);
-  ~ResidualGlobalCorrectionMakerG4e() {}
+  ResidualGlobalCorrectionMakerG4e(const edm::ParameterSet &);
+  ~ResidualGlobalCorrectionMakerG4e();
 
 // static void fillDescriptions(edm::ConfigurationDescriptions &descriptions);
 
@@ -69,6 +70,8 @@ private:
   edm::EDPutTokenT<edm::ValueMap<float>> outputCorEta_;
   edm::EDPutTokenT<edm::ValueMap<float>> outputCorPhi_;
   edm::EDPutTokenT<edm::ValueMap<int>> outputCorCharge_;
+  edm::EDPutTokenT<edm::ValueMap<float>> outputCorDxy_;
+  edm::EDPutTokenT<edm::ValueMap<float>> outputCorDz_;
   edm::EDPutTokenT<edm::ValueMap<float>> outputEdmval_;
   edm::EDPutTokenT<edm::ValueMap<int>> outputNValidHits_;
   edm::EDPutTokenT<edm::ValueMap<int>> outputNValidPixelHits_;
@@ -90,12 +93,125 @@ private:
   double trackMass_;
   std::string trackParticleName_;
 
+  // Per-stream fit-outcome accounting, printed from the destructor.
+  // attempted = tracks entering the iterative refit (post-selection);
+  // succeeded = fits that survived all iterations (tree/valuemap filled).
+  mutable unsigned long long fitAttempted_ = 0ULL;
+  mutable unsigned long long fitSucceeded_ = 0ULL;
+  mutable unsigned long long fitFailProp_ = 0ULL;       // Geant4e propagation failed
+  mutable unsigned long long fitFailHitUpdate_ = 0ULL;  // CPE re-evaluation (cloner) invalid
+  mutable unsigned long long fitFailNaN_ = 0ULL;        // NaN/inf parameter update
+  mutable unsigned long long fitStepClamped_ = 0ULL;    // fits with >=1 trust-region-clamped GN step
+  mutable unsigned long long fitChargeFlipAllowed_ = 0ULL;  // GN steps permitted to cross q/p=0 (high-p)
+  mutable unsigned long long fitChargeHypTaken_ = 0ULL;  // tracks where the two-hyp fit kept the opposite charge
+
+  // Pixel hit-quality accounting (valid pixel hits entering the quality cut).
+  mutable unsigned long long pixHitsSeen_ = 0ULL;
+  mutable unsigned long long pixHitsEdge_ = 0ULL;       // cluster on the sensor boundary (isOnEdge)
+  mutable unsigned long long pixHitsSizeX1_ = 0ULL;     // cluster sizeX == 1
+  mutable unsigned long long pixHitsDemoted_ = 0ULL;    // demoted to inactive by the quality cut
+
+  // Convergence knobs (see ctor). Defaults reproduce the baseline.
+  unsigned int nIters_ = 10;
+  double edmConvergence_ = 1.e-5;
+  unsigned int gnDampAfter_ = 0;   // 0 = damping off
+  double gnDampFactor_ = 0.5;
+  // Momentum above which the Gauss-Newton step is ALLOWED to cross q/p = 0
+  // (a genuine charge flip). Crossing q/p = 0 is p -> inf, harmless at high p
+  // where the seed charge is ambiguous; the sign-flip clamp is only a
+  // divergence guard for stiffer (lower-p) tracks. Default 1e9 GeV = never
+  // allow = legacy behaviour. The hard p >= 2 GeV momentum floor always applies.
+  double allowChargeFlipAboveP_ = 1.e9;
+  // Two-hypothesis charge resolution in one pass: when the nominal fit's clamp
+  // catches a q/p sign crossing (nChargeFlipProtect>0), re-fit the opposite
+  // charge and keep the lower-chi2 result. Inert for well-measured (low/mod p)
+  // tracks whose fit never tries to cross q/p=0. Default on.
+  bool twoHypothesisCharge_ = true;
+  // Cosmic seeding: default (false) seeds from the inner (near-beamline) state
+  // and propagates OUTWARD, so the upper half of a down-going cosmic propagates
+  // BACKWARD (against the muon). When true, seed from the muon-ENTRY end (higher
+  // y) and iterate hits along the muon (downward) -> the whole leg propagates
+  // FORWARD. Moves the report point to the entry end; validates the backward
+  // energy-loss handling (forward-only vs mixed on the same track).
+  bool cosmicSeedFromEntry_ = false;
+  // Force the outside-in cosmic handling regardless of track algo (needed for
+  // split-track legs from cosmicTrackSplitter, whose algo 'cosmic' is not
+  // recognised as ctf/cosmics). Default false.
+  bool forceCosmic_ = false;
+  // Two-hypothesis charge test: seed the fit with sign(q) * seedChargeSign_
+  // (applied consistently to the G4 particle and the initial state), so the
+  // fit converges to the OPPOSITE-charge minimum (the clamp keeps it there).
+  // Run +1 and -1 and compare chi2 per track to identify genuine mis-ID
+  // (opposite hypothesis fits better) vs correct seed (opposite diverges).
+  // Default +1 = nominal seed.
+  int seedChargeSign_ = 1;
+
+  // Global material model validation knobs (Phase A; the model itself and
+  // the parmtype-15 registration live in the base class). With a model
+  // loaded, per-leg per-group dxi columns are accumulated by the
+  // propagator and checked inline against the integrated dxi column (V2
+  // sum identity); materialFDGroup >= 0 additionally runs a one-shot FD
+  // closure (V1): the first leg crossing that group is re-propagated with
+  // k_g += eps and d(q/p)/dk compared against the analytic column.
+  int materialFDGroup_ = -1;
+  double materialFDEps_ = 1e-3;
+  mutable std::vector<std::pair<int, Eigen::Matrix<double, 5, 1>>> groupJacs_;
+  // per-step field-mode columns from the propagator (reused buffer)
+  mutable std::vector<Eigen::Matrix<double, 5, 1>> modeJacs_;
+  mutable double v2MaxRelDiff_ = 0.;
+  mutable unsigned long long v2Checks_ = 0ULL;
+  mutable bool fdMatDone_ = false;
+
+  // Per-iteration debug dump (mirrors the two-track maker): vector branches
+  // recording the full chi2/EDM trajectory of each fit. Only booked/filled
+  // when debugPerIterDump=true.
+  bool debugPerIterDump_ = false;
+  std::vector<double> chisqval_iter;
+  std::vector<double> edmval_iter;
+  std::vector<double> edmvalref_iter;
+  std::vector<double> deltachisqval_iter;
 };
 
+ResidualGlobalCorrectionMakerG4e::~ResidualGlobalCorrectionMakerG4e() {
+  if (fitAttempted_ > 0ULL) {
+    const unsigned long long failTotal = fitAttempted_ - fitSucceeded_;
+    std::cout << "ResidualGlobalCorrectionMakerG4e fit summary"
+              << "  attempted=" << fitAttempted_
+              << "  succeeded=" << fitSucceeded_
+              << "  failed=" << failTotal
+              << " (" << (100. * failTotal / fitAttempted_) << "%)"
+              << "  fail[prop]=" << fitFailProp_
+              << "  fail[hitupdate]=" << fitFailHitUpdate_
+              << "  fail[nan]=" << fitFailNaN_
+              << "  clamped[step]=" << fitStepClamped_
+              << "  chargeflip[allowed]=" << fitChargeFlipAllowed_
+              << "  chargehyp[flipped]=" << fitChargeHypTaken_
+              << std::endl;
+    if (pixHitsSeen_ > 0ULL) {
+      std::cout << "ResidualGlobalCorrectionMakerG4e pixel hit-quality summary"
+                << "  seen=" << pixHitsSeen_
+                << "  onEdge=" << pixHitsEdge_
+                << " (" << (100. * pixHitsEdge_ / pixHitsSeen_) << "%)"
+                << "  sizeX1=" << pixHitsSizeX1_
+                << " (" << (100. * pixHitsSizeX1_ / pixHitsSeen_) << "%)"
+                << "  demoted=" << pixHitsDemoted_
+                << " (" << (100. * pixHitsDemoted_ / pixHitsSeen_) << "%)"
+                << "  keepPixelEdgeHits=" << keepPixelEdgeHits_
+                << "  pixelMinSizeX=" << pixelMinSizeX_
+                << std::endl;
+    }
+    if (v2Checks_ > 0ULL) {
+      std::cout << "ResidualGlobalCorrectionMakerG4e material-group V2 (sum == dxi column)"
+                << "  checks=" << v2Checks_
+                << "  maxRelDiff=" << v2MaxRelDiff_
+                << std::endl;
+    }
+  }
+}
 
-ResidualGlobalCorrectionMakerG4e::ResidualGlobalCorrectionMakerG4e(const edm::ParameterSet &iConfig,
-                                                                   const CvhMasterThread *master)
-    : ResidualGlobalCorrectionMakerBase(iConfig, master),
+
+ResidualGlobalCorrectionMakerG4e::ResidualGlobalCorrectionMakerG4e(const edm::ParameterSet &iConfig)
+    : ResidualGlobalCorrectionMakerBase(iConfig),
       ttrhToken_(esConsumes(edm::ESInputTag("", "WithAngleAndTemplate"))),
       g4ePropToken_(esConsumes(edm::ESInputTag("", "Geant4ePropagator"))),
       siStripClusterInfo_(consumesCollector())
@@ -111,9 +227,54 @@ ResidualGlobalCorrectionMakerG4e::ResidualGlobalCorrectionMakerG4e(const edm::Pa
       ? iConfig.getParameter<std::string>("trackParticleName") : std::string("mu");
   trackMass_ = ana_hitanalyzer::getParticleProperties(trackParticleName_).mass;
 
+  // Convergence knobs, mirroring the two-track maker (existsAs-guarded so
+  // legacy cfis keep the baseline behaviour: 10 iterations, EDM < 1e-5).
+  nIters_ = iConfig.existsAs<unsigned int>("nIters")
+      ? iConfig.getParameter<unsigned int>("nIters") : 10u;
+  edmConvergence_ = iConfig.existsAs<double>("edmConvergence")
+      ? iConfig.getParameter<double>("edmConvergence") : 1.e-5;
+  debugPerIterDump_ = iConfig.existsAs<bool>("debugPerIterDump")
+      ? iConfig.getParameter<bool>("debugPerIterDump") : false;
+  // Gauss-Newton step damping from iteration gnDampAfter_ onward (0 = off).
+  // Remedy for limit cycles between nearly-chi2-degenerate states: a
+  // half-step from one cycle endpoint lands on the midpoint, collapsing
+  // 2-cycles onto the true minimum. Applied only after the early
+  // iterations so normal convergence (2-4 full steps) is untouched.
+  gnDampAfter_ = iConfig.existsAs<unsigned int>("gnDampAfter")
+      ? iConfig.getParameter<unsigned int>("gnDampAfter") : 0u;
+  gnDampFactor_ = iConfig.existsAs<double>("gnDampFactor")
+      ? iConfig.getParameter<double>("gnDampFactor") : 0.5;
+  // Allow the GN step to cross q/p = 0 (charge flip) for tracks stiffer than
+  // this momentum (default 1e9 GeV = never = legacy). Motivated by high-p
+  // cosmics whose seed charge is ambiguous: freezing the seed sign can pin a
+  // mis-identified track in a wrong-sign chi2 minimum.
+  allowChargeFlipAboveP_ = iConfig.existsAs<double>("allowChargeFlipAboveP")
+      ? iConfig.getParameter<double>("allowChargeFlipAboveP") : 1.e9;
+  // Two-hypothesis charge test: +1 = nominal seed, -1 = opposite-charge seed.
+  seedChargeSign_ = iConfig.existsAs<int>("seedChargeSign")
+      ? iConfig.getParameter<int>("seedChargeSign") : 1;
+  // One-pass two-hypothesis charge resolution (default on).
+  twoHypothesisCharge_ = iConfig.existsAs<bool>("twoHypothesisCharge")
+      ? iConfig.getParameter<bool>("twoHypothesisCharge") : true;
+  // Seed cosmic legs from the muon-entry end (fully forward propagation).
+  cosmicSeedFromEntry_ = iConfig.existsAs<bool>("cosmicSeedFromEntry")
+      ? iConfig.getParameter<bool>("cosmicSeedFromEntry") : false;
+  // Force cosmic (outside-in) handling regardless of track algo.
+  forceCosmic_ = iConfig.existsAs<bool>("forceCosmic")
+      ? iConfig.getParameter<bool>("forceCosmic") : false;
+
+  // Global material model validation knobs (the model itself is loaded by
+  // the base class from materialGroupsFile).
+  materialFDGroup_ = iConfig.existsAs<int>("materialFDGroup")
+      ? iConfig.getParameter<int>("materialFDGroup") : -1;
+  materialFDEps_ = iConfig.existsAs<double>("materialFDEps")
+      ? iConfig.getParameter<double>("materialFDEps") : 1e-3;
+
   outputCorPt_ = produces<edm::ValueMap<float>>("corPt");
   outputCorEta_ = produces<edm::ValueMap<float>>("corEta");
   outputCorPhi_ = produces<edm::ValueMap<float>>("corPhi");
+  outputCorDxy_ = produces<edm::ValueMap<float>>("corDxy");
+  outputCorDz_ = produces<edm::ValueMap<float>>("corDz");
   outputCorCharge_ = produces<edm::ValueMap<int>>("corCharge");
   outputEdmval_ = produces<edm::ValueMap<float>>("edmval");
   outputNValidHits_ = produces<edm::ValueMap<int>>("nValidHits");
@@ -138,6 +299,15 @@ void ResidualGlobalCorrectionMakerG4e::beginStream(edm::StreamID streamid)
     tree->Branch("trackPhi", &trackPhi, basketSize);
     tree->Branch("trackCharge", &trackCharge, basketSize);
     tree->Branch("trackQopErr", &trackQopErr);
+    // Per-iteration trajectory dump (debug): one entry per Gauss-Newton
+    // iteration. edmvalref_iter is the reference-block EDM, i.e. the
+    // actual convergence criterion.
+    if (debugPerIterDump_) {
+      tree->Branch("chisqval_iter",      &chisqval_iter);
+      tree->Branch("edmval_iter",        &edmval_iter);
+      tree->Branch("edmvalref_iter",     &edmvalref_iter);
+      tree->Branch("deltachisqval_iter", &deltachisqval_iter);
+    }
     // Stage-2 per-row B+ candidate index, branched only when the cfi
     // configured bCandIdxSrc (additive, no-op for legacy J/psi/Upsilon/Z).
     if (!bCandIdxSrcTag_.label().empty()) {
@@ -323,6 +493,14 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 {
   siStripClusterInfo_.initEvent(iSetup);
 
+  // Sync the material-group k values from corparms_ into the model so the
+  // propagator's per-step provider applies the current calibration.
+  if (globalMaterialModel_) {
+    for (unsigned int g = 0; g < matGroupGlobalIdx_.size(); ++g) {
+      matModel_->setKValue(g, corparms_[matGroupGlobalIdx_[g]]);
+    }
+  }
+
   const bool dogen = fitFromGenParms_;
   const bool dolocalupdate = fitFromSimParms_;
   // const bool dolocalupdate = true;
@@ -349,7 +527,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   // MT: bootstrap this TBB worker thread's G4 environment from the master
   // (world + per-thread navigator + per-thread magnetic field). Idempotent
   // per thread; runs on every produce() but only does work on the first.
-  worker_->ensureInitialized(globalCache()->cvhMaster());
+  worker_->ensureInitialized(iSetup.getData(cvhMasterToken_).cvhMaster());
   // Bind this thread's G4 RNG to the stream's CLHEP engine for this event.
   setG4RandomEngineForStream(iEvent.streamID());
   // Lazy-init the per-stream propagator clone on first call. Clone now is
@@ -429,6 +607,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   std::vector<float> corEtaV;
   std::vector<float> corPhiV;
   std::vector<int> corChargeV;
+  std::vector<float> corDxyV;
+  std::vector<float> corDzV;
   std::vector<float> edmvalV;
   std::vector<int> nValidHitsV;
   std::vector<int> nValidPixelHitsV;
@@ -444,6 +624,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     corEtaV.assign(muonAssoc->ref()->size(), -99.);
     corPhiV.assign(muonAssoc->ref()->size(), -99.);
     corChargeV.assign(muonAssoc->ref()->size(), -99);
+    corDxyV.assign(muonAssoc->ref()->size(), -99.);
+    corDzV.assign(muonAssoc->ref()->size(), -99.);
     edmvalV.assign(muonAssoc->ref()->size(), -99.);
     nValidHitsV.assign(muonAssoc->ref()->size(), -99);
     nValidPixelHitsV.assign(muonAssoc->ref()->size(), -99);
@@ -462,13 +644,15 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     bCandIdx = (bCandIdxH.isValid() && itrack < bCandIdxH->size())
         ? (*bCandIdxH)[itrack] : -1;
 
-    // Build the per-track Geant4 particle-name override once. Naming logic
-    // shared with the two-track ntuplizer via the base-class helper.
-    const std::string g4PartName = ana_hitanalyzer::g4ParticleName(trackParticleName_, track.charge());
+    // Note: the Geant4 particle name (charge-dependent) is built per fit
+    // attempt inside the runHypothesis lambda below, so the two-hypothesis
+    // fit can flip the charge consistently with refFts[6].
 
     const edm::Ref<std::vector<pat::Muon>> muonref = doMuonAssoc_ ? (*muonAssoc)[trackref] : edm::Ref<std::vector<pat::Muon>>();
 
-    const bool iscosmic = track.algo() == reco::TrackBase::ctf || track.algo() == reco::TrackBase::cosmics;
+    // forceCosmic_ makes split-leg tracks (algo 'cosmic', not matched below) use
+    // the outside-in cosmic handling instead of the beamline-PCA parameterisation.
+    const bool iscosmic = forceCosmic_ || track.algo() == reco::TrackBase::ctf || track.algo() == reco::TrackBase::cosmics;
     
     const bool dopca = !dogen && !iscosmic;
     
@@ -653,6 +837,15 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         continue;
       }
 
+      // Leg-structure-free mode: hitless surfaces (dead-module placeholders)
+      // carry no measurement and, with the global models, no parameter
+      // attribution either -- drop them so propagation goes hit to hit.
+      // The material of the skipped modules is still crossed by the G4
+      // steps of the longer leg.
+      if (skipHitlessSurfaces_ && !(*it)->isValid()) {
+        continue;
+      }
+
       const GeomDet* detectorG = globalGeometry->idToDet((*it)->geographicalId());
       const GluedGeomDet* detglued = dynamic_cast<const GluedGeomDet*>(detectorG);
       
@@ -705,7 +898,14 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             const SiPixelCluster& cluster = *tkhit->cluster_pixel();
             assert(pixhit != nullptr);
             
-            hitquality = !pixhit->isOnEdge() && cluster.sizeX() > 1;
+            ++pixHitsSeen_;
+            const bool onEdge = pixhit->isOnEdge();
+            if (onEdge) ++pixHitsEdge_;
+            if (cluster.sizeX() <= 1) ++pixHitsSizeX1_;
+            // Boundary veto configurable via keepPixelEdgeHits; sizeX
+            // threshold configurable via pixelMinSizeX (default 2 = legacy).
+            hitquality = (keepPixelEdgeHits_ || !onEdge) && cluster.sizeX() >= pixelMinSizeX_;
+            if (!hitquality) ++pixHitsDemoted_;
 // hitquality = false;
           }
           else {
@@ -733,7 +933,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         if (hitquality) {
           hits.push_back((*it)->cloneForFit(*detectorG));
         }
-        else {
+        else if (!skipHitlessSurfaces_) {
           hits.push_back(TrackingRecHit::RecHitPointer(new InvalidTrackingRecHit(*detectorG, TrackingRecHit::inactive)));
         }
       }
@@ -746,6 +946,23 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     }
 
     nHits = nhits;
+
+    // Cosmic forward-seeding option: if the muon enters at the OUTER end (higher
+    // y than the inner end), reverse the hit order so the fit propagates from
+    // the entry end along the muon (downward) = fully forward. The seed state
+    // is chosen accordingly below. Default off (inner seed, upper half backward).
+    bool cosmicFromOuter = false;
+    if (cosmicSeedFromEntry_ && iscosmic && track.extra().isNonnull()) {
+      // seed from whichever end is higher (the down-going muon's entry), so the
+      // propagation follows the muon downward = forward. For split legs the
+      // inner end is already the higher one (no-op); for a full cosmic the
+      // outer extremity may be on top, in which case seed there + reverse hits.
+      cosmicFromOuter =
+          track.extra()->outerPosition().y() > track.extra()->innerPosition().y();
+      if (cosmicFromOuter) {
+        std::reverse(hits.begin(), hits.end());
+      }
+    }
 
     unsigned int nvalid = 0;
     unsigned int nvalidpixel = 0;
@@ -784,19 +1001,16 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     
     nValidHits = nvalid;
     nValidPixelHits = nvalidpixel;
-    // openspec/improve-cvh-refit-convergence §2: per-event resets of the
-    // (now-unbranched) base-class nValidHitsFinal / nValidPixelHitsFinal
-    // counters. The two-track maker still uses these as a running sum;
-    // resetting here avoids inherited state if that maker runs in the
-    // same job, even though the values are never emitted from this
-    // single-track producer.
-    nValidHitsFinal = 0;
-    nValidPixelHitsFinal = 0;
     
     const unsigned int nparsAlignment = 5*nvalid + nvalidalign2d;
     const unsigned int nFieldModes = fieldCorrection_->nModes();
     const unsigned int nparsBfield = nhits * nFieldModes;
-    const unsigned int nparsEloss = nhits;
+    // Global material model: one slot per group per hit (uncrossed groups
+    // contribute zero columns; the idxmap collapses the shared global
+    // indices exactly like the field-mode block). Legacy: one per-module
+    // eloss slot per hit.
+    const unsigned int nMatGroups = globalMaterialModel_ ? matModel_->nGroups() : 0;
+    const unsigned int nparsEloss = globalMaterialModel_ ? nhits * nMatGroups : nhits;
 // const unsigned int nparsRes = nhits + nvalid + nvalidpixel;
     const unsigned int nparsRes = dores ? 2*nhits + nvalid + nvalidpixel : 0;
     const unsigned int npars = nparsAlignment + nparsBfield + nparsEloss + nparsRes;
@@ -921,20 +1135,24 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       refFts[3] = trackmom.x();
       refFts[4] = trackmom.y();
       refFts[5] = trackmom.z();
-      
-      refFts[6] = track.charge();
-      
+
+      // seedChargeSign_ (default +1) flips the charge hypothesis (two-hypothesis test)
+      refFts[6] = seedChargeSign_ * track.charge();
+
       // special case for cosmics, start from "inner" state with straight line extrapolation back 1cm to preserve the propagation logic
       // (the reference point is instead the PCA to the beamline and is therefore in the middle of the trajectory and not compatible
       // with the fitter/propagation logic
       // TODO change this so that cosmics directly use a local parameterization on the first hit?
       if (iscosmic) {
-        auto const& startpoint = track.extra()->innerPosition();
-        auto const& startmom = track.extra()->innerMomentum();
-        
+        // seed from the outer (entry) end when cosmicFromOuter, else the inner end
+        auto const& startpoint = cosmicFromOuter ? track.extra()->outerPosition()
+                                                 : track.extra()->innerPosition();
+        auto const& startmom = cosmicFromOuter ? track.extra()->outerMomentum()
+                                               : track.extra()->innerMomentum();
+
         const Eigen::Vector3d startpointv(startpoint.x(), startpoint.y(), startpoint.z());
         const Eigen::Vector3d startmomv(startmom.x(), startmom.y(), startmom.z());
-        
+
         refFts.head<3>() = startpointv - 1.0*startmomv.normalized();
         refFts.segment<3>(3) = startmomv;
 
@@ -948,14 +1166,15 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     // tracks only to keep logs short.
     static std::atomic<int> kaonQpDumpCount{0};
     constexpr int kKaonQpDumpMax = 5;
-    // Gate widened from "kaon" to "kaon || mu" so the §9.4.c mass-hypothesis
-    // A/B (kaonAsMuon=True ⇒ trackParticleName="mu" on the kaon collection)
-    // still fires the diagnostic. Single-track G4e maker is only used here
-    // by the bachelor-kaon path in `runCvhBplusJpsiK.py`, so this is safe.
-    const bool dumpKaonQp = (trackParticleName_ == "kaon" || trackParticleName_ == "mu")
-                          && (kaonQpDumpCount.load() < kKaonQpDumpMax);
+    // Gate on the B->J/psiK bachelor path (bCandIdxSrc configured) rather
+    // than on the particle name: this keeps the diagnostic for the §9.4.c
+    // mass-hypothesis A/B (kaonAsMuon=True => trackParticleName="mu" on the
+    // kaon collection) WITHOUT firing in plain muon single-track jobs
+    // (runCvhSingleTrack.py), which use this same plugin. fetch_add first
+    // so the cap cannot be exceeded by concurrent streams.
+    const bool dumpKaonQp = !bCandIdxSrcTag_.label().empty()
+                          && (kaonQpDumpCount.fetch_add(1) < kKaonQpDumpMax);
     if (dumpKaonQp) {
-      kaonQpDumpCount.fetch_add(1);
       const double inP = std::sqrt(track.momentum().mag2());
       const double refP = refFts.segment<3>(3).norm();
       const double qOverPin = track.charge() / std::max(inP, 1e-12);
@@ -971,6 +1190,22 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                 << "  q/p="    << qOverPref0 << "\n"
                 << "  track.parameters() = " << track.parameters() << std::endl;
     }
+
+    // ---- Two-hypothesis charge fit in one pass --------------------------
+    // Snapshot the seed state (spatial parts fixed; refFts[6] set per attempt)
+    // and run the whole fit as a lambda parameterised by the seed-charge sign.
+    // The nominal attempt runs first; if its clamp caught a q/p sign crossing
+    // (nChargeFlipProtect>0 -- the fit "wanted" the opposite charge, the
+    // signature of a high-p charge mis-ID) the opposite hypothesis is fit and
+    // the lower-chi2 result is kept. All fit products are written to member
+    // branch buffers, so the members hold the winning attempt at tree->Fill.
+    const Matrix<double, 7, 1> refFtsSeed = refFts;
+    ++fitAttempted_;
+    auto runHypothesis = [&](int effSeedSign) -> std::pair<bool, double> {
+    // reset the mutable reference state to the seed and apply this attempt's charge
+    refFts = refFtsSeed;
+    refFts[6] = effSeedSign * track.charge();
+    const std::string g4PartName = ana_hitanalyzer::g4ParticleName(trackParticleName_, effSeedSign * track.charge());
 
     if (dopca) {
       // enforce that reference state is really a consistent PCA to the beamline (by adjusting the reference position if needed)
@@ -988,6 +1223,14 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     layerStates.reserve(nhits);
     
     bool valid = true;
+    bool stepClampedThisFit = false;
+    nChargeFlipProtect = 0;
+    if (debugPerIterDump_) {
+      chisqval_iter.clear();
+      edmval_iter.clear();
+      edmvalref_iter.clear();
+      deltachisqval_iter.clear();
+    }
 
     const bool islikelihood = false;
 
@@ -1000,7 +1243,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     
     const bool anomDebug = false;
     
-    const unsigned int niters = (dogen && !dolocalupdate) || (dogen && fitFromSimParms_) ? 1 : 10;
+    const unsigned int niters = (dogen && !dolocalupdate) || (dogen && fitFromSimParms_) ? 1 : nIters_;
     
     for (unsigned int iiter=0; iiter<niters; ++iiter) {
       if (debugprintout_) {
@@ -1369,7 +1612,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         const DetId parmdetid = isglued ? DetId(gluedid) : hit->geographicalId();
         const DetId aligndetid = alignGlued_ ? parmdetid : hit->geographicalId();
         
-        const unsigned int elossglobalidx = detidparms.at(std::make_pair(7, propdetid));
+        const unsigned int elossglobalidx =
+            globalMaterialModel_ ? 0 : detidparms.at(std::make_pair(7, propdetid));
         const unsigned int msglobalidx = dores ? detidparms.at(std::make_pair(10, propdetid)) : 0;
         const unsigned int ioniglobalidx = dores ? detidparms.at(std::make_pair(11, propdetid)) : 0;
 
@@ -1378,13 +1622,23 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         // chain-rule scaling for the transport-Jacobian dBx/dBy/dBz columns
         // (cols 5,6,7 of the 5x9 transportJacobianBxByBzD).
         const GlobalPoint propStartPos(updtsos[0], updtsos[1], updtsos[2]);
-        const Eigen::Vector3d dB = fieldCorrection_->getCorrectionAt(propStartPos, corparms_);
+        // Per-step mode: the provider applies the correction inside the
+        // propagator (dB argument stays zero for FD perturbations) and the
+        // per-leg basis samples are not needed.
+        const Eigen::Vector3d dB = perStepFieldModes_
+            ? Eigen::Vector3d::Zero()
+            : fieldCorrection_->getCorrectionAt(propStartPos, corparms_);
         std::vector<double> dBxPerMode, dByPerMode, dBzPerMode;
-        fieldCorrection_->getBxBasisAt(propStartPos, dBxPerMode);
-        fieldCorrection_->getByBasisAt(propStartPos, dByPerMode);
-        fieldCorrection_->getBzBasisAt(propStartPos, dBzPerMode);
+        if (!perStepFieldModes_) {
+          fieldCorrection_->getBxBasisAt(propStartPos, dBxPerMode);
+          fieldCorrection_->getByBasisAt(propStartPos, dByPerMode);
+          fieldCorrection_->getBzBasisAt(propStartPos, dBzPerMode);
+        }
 
-        const double dxival = corparms_[elossglobalidx];
+        // Global material model: the leg-constant dxi is zero; the per-step
+        // group values k_g (synced from corparms_ into the model at the top
+        // of the fit) are applied by the propagator's provider path.
+        const double dxival = globalMaterialModel_ ? 0. : corparms_[elossglobalidx];
         const double dmsval = dores ? corparms_[msglobalidx] : dxival;
         const double dionival = dores ? corparms_[ioniglobalidx] : dxival;
         
@@ -1433,8 +1687,14 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             simhitdebug ? propfromtsos : updtsos;
 
         auto const &propresult = simhitdebug
-            ? g4prop->propagateGenericWithJacobianAltD(propfromtsos, surface, dB, dxival, dmsval, dionival, -1., g4PartName)
-            : g4prop->propagateGenericWithJacobianAltD(updtsos,      surface, dB, dxival, dmsval, dionival, -1., g4PartName);
+            ? g4prop->propagateGenericWithJacobianAltD(propfromtsos, surface, dB, dxival, dmsval, dionival, -1., g4PartName,
+                                                       matModel_.get(), matModel_ ? &groupJacs_ : nullptr,
+                                                       fieldModeProvider_.get(),
+                                                       fieldModeProvider_ ? &modeJacs_ : nullptr)
+            : g4prop->propagateGenericWithJacobianAltD(updtsos,      surface, dB, dxival, dmsval, dionival, -1., g4PartName,
+                                                       matModel_.get(), matModel_ ? &groupJacs_ : nullptr,
+                                                       fieldModeProvider_.get(),
+                                                       fieldModeProvider_ ? &modeJacs_ : nullptr);
 
 
         if (simhitdebug && simhit) {
@@ -1453,7 +1713,11 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         }
 
         if (!std::get<0>(propresult)) {
-          std::cout << "Abort: Propagation Failed!" << std::endl;
+          std::cout << "Abort: Propagation Failed!"
+                    << " iiter = " << iiter << " ihit = " << ihit
+                    << " seed: q=" << track.charge() << " pt=" << track.pt()
+                    << " eta=" << track.eta() << std::endl;
+          ++fitFailProp_;
           valid = false;
           break;
         }
@@ -1467,6 +1731,52 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 // const Matrix<double, 5, 5> dQcurv = Qcurv;
         const double deltaTotal = std::get<7>(propresult);
         const double wTotal = std::get<8>(propresult);
+
+        // Global material model Phase A validations (see member docs).
+        if (matModel_) {
+          // V2: the per-group columns must sum to the integrated dxi column
+          Eigen::Matrix<double, 5, 1> gsum = Eigen::Matrix<double, 5, 1>::Zero();
+          for (auto const &gc : groupJacs_) {
+            gsum += gc.second;
+          }
+          const double ref = FdFmcurv.col(8).norm();
+          const double rel = ref > 0. ? (gsum - FdFmcurv.col(8)).norm() / ref
+                                      : (gsum - FdFmcurv.col(8)).norm();
+          if (rel > v2MaxRelDiff_) {
+            v2MaxRelDiff_ = rel;
+          }
+          ++v2Checks_;
+
+          // V1: one-shot FD closure of one group's column on the first leg
+          // that actually crosses the injected group
+          if (materialFDGroup_ >= 0 && !fdMatDone_) {
+            auto itg = std::find_if(groupJacs_.begin(), groupJacs_.end(),
+                                    [this](auto const &e) { return e.first == materialFDGroup_; });
+            if (itg != groupJacs_.end() && itg->second.cwiseAbs().maxCoeff() > 0.) {
+              fdMatDone_ = true;
+              const Eigen::Matrix<double, 5, 1> anacol = itg->second;
+              matModel_->setInjection(materialFDGroup_, materialFDEps_);
+              auto const &pertres = g4prop->propagateGenericWithJacobianAltD(
+                  propInputState, surface, dB, dxival, dmsval, dionival, -1., g4PartName,
+                  matModel_.get(), nullptr);
+              matModel_->setInjection(-1, 0.);
+              if (std::get<0>(pertres)) {
+                const auto &ftsNom = std::get<1>(propresult);
+                const auto &ftsPert = std::get<1>(pertres);
+                const double qopNom = ftsNom[6] / ftsNom.segment<3>(3).norm();
+                const double qopPert = ftsPert[6] / ftsPert.segment<3>(3).norm();
+                const double fd = (qopPert - qopNom) / materialFDEps_;
+                std::cout << "material FD closure (V1): group " << materialFDGroup_
+                          << " (" << matModel_->groupName(materialFDGroup_) << ")"
+                          << " eps = " << materialFDEps_
+                          << " dqop/dk analytic = " << anacol[0]
+                          << " fd = " << fd
+                          << " ratio fd/analytic = "
+                          << (anacol[0] != 0. ? fd / anacol[0] : 0.) << std::endl;
+              }
+            }
+          }
+        }
         
         Matrix<double, 5, 9> FdFm = FdFmcurv;
         if (ihit == 0) {
@@ -1649,7 +1959,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           // Field block expands to nFieldModes columns (one per scalar-potential
           // mode), each scaled by its Bz basis value at the propagation start.
           const unsigned int nlocalbfield = nFieldModes;
-          constexpr unsigned int nlocaleloss = 1;
+          // Eloss block: one column per material group (global model) or the
+          // single per-module dxi column (legacy).
+          const unsigned int nlocaleloss = globalMaterialModel_ ? nMatGroups : 1;
           const unsigned int nlocalparms = nlocalbfield + nlocaleloss;
 
           const unsigned int fullstateidx = 5*ihit;
@@ -1662,12 +1974,33 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           // mode's Bx/By/Bz basis values at the propagation start; the last
           // column is the unchanged d/dxi column FdFm.col(8).
           Matrix<double, 5, Dynamic> dStateDparams(5, nlocalparms);
-          for (unsigned int imode = 0; imode < nlocalbfield; ++imode) {
-            dStateDparams.col(imode) = FdFm.col(5) * dBxPerMode[imode]
-                                     + FdFm.col(6) * dByPerMode[imode]
-                                     + FdFm.col(7) * dBzPerMode[imode];
+          if (perStepFieldModes_) {
+            // per-step columns from the propagator, already leg-integrated
+            // with the basis sampled at every step midpoint
+            for (unsigned int imode = 0; imode < nlocalbfield; ++imode) {
+              dStateDparams.col(imode) = modeJacs_[imode];
+            }
+          } else {
+            for (unsigned int imode = 0; imode < nlocalbfield; ++imode) {
+              dStateDparams.col(imode) = FdFm.col(5) * dBxPerMode[imode]
+                                       + FdFm.col(6) * dByPerMode[imode]
+                                       + FdFm.col(7) * dBzPerMode[imode];
+            }
           }
-          dStateDparams.col(nlocalbfield) = FdFm.col(8);
+          if (globalMaterialModel_) {
+            // per-group dxi columns from the propagator (zero for groups
+            // this leg did not cross); ihit == 0 reference-state Jacobian
+            // correction does not apply to the perturbation columns, but the
+            // columns were accumulated on the curvilinear trajectory like
+            // col 8, so they get the same treatment as the legacy column
+            // (none beyond FdFm assembly).
+            dStateDparams.rightCols(nlocaleloss).setZero();
+            for (auto const &gc : groupJacs_) {
+              dStateDparams.col(nlocalbfield + gc.first) = gc.second;
+            }
+          } else {
+            dStateDparams.col(nlocalbfield) = FdFm.col(8);
+          }
 
           // ----- Numerical-FD closure (debug only) ----------------
           // Validates the analytic Bx/By/Bz chain rule by perturbing dB at the
@@ -1676,7 +2009,78 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           // finite-differencing the 5-component endpoint state. Compares
           // against dStateDparams.col(imode). Runs once per job at the first
           // chain-rule site that has nlocalbfield > 0.
-          if (runFDClosure_ && !didFDClosure_ && nlocalbfield > 0) {
+          // Per-step variant: perturb the provider's applied field by
+          // eps * basis_i and re-propagate with the provider active --
+          // the FD then probes the same per-step application the analytic
+          // columns describe.
+          // Compares the basis-invariant curvilinear components (qop,
+          // lambda, phi), per-mode eps scaled to a target |dB| at the leg
+          // start, top modes by basis amplitude -- mirroring the per-leg
+          // closure in the two-track maker.
+          if (runFDClosure_ && !didFDClosure_ && perStepFieldModes_ && nlocalbfield > 0) {
+            didFDClosure_ = true;
+            auto qopLamPhi = [](const Eigen::Matrix<double, 7, 1> &s) {
+              const double px = s(3), py = s(4), pz = s(5), q = s(6);
+              const double pT = std::sqrt(px * px + py * py);
+              const double pmag = std::sqrt(pT * pT + pz * pz);
+              return Eigen::Vector3d(q / pmag, std::atan2(pz, pT), std::atan2(py, px));
+            };
+            const Eigen::Vector3d cNom = qopLamPhi(updtsos);
+            const double dBtarget = epsilonFDClosure_;
+            const double *bxs = nullptr;
+            const double *bys = nullptr;
+            const double *bzs = nullptr;
+            double bdummy[3];
+            fieldModeProvider_->sampleAt(propInputState[0], propInputState[1], propInputState[2],
+                                         bdummy, bxs, bys, bzs);
+            std::vector<std::pair<double, unsigned int>> sorted;
+            sorted.reserve(nlocalbfield);
+            for (unsigned int i = 0; i < nlocalbfield; ++i) {
+              sorted.emplace_back(
+                  std::sqrt(bxs[i] * bxs[i] + bys[i] * bys[i] + bzs[i] * bzs[i]), i);
+            }
+            std::sort(sorted.begin(), sorted.end(),
+                      std::greater<std::pair<double, unsigned int>>());
+            const unsigned int nTest = std::min<unsigned int>(10u, nlocalbfield);
+            std::cout << "===== Per-step field FD closure =====  nModes=" << nlocalbfield
+                      << "  testing top-" << nTest << " by basis amplitude  dB_target="
+                      << dBtarget << " T  comparing (qop, lambda, phi)" << std::endl;
+            std::cout << std::scientific << std::setprecision(4);
+            double worstRel = 0.0;
+            for (unsigned int j = 0; j < nTest; ++j) {
+              const double basisAmp = sorted[j].first;
+              const unsigned int imode = sorted[j].second;
+              if (basisAmp < 1e-15) {
+                continue;
+              }
+              const double eps = dBtarget / basisAmp;
+              const Eigen::Vector3d anac = modeJacs_[imode].head<3>();
+              fieldModeProvider_->setInjection(imode, eps);
+              auto const &pertResult = g4prop->propagateGenericWithJacobianAltD(
+                  propInputState, surface, dB, dxival, dmsval, dionival, -1., g4PartName,
+                  matModel_.get(), nullptr, fieldModeProvider_.get(), nullptr);
+              fieldModeProvider_->setInjection(-1, 0.);
+              if (!std::get<0>(pertResult)) {
+                std::cout << "  mode " << imode << ": perturbed propagation failed" << std::endl;
+                continue;
+              }
+              const Eigen::Vector3d dCFD = (qopLamPhi(std::get<1>(pertResult)) - cNom) / eps;
+              Eigen::Vector3d rel;
+              for (int k = 0; k < 3; ++k) {
+                rel(k) = std::abs(dCFD(k) - anac(k)) / std::max(std::abs(anac(k)), 1e-30);
+                if (rel(k) > worstRel) {
+                  worstRel = rel(k);
+                }
+              }
+              std::cout << "  mode " << imode << " (basis=" << basisAmp
+                        << ")  rel(qop,lam,phi) = " << rel.transpose() << std::endl;
+            }
+            std::cout << "===== per-step FD closure: worst rel = " << worstRel << " ====="
+                      << std::endl;
+            std::cout.unsetf(std::ios_base::floatfield);
+          }
+
+          if (runFDClosure_ && !didFDClosure_ && !perStepFieldModes_ && nlocalbfield > 0) {
             const Matrix<double, 5, 1> stateNom =
                 Eigen::Matrix<double, 5, 1>(updtsos.head<5>());
             const double eps = epsilonFDClosure_;
@@ -1749,8 +2153,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             SparseMatrix<double> &dV = dVs.emplace_back(ncons, ncons);
             dV.setFromTriplets(coeffs.begin(), coeffs.end());
             // MS resolution parameter slot sits right after the bfield block
-            // and the eloss slot.
-            residxs.push_back(iparm + nlocalbfield + 1);
+            // and the eloss slot(s).
+            residxs.push_back(iparm + nlocalbfield + nlocaleloss);
           }
 
           if (dores) {
@@ -1763,8 +2167,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             SparseMatrix<double> &dV = dVs.emplace_back(ncons, ncons);
             dV.setFromTriplets(coeffs.begin(), coeffs.end());
             // Ionization resolution slot is the second-after-eloss; offset is
-            // bfield block + eloss + msres (= nlocalbfield + 2).
-            residxs.push_back(iparm + nlocalbfield + 2);
+            // bfield block + eloss slot(s) + msres.
+            residxs.push_back(iparm + nlocalbfield + nlocaleloss + 1);
           }
 
 
@@ -1776,7 +2180,14 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             globalidxv[iparm++] = fieldCorrection_->basisGlobalIdx(imode);
           }
 
-          globalidxv[iparm++] = elossglobalidx;
+          if (globalMaterialModel_) {
+            // One slot per material group, shared global indices as above.
+            for (unsigned int g = 0; g < nMatGroups; ++g) {
+              globalidxv[iparm++] = matGroupGlobalIdx_[g];
+            }
+          } else {
+            globalidxv[iparm++] = elossglobalidx;
+          }
 
           if (dores) {
             globalidxv[iparm++] = msglobalidx;
@@ -1798,6 +2209,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           auto const& preciseHit = cloner.makeShared(hit, tsostmp);
           if (!preciseHit->isValid()) {
             std::cout << "Abort: Failed updating hit" << std::endl;
+            ++fitFailHitUpdate_;
             valid = false;
             break;
           }
@@ -2493,12 +2905,103 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       
       dxfree = -Cinvd.solve(VinvF.transpose()*rfull);
 
-      const double deltachisq = rfull.transpose()*VinvF*dxfree;
-      edmval = -deltachisq;
-      
+      // Fail fast on a non-finite update (drained/runaway propagation leg
+      // or singular normal matrix) instead of leaking NaN into the state.
+      if (!dxfree.allFinite()) {
+        std::cout << "Abort: non-finite parameter update from solve!"
+                  << " iiter = " << iiter
+                  << " seed(q,pt,eta)=(" << track.charge() << "," << track.pt() << "," << track.eta() << ")"
+                  << std::endl;
+        ++fitFailNaN_;
+        valid = false;
+        break;
+      }
+
       dxfull = VectorXd::Zero(nstateparms);
       dxfull(freestateidxs) = dxfree;
-      
+
+      // Momentum-floor safeguard on the Gauss-Newton step. Large relative
+      // q/p steps are legitimate (forward tracks routinely repull q/p by
+      // O(100%) in the first iterations), so a generic step cap would bind
+      // on healthy fits. Two update outcomes are guarded, by scaling the
+      // whole step vector (direction preserved):
+      //  - the updated momentum drops below pFloor (2 GeV, safely above the
+      //    1 GeV propagation refusal that killed such fits) -- ALWAYS clamped;
+      //  - q/p changes sign (charge flip). Crossing q/p = 0 is p -> inf, so a
+      //    flip is only dangerous for a stiff track (where it signals a
+      //    diverging step). For a high-p track (p > allowChargeFlipAboveP_)
+      //    the seed charge is genuinely ambiguous and the flip is a legitimate
+      //    correction, so it is PERMITTED (subject to the momentum floor on the
+      //    far side). Default allowChargeFlipAboveP_ = 1e9 GeV -> never allowed.
+      {
+        const double pref = refFts.segment<3>(3).norm();
+        const double qopref = pref > 0. ? refFts[6] / pref : 0.;
+        const double dqop = dxfull[0];
+        const double qopupd = qopref + dqop;
+        constexpr double pFloor = 2.0;  // GeV
+        // |q/p| threshold below which a sign flip is allowed (high p, stiff track)
+        const double qopFlipAllow = 1. / std::max(allowChargeFlipAboveP_, pFloor);
+        double stepscale = 1.;
+        if (qopref != 0. && dqop != 0.) {
+          if (std::abs(qopupd) > 1. / pFloor) {
+            // far-side momentum below the floor: land on p = pFloor, same
+            // charge (catches diverging steps, incl. sign flips toward low p)
+            stepscale = (std::copysign(1. / pFloor, qopref) - qopref) / dqop;
+          } else if (qopupd * qopref <= 0. && std::abs(qopref) > qopFlipAllow) {
+            // sign flip of a track too stiff for the flip to be ambiguous:
+            // treat as divergence, stop half-way toward q/p = 0. This track
+            // "wanted" the opposite charge -> flag for the two-hypothesis fit.
+            stepscale = -0.5 * qopref / dqop;
+            ++nChargeFlipProtect;
+          }
+          // else: benign same-sign step, or a high-p (ambiguous) charge flip
+          // with far-side p >= pFloor -> allowed unchanged
+        }
+        if (qopref != 0. && dqop != 0. && qopupd * qopref <= 0. && stepscale >= 1.) {
+          ++fitChargeFlipAllowed_;
+        }
+        if (stepscale < 1.) {
+          stepscale = std::max(stepscale, 0.);
+          dxfree *= stepscale;
+          dxfull *= stepscale;
+          if (!stepClampedThisFit) {
+            stepClampedThisFit = true;
+            ++fitStepClamped_;
+          }
+          std::cout << "GN step clamped: iiter = " << iiter
+                    << " qopref = " << qopref << " dqop = " << dqop
+                    << " scale = " << stepscale
+                    << " seed(q,pt,eta)=(" << track.charge() << "," << track.pt() << "," << track.eta() << ")"
+                    << std::endl;
+        }
+      }
+
+      // Limit-cycle damping (see ctor comment). Applied after the momentum
+      // floor and before the EDM bookkeeping so the recorded edmval refers
+      // to the step actually taken.
+      if (gnDampAfter_ > 0 && iiter >= gnDampAfter_) {
+        dxfree *= gnDampFactor_;
+        dxfull *= gnDampFactor_;
+      }
+
+      const double deltachisq = rfull.transpose()*VinvF*dxfree;
+      edmval = -deltachisq;
+
+      // Realized chi2 tracking (this maker historically never filled the
+      // chisqval/deltachisqval members in-loop -- they were stale storage;
+      // the always-stored chisqval branch is still overwritten with the
+      // final residual-projector value after the loop as before). chi2 at
+      // the current linearization point plus the predicted change of this
+      // step, mirroring the two-track maker; deltachisqval is the realized
+      // iteration-to-iteration change (per-iteration debug dump).
+      {
+        const double chisq0val = rfull.dot(Vinvsparse * rfull);
+        const double chisqcur = chisq0val + deltachisq;
+        deltachisqval = chisqcur - chisqvalold;
+        chisqvalold = chisqcur;
+        chisqval = chisqcur;
+      }
+
       const Vector5d dxref = dxfull.head<5>();
 
 // std::cout << "iiter = " << iiter << std::endl;
@@ -2557,7 +3060,13 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       refParms[0] = qbpupd;
       refParms[1] = lamupd;
       refParms[2] = phiupd;
-      //TODO (longstanding) fix filling of position parameters
+      // Position (impact) parameters at the PCA to the beamspot: d0 (=dxy) and
+      // z0 (=dz). Reference value from the converged state (cart2pca of refFts)
+      // plus the reference-block update, mirroring the momentum fill above.
+      // Resolves the longstanding "fill position parameters" TODO.
+      const Matrix<double, 5, 1> statepcaRef = cart2pca(refFts, *bsH);
+      refParms[3] = statepcaRef[3] + dxref[3];
+      refParms[4] = statepcaRef[4] + dxref[4];
 
       refParmsMomD[0] = qbpupd;
       refParmsMomD[1] = lamupd;
@@ -2574,9 +3083,19 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         
       
       niter = iiter + 1;
-      
+
+      // Per-iteration trajectory record (pushed before the convergence
+      // break so the break-triggering iteration is included).
+      if (debugPerIterDump_) {
+        chisqval_iter.push_back(static_cast<double>(chisqval));
+        edmval_iter.push_back(static_cast<double>(edmval));
+        edmvalref_iter.push_back(static_cast<double>(edmvalref));
+        deltachisqval_iter.push_back(static_cast<double>(deltachisqval));
+      }
+
       if (std::isnan(edmval) || std::isinf(edmval)) {
         std::cout << "WARNING: invalid parameter update!!!" << " edmval = " << edmval << " lamupd = " << lamupd << " deltachisqval = " << deltachisqval << std::endl;
+        ++fitFailNaN_;
         valid = false;
         break;
       }
@@ -2589,21 +3108,20 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       }
 
       
-      if (iiter > 0 && dolocalupdate && edmval < 1e-5) {
+      if (iiter > 0 && dolocalupdate && edmval < edmConvergence_) {
         break;
       }
-      else if (iiter > 0 && !dolocalupdate && edmvalref < 1e-5) {
+      else if (iiter > 0 && !dolocalupdate && edmvalref < edmConvergence_) {
         break;
       }
     
     }
     
     if (!valid) {
-      // chisqval = -99.;
-      // tree->Fill();
-      continue;
+      // this hypothesis failed to converge; caller decides what to keep
+      return {false, std::numeric_limits<double>::max()};
     }
-        
+
     std::unordered_map<unsigned int, unsigned int> idxmap;
     
     globalidxvfinal.clear();
@@ -3140,12 +3658,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
 // std::cout << "refParms[0]: " << refParms[0] << std::endl;
 
-    if (fillTrackTree_) {
-      tree->Fill();
-    }
-
-
-
+    // Muon-association outputs (written per attempt; the winning attempt's
+    // values persist since the fit is re-run to restore the nominal if the
+    // opposite loses). Inert for cosmics/single-track (muonref null).
     if (muonref.isNonnull()) {
       const double qbpupd = refParmsMomD[0];
       const double lamupd = refParmsMomD[1];
@@ -3161,6 +3676,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       corEtaV[muonref.index()] = etaupd;
       corPhiV[muonref.index()] = phiupd;
       corChargeV[muonref.index()] = chargeupd;
+      corDxyV[muonref.index()] = refParms[3];
+      corDzV[muonref.index()] = refParms[4];
       edmvalV[muonref.index()] = edmval;
       nValidHitsV[muonref.index()] = nvalid;
       nValidPixelHitsV[muonref.index()] = nvalidpixel;
@@ -3182,13 +3699,42 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       imomCov.assign(3*3, 0.);
       Map<Matrix<float, 3, 3, RowMajor>> momCovout(imomCov.data(), 3, 3);
       momCovout.triangularView<Upper>() = covfull.topLeftCorner<3,3>().cast<float>();
-// std::cout << "covfull.topLeftCorner<3,3>()" << std::endl;
-// std::cout << covfull.topLeftCorner<3,3>() << std::endl;
-// std::cout << "momcovout" << std::endl;
-// std::cout << momCovout << std::endl;
     }
 
+    return {true, static_cast<double>(chisqval)};
+    };  // ---- end runHypothesis lambda --------------------------------------
 
+    // Attempt 1: nominal seed charge.
+    std::pair<bool, double> fitres = runHypothesis(seedChargeSign_);
+    const unsigned int flipProtectNom = nChargeFlipProtect;
+    chargeHypFlipped = 0u;
+    // Attempt 2: only if the nominal fit converged but its clamp caught a q/p
+    // sign crossing (it wanted the opposite charge -- the high-p mis-ID
+    // signature). Keep whichever hypothesis has the lower chi2.
+    if (twoHypothesisCharge_ && fitres.first && flipProtectNom > 0u) {
+      const double chisqNom = fitres.second;
+      const std::pair<bool, double> fitresOpp = runHypothesis(-seedChargeSign_);
+      if (fitresOpp.first && fitresOpp.second < chisqNom) {
+        // opposite charge fits better: member buffers already hold it
+        fitres = fitresOpp;
+        chargeHypFlipped = 1u;
+        ++fitChargeHypTaken_;
+      } else {
+        // opposite worse or failed: re-run the nominal to restore its outputs
+        fitres = runHypothesis(seedChargeSign_);
+      }
+    }
+    // restore the diagnostic flag to the nominal attempt's value
+    nChargeFlipProtect = flipProtectNom;
+
+    if (!fitres.first) {
+      continue;
+    }
+    ++fitSucceeded_;
+
+    if (fillTrackTree_) {
+      tree->Fill();
+    }
 
   }
 
@@ -3196,6 +3742,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   edm::ValueMap<float> corEtaMap;
   edm::ValueMap<float> corPhiMap;
   edm::ValueMap<int> corChargeMap;
+  edm::ValueMap<float> corDxyMap;
+  edm::ValueMap<float> corDzMap;
   edm::ValueMap<float> edmvalMap;
   edm::ValueMap<int> nValidHitsMap;
   edm::ValueMap<int> nValidPixelHitsMap;
@@ -3221,6 +3769,14 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     edm::ValueMap<int>::Filler corChargeMapFiller(corChargeMap);
     corChargeMapFiller.insert(muonAssoc->ref(), std::make_move_iterator(corChargeV.begin()), std::make_move_iterator(corChargeV.end()));
     corChargeMapFiller.fill();
+
+    edm::ValueMap<float>::Filler corDxyMapFiller(corDxyMap);
+    corDxyMapFiller.insert(muonAssoc->ref(), std::make_move_iterator(corDxyV.begin()), std::make_move_iterator(corDxyV.end()));
+    corDxyMapFiller.fill();
+
+    edm::ValueMap<float>::Filler corDzMapFiller(corDzMap);
+    corDzMapFiller.insert(muonAssoc->ref(), std::make_move_iterator(corDzV.begin()), std::make_move_iterator(corDzV.end()));
+    corDzMapFiller.fill();
 
     edm::ValueMap<float>::Filler edmvalMapFiller(edmvalMap);
     edmvalMapFiller.insert(muonAssoc->ref(), std::make_move_iterator(edmvalV.begin()), std::make_move_iterator(edmvalV.end()));
@@ -3251,6 +3807,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   iEvent.emplace(outputCorEta_, std::move(corEtaMap));
   iEvent.emplace(outputCorPhi_, std::move(corPhiMap));
   iEvent.emplace(outputCorCharge_, std::move(corChargeMap));
+  iEvent.emplace(outputCorDxy_, std::move(corDxyMap));
+  iEvent.emplace(outputCorDz_, std::move(corDzMap));
   iEvent.emplace(outputEdmval_, std::move(edmvalMap));
   iEvent.emplace(outputNValidHits_, std::move(nValidHitsMap));
   iEvent.emplace(outputNValidPixelHits_, std::move(nValidPixelHitsMap));
