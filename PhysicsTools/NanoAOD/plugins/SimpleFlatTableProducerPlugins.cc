@@ -67,6 +67,20 @@ typedef SimpleFlatTableProducer<reco::GsfTrack> SimpleGsfTrackFlatTableProducer;
 #include "DataFormats/PatCandidates/interface/CompositeCandidate.h"
 typedef SimpleFlatTableProducer<pat::CompositeCandidate> SimpleCompositeCandidateFlatTableProducer;
 
+// RECO-tier muons. The stock Muon table is built from pat::Muon, but AlCaReco
+// streams persist plain reco::Muon (no PAT embedding), and the generic
+// reco::Candidate producer reaches only the kinematics, not the muon-specific
+// accessors (isGlobalMuon / isTrackerMuon / numberOfMatches).
+#include "DataFormats/MuonReco/interface/Muon.h"
+typedef SimpleFlatTableProducer<reco::Muon> SimpleMuonFlatTableProducer;
+
+// RECO-tier composite candidates (V0s, quarkonia, B candidates). Needed
+// because string expressions on a reco::Candidate view cannot reach daughters
+// ("method daughter returned void"); the concrete type can.
+#include "DataFormats/Candidate/interface/VertexCompositeCandidate.h"
+typedef SimpleFlatTableProducer<reco::VertexCompositeCandidate>
+    SimpleVertexCompositeCandidateFlatTableProducer;
+
 #include "FWCore/Framework/interface/MakerMacros.h"
 DEFINE_FWK_MODULE(SimpleCandidateFlatTableProducer);
 DEFINE_FWK_MODULE(SimpleCandidateCollectionFlatTableProducer);
@@ -91,3 +105,5 @@ DEFINE_FWK_MODULE(SimpleL2MuonTrajectorySeedFlatTableProducer);
 DEFINE_FWK_MODULE(SimpleTriggerTrackFlatTableProducer);
 DEFINE_FWK_MODULE(SimpleGsfTrackFlatTableProducer);
 DEFINE_FWK_MODULE(SimpleCompositeCandidateFlatTableProducer);
+DEFINE_FWK_MODULE(SimpleMuonFlatTableProducer);
+DEFINE_FWK_MODULE(SimpleVertexCompositeCandidateFlatTableProducer);
