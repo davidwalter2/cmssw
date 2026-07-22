@@ -59,6 +59,21 @@ opts.register('mode', 'both', VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string,
               'which maker(s) to schedule: "both" (default, one job -- the '
               'makers share the one CvhMaster ES product), "dimuon", or "kaon"')
+opts.register('nanoOut', '', VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.string,
+              'when set, write a NanoAOD to this path: candidate table with '
+              'raw VCC columns plus the refit ValueMaps as externalVariables, '
+              'and Track / PV / Muon tables. Turns on produceValueMaps and '
+              'turns off the sidecar TTree.')
+opts.register('srcTracks', 'ALCARECOTkAlJpsiX',
+              VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.string,
+              'persisted AlCaReco track collection (also the dE/dx ValueMap '
+              'key and the NanoAOD Track table source)')
+opts.register('srcMuons', 'ALCARECOTkAlJpsiXLooseMuons',
+              VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.string,
+              'persisted reco::Muon collection for the NanoAOD Muon table')
 opts.register('srcCandidates', 'ALCARECOTkAlJpsiXBPlusResonances',
               VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string,
@@ -90,10 +105,12 @@ opts.register('kaonAsMuon', False, VarParsing.VarParsing.multiplicity.singleton,
               'B+ config still uses the hard-coded kaon mass hypothesis; the '
               'multi-channel Stage-2 (Bc/K*0/phi/Ks/Lambda/psi2S) will consume '
               'the pdgId branches to pick the mass hypothesis per event.')
-opts.register('plimit', 1.0, VarParsing.VarParsing.multiplicity.singleton,
+opts.register('plimit', 0.05, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.float,
-              'Geant4ePropagator PropagationPtotLimit [GeV/c]. Default 1.0 '
-              'matches the cfi; §9.8 ramps this down to 0.05 to recover the '
+              'Geant4ePropagator PropagationPtotLimit [GeV/c]. Default 0.05: '
+              'B+ bachelor kaons are soft (p ~ 0.3-0.9 GeV) and the old cfi '
+              'default of 1.0 aborted ~2/3 of them with fail[plimit]. '
+              'The cfi value was 1.0; §9.8 ramps this down to 0.05 to recover the '
               'soft-bachelor tail. Lowering it on the dimuon side is a no-op '
               '(muons clear 1.0 trivially); the knob affects the kaon mode.')
 # openspec/improve-cvh-refit-convergence: CVH joint-refit convergence knobs
@@ -410,7 +427,117 @@ if opts.mode in ('both', 'dimuon'):
 if opts.mode in ('both', 'kaon'):
     _seq = _seq * process.globalCorJpsiKKaon
 process.reconstruction_step = cms.Path(_seq)
+
+# ---- NanoAOD output --------------------------------------------------------
+# The refit's corrected quantities are already EDM ValueMaps keyed to
+# srcCandidates, so they attach to the candidate table as externalVariables --
+# the same mechanism the dE/dx maps use on the Track table. Raw VCC columns and
+# corrected columns therefore sit side by side, with no offline join.
+if opts.nanoOut:
+    from PhysicsTools.NanoAOD.common_cff import Var, ExtVar, P3Vars
+
+    process.globalCorJpsiK.produceValueMaps = cms.bool(True)
+    process.globalCorJpsiK.fillTrackTree = cms.bool(False)
+    process.globalCorJpsiKKaon.fillTrackTree = cms.bool(False)
+
+    _cor = 'globalCorJpsiK'
+    process.bplusTable = cms.EDProducer(
+        'SimpleVertexCompositeCandidateFlatTableProducer',
+        src=_src_cands,
+        cut=cms.string(''),
+        name=cms.string('BuJpsiK'),
+        doc=cms.string('B+ -> J/psi K+ stage-1 candidates, raw + CVH-refit'),
+        singleton=cms.bool(False), extension=cms.bool(False),
+        variables=cms.PSet(
+            P3Vars,
+            mass=Var('mass', float, doc='raw candidate mass'),
+            charge=Var('charge', 'int16', doc='charge'),
+            vertexChi2=Var('vertexChi2', float, doc='raw vertex chi2'),
+            nDau=Var('numberOfDaughters', 'int16', doc='n daughters'),
+            jpsiPt=Var('daughter(0).pt', float, doc='J/psi (daughter0) pt'),
+            jpsiPdgId=Var('daughter(0).pdgId', int, doc='J/psi pdgId'),
+            kaonPt=Var('daughter(1).pt', float, doc='bachelor pt'),
+            kaonEta=Var('daughter(1).eta', float, doc='bachelor eta'),
+            kaonPhi=Var('daughter(1).phi', float, doc='bachelor phi'),
+            kaonPdgId=Var('daughter(1).pdgId', int, doc='bachelor signed pdgId'),
+        ),
+        externalVariables=cms.PSet(
+            corMass=ExtVar(cms.InputTag(_cor, 'corMass'), float, doc='CVH-refit dimuon mass'),
+            corMassErr=ExtVar(cms.InputTag(_cor, 'corMassErr'), float, doc='CVH-refit mass error'),
+            corPt=ExtVar(cms.InputTag(_cor, 'corPt'), float, doc='CVH-refit dimuon pt'),
+            corEta=ExtVar(cms.InputTag(_cor, 'corEta'), float, doc='CVH-refit dimuon eta'),
+            corPhi=ExtVar(cms.InputTag(_cor, 'corPhi'), float, doc='CVH-refit dimuon phi'),
+            corMuPlusPt=ExtVar(cms.InputTag(_cor, 'muPlusPt'), float, doc='CVH-refit mu+ pt'),
+            corMuMinusPt=ExtVar(cms.InputTag(_cor, 'muMinusPt'), float, doc='CVH-refit mu- pt'),
+            # edmval < 0 marks a candidate whose dimuon leg did not converge:
+            # the orphan flag that used to live in the offline join.
+            corEdmval=ExtVar(cms.InputTag(_cor, 'edmval'), float, doc='CVH fit EDM (<0 = not refit)'),
+        ),
+    )
+
+    process.trackTable = cms.EDProducer(
+        'SimpleTrackFlatTableProducer',
+        src=cms.InputTag(opts.srcTracks),
+        cut=cms.string(''), name=cms.string('Track'),
+        doc=cms.string('AlCaReco cloned alignment tracks'),
+        singleton=cms.bool(False), extension=cms.bool(False),
+        variables=cms.PSet(
+            P3Vars,
+            charge=Var('charge', 'int16', doc='charge'),
+            dxy=Var('dxy', float, doc='dxy'), dz=Var('dz', float, doc='dz'),
+            normChi2=Var('normalizedChi2', float, doc='chi2/ndof'),
+            nValidHits=Var('numberOfValidHits', 'int16', doc='n valid hits'),
+        ),
+        externalVariables=cms.PSet(
+            dedxHarmonic2=ExtVar(cms.InputTag(opts.srcTracks + 'DeDxHarmonic2'), float, doc='dE/dx harmonic2'),
+            dedxPixelHarmonic2=ExtVar(cms.InputTag(opts.srcTracks + 'DeDxPixelHarmonic2'), float, doc='dE/dx pixel harmonic2'),
+            originalIndex=ExtVar(cms.InputTag(opts.srcTracks, 'originalIndex'), 'uint', doc='index into generalTracks'),
+        ),
+    )
+
+    process.muonTable = cms.EDProducer(
+        'SimpleMuonFlatTableProducer',
+        src=cms.InputTag(opts.srcMuons),
+        cut=cms.string(''), name=cms.string('Muon'),
+        doc=cms.string('AlCaReco persisted reco::Muon'),
+        singleton=cms.bool(False), extension=cms.bool(False),
+        variables=cms.PSet(
+            P3Vars,
+            charge=Var('charge', 'int16', doc='charge'),
+            isGlobal=Var('isGlobalMuon', bool, doc='is global muon'),
+            isTracker=Var('isTrackerMuon', bool, doc='is tracker muon'),
+            nMatches=Var('numberOfMatches', 'int16', doc='n matched stations'),
+        ),
+    )
+
+    process.pvTable = cms.EDProducer(
+        'SimpleVertexFlatTableProducer',
+        src=cms.InputTag('offlinePrimaryVertices'),
+        cut=cms.string(''), name=cms.string('PV'),
+        doc=cms.string('offline primary vertices'),
+        singleton=cms.bool(False), extension=cms.bool(False),
+        variables=cms.PSet(
+            x=Var('x', float, doc='x'), y=Var('y', float, doc='y'), z=Var('z', float, doc='z'),
+            chi2=Var('chi2', float, doc='chi2'), ndof=Var('ndof', float, doc='ndof'),
+        ),
+    )
+
+    process.nanoTables = cms.Task(
+        process.bplusTable, process.trackTable, process.muonTable, process.pvTable)
+    process.nano_step = cms.Path(process.nanoTables)
+
+    process.nanoOutput = cms.OutputModule(
+        'NanoAODOutputModule',
+        fileName=cms.untracked.string(opts.nanoOut if opts.nanoOut.startswith('file:')
+                                      else 'file:' + opts.nanoOut),
+        outputCommands=cms.untracked.vstring('drop *', 'keep nanoaodFlatTable_*_*_*'),
+        compressionLevel=cms.untracked.int32(9),
+        compressionAlgorithm=cms.untracked.string('LZMA'),
+    )
+    process.nano_out_step = cms.EndPath(process.nanoOutput)
 process.schedule = cms.Schedule(process.reconstruction_step)
+if opts.nanoOut:
+    process.schedule.extend([process.nano_step, process.nano_out_step])
 
 from PhysicsTools.PatAlgos.tools.helpers import associatePatAlgosToolsTask
 associatePatAlgosToolsTask(process)
