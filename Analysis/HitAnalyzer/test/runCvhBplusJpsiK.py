@@ -497,6 +497,11 @@ if opts.nanoOut:
             cvhFitVtxChi2=ExtVar(cms.InputTag('bplusFit', 'fitVtxChi2'), float, doc='fit vertex chi2'),
             cvhFitVtxProb=ExtVar(cms.InputTag('bplusFit', 'fitVtxProb'), float, doc='fit vertex prob'),
             cvhFitOk=ExtVar(cms.InputTag('bplusFit', 'fitOk'), int, doc='1 = kinematic fit succeeded'),
+            # Cross-links into the Track table (-1 = no match). Enables e.g.
+            # Track_dedxHarmonic2[BuJpsiK_kaonTrackIdx[i]] downstream.
+            mu0TrackIdx=ExtVar(cms.InputTag('bplusLeafIdx', 'mu0TrackIdx'), int, doc='J/psi mu0 row in Track'),
+            mu1TrackIdx=ExtVar(cms.InputTag('bplusLeafIdx', 'mu1TrackIdx'), int, doc='J/psi mu1 row in Track'),
+            kaonTrackIdx=ExtVar(cms.InputTag('bplusLeafIdx', 'bach0TrackIdx'), int, doc='bachelor kaon row in Track'),
         ),
     )
 
@@ -577,6 +582,13 @@ if opts.nanoOut:
         maxChi2=cms.double(-1.),
     )
 
+    # Candidate-daughter -> Track row cross-links (flat-tree join keys).
+    process.bplusLeafIdx = cms.EDProducer(
+        'CandidateLeafTrackIndexProducer',
+        src=_src_cands,
+        trackSrc=cms.InputTag(opts.srcTracks),
+    )
+
     _extra_tables = []
     if opts.emitRefitTracks:
         process.refitTrackTable = cms.EDProducer(
@@ -601,7 +613,8 @@ if opts.nanoOut:
 
     process.nanoTables = cms.Task(
         process.bplusTable, process.trackTable, process.muonTable,
-        process.pvTable, process.dcsTable, process.bplusFit, *_extra_tables)
+        process.pvTable, process.dcsTable, process.bplusFit,
+        process.bplusLeafIdx, *_extra_tables)
     process.nano_step = cms.Path(process.nanoTables)
 
     process.nanoOutput = cms.OutputModule(
