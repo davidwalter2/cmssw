@@ -3,6 +3,7 @@
 
 
 #include <memory>
+#include <unordered_set>
 
 // user include files
 #include "FWCore/Framework/interface/Frameworkfwd.h"
@@ -194,6 +195,15 @@ protected:
   virtual void beginRun(edm::Run const&, edm::EventSetup const&) override;
 
   GloballyPositioned<double> surfaceToDouble(const Surface &surface) const;
+
+  // re-place hits on garbage-shifted modules at the path position implied by
+  // their REPAIRED surfaces: the stored hit order comes from the garbage
+  // constants and can put the repaired surface behind its predecessor,
+  // which aborts the forward-only Geant4e propagation. Sane hits keep their
+  // stored order; each flagged hit is inserted where its projection along
+  // the track momentum fits between them.
+  void reorderGarbageShiftHits(TransientTrackingRecHit::RecHitContainer &hits,
+                               const math::XYZVector &trackmom) const;
 
   GloballyPositioned<double> surfaceToDouble(const Surface &surface, const Basic3DVector<double> &gz) const;
 
@@ -492,6 +502,13 @@ protected:
   bool fillJac_;
   bool fillRunTree_;
   bool alignGlued_ = true;
+  double gluedGarbageTiltThreshold_ = 0.05;
+  double moduleGarbageShiftThreshold_ = 0.4;
+  // modules failing the local-consensus displacement check; their hits are
+  // either re-ordered to match the repaired surface positions (default) or
+  // excluded from the fit entirely, per garbageShiftReorderHits_
+  std::unordered_set<uint32_t> garbageShiftModules_;
+  bool garbageShiftReorderHits_ = true;
   
   bool debugprintout_;
   

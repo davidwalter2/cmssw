@@ -846,6 +846,14 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         continue;
       }
 
+      // hits on garbage-shifted modules: either dropped here (drop policy) or
+      // re-inserted at the repaired-surface path position after collection
+      // (reorder policy) -- the stored hit order comes from the garbage
+      // constants and can imply backward propagation steps that abort the fit
+      if (!garbageShiftReorderHits_ && garbageShiftModules_.count((*it)->geographicalId().rawId())) {
+        continue;
+      }
+
       const GeomDet* detectorG = globalGeometry->idToDet((*it)->geographicalId());
       const GluedGeomDet* detglued = dynamic_cast<const GluedGeomDet*>(detectorG);
       
@@ -880,8 +888,12 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           }
         }
         
-        hits.push_back(TrackingRecHit::RecHitPointer(new InvalidTrackingRecHit(*detinner, (*it)->type())));
-        hits.push_back(TrackingRecHit::RecHitPointer(new InvalidTrackingRecHit(*detouter, (*it)->type())));
+        if (garbageShiftReorderHits_ || !garbageShiftModules_.count(detinner->geographicalId().rawId())) {
+          hits.push_back(TrackingRecHit::RecHitPointer(new InvalidTrackingRecHit(*detinner, (*it)->type())));
+        }
+        if (garbageShiftReorderHits_ || !garbageShiftModules_.count(detouter->geographicalId().rawId())) {
+          hits.push_back(TrackingRecHit::RecHitPointer(new InvalidTrackingRecHit(*detouter, (*it)->type())));
+        }
         
       }
       else {
@@ -937,6 +949,10 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           hits.push_back(TrackingRecHit::RecHitPointer(new InvalidTrackingRecHit(*detectorG, TrackingRecHit::inactive)));
         }
       }
+    }
+
+    if (garbageShiftReorderHits_ && !garbageShiftModules_.empty()) {
+      reorderGarbageShiftHits(hits, track.momentum());
     }
 
     const unsigned int nhits = hits.size();
@@ -1718,6 +1734,16 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                     << " seed: q=" << track.charge() << " pt=" << track.pt()
                     << " eta=" << track.eta() << std::endl;
           ++fitFailProp_;
+          {
+            const DetId fdet = hit->geographicalId();
+            std::cout << "CVHDIAG reason=PROP ihit=" << ihit << " nhit=" << hits.size()
+                      << " detid=" << fdet.rawId() << " subdet=" << fdet.subdetId()
+                      << " layer=" << trackerTopology->layer(fdet)
+                      << " sx=" << surface.position().x() << " sy=" << surface.position().y()
+                      << " sz=" << surface.position().z()
+                      << " trkpt=" << trackPt << " trketa=" << trackEta << " trkphi=" << trackPhi
+                      << " iiter=" << iiter << std::endl;
+          }
           valid = false;
           break;
         }
@@ -2210,6 +2236,14 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           if (!preciseHit->isValid()) {
             std::cout << "Abort: Failed updating hit" << std::endl;
             ++fitFailHitUpdate_;
+            {
+              const DetId fdet = hit->geographicalId();
+              std::cout << "CVHDIAG reason=HITUPD ihit=" << ihit << " nhit=" << hits.size()
+                        << " detid=" << fdet.rawId() << " subdet=" << fdet.subdetId()
+                        << " layer=" << trackerTopology->layer(fdet)
+                        << " trkpt=" << trackPt << " trketa=" << trackEta << " trkphi=" << trackPhi
+                        << " iiter=" << iiter << std::endl;
+            }
             valid = false;
             break;
           }
@@ -3096,6 +3130,10 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       if (std::isnan(edmval) || std::isinf(edmval)) {
         std::cout << "WARNING: invalid parameter update!!!" << " edmval = " << edmval << " lamupd = " << lamupd << " deltachisqval = " << deltachisqval << std::endl;
         ++fitFailNaN_;
+        std::cout << "CVHDIAG reason=PARUPD ihit=-1 nhit=" << nValidHits
+                  << " detid=0 subdet=-1 layer=-1"
+                  << " trkpt=" << trackPt << " trketa=" << trackEta << " trkphi=" << trackPhi
+                  << " iiter=" << iiter << " edmval=" << edmval << " lamupd=" << lamupd << std::endl;
         valid = false;
         break;
       }

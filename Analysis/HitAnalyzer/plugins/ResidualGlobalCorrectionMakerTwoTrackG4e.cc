@@ -1307,6 +1307,13 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             continue;
           }
 
+          // hits on garbage-shifted modules: dropped (drop policy) or
+          // re-inserted at the repaired-surface path position (reorder
+          // policy); see the single-track producer for the rationale
+          if (!garbageShiftReorderHits_ && garbageShiftModules_.count((*it)->geographicalId().rawId())) {
+            continue;
+          }
+
           const GeomDet* detectorG = globalGeometry->idToDet((*it)->geographicalId());
           const GluedGeomDet* detglued = dynamic_cast<const GluedGeomDet*>(detectorG);
           
@@ -1326,8 +1333,12 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             const GeomDetUnit* detinner = order ? detglued->monoDet() : detglued->stereoDet();
             const GeomDetUnit* detouter = order ? detglued->stereoDet() : detglued->monoDet();
             
-            hits.push_back(TrackingRecHit::RecHitPointer(new InvalidTrackingRecHit(*detinner, (*it)->type())));
-            hits.push_back(TrackingRecHit::RecHitPointer(new InvalidTrackingRecHit(*detouter, (*it)->type())));
+            if (garbageShiftReorderHits_ || !garbageShiftModules_.count(detinner->geographicalId().rawId())) {
+              hits.push_back(TrackingRecHit::RecHitPointer(new InvalidTrackingRecHit(*detinner, (*it)->type())));
+            }
+            if (garbageShiftReorderHits_ || !garbageShiftModules_.count(detouter->geographicalId().rawId())) {
+              hits.push_back(TrackingRecHit::RecHitPointer(new InvalidTrackingRecHit(*detouter, (*it)->type())));
+            }
           }
           else {
             // apply hit quality criteria
@@ -1391,10 +1402,13 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             else if (!skipHitlessSurfaces_) {
               hits.push_back(TrackingRecHit::RecHitPointer(new InvalidTrackingRecHit(*detectorG, TrackingRecHit::inactive)));
             }
-          }          
+          }
+        }
+        if (garbageShiftReorderHits_ && !garbageShiftModules_.empty()) {
+          reorderGarbageShiftHits(hits, track.momentum());
         }
       }
-      
+
       unsigned int nhits = 0;
       unsigned int nvalid = 0;
       unsigned int nvalidpixel = 0;
