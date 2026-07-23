@@ -96,6 +96,14 @@ private:
   edm::EDPutTokenT<reco::TrackCollection> outputRefitTracks_;
   edm::EDPutTokenT<edm::ValueMap<int>> outputRefitOk_;
 
+  // Optional sanity cut on the refit momentum uncertainty. The NaN guard
+  // below still lets through a finite-but-absurd tail (worst seen: ptErr of
+  // 92 GeV on a ~1 GeV track), which would destabilise a downstream vertex
+  // fit. A track above this relative threshold is emitted as the input copy
+  // with refitOk = 0. Negative (the default) disables the cut entirely, so
+  // nominal behaviour is unchanged and the tail stays available for study.
+  double refitMaxRelPtErr_ = -1.;
+
   edm::ESGetToken<TransientTrackingRecHitBuilder, TransientRecHitRecord> ttrhToken_;
   edm::ESGetToken<Propagator, TrackingComponentsRecord> g4ePropToken_;
 
@@ -302,6 +310,8 @@ ResidualGlobalCorrectionMakerG4e::ResidualGlobalCorrectionMakerG4e(const edm::Pa
 
   emitRefitTracks_ = iConfig.existsAs<bool>("emitRefitTracks")
       ? iConfig.getParameter<bool>("emitRefitTracks") : false;
+  refitMaxRelPtErr_ = iConfig.existsAs<double>("refitMaxRelPtErr")
+      ? iConfig.getParameter<double>("refitMaxRelPtErr") : -1.;
   if (emitRefitTracks_) {
     outputRefitTracks_ = produces<reco::TrackCollection>("refit");
     outputRefitOk_ = produces<edm::ValueMap<int>>("refitOk");
@@ -3727,10 +3737,18 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         // tracker convention -- so normalizedChi2() on a refit track is NOT
         // a standard track-quality measure and must not be cut on as one.
         const int ndof = std::max(1, 2 * static_cast<int>(nvalid) - 5);
-        refitTracksV[itrack] = reco::Track(chisqval, ndof, refpt, mom,
-                                           static_cast<int>(std::copysign(1., qbp)),
-                                           cov, track.algo());
-        refitOkV[itrack] = 1;
+        const reco::Track cand(chisqval, ndof, refpt, mom,
+                               static_cast<int>(std::copysign(1., qbp)),
+                               cov, track.algo());
+
+        // Optional relative-ptErr sanity cut (disabled when negative).
+        const bool pterrok =
+            refitMaxRelPtErr_ < 0. ||
+            (cand.pt() > 0. && cand.ptError() / cand.pt() < refitMaxRelPtErr_);
+        if (pterrok) {
+          refitTracksV[itrack] = cand;
+          refitOkV[itrack] = 1;
+        }
       }
     }
 

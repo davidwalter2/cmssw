@@ -63,6 +63,17 @@ opts.register('emitRefitTracks', False, VarParsing.VarParsing.multiplicity.singl
               VarParsing.VarParsing.varType.bool,
               'single-track maker emits refit reco::Tracks (+refitOk map) for '
               'the downstream constrained B-vertex fit')
+opts.register('refitMaxRelPtErr', -1.0, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'reject a refit track whose ptError/pt exceeds this (refitOk=0). '
+              'Negative (default) disables the cut, leaving the covariance tail '
+              'available for the follow-up investigation.')
+opts.register('jpsiConstraint', 'inFit', VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.string,
+              'B-candidate kinematic fit mode: inFit (Bmm5, constraint applied '
+              'inside the mother fit) | upstream (muons already CVH '
+              'J/psi-constrained, no second constraint) | cascade (dimuon fit '
+              'first, then combined with the bachelor, vertex floating)')
 opts.register('nanoOut', '', VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string,
               'when set, write a NanoAOD to this path: candidate table with '
@@ -370,6 +381,7 @@ process.globalCorJpsiKKaon = globalCorJpsiKKaon.clone(
     # while leaving the input track collection (bachelor kaons) untouched.
     trackParticleName=cms.string('mu' if opts.kaonAsMuon else 'kaon'),
     emitRefitTracks=cms.bool(bool(opts.emitRefitTracks)),
+    refitMaxRelPtErr=cms.double(float(opts.refitMaxRelPtErr)),
     CvhMaster=CvhMasterPSet.clone(
         Particles=cms.vstring('mu+', 'mu-', 'kaon+', 'kaon-')),
     **_calib_pset,
@@ -477,6 +489,14 @@ if opts.nanoOut:
             # edmval < 0 marks a candidate whose dimuon leg did not converge:
             # the orphan flag that used to live in the offline join.
             corEdmval=ExtVar(cms.InputTag(_cor, 'edmval'), float, doc='CVH fit EDM (<0 = not refit)'),
+            # Fitted mother candidate. Distinct cvh* names so these can never
+            # be confused with BParking's own bkmm_jpsimc_* / bkmm_nomc_*.
+            cvhFitMass=ExtVar(cms.InputTag('bplusFit', 'fitMass'), float, doc='fitted m(mumuK)'),
+            cvhFitMassErr=ExtVar(cms.InputTag('bplusFit', 'fitMassErr'), float, doc='fitted mass error'),
+            cvhFitPt=ExtVar(cms.InputTag('bplusFit', 'fitPt'), float, doc='fitted pt'),
+            cvhFitVtxChi2=ExtVar(cms.InputTag('bplusFit', 'fitVtxChi2'), float, doc='fit vertex chi2'),
+            cvhFitVtxProb=ExtVar(cms.InputTag('bplusFit', 'fitVtxProb'), float, doc='fit vertex prob'),
+            cvhFitOk=ExtVar(cms.InputTag('bplusFit', 'fitOk'), int, doc='1 = kinematic fit succeeded'),
         ),
     )
 
@@ -544,6 +564,19 @@ if opts.nanoOut:
 
     # Refit bachelor tracks, when the maker emits them. These are the inputs
     # a constrained B-vertex fit needs; refitOk flags legs that were not refit.
+    # Fitted mother candidate (the Bmm5 chain). The stage-1 mass is a raw
+    # four-vector sum; this is the actual vertex/kinematic fit.
+    process.bplusFit = cms.EDProducer(
+        'JpsiXKinematicFitProducer',
+        src=_src_cands,
+        srcTracks=cms.InputTag('globalCorJpsiKKaon', 'refit') if opts.emitRefitTracks
+                  else cms.InputTag(''),
+        srcRefitOk=cms.InputTag('globalCorJpsiKKaon', 'refitOk'),
+        jpsiConstraint=cms.string(str(opts.jpsiConstraint)),
+        jpsiMass=cms.double(3.0969),
+        maxChi2=cms.double(-1.),
+    )
+
     _extra_tables = []
     if opts.emitRefitTracks:
         process.refitTrackTable = cms.EDProducer(
@@ -568,7 +601,7 @@ if opts.nanoOut:
 
     process.nanoTables = cms.Task(
         process.bplusTable, process.trackTable, process.muonTable,
-        process.pvTable, process.dcsTable, *_extra_tables)
+        process.pvTable, process.dcsTable, process.bplusFit, *_extra_tables)
     process.nano_step = cms.Path(process.nanoTables)
 
     process.nanoOutput = cms.OutputModule(
