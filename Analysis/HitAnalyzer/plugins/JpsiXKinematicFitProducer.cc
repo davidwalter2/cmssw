@@ -36,6 +36,7 @@
 #include "DataFormats/Candidate/interface/VertexCompositeCandidateFwd.h"
 #include "DataFormats/Common/interface/Handle.h"
 #include "DataFormats/Common/interface/ValueMap.h"
+#include "DataFormats/BeamSpot/interface/BeamSpot.h"
 #include "DataFormats/RecoCandidate/interface/RecoChargedCandidate.h"
 #include "DataFormats/TrackReco/interface/Track.h"
 #include "DataFormats/TrackReco/interface/TrackFwd.h"
@@ -110,7 +111,9 @@ private:
   const edm::ESGetToken<TransientTrackBuilder, TransientTrackRecord> ttbToken_;
   edm::EDGetTokenT<reco::TrackCollection> refitTrackToken_;
   edm::EDGetTokenT<edm::ValueMap<int>> refitOkToken_;
+  edm::EDGetTokenT<reco::BeamSpot> bsToken_;
   const bool useRefitTracks_;
+  const bool useBeamSpot_;
   const std::string mode_;
   const double jpsiMass_;
   const double maxChi2_;
@@ -118,6 +121,10 @@ private:
   edm::EDPutTokenT<edm::ValueMap<float>> outMass_, outMassErr_, outPt_, outEta_,
       outPhi_, outVtxChi2_, outVtxNdof_, outVtxProb_;
   edm::EDPutTokenT<edm::ValueMap<int>> outOk_;
+  // Dimuon (J/psi) fit-quality handles the btojpsik analysis path cuts on
+  // (dimuon vtx prob > 0.1, alphaBS < 0.4, sl3d > 4). Computed from a
+  // dimuon-only vertex fit of the two muon legs.
+  edm::EDPutTokenT<edm::ValueMap<float>> outMmVtxProb_, outMmAlphaBS_, outMmSl3d_;
 };
 
 JpsiXKinematicFitProducer::JpsiXKinematicFitProducer(const edm::ParameterSet& cfg)
@@ -125,6 +132,7 @@ JpsiXKinematicFitProducer::JpsiXKinematicFitProducer(const edm::ParameterSet& cf
           cfg.getParameter<edm::InputTag>("src"))),
       ttbToken_(esConsumes(edm::ESInputTag("", "TransientTrackBuilder"))),
       useRefitTracks_(!cfg.getParameter<edm::InputTag>("srcTracks").label().empty()),
+      useBeamSpot_(!cfg.getParameter<edm::InputTag>("beamSpot").label().empty()),
       mode_(cfg.getParameter<std::string>("jpsiConstraint")),
       jpsiMass_(cfg.getParameter<double>("jpsiMass")),
       maxChi2_(cfg.getParameter<double>("maxChi2")) {
@@ -137,6 +145,11 @@ JpsiXKinematicFitProducer::JpsiXKinematicFitProducer(const edm::ParameterSet& cf
     refitOkToken_ = consumes<edm::ValueMap<int>>(
         cfg.getParameter<edm::InputTag>("srcRefitOk"));
   }
+  if (useBeamSpot_)
+    bsToken_ = consumes<reco::BeamSpot>(cfg.getParameter<edm::InputTag>("beamSpot"));
+  outMmVtxProb_ = produces<edm::ValueMap<float>>("dimuonVtxProb");
+  outMmAlphaBS_ = produces<edm::ValueMap<float>>("dimuonAlphaBS");
+  outMmSl3d_ = produces<edm::ValueMap<float>>("dimuonSxy");
   outMass_ = produces<edm::ValueMap<float>>("fitMass");
   outMassErr_ = produces<edm::ValueMap<float>>("fitMassErr");
   outPt_ = produces<edm::ValueMap<float>>("fitPt");
@@ -159,12 +172,16 @@ void JpsiXKinematicFitProducer::produce(edm::Event& iEvent, const edm::EventSetu
     iEvent.getByToken(refitTrackToken_, refitH);
     iEvent.getByToken(refitOkToken_, refitOkH);
   }
+  edm::Handle<reco::BeamSpot> bsH;
+  if (useBeamSpot_) iEvent.getByToken(bsToken_, bsH);
+  const bool haveBS = useBeamSpot_ && bsH.isValid();
 
   const size_t n = candH->size();
   // Sentinel-filled: one entry per input candidate, so a failed fit stays
   // visible as fitOk = 0 rather than vanishing from the collection.
   std::vector<float> mass(n, -99.f), massErr(n, -99.f), pt(n, -99.f), eta(n, -99.f),
       phi(n, -99.f), vchi2(n, -99.f), vndof(n, -99.f), vprob(n, -99.f);
+  std::vector<float> mmVtxProb(n, -99.f), mmAlphaBS(n, -99.f), mmSl3d(n, -99.f);
   std::vector<int> ok(n, 0);
 
   KinematicParticleFactoryFromTransientTrack factory;
@@ -203,6 +220,64 @@ void JpsiXKinematicFitProducer::produce(edm::Event& iEvent, const edm::EventSetu
       masses.push_back(massForPdgId(leaves[il]->pdgId()));
     }
     if (badleg || tts.size() != leaves.size()) continue;
+
+    // Dimuon (J/psi) fit-quality handles the analysis path cuts on. An
+    // independent unconstrained vertex fit of the two muon legs -> vertex
+    // probability, XY pointing angle wrt the beamspot (alphaBS), and 3D flight
+    // significance wrt the beamspot (sl3d). Wrapped so a failed dimuon fit
+    // leaves the sentinels rather than aborting the whole candidate.
+    try {
+      std::vector<RefCountedKinematicParticle> mm;
+      for (size_t il = 0; il < 2; ++il) {
+        float m = kMuonMass, s = kMuonSigma, c2 = 0., nd = 0.;
+        mm.push_back(factory.particle(tts[il], m, c2, nd, s));
+      }
+      KinematicParticleVertexFitter mmFit;
+      RefCountedKinematicTree mmTree = mmFit.fit(mm);
+      if (!mmTree->isEmpty() && mmTree->isValid()) {
+        mmTree->movePointerToTheTop();
+        auto mmPart = mmTree->currentParticle();
+        auto mmVtx = mmTree->currentDecayVertex();
+        if (mmPart->currentState().isValid() && mmVtx->vertexIsValid()) {
+          const double c2 = mmVtx->chiSquared();
+          const double nd = mmVtx->degreesOfFreedom();
+          if (nd > 0.)
+            mmVtxProb[ic] = TMath::Prob(c2, static_cast<int>(std::lround(nd)));
+          const auto sv = mmVtx->position();
+          const auto mom = mmPart->currentState().globalMomentum();
+          if (haveBS) {
+            const double dx = sv.x() - bsH->x(sv.z());
+            const double dy = sv.y() - bsH->y(sv.z());
+            const double dz = sv.z() - bsH->z0();
+            const double lxy = std::hypot(dx, dy);
+            const double ptv = mom.perp();
+            if (lxy > 0. && ptv > 0.) {
+              const double cosA = (dx * mom.x() + dy * mom.y()) / (lxy * ptv);
+              mmAlphaBS[ic] = std::acos(std::max(-1.0, std::min(1.0, cosA)));
+            }
+            // 2D transverse flight-length significance wrt the beamspot. The
+            // beamspot has no useful z constraint, so a true 3D sl3d needs the
+            // PV (see the Track->PV bridge task); the transverse quantity is
+            // the well-defined proxy with only a beamspot. Uncertainty = the
+            // vertex XY covariance plus the beamspot transverse width,
+            // projected on the flight direction.
+            (void)dz;
+            if (lxy > 0.) {
+              const auto e = mmVtx->error().matrix();
+              const double ux = dx / lxy, uy = dy / lxy;
+              const double bw2 =
+                  bsH->BeamWidthX() * bsH->BeamWidthX() * ux * ux +
+                  bsH->BeamWidthY() * bsH->BeamWidthY() * uy * uy;
+              const double var = ux * ux * e(0, 0) + uy * uy * e(1, 1) +
+                                 2 * ux * uy * e(0, 1) + bw2;
+              if (var > 0.) mmSl3d[ic] = lxy / std::sqrt(var);
+            }
+          }
+        }
+      }
+    } catch (const std::exception&) {
+      // leave the dimuon sentinels
+    }
 
     try {
       RefCountedKinematicTree tree;
@@ -299,6 +374,9 @@ void JpsiXKinematicFitProducer::produce(edm::Event& iEvent, const edm::EventSetu
   put(outVtxNdof_, vndof);
   put(outVtxProb_, vprob);
   put(outOk_, ok);
+  put(outMmVtxProb_, mmVtxProb);
+  put(outMmAlphaBS_, mmAlphaBS);
+  put(outMmSl3d_, mmSl3d);
 }
 
 }  // namespace ana_hitanalyzer

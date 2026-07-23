@@ -513,6 +513,10 @@ if opts.nanoOut:
             cvhFitVtxChi2=ExtVar(cms.InputTag('bplusFit', 'fitVtxChi2'), float, doc='fit vertex chi2'),
             cvhFitVtxProb=ExtVar(cms.InputTag('bplusFit', 'fitVtxProb'), float, doc='fit vertex prob'),
             cvhFitOk=ExtVar(cms.InputTag('bplusFit', 'fitOk'), int, doc='1 = kinematic fit succeeded'),
+            # Dimuon (J/psi) fit-quality handles the analysis path cuts on.
+            dimuonVtxProb=ExtVar(cms.InputTag('bplusFit', 'dimuonVtxProb'), float, doc='dimuon vertex prob'),
+            dimuonAlphaBS=ExtVar(cms.InputTag('bplusFit', 'dimuonAlphaBS'), float, doc='dimuon XY pointing angle wrt BS'),
+            dimuonSxy=ExtVar(cms.InputTag('bplusFit', 'dimuonSxy'), float, doc='dimuon 2D Lxy significance wrt BS'),
             # Cross-links into the Track table (-1 = no match). Enables e.g.
             # Track_dedxHarmonic2[BuJpsiK_kaonTrackIdx[i]] downstream.
             mu0TrackIdx=ExtVar(cms.InputTag('bplusLeafIdx', 'mu0TrackIdx'), int, doc='J/psi mu0 row in Track'),
@@ -616,6 +620,7 @@ if opts.nanoOut:
         jpsiConstraint=cms.string(str(opts.jpsiConstraint)),
         jpsiMass=cms.double(3.0969),
         maxChi2=cms.double(-1.),
+        beamSpot=cms.InputTag('offlineBeamSpot'),
     )
 
     # Candidate-daughter -> Track row cross-links (flat-tree join keys).
