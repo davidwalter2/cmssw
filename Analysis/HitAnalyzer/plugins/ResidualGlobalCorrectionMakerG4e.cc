@@ -81,6 +81,21 @@ private:
   edm::EDPutTokenT<edm::ValueMap<std::vector<float>>> outputJacRef_;
   edm::EDPutTokenT<edm::ValueMap<std::vector<float>>> outputMomCov_;
 
+  // Optional refit-track output. The ValueMaps above publish only a 3x3
+  // momentum block, and only when a muon association is configured, so they
+  // cannot seed a TransientTrack. A downstream constrained B-vertex fit
+  // (KinematicConstrainedVertexFitter, as Bmm5 does it) needs full 5-parameter
+  // tracks with their 5x5 covariance, which is what this emits. Off by
+  // default, so nominal behaviour is untouched.
+  //
+  // The collection is positionally aligned with the input tracks: entry i is
+  // the refit of input track i. Entries whose fit failed keep a copy of the
+  // input track and are flagged refitOk = 0, so a leg that was never refit
+  // stays visible instead of silently masquerading as corrected.
+  bool emitRefitTracks_ = false;
+  edm::EDPutTokenT<reco::TrackCollection> outputRefitTracks_;
+  edm::EDPutTokenT<edm::ValueMap<int>> outputRefitOk_;
+
   edm::ESGetToken<TransientTrackingRecHitBuilder, TransientRecHitRecord> ttrhToken_;
   edm::ESGetToken<Propagator, TrackingComponentsRecord> g4ePropToken_;
 
@@ -284,6 +299,13 @@ ResidualGlobalCorrectionMakerG4e::ResidualGlobalCorrectionMakerG4e(const edm::Pa
 
   outputJacRef_ = produces<edm::ValueMap<std::vector<float>>>("jacRef");
   outputMomCov_ = produces<edm::ValueMap<std::vector<float>>>("momCov");
+
+  emitRefitTracks_ = iConfig.existsAs<bool>("emitRefitTracks")
+      ? iConfig.getParameter<bool>("emitRefitTracks") : false;
+  if (emitRefitTracks_) {
+    outputRefitTracks_ = produces<reco::TrackCollection>("refit");
+    outputRefitOk_ = produces<edm::ValueMap<int>>("refitOk");
+  }
 }
 
 void ResidualGlobalCorrectionMakerG4e::beginStream(edm::StreamID streamid)
@@ -618,6 +640,16 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   std::vector<std::vector<float>> momCovV;
 
   std::array<double, 3> refParmsMomD;
+
+  // Refit-track output, positionally aligned with the input tracks. Seeded
+  // with copies of the inputs so a failed fit leaves a valid (uncorrected)
+  // entry that refitOk marks as such.
+  std::vector<reco::Track> refitTracksV;
+  std::vector<int> refitOkV;
+  if (emitRefitTracks_) {
+    refitTracksV.assign(trackOrigH->begin(), trackOrigH->end());
+    refitOkV.assign(trackOrigH->size(), 0);
+  }
 
   if (doMuonAssoc_) {
     corPtV.assign(muonAssoc->ref()->size(), -99.);
@@ -3658,6 +3690,50 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
 // std::cout << "refParms[0]: " << refParms[0] << std::endl;
 
+    // Refit track, rebuilt from the converged reference state. Deliberately
+    // NOT inside the muonref gate below: the bachelor-track use case has no
+    // muon association at all, which is exactly the case the ValueMaps miss.
+    // covfull's top-left 5x5 is the reference-state covariance in the same
+    // (qoverp, lambda, phi, dxy, dz) basis reco::TrackBase uses.
+    if (emitRefitTracks_) {
+      const double qbp = refParmsMomD[0];
+      const double lam = refParmsMomD[1];
+      const double phi = refParmsMomD[2];
+      const double pmag = 1. / std::max(std::abs(qbp), 1e-12);
+      const math::XYZVector mom(pmag * std::cos(lam) * std::cos(phi),
+                                pmag * std::cos(lam) * std::sin(phi),
+                                pmag * std::sin(lam));
+      const double dxyv = refParms[3];
+      const double dzv = refParms[4];
+      const math::XYZPoint refpt(-dxyv * std::sin(phi), dxyv * std::cos(phi), dzv);
+
+      // Guard the covariance. Clamped / marginally-converged fits can leave a
+      // non-finite or non-positive reference block, and a NaN covariance would
+      // silently poison any downstream vertex fit. Such tracks are emitted as
+      // the input copy with refitOk = 0 rather than as a corrected track.
+      const Matrix<double, 5, 5> c5 = covfull.topLeftCorner<5, 5>();
+      bool covok = c5.allFinite();
+      for (int i = 0; i < 5 && covok; ++i)
+        covok = c5(i, i) > 0.;
+
+      if (covok) {
+        reco::TrackBase::CovarianceMatrix cov;
+        for (int i = 0; i < 5; ++i)
+          for (int j = i; j < 5; ++j)
+            cov(i, j) = c5(i, j);
+
+        // NB: chisqval is the CVH fit's full chi2 (all hits plus the
+        // scattering/material terms), and ndof here is only the nominal
+        // tracker convention -- so normalizedChi2() on a refit track is NOT
+        // a standard track-quality measure and must not be cut on as one.
+        const int ndof = std::max(1, 2 * static_cast<int>(nvalid) - 5);
+        refitTracksV[itrack] = reco::Track(chisqval, ndof, refpt, mom,
+                                           static_cast<int>(std::copysign(1., qbp)),
+                                           cov, track.algo());
+        refitOkV[itrack] = 1;
+      }
+    }
+
     // Muon-association outputs (written per attempt; the winning attempt's
     // values persist since the fit is re-run to restore the nominal if the
     // opposite loses). Inert for cosmics/single-track (muonref null).
@@ -3801,6 +3877,18 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     edm::ValueMap<std::vector<float>>::Filler momCovMapFiller(momCovMap);
     momCovMapFiller.insert(muonAssoc->ref(), std::make_move_iterator(momCovV.begin()), std::make_move_iterator(momCovV.end()));
     momCovMapFiller.fill();
+  }
+
+  if (emitRefitTracks_) {
+    auto refitOut = std::make_unique<reco::TrackCollection>(std::move(refitTracksV));
+    const edm::OrphanHandle<reco::TrackCollection> refitH =
+        iEvent.put(outputRefitTracks_, std::move(refitOut));
+    // Keyed to the emitted collection, so refitOk[i] describes refit track i.
+    auto okOut = std::make_unique<edm::ValueMap<int>>();
+    edm::ValueMap<int>::Filler okFiller(*okOut);
+    okFiller.insert(refitH, refitOkV.begin(), refitOkV.end());
+    okFiller.fill();
+    iEvent.put(outputRefitOk_, std::move(okOut));
   }
 
   iEvent.emplace(outputCorPt_, std::move(corPtMap));

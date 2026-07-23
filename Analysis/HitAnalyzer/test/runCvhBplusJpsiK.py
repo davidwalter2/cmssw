@@ -59,6 +59,10 @@ opts.register('mode', 'both', VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string,
               'which maker(s) to schedule: "both" (default, one job -- the '
               'makers share the one CvhMaster ES product), "dimuon", or "kaon"')
+opts.register('emitRefitTracks', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'single-track maker emits refit reco::Tracks (+refitOk map) for '
+              'the downstream constrained B-vertex fit')
 opts.register('nanoOut', '', VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string,
               'when set, write a NanoAOD to this path: candidate table with '
@@ -365,6 +369,7 @@ process.globalCorJpsiKKaon = globalCorJpsiKKaon.clone(
     # §9.4.c knob: override the propagation hypothesis from "kaon" to "mu"
     # while leaving the input track collection (bachelor kaons) untouched.
     trackParticleName=cms.string('mu' if opts.kaonAsMuon else 'kaon'),
+    emitRefitTracks=cms.bool(bool(opts.emitRefitTracks)),
     CvhMaster=CvhMasterPSet.clone(
         Particles=cms.vstring('mu+', 'mu-', 'kaon+', 'kaon-')),
     **_calib_pset,
@@ -537,9 +542,33 @@ if opts.nanoOut:
         ),
     )
 
+    # Refit bachelor tracks, when the maker emits them. These are the inputs
+    # a constrained B-vertex fit needs; refitOk flags legs that were not refit.
+    _extra_tables = []
+    if opts.emitRefitTracks:
+        process.refitTrackTable = cms.EDProducer(
+            'SimpleTrackFlatTableProducer',
+            src=cms.InputTag('globalCorJpsiKKaon', 'refit'),
+            cut=cms.string(''), name=cms.string('RefitTrack'),
+            doc=cms.string('CVH-refit bachelor tracks (aligned with input tracks)'),
+            singleton=cms.bool(False), extension=cms.bool(False),
+            variables=cms.PSet(
+                P3Vars,
+                charge=Var('charge', 'int16', doc='charge'),
+                dxy=Var('dxy', float, doc='dxy'), dz=Var('dz', float, doc='dz'),
+                normChi2=Var('normalizedChi2', float, doc='chi2/ndof'),
+                ptErr=Var('ptError', float, doc='pt uncertainty from the refit 5x5'),
+            ),
+            externalVariables=cms.PSet(
+                refitOk=ExtVar(cms.InputTag('globalCorJpsiKKaon', 'refitOk'),
+                               int, doc='1 = refit succeeded, 0 = input copy'),
+            ),
+        )
+        _extra_tables.append(process.refitTrackTable)
+
     process.nanoTables = cms.Task(
         process.bplusTable, process.trackTable, process.muonTable,
-        process.pvTable, process.dcsTable)
+        process.pvTable, process.dcsTable, *_extra_tables)
     process.nano_step = cms.Path(process.nanoTables)
 
     process.nanoOutput = cms.OutputModule(
