@@ -55,6 +55,7 @@
 #include "DataFormats/TrackingRecHit/interface/KfComponentsHolder.h"
 #include "DataFormats/Math/interface/invertPosDefMatrix.h"
 #include "DataFormats/Math/interface/ProjectMatrix.h"
+#include "DataFormats/Math/interface/deltaPhi.h"
 #include "TrackingTools/Records/interface/TrackingComponentsRecord.h" 
 
 #include "Geometry/TrackerGeometryBuilder/interface/StripGeomDetUnit.h"
@@ -136,6 +137,21 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   doTrigger_ = iConfig.getParameter<bool>("doTrigger");
   doRes_ = iConfig.getParameter<bool>("doRes");
   useIdealGeometry_ = iConfig.getParameter<bool>("useIdealGeometry");
+  // Efficiency A/B study (eb96caef): garbage-aligned glued-module composite-frame
+  // repair triggers when the composite tilt vs ideal exceeds this threshold.
+  // Untracked with a default so no cfi needs editing: 0.05 rad = fix ON (default),
+  // a huge value (e.g. 1e9) = fix OFF, reproducing the pre-eb96caef buggy behaviour.
+  gluedGarbageTiltThreshold_ = iConfig.getUntrackedParameter<double>("gluedGarbageTiltThreshold", 0.05);
+  // Translation analogue of the tilt guard: repair triggers when a module's
+  // aligned-vs-ideal displacement deviates from the local consensus of its
+  // layer neighbors by more than this threshold [cm]. Genuine module-level
+  // misalignment is sub-mm (p99.9 ~ 2 mm in 2016 data); 0.4 cm cleanly
+  // separates the pathological constants (observed 0.5-1.6 cm). 1e9 = OFF.
+  moduleGarbageShiftThreshold_ = iConfig.getUntrackedParameter<double>("moduleGarbageShiftThreshold", 0.4);
+  // policy for hits on garbage-shifted modules: true (default) = keep the hit
+  // but re-insert it at the path position implied by the repaired surface;
+  // false = exclude the hit from the fit entirely
+  garbageShiftReorderHits_ = iConfig.getUntrackedParameter<bool>("garbageShiftReorderHits", true);
   corFiles_ = iConfig.getParameter<std::vector<std::string>>("corFiles");
   fieldlabel_ = iConfig.getParameter<std::string>("MagneticFieldLabel");
 
@@ -265,6 +281,10 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
     tree->Branch("event", &event);
     
     tree->Branch("edmval", &edmval);
+    // Reference-block EDM at the final iteration -- the actual convergence
+    // criterion (edmval is the full-state EDM incl. per-hit scattering DOF,
+    // which is large by construction). Always-on so convergence quality is
+    // auditable offline together with niter.
     tree->Branch("edmvalref", &edmvalref);
     tree->Branch("deltachisqval", &deltachisqval);
     tree->Branch("niter", &niter);
@@ -843,6 +863,97 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
     }
   }
 
+  // Translation-outlier guard (generic analogue of the glued-tilt guard):
+  // modules with unconstrained alignment can also carry garbage TRANSLATIONS
+  // (observed: one TID r-phi face displaced by 1.3 cm in z, killing the
+  // Geant4e propagation for every track with a hit on it). A plain
+  // aligned-vs-ideal position cut cannot separate these from legitimate
+  // coherent large-structure movements (up to ~1 cm), so the discriminator
+  // is the deviation from the LOCAL CONSENSUS: the median aligned-ideal
+  // displacement of neighboring modules in the same subdetector and layer
+  // (same z-side, |dz| < 15 cm, |dphi| < 0.6). Genuine module-level
+  // misalignment relative to this consensus is sub-mm (p99 ~ 1.3 mm,
+  // p99.9 ~ 2 mm over the whole tracker in 2016 data); outliers beyond
+  // the threshold are pathological constants and their surfaces are
+  // rebuilt as ideal surface + consensus displacement.
+  std::unordered_map<uint32_t, std::array<double, 3>> shiftRepairs;
+  garbageShiftModules_.clear();
+  if (moduleGarbageShiftThreshold_ < 1e6) {
+    struct ModDisp {
+      uint32_t detid;
+      int cat;
+      double z, phi;
+      std::array<double, 3> disp;
+    };
+    std::vector<ModDisp> moddisps;
+    moddisps.reserve(20000);
+    for (const GeomDet* det : globalGeometry->detUnits()) {
+      if (!det || !GeomDetEnumerators::isTracker(det->subDetector())) {
+        continue;
+      }
+      const DetId detid = det->geographicalId();
+      auto idealIt = surfacemapIdealD_.find(detid);
+      if (idealIt == surfacemapIdealD_.end()) {
+        continue;
+      }
+      const auto &idealpos = idealIt->second.position();
+      const auto &pos = det->surface().position();
+      ModDisp md;
+      md.detid = detid.rawId();
+      md.cat = 100 * detid.subdetId() + int(trackerTopology->layer(detid))
+               + (idealpos.z() < 0. ? 10000 : 0);
+      md.z = idealpos.z();
+      md.phi = idealpos.phi();
+      md.disp = {{pos.x() - idealpos.x(), pos.y() - idealpos.y(), pos.z() - idealpos.z()}};
+      moddisps.push_back(md);
+    }
+    // bucket by category for the neighbor scan
+    std::unordered_map<int, std::vector<unsigned int>> catmap;
+    for (unsigned int i = 0; i < moddisps.size(); ++i) {
+      catmap[moddisps[i].cat].push_back(i);
+    }
+    for (unsigned int i = 0; i < moddisps.size(); ++i) {
+      const ModDisp &mi = moddisps[i];
+      std::array<std::vector<double>, 3> comps;
+      for (unsigned int j : catmap[mi.cat]) {
+        if (j == i) {
+          continue;
+        }
+        const ModDisp &mj = moddisps[j];
+        if (std::abs(mj.z - mi.z) > 15.) {
+          continue;
+        }
+        const double dphi = std::abs(reco::deltaPhi(mj.phi, mi.phi));
+        if (dphi > 0.6) {
+          continue;
+        }
+        for (unsigned int k = 0; k < 3; ++k) {
+          comps[k].push_back(mj.disp[k]);
+        }
+      }
+      if (comps[0].size() < 5) {
+        continue;
+      }
+      std::array<double, 3> med;
+      for (unsigned int k = 0; k < 3; ++k) {
+        auto &v = comps[k];
+        std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
+        med[k] = v[v.size() / 2];
+      }
+      const double dev = std::sqrt(std::pow(mi.disp[0] - med[0], 2) +
+                                   std::pow(mi.disp[1] - med[1], 2) +
+                                   std::pow(mi.disp[2] - med[2], 2));
+      if (dev > moduleGarbageShiftThreshold_) {
+        shiftRepairs[mi.detid] = med;
+        garbageShiftModules_.insert(mi.detid);
+        edm::LogWarning("ResidualGlobalCorrectionMakerBase")
+            << "Garbage-shifted module " << mi.detid
+            << " (deviation from local consensus = " << dev
+            << " cm): surface rebuilt as ideal + consensus displacement"
+            << " and its hits excluded from the fit.";
+      }
+    }
+  }
 
   // fill map of modified surfaces with results of previous iteration if applicable
   for (const GeomDet* det : globalGeometry->detUnits()) {
@@ -863,9 +974,20 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       const bool align2d = detidparms.count(std::make_pair(1, det->geographicalId()));
       
       const Surface &surface = det->surface();
-      
+
       GloballyPositioned<double> surfaceD = surfaceToDouble(surface);
-      
+
+      // translation-outlier repair: ideal surface + local consensus displacement
+      auto shiftRep = shiftRepairs.find(det->geographicalId().rawId());
+      if (shiftRep != shiftRepairs.end()) {
+        const auto &idealD = surfacemapIdealD_.at(det->geographicalId());
+        const auto &m = shiftRep->second;
+        const Point3DBase<double, GlobalTag> posrep(idealD.position().x() + m[0],
+                                                    idealD.position().y() + m[1],
+                                                    idealD.position().z() + m[2]);
+        surfaceD = GloballyPositioned<double>(posrep, idealD.rotation());
+      }
+
       Matrix<double, 2, 2> Rglued = Matrix<double, 2, 2>::Identity();
       
       //TODO restore alignment application functionality
@@ -873,10 +995,97 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       if (isglued) {
         GloballyPositioned<double> surfaceGlued = surfaceToDouble(parmDet->surface());
 
+        // Garbage-alignment guard: modules that were off during data-taking
+        // have no hits and hence unconstrained alignment; the persisted
+        // constants can be arbitrary (observed: one TIB face rotated by
+        // ~49 deg, which contaminates the composite frame used as the
+        // anchor of the reconstruction below). If the aligned composite
+        // orientation deviates from the ideal one by more than 50 mrad --
+        // far beyond any genuine alignment correction -- rebuild the
+        // composite frame from the sane component: anchor on the component
+        // whose aligned orientation is closest to its ideal one, composed
+        // with the ideal component->composite transform.
         if (alignGlued_) {
+          const GluedGeomDet *gluedDet = dynamic_cast<const GluedGeomDet*>(parmDet);
+          const Surface &gluedIdealSurf = globalGeometryIdeal->idToDet(parmDet->geographicalId())->surface();
+          auto tilt = [](const Surface &a, const Surface &b) {
+            const auto na = a.rotation().z();
+            const auto nb = b.rotation().z();
+            const double c = std::abs(na.x()*nb.x() + na.y()*nb.y() + na.z()*nb.z());
+            return std::sqrt(std::max(0., 1. - c*c));
+          };
+          if (gluedDet != nullptr && tilt(parmDet->surface(), gluedIdealSurf) > gluedGarbageTiltThreshold_) {
+            const GeomDetUnit *monoDet = gluedDet->monoDet();
+            const GeomDetUnit *stereoDet = gluedDet->stereoDet();
+            const Surface &monoIdeal = globalGeometryIdeal->idToDet(monoDet->geographicalId())->surface();
+            const Surface &stereoIdeal = globalGeometryIdeal->idToDet(stereoDet->geographicalId())->surface();
+            const double tmono = tilt(monoDet->surface(), monoIdeal);
+            const double tstereo = tilt(stereoDet->surface(), stereoIdeal);
+            const GeomDet *anchor = tmono <= tstereo ? monoDet : stereoDet;
+            const Surface &anchorIdeal = tmono <= tstereo ? monoIdeal : stereoIdeal;
+
+            const GloballyPositioned<double> anchorD = surfaceToDouble(anchor->surface());
+            const GloballyPositioned<double> anchorIdealD = surfaceToDouble(anchorIdeal);
+            const GloballyPositioned<double> gluedIdealD = surfaceToDouble(gluedIdealSurf);
+
+            const Point3DBase<double, GlobalTag> posGlobal =
+                anchorD.toGlobal(anchorIdealD.toLocal(gluedIdealD.position()));
+            auto mapAxis = [&](const Basic3DVector<double> &v) {
+              return anchorD.toGlobal(anchorIdealD.toLocal(Vector3DBase<double, GlobalTag>(v.x(), v.y(), v.z())));
+            };
+            const Vector3DBase<double, GlobalTag> gxn = mapAxis(gluedIdealD.rotation().x());
+            const Vector3DBase<double, GlobalTag> gyn = mapAxis(gluedIdealD.rotation().y());
+            const Vector3DBase<double, GlobalTag> gzn = mapAxis(gluedIdealD.rotation().z());
+            const TkRotation<double> tkrotRepair(gxn.x(), gxn.y(), gxn.z(),
+                                                 gyn.x(), gyn.y(), gyn.z(),
+                                                 gzn.x(), gzn.y(), gzn.z());
+            surfaceGlued = GloballyPositioned<double>(posGlobal, tkrotRepair);
+            edm::LogWarning("ResidualGlobalCorrectionMakerBase")
+                << "Garbage-aligned glued module " << parmdetid.rawId()
+                << " (composite tilt vs ideal = " << tilt(parmDet->surface(), gluedIdealSurf)
+                << ", mono tilt = " << tmono << ", stereo tilt = " << tstereo
+                << "): rebuilt composite frame anchored on the "
+                << (tmono <= tstereo ? "mono" : "stereo") << " face.";
+          }
           
+          // translation-outlier repair for the composite: the glued plane
+          // spans both faces, so a garbage-shifted face contaminates it by
+          // half its offset. If either face is being repaired, rebuild the
+          // composite as ideal composite surface + consensus displacement.
+          {
+            const GluedGeomDet *gluedDetShift = dynamic_cast<const GluedGeomDet*>(parmDet);
+            if (gluedDetShift != nullptr) {
+              auto repMono = shiftRepairs.find(gluedDetShift->monoDet()->geographicalId().rawId());
+              auto repStereo = shiftRepairs.find(gluedDetShift->stereoDet()->geographicalId().rawId());
+              if (repMono != shiftRepairs.end() || repStereo != shiftRepairs.end()) {
+                std::array<double, 3> m{};
+                double nrep = 0.;
+                for (auto it : {repMono, repStereo}) {
+                  if (it != shiftRepairs.end()) {
+                    for (unsigned int k = 0; k < 3; ++k) {
+                      m[k] += it->second[k];
+                    }
+                    nrep += 1.;
+                  }
+                }
+                for (unsigned int k = 0; k < 3; ++k) {
+                  m[k] /= nrep;
+                }
+                const GloballyPositioned<double> gluedIdealRepD =
+                    surfaceToDouble(globalGeometryIdeal->idToDet(parmdetid)->surface());
+                const Point3DBase<double, GlobalTag> posrep(gluedIdealRepD.position().x() + m[0],
+                                                            gluedIdealRepD.position().y() + m[1],
+                                                            gluedIdealRepD.position().z() + m[2]);
+                surfaceGlued = GloballyPositioned<double>(posrep, gluedIdealRepD.rotation());
+                edm::LogWarning("ResidualGlobalCorrectionMakerBase")
+                    << "Garbage-shifted glued composite " << parmdetid.rawId()
+                    << ": rebuilt as ideal + consensus displacement.";
+              }
+            }
+          }
+
           //TODO apply partial alignment to surfaceGlued here
-          
+
           // recreate plane using relative position and orientation from ideal geometry, enforcing that the plane is parallel to the glued one (but preserving the relative orientation of the local z axis in case they are flipped)
           // only the out-of-plane DOF's are preserved (ie the spacing of the planes), whereas the in-plane DOF's (position and orientation of local x and y axes) are left as-is from the nominal geometry
           const Surface &surfaceGluedIdealPre = globalGeometryIdeal->idToDet(parmDet->geographicalId())->surface();
@@ -974,6 +1183,41 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
 //   return GloballyPositioned<double>(pos, tkrot);
 // }
 
+
+void ResidualGlobalCorrectionMakerBase::reorderGarbageShiftHits(
+    TransientTrackingRecHit::RecHitContainer &hits, const math::XYZVector &trackmom) const {
+  // partition, preserving stored order of the sane hits
+  TransientTrackingRecHit::RecHitContainer sane, flagged;
+  sane.reserve(hits.size());
+  for (auto &hit : hits) {
+    if (garbageShiftModules_.count(hit->geographicalId().rawId())) {
+      flagged.push_back(hit);
+    }
+    else {
+      sane.push_back(hit);
+    }
+  }
+  if (flagged.empty()) {
+    return;
+  }
+  const double pnorm = std::sqrt(trackmom.mag2());
+  auto pathcoord = [this, &trackmom, pnorm](const TrackingRecHit &hit) {
+    const auto &pos = surfacemapD_.at(hit.geographicalId()).position();
+    return (pos.x() * trackmom.x() + pos.y() * trackmom.y() + pos.z() * trackmom.z()) / pnorm;
+  };
+  // insert each flagged hit before the first sane hit further along the track;
+  // uses the REPAIRED surface positions, so the resulting sequence is
+  // monotonic in path and the forward-only propagation can traverse it
+  for (auto &fhit : flagged) {
+    const double t = pathcoord(*fhit);
+    auto it = std::find_if(sane.begin(), sane.end(),
+                           [&](const TransientTrackingRecHit::RecHitPointer &shit) {
+                             return pathcoord(*shit) > t;
+                           });
+    sane.insert(it, fhit);
+  }
+  hits.swap(sane);
+}
 
 GloballyPositioned<double> ResidualGlobalCorrectionMakerBase::surfaceToDouble(const Surface &surface) const {
   const Point3DBase<double, GlobalTag> pos = surface.position();
