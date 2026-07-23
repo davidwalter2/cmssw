@@ -356,15 +356,24 @@ protected:
   unsigned int nSym;
 
   // Factored Hessian storage (fillGradsFactored_): the reduced Hessian
-  // wrt the global params has rank ~ ndof + nconstraints << nParms, so
-  // it is stored as B (nRank x nParms, row-major, H = B^T B summed over
-  // rows) instead of the packed dense upper triangle. nFactor =
-  // nRank*nParms is the flat branch dimension.
+  // wrt the global params has rank exactly ndof (the measurement content
+  // incl. constraint rows; the deweighted strip coordinates carry exactly
+  // zero weight) << nParms, so it is stored as B (nRank x nParms,
+  // row-major, H = B^T B summed over rows) instead of the packed dense
+  // upper triangle. nRank = min(ndof, nParms) by counting -- not by
+  // eigenvalue threshold, since the numerical-noise tail of the
+  // double-precision profiling overlaps the smallest genuine modes.
+  // nFactor = nRank*nParms is the flat branch dimension.
   unsigned int nRank;
   unsigned int nFactor;
   // relative eigenvalue mass dropped by the rank truncation,
   // sum(dropped lambda)/sum(kept lambda) -- monitoring quantity
   float hessdroppedmass;
+  // spectral-gap monitor: lambda_{first dropped}/lambda_{last kept}
+  // (0 if nothing dropped). Healthy candidates sit at ~1e-9..1e-4;
+  // a value approaching 1 would flag a defect in the rank counting
+  // (a genuine eigenmode being dropped).
+  float hessrankgap;
 
   // Stage-2 per-row B+ candidate index (filled per Fill() call when the
   // optional bCandIdxToken_ is configured; -1 sentinel otherwise).
@@ -498,7 +507,6 @@ protected:
   bool fillTrackTree_;
   bool fillGrads_;
   bool fillGradsFactored_;
-  double hessFactorTol_;
   bool fillJac_;
   bool fillRunTree_;
   bool alignGlued_ = true;
