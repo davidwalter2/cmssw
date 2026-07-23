@@ -323,9 +323,22 @@ print('[runCvhBplusJpsiK] calibration output: '
       f'globalMaterialModel={bool(opts.globalMaterialModel)} '
       f'materialGroupsFile="{opts.materialGroupsFile}"')
 
-# ---- splitter --------------------------------------------------------------
-from Analysis.HitAnalyzer.JpsiKCandidateSplitter_cfi import jpsiKCandidateSplitter
-process.jpsiKCandidateSplitter = jpsiKCandidateSplitter.clone()
+# ---- bachelor track source -------------------------------------------------
+# Splitter removal: the two-track maker reads the nested candidate directly and
+# CandidateLeafTrackProducer extracts the bachelor (direct leaf-daughter) tracks
+# generically -- so JpsiKCandidateSplitter is only needed for the legacy
+# pre-split A/B path (srcCandidates=jpsiKCandidateSplitter:*).
+_uses_splitter = 'jpsiKCandidateSplitter' in opts.srcCandidates
+if _uses_splitter:
+    from Analysis.HitAnalyzer.JpsiKCandidateSplitter_cfi import jpsiKCandidateSplitter
+    process.jpsiKCandidateSplitter = jpsiKCandidateSplitter.clone()
+    _bach_src = cms.InputTag('jpsiKCandidateSplitter', 'bachelor')
+    _bach_idx = cms.InputTag('jpsiKCandidateSplitter', 'bachelorBCandIdx')
+else:
+    process.bplusBachelorTracks = cms.EDProducer(
+        'CandidateLeafTrackProducer', src=cms.InputTag(opts.srcCandidates))
+    _bach_src = cms.InputTag('bplusBachelorTracks')
+    _bach_idx = cms.InputTag('bplusBachelorTracks', 'candIdx')
 
 # ---- beamspot --------------------------------------------------------------
 process.offlineBeamSpot = cms.EDProducer('BeamSpotProducer')
@@ -338,7 +351,6 @@ _src_cands = cms.InputTag(*opts.srcCandidates.split(':')) \
 # Reading the nested stage-1 B+ VCC directly: the maker descends daughter(0)
 # (the J/psi composite) itself, so bCandIdx bookkeeping is unnecessary -- the
 # ValueMaps key straight to this collection.
-_uses_splitter = 'jpsiKCandidateSplitter' in opts.srcCandidates
 process.globalCorJpsiK = globalCorJpsiK.clone(
     srcCandidates=_src_cands,
     bCandIdxSrc=(globalCorJpsiK.bCandIdxSrc if _uses_splitter else cms.InputTag('')),
@@ -371,6 +383,8 @@ process.RandomNumberGeneratorService.globalCorJpsiK = cms.PSet(
 from Analysis.HitAnalyzer.ResidualGlobalCorrectionMakerJpsiKSingleTrackKaonG4e_cfi \
     import globalCorJpsiKKaon
 process.globalCorJpsiKKaon = globalCorJpsiKKaon.clone(
+    src=_bach_src,
+    bCandIdxSrc=_bach_idx,
     scalarPotentialInitFile=cms.string(opts.scalarPot3DInitFile),
     fillJac=cms.bool(bool(opts.fillJac)),
     runFDClosure=cms.bool(bool(opts.runFDClosure)),
@@ -432,13 +446,15 @@ process.Geant4ePropagator.PropagationPtotLimit = cms.double(opts.plimit)
 # supplies a single Geant4 master as an EventSetup product and both makers
 # consume it, so there is no second G4 kernel and no offline join.
 #
-# The splitter is still scheduled while the single-track (kaon) maker consumes
-# its `bachelor` TrackCollection; the dimuon side no longer needs it (the maker
-# descends the nested candidate itself). It drops out entirely once the
-# single-track maker reads leaf daughters straight off the candidate.
+# Splitter removed from the default path: the two-track maker descends the
+# nested candidate, and the kaon maker's bachelor tracks come from
+# CandidateLeafTrackProducer. The splitter only reappears on the legacy
+# pre-split A/B path (_uses_splitter).
 _seq = process.offlineBeamSpot
-if _uses_splitter or opts.mode in ('both', 'kaon'):
+if _uses_splitter:
     _seq = _seq * process.jpsiKCandidateSplitter
+elif opts.mode in ('both', 'kaon'):
+    _seq = _seq * process.bplusBachelorTracks
 if opts.mode in ('both', 'dimuon'):
     _seq = _seq * process.globalCorJpsiK
 if opts.mode in ('both', 'kaon'):
@@ -505,6 +521,17 @@ if opts.nanoOut:
         ),
     )
 
+    # Track -> Muon / Track -> PV cross-links, inverting the persisted
+    # associations into row indices (-1 = none) on the Track table.
+    process.trackMuonIdx = cms.EDProducer(
+        'TrackToMuonIndexProducer',
+        trackSrc=cms.InputTag(opts.srcTracks),
+        association=cms.InputTag(opts.srcTracks + 'TrackToMuon'))
+    process.trackPvIdx = cms.EDProducer(
+        'TrackToVertexIndexProducer',
+        trackSrc=cms.InputTag(opts.srcTracks),
+        association=cms.InputTag('offlinePrimaryVertices'))
+
     process.trackTable = cms.EDProducer(
         'SimpleTrackFlatTableProducer',
         src=cms.InputTag(opts.srcTracks),
@@ -522,6 +549,8 @@ if opts.nanoOut:
             dedxHarmonic2=ExtVar(cms.InputTag(opts.srcTracks + 'DeDxHarmonic2'), float, doc='dE/dx harmonic2'),
             dedxPixelHarmonic2=ExtVar(cms.InputTag(opts.srcTracks + 'DeDxPixelHarmonic2'), float, doc='dE/dx pixel harmonic2'),
             originalIndex=ExtVar(cms.InputTag(opts.srcTracks, 'originalIndex'), 'uint', doc='index into generalTracks'),
+            muonIdx=ExtVar(cms.InputTag('trackMuonIdx'), int, doc='row in Muon (-1 = none)'),
+            pvIdx=ExtVar(cms.InputTag('trackPvIdx'), int, doc='row in PV (-1 = none)'),
         ),
     )
 
@@ -565,6 +594,13 @@ if opts.nanoOut:
             magnetTemperature=Var('magnetTemperature', float, doc='magnet temperature'),
             ready=Var('ready', 'uint', doc='per-partition ready bitmask'),
         ),
+    )
+
+    # Legacy L1: finalOR + packed 128-bit algo / 64-bit tech decision words.
+    process.l1Table = cms.EDProducer(
+        'L1LegacyDecisionTableProducer',
+        src=cms.InputTag('gtDigis'),
+        name=cms.string('L1'),
     )
 
     # Refit bachelor tracks, when the maker emits them. These are the inputs
@@ -613,8 +649,9 @@ if opts.nanoOut:
 
     process.nanoTables = cms.Task(
         process.bplusTable, process.trackTable, process.muonTable,
-        process.pvTable, process.dcsTable, process.bplusFit,
-        process.bplusLeafIdx, *_extra_tables)
+        process.pvTable, process.dcsTable, process.l1Table, process.bplusFit,
+        process.bplusLeafIdx, process.trackMuonIdx, process.trackPvIdx,
+        *_extra_tables)
     process.nano_step = cms.Path(process.nanoTables)
 
     process.nanoOutput = cms.OutputModule(
