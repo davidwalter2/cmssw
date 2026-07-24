@@ -1,10 +1,14 @@
-## Stage-2 CVH refit driver for J/psi ALCARECO (data, Run 2 2016).
-## Reads ALCARECOTkAlJpsiMuMu directly; the producer falls back to the
-## legacy in-module track-pair loop when srcCandidates is empty, so no
-## prior candidate-producer step is required.
+## CVH gen-closure refit driver for the inclusive B->J/psi+X MC ALCARECO
+## (2016 postVFP, produced with CMSSW_10_6_20_patch1, split=1, gen kept).
+## Adapted from runCvhJpsi.py (data driver) for the pixel edge / single-
+## column hit study: fits J/psi->mumu candidates with fitFromGenParms=True
+## (reference state frozen to gen kinematics -> no mass constraint, no
+## weak modes; validated unbiased in the past), so hit-pathology biases
+## can be measured directly against gen truth.
 ##
-## Knobs are exposed through VarParsing('analysis'); see the opts.register
-## calls below for the full list. Driven by calibration_studies/slurm/.
+## Default input collections are the ALCARECOTkAlJpsiX labels of the MC
+## (tracks + JpsiOnlyResonances candidates); the Golden-JSON and HLT
+## filters of the data driver are dropped / made opt-in.
 import FWCore.ParameterSet.Config as cms
 import FWCore.ParameterSet.VarParsing as VarParsing
 import os
@@ -14,7 +18,72 @@ from Configuration.AlCa.GlobalTag import GlobalTag
 
 opts = VarParsing.VarParsing('analysis')
 opts.register('input', '', VarParsing.VarParsing.multiplicity.singleton,
-              VarParsing.VarParsing.varType.string, 'absolute path or root:// URL of ALCARECO file')
+              VarParsing.VarParsing.varType.string,
+              'comma-separated absolute paths or root:// URLs of ALCARECO files')
+opts.register('inputFileList', '', VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.string,
+              'text file with one input path per line (the MC has ~10 events '
+              'per file, so runs typically need many files); combined with '
+              'input= if both are given')
+opts.register('fitFromGenParms', True, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'freeze the 10 vertex/kinematic reference parameters to the '
+              'gen-muon values (gen-closure mode, default True)')
+opts.register('applyHltFilter', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'require one of the J/psi HLT paths (default False for MC '
+              'closure; the ALCARECO selection already ran)')
+opts.register('useLegacyPairLoop', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'ignore the JpsiOnlyResonances candidates and pair all tracks '
+              'in the module (legacy fallback; default False)')
+opts.register('fillHitDiagnostics', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'store per-pixel-hit diagnostic branches (hitdiag_*): local '
+              'residuals + side-resolved pathology class')
+opts.register('deweightPathoHits', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'deweight pathological pixel hits (x1e-6) instead of using '
+              'them: keeps surface+state so hitdiag residuals are unbiased '
+              'w.r.t. the rest of the fit; combine with keepPixelEdgeHits='
+              'True pixelMinSizeX=1 and fitFromGenParms=True')
+opts.register('pixelHitClassCorrections', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'register the per-pixel-module pathology-class correction '
+              'parameters (parmtypes 16-21: edge-x-mean/diff, edge-y-mean/'
+              'diff, sizeX1, sizeY1) and emit their Jacobian columns; use '
+              'with keepPixelEdgeHits=True pixelMinSizeX=1')
+opts.register('corFile', '', VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.string,
+              'optional correction file (parmtree/x, one entry per catalog '
+              'parameter) applied via corparms_, e.g. the fitted class '
+              'corrections from write_classcorr_corfile.py')
+opts.register('pixelLorentzParam', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'physics mode: replace edge-x-mean/sizeX1 by a per-module '
+              'delta-tan(thetaL) parameter (parmtype 22) with a Jacobian '
+              'column on EVERY valid pixel hit (weights: size-1 = 1, '
+              'x-edge = lorentzWedge, regular = lorentzWclean)')
+opts.register('lorentzWclean', 0.67, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'dtanLA response weight of regular (clean) pixel hits '
+              '(measured: digitizer twin-sample study)')
+opts.register('lorentzWsize1', 0.02, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'dtanLA response weight of size-1 pixel hits (measured ~0: '
+              'pixel-center quantisation)')
+opts.register('lorentzWedge', 0.45, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'dtanLA response weight of x-edge pixel hits (low-stats '
+              'measurement, +-0.4)')
+opts.register('injectLorentzTan', 0., VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'closure test: inject a true Lorentz-angle mismatch of this '
+              'size (shifts every valid pixel hit local-x by t/2*w*value)')
+opts.register('injectLorentzWclean', -999., VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'clean-hit response weight used for the INJECTION (response-'
+              'model error study); < -900 = same as lorentzWclean')
 opts.register('nEvents', 500, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.int, 'number of events to process (-1 = all)')
 opts.register('fillJac', True, VarParsing.VarParsing.multiplicity.singleton,
@@ -31,9 +100,6 @@ opts.register('useIdealGeometry', False, VarParsing.VarParsing.multiplicity.sing
               'Default False (btojpsik option (B), aligned geometry from GT). Set True '
               'only for the AN Stage-1 broken baseline (Stage-2 corrections not applied '
               'here). See openspec/finalize-cvh-producer-15-0-19.')
-opts.register('goldenJson', '', VarParsing.VarParsing.multiplicity.singleton,
-              VarParsing.VarParsing.varType.string,
-              'optional Golden JSON file to filter run/lumi pre-processing; empty = no filter')
 opts.register('useScalarPot3D', True, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'use the spherical-harmonic scalar-potential field  '
@@ -80,11 +146,6 @@ opts.register('keepPixelEdgeHits', False, VarParsing.VarParsing.multiplicity.sin
               '(isOnEdge) in the fit instead of demoting them to inactive; '
               'the pixelMinSizeX CPE-quality cut applies independently '
               '(default False = baseline)')
-opts.register('pixelHitClassCorrections', False, VarParsing.VarParsing.multiplicity.singleton,
-              VarParsing.VarParsing.varType.bool,
-              'register the per-pixel-module pathology-class correction '
-              'parameters (parmtypes 16-21) and emit their Jacobian '
-              'columns; use with keepPixelEdgeHits=True pixelMinSizeX=1')
 opts.register('pixelMinSizeX', 2, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.int,
               'minimum pixel cluster size in x for a hit to stay in the fit '
@@ -157,7 +218,10 @@ process.load("Configuration.StandardSequences.EndOfProcess_cff")
 process.load("Configuration.StandardSequences.FrontierConditions_GlobalTag_cff")
 process.load("Configuration.StandardSequences.GeometrySimDB_cff")
 
-process.GlobalTag = GlobalTag(process.GlobalTag, "auto:run2_data", "")
+# Conditions the MC was produced with (CMSSW_10_6_20_patch1 production
+# chain) -- alignment/CPE/beamspot consistent with the simulated detector,
+# which is what a gen-closure fit must use.
+process.GlobalTag = GlobalTag(process.GlobalTag, "106X_mcRun2_asymptotic_v17", "")
 process.GlobalTag.toGet = cms.VPSet(
     cms.PSet(
         record=cms.string("GeometryFileRcd"),
@@ -172,24 +236,29 @@ from TrackPropagation.Geant4e.cvhMaster_cfi import CvhMasterPSet
 
 process.maxEvents = cms.untracked.PSet(input=cms.untracked.int32(opts.nEvents))
 
-assert opts.input, "must set input=<path> on the cmsRun command line"
-# Accept local paths (prepend "file:") or xrootd URLs as-is; comma-separated
-# lists are split (backward compatible: single paths contain no comma).
-_urls = [p if p.startswith(("root://", "file:")) else "file:" + p
-         for p in opts.input.split(',') if p.strip()]
+_paths = [p.strip() for p in opts.input.split(',') if p.strip()]
+if opts.inputFileList:
+    with open(opts.inputFileList) as _f:
+        _paths += [l.strip() for l in _f if l.strip() and not l.startswith('#')]
+assert _paths, "must set input=<paths> and/or inputFileList=<file> on the cmsRun command line"
+# Accept local paths (prepend "file:") or xrootd URLs as-is.
+_urls = [p if p.startswith(("root://", "file:")) else "file:" + p for p in _paths]
 process.source = cms.Source(
     "PoolSource",
     fileNames=cms.untracked.vstring(*_urls),
     secondaryFileNames=cms.untracked.vstring(),
+    # The condor MC production has a small tail of corrupt files (garbled
+    # embedded provenance -> FormatIncompatibility at readFile_); skip
+    # them instead of aborting the whole many-file job. Skipped files are
+    # reported in the log. NOTE: this does NOT cover the
+    # FormatIncompatibility case -- pre-scan the filelist (see
+    # calibration_studies/pixelhits) and exclude those files.
+    skipBadFiles=cms.untracked.bool(True),
+    # Every condor job numbers its events from the same (run=1, lumi=1)
+    # range, so distinct physics events collide in (run, lumi, event) and
+    # the default duplicate check silently drops most of the sample.
+    duplicateCheckMode=cms.untracked.string('noDuplicateCheck'),
 )
-
-# Golden-JSON pre-filter: drop run/lumi pairs that aren't certified.
-# Applied at the source so the framework never delivers those events to the
-# CVH module, saving CPU on bad lumis.
-if opts.goldenJson:
-    import FWCore.PythonUtilities.LumiList as LumiList
-    process.source.lumisToProcess = LumiList.LumiList(
-        filename=opts.goldenJson).getVLuminosityBlockRange()
 
 if opts.eventsToProcess:
     process.source.eventsToProcess = cms.untracked.VEventRange(
@@ -231,8 +300,8 @@ process.hltFilter = cms.EDFilter(
 
 process.globalCor = cms.EDProducer(
     "ResidualGlobalCorrectionMakerTwoTrackG4e",
-    src=cms.InputTag("ALCARECOTkAlJpsiMuMu"),
-    fitFromGenParms=cms.bool(False),
+    src=cms.InputTag("ALCARECOTkAlJpsiX"),
+    fitFromGenParms=cms.bool(bool(opts.fitFromGenParms)),
     fitFromSimParms=cms.bool(False),
     fillTrackTree=cms.bool(True),
     fillGrads=cms.bool(bool(opts.fillGrads)),
@@ -242,9 +311,13 @@ process.globalCor = cms.EDProducer(
     fillGradsFactored=cms.untracked.bool(bool(opts.fillGradsFactored)),
     fillJac=cms.bool(bool(opts.fillJac)),
     fillRunTree=cms.bool(True),
-    doGen=cms.bool(False),
+    doGen=cms.bool(True),
+    genParticles=cms.InputTag("genParticles"),
+    pileupInfo=cms.InputTag("addPileupInfo"),
     doSim=cms.bool(False),
-    requireGen=cms.bool(False),
+    # Gen matching (dR < 0.1, same charge, status-1 muons) is required both
+    # to anchor fitFromGenParms and to reject combinatorial pairs.
+    requireGen=cms.bool(True),
     doMuons=cms.bool(False),
     doMuonAssoc=cms.bool(False),
     doTrigger=cms.bool(True),
@@ -254,12 +327,20 @@ process.globalCor = cms.EDProducer(
     applyHitQuality=cms.bool(True),
     keepPixelEdgeHits=cms.bool(bool(opts.keepPixelEdgeHits)),
     pixelMinSizeX=cms.int32(int(opts.pixelMinSizeX)),
+    fillHitDiagnostics=cms.bool(bool(opts.fillHitDiagnostics)),
+    deweightPathoHits=cms.bool(bool(opts.deweightPathoHits)),
     pixelHitClassCorrections=cms.bool(bool(opts.pixelHitClassCorrections)),
+    pixelLorentzParam=cms.bool(bool(opts.pixelLorentzParam)),
+    lorentzWclean=cms.double(float(opts.lorentzWclean)),
+    lorentzWsize1=cms.double(float(opts.lorentzWsize1)),
+    lorentzWedge=cms.double(float(opts.lorentzWedge)),
+    injectLorentzTan=cms.double(float(opts.injectLorentzTan)),
+    injectLorentzWclean=cms.double(float(opts.injectLorentzWclean)),
     doVtxConstraint=cms.bool(False),
     doMassConstraint=cms.bool(bool(opts.doMassConstraint)),
     massConstraint=cms.double(3.0969),
     massConstraintWidth=cms.double(1e-5),
-    corFiles=cms.vstring(),
+    corFiles=cms.vstring(*( [opts.corFile] if opts.corFile else [] )),
     triggers=cms.vstring(*JPSI_TRIGGERS),
     MagneticFieldLabel=cms.string(""),
     # Scalar-potential B-field correction (parmtype-14, absolute-field
@@ -294,6 +375,12 @@ process.globalCor = cms.EDProducer(
     # allocations for ~9 unused particles.
     CvhMaster=CvhMasterPSet.clone(Particles=cms.vstring("mu+", "mu-")),
 )
+
+# Candidate-driven pair building: use the persisted J/psi->mumu candidates
+# of the TkAlJpsiX ALCARECO instead of the all-pairs legacy loop (the MC
+# track collection also contains the other B daughters, e.g. the kaon).
+if not opts.useLegacyPairLoop:
+    process.globalCor.srcCandidates = cms.InputTag("ALCARECOTkAlJpsiXJpsiOnlyResonances")
 
 # Bring up the labelled 3D field producer and rewire the consumers
 # present in this driver (geopro, Geant4ePropagator, and our
@@ -354,12 +441,17 @@ process.Geant4ePropagator.ForCVH = cms.bool(True)
 process.Geant4ePropagator.PropagationDirection = cms.string(opts.propagationDirection)
 process.globalCor.MagneticFieldLabel = cms.string(fieldlabel)
 
-process.reconstruction_step = cms.Path(
-    # geopro is removed: CvhMasterThread (residual-maker GlobalCache) now
-    # owns the G4 world / master magnetic field setup in an MT-safe way.
-    # See TrackPropagation/Geant4e/{interface,src}/CvhMaster*.
-    process.hltFilter * process.offlineBeamSpot * process.globalCor
-)
+# geopro is removed: CvhMasterThread (residual-maker GlobalCache) now
+# owns the G4 world / master magnetic field setup in an MT-safe way.
+# See TrackPropagation/Geant4e/{interface,src}/CvhMaster*.
+if opts.applyHltFilter:
+    process.reconstruction_step = cms.Path(
+        process.hltFilter * process.offlineBeamSpot * process.globalCor
+    )
+else:
+    process.reconstruction_step = cms.Path(
+        process.offlineBeamSpot * process.globalCor
+    )
 process.schedule = cms.Schedule(process.reconstruction_step)
 
 from PhysicsTools.PatAlgos.tools.helpers import associatePatAlgosToolsTask
