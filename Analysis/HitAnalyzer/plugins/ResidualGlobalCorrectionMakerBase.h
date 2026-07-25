@@ -539,6 +539,36 @@ protected:
   // Default 2 = legacy sizeX>1 cut; 1 admits all clusters.
   int pixelMinSizeX_ = 2;
 
+  // Register the pixel pathological-hit class correction parameters
+  // (parmtypes 16-21, per pixel module, mean/diff basis for the edge
+  // classes) and emit their Jacobian columns in the fit. Meant to be
+  // used together with keepPixelEdgeHits=True pixelMinSizeX=1 so the
+  // pathological hits are actually in the fit. Default false = catalog
+  // unchanged.
+  bool pixelHitClassCorrections_ = false;
+  int genMatchPdgId_ = 13;
+
+  // Physics parameterization of the local-x drift effects: replace the
+  // empirical parmtypes 16 (edge-x-mean) and 20 (sizeX1) with a single
+  // delta-tan(thetaL) parameter per pixel module (parmtype 22) whose
+  // Jacobian column is attached to EVERY valid pixel hit with the
+  // class-dependent response weight w (size-1: 1, x-edge: lorentzWedge,
+  // regular: lorentzWclean) and per-hit scale t/2 (t = sensor thickness).
+  // Coupling the regular hits makes dtanLA separable from the local-x
+  // alignment translation (uniform response) in a simultaneous fit.
+  // Requires pixelHitClassCorrections.
+  bool pixelLorentzParam_ = false;
+  double lorentzWclean_ = 0.69;   // measured, 100k twins: +0.686 +- 0.013
+  double lorentzWsize1_ = 0.07;   // measured: +0.066 +- 0.033 (pixel-center quantisation)
+  double lorentzWedge_ = 0.75;    // measured: lo +0.77+-0.19, hi +0.74+-0.18 (side-symmetric)
+  // Injection test: shift every valid pixel hit's local-x position by
+  // 0.5*t*w_inj(class)*injectLorentzTan, simulating a true Lorentz-angle
+  // mismatch of the given size. injectLorentzWclean lets the injected
+  // clean-hit response differ from the model one (response-model error
+  // study); < -900 = use lorentzWclean.
+  double injectLorentzTan_ = 0.;
+  double injectLorentzWclean_ = -999.;
+
   bool doRes_ = false;
   bool useIdealGeometry_ = false;
 

@@ -18,6 +18,7 @@
 #include "TRandom.h"
 
 #include "Geometry/CommonTopologies/interface/TrapezoidalStripTopology.h"
+#include "Geometry/CommonTopologies/interface/PixelTopology.h"
 
 
 
@@ -110,6 +111,11 @@ private:
   mutable unsigned long long pixHitsEdge_ = 0ULL;       // cluster on the sensor boundary (isOnEdge)
   mutable unsigned long long pixHitsSizeX1_ = 0ULL;     // cluster sizeX == 1
   mutable unsigned long long pixHitsDemoted_ = 0ULL;    // demoted to inactive by the quality cut
+  // Pathology-class table: bit0 = edge in local x (cluster touches a
+  // sensor-boundary row), bit1 = edge in local y (boundary column),
+  // bit2 = sizeX == 1 (single row -> x from one pixel), bit3 = sizeY == 1
+  // (single column -> y from one pixel). Outer index 0 = BPix, 1 = FPix.
+  mutable std::array<std::array<unsigned long long, 16>, 2> pixHitsClass_ {{{{0ULL}}, {{0ULL}}}};
 
   // Convergence knobs (see ctor). Defaults reproduce the baseline.
   unsigned int nIters_ = 10;
@@ -199,6 +205,24 @@ ResidualGlobalCorrectionMakerG4e::~ResidualGlobalCorrectionMakerG4e() {
                 << "  keepPixelEdgeHits=" << keepPixelEdgeHits_
                 << "  pixelMinSizeX=" << pixelMinSizeX_
                 << std::endl;
+      // Pathology-class combination table (only non-empty bins).
+      for (unsigned int isub = 0; isub < 2; ++isub) {
+        for (unsigned int icls = 0; icls < 16; ++icls) {
+          const unsigned long long n = pixHitsClass_[isub][icls];
+          if (n == 0ULL) continue;
+          std::string label;
+          if (icls & 1) label += "|edgeX";
+          if (icls & 2) label += "|edgeY";
+          if (icls & 4) label += "|sizeX1";
+          if (icls & 8) label += "|sizeY1";
+          if (label.empty()) label = "|clean";
+          std::cout << "pixHitClass " << (isub == 0 ? "BPix" : "FPix")
+                    << " " << label.substr(1)
+                    << "  n=" << n
+                    << " (" << (100. * n / pixHitsSeen_) << "%)"
+                    << std::endl;
+        }
+      }
     }
     if (v2Checks_ > 0ULL) {
       std::cout << "ResidualGlobalCorrectionMakerG4e material-group V2 (sum == dxi column)"
@@ -734,7 +758,11 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           genY = g->vertex().y();
           genZ = g->vertex().z();
 
-          genl3d = std::sqrt((g->vertex() - *genXyz0).mag2());
+          // genParticles:xyz0 (gen PV) is not kept in every ALCARECO
+          // (the B->J/psi+X MC keeps only the recoGenParticles branch);
+          // fall back to the -99 sentinel rather than throwing.
+          genl3d = genXyz0.isValid()
+              ? std::sqrt((g->vertex() - *genXyz0).mag2()) : -99.;
 
           auto const& vtx = g->vertex();
           auto const& myBeamSpot = bsH->position(vtx.z());
@@ -914,6 +942,23 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             const bool onEdge = pixhit->isOnEdge();
             if (onEdge) ++pixHitsEdge_;
             if (cluster.sizeX() <= 1) ++pixHitsSizeX1_;
+            // Direction-resolved pathology classes (see the two-track maker).
+            {
+              const PixelTopology* pixtopo =
+                  dynamic_cast<const PixelTopology*>(&detectorG->topology());
+              assert(pixtopo != nullptr);
+              const bool edgeX = pixtopo->isItEdgePixelInX(cluster.minPixelRow()) ||
+                                 pixtopo->isItEdgePixelInX(cluster.maxPixelRow());
+              const bool edgeY = pixtopo->isItEdgePixelInY(cluster.minPixelCol()) ||
+                                 pixtopo->isItEdgePixelInY(cluster.maxPixelCol());
+              const unsigned int icls = (edgeX ? 1u : 0u) |
+                                        (edgeY ? 2u : 0u) |
+                                        (cluster.sizeX() <= 1 ? 4u : 0u) |
+                                        (cluster.sizeY() <= 1 ? 8u : 0u);
+              const unsigned int isub =
+                  GeomDetEnumerators::isBarrel(detectorG->subDetector()) ? 0 : 1;
+              ++pixHitsClass_[isub][icls];
+            }
             // Boundary veto configurable via keepPixelEdgeHits; sizeX
             // threshold configurable via pixelMinSizeX (default 2 = legacy).
             hitquality = (keepPixelEdgeHits_ || !onEdge) && cluster.sizeX() >= pixelMinSizeX_;

@@ -181,6 +181,27 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
       ? iConfig.getParameter<bool>("keepPixelEdgeHits") : false;
   pixelMinSizeX_ = iConfig.existsAs<int>("pixelMinSizeX")
       ? iConfig.getParameter<int>("pixelMinSizeX") : 2;
+  // |pdgId| used by the single-track gen matching (doGen); default muon.
+  // Set to 211/321/2212 for the pion/kaon/proton closure drivers -- the
+  // TkAlJpsiX MC track collection contains the other B daughters.
+  genMatchPdgId_ = iConfig.existsAs<int>("genMatchPdgId")
+      ? iConfig.getParameter<int>("genMatchPdgId") : 13;
+
+  pixelHitClassCorrections_ = iConfig.existsAs<bool>("pixelHitClassCorrections")
+      ? iConfig.getParameter<bool>("pixelHitClassCorrections") : false;
+  pixelLorentzParam_ = iConfig.existsAs<bool>("pixelLorentzParam")
+      ? iConfig.getParameter<bool>("pixelLorentzParam") : false;
+  lorentzWclean_ = iConfig.existsAs<double>("lorentzWclean")
+      ? iConfig.getParameter<double>("lorentzWclean") : 0.69;
+  lorentzWsize1_ = iConfig.existsAs<double>("lorentzWsize1")
+      ? iConfig.getParameter<double>("lorentzWsize1") : 0.07;
+  lorentzWedge_ = iConfig.existsAs<double>("lorentzWedge")
+      ? iConfig.getParameter<double>("lorentzWedge") : 0.75;
+  injectLorentzTan_ = iConfig.existsAs<double>("injectLorentzTan")
+      ? iConfig.getParameter<double>("injectLorentzTan") : 0.;
+  injectLorentzWclean_ = iConfig.existsAs<double>("injectLorentzWclean")
+      ? iConfig.getParameter<double>("injectLorentzWclean") : -999.;
+  assert(!pixelLorentzParam_ || pixelHitClassCorrections_);
 
   // Global material model (see member docs in the header).
   materialGroupsFile_ = iConfig.existsAs<std::string>("materialGroupsFile")
@@ -634,6 +655,27 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       if (align2d) {
         //local y alignment parameters only for pixels and wedge modules
         parmset.emplace(1, det->geographicalId());
+      }
+
+      // Pixel pathological-hit class corrections (mean/diff basis; see
+      // calibration_studies/pixelhits): local translations gated on the
+      // hit class, per pixel module.
+      //   16 = edge-x-mean, 17 = edge-x-diff  (local x; diff column gets
+      //        the edge-side sign s = +1 at the +x boundary, -1 at -x)
+      //   18 = edge-y-mean, 19 = edge-y-diff  (local y, same convention)
+      //   20 = sizeX==1 (local x), 21 = sizeY==1 (local y)
+      if (pixelHitClassCorrections_ && ispixel) {
+        for (int pt = 16; pt <= 21; ++pt) {
+          // Physics mode: dtanLA (22) replaces edge-x-mean (16) and
+          // sizeX1 (20), whose content is drift physics.
+          if (pixelLorentzParam_ && (pt == 16 || pt == 20)) {
+            continue;
+          }
+          parmset.emplace(pt, det->geographicalId());
+        }
+        if (pixelLorentzParam_) {
+          parmset.emplace(22, det->geographicalId());
+        }
       }
 
       // material parameter is per-module (glued detid where applicable),
