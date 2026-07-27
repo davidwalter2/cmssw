@@ -655,13 +655,6 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             continue;
           }
 
-          // hits on garbage-shifted modules: dropped (drop policy) or
-          // re-inserted at the repaired-surface path position (reorder
-          // policy); see the single-track producer for the rationale
-          if (!garbageShiftReorderHits_ && garbageShiftModules_.count((*it)->geographicalId().rawId())) {
-            continue;
-          }
-
           const GeomDet* detectorG = globalGeometry->idToDet((*it)->geographicalId());
           const GluedGeomDet* detglued = dynamic_cast<const GluedGeomDet*>(detectorG);
           
@@ -669,9 +662,12 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           if (detglued != nullptr && !(*it)->isValid()) {
 //             bool order = detglued->stereoDet()->surface().position().mag() > detglued->monoDet()->surface().position().mag();
             
-            const auto stereopos = detglued->stereoDet()->surface().position();
-            const auto monopos = detglued->monoDet()->surface().position();
-            
+            // inner/outer order from the surfaces the fit will use, not from
+            // the raw alignment constants -- see the same block in
+            // ResidualGlobalCorrectionMakerG4e
+            const auto &stereopos = surfacemapD_.at(detglued->stereoDet()->geographicalId()).position();
+            const auto &monopos = surfacemapD_.at(detglued->monoDet()->geographicalId()).position();
+
             const Eigen::Vector3d stereoposv(stereopos.x(), stereopos.y(), stereopos.z());
             const Eigen::Vector3d monoposv(monopos.x(), monopos.y(), monopos.z());
             const Eigen::Vector3d trackmomv(track.momentum().x(), track.momentum().y(), track.momentum().z());
@@ -681,12 +677,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             const GeomDetUnit* detinner = order ? detglued->monoDet() : detglued->stereoDet();
             const GeomDetUnit* detouter = order ? detglued->stereoDet() : detglued->monoDet();
             
-            if (garbageShiftReorderHits_ || !garbageShiftModules_.count(detinner->geographicalId().rawId())) {
-              hits.push_back(TrackingRecHit::RecHitPointer(new InvalidTrackingRecHit(*detinner, (*it)->type())));
-            }
-            if (garbageShiftReorderHits_ || !garbageShiftModules_.count(detouter->geographicalId().rawId())) {
-              hits.push_back(TrackingRecHit::RecHitPointer(new InvalidTrackingRecHit(*detouter, (*it)->type())));
-            }
+            hits.push_back(TrackingRecHit::RecHitPointer(new InvalidTrackingRecHit(*detinner, (*it)->type())));
+            hits.push_back(TrackingRecHit::RecHitPointer(new InvalidTrackingRecHit(*detouter, (*it)->type())));
           }
           else {
             // apply hit quality criteria
@@ -744,9 +736,6 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               hits.push_back(TrackingRecHit::RecHitPointer(new InvalidTrackingRecHit(*detectorG, TrackingRecHit::inactive)));
             }
           }
-        }
-        if (garbageShiftReorderHits_ && !garbageShiftModules_.empty()) {
-          reorderGarbageShiftHits(hits, track.momentum());
         }
       }
 
