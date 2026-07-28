@@ -40,6 +40,7 @@
 <use name="CommonTools/CandUtils"/>
 <use name="RecoLocalTracker/SiStripClusterizer"/>
 <use name="TrackingTools/TransientTrack"/>
+<use name="TrackingTools/IPTools"/>
 <use name="RecoVertex/LinearizationPointFinders"/>
 <use name="RecoVertex/KinematicFitPrimitives"/>
 <use name="RecoVertex/KinematicFit"/>

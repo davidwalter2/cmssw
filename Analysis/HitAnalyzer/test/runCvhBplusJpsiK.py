@@ -336,9 +336,24 @@ if _uses_splitter:
     _bach_idx = cms.InputTag('jpsiKCandidateSplitter', 'bachelorBCandIdx')
 else:
     process.bplusBachelorTracks = cms.EDProducer(
-        'CandidateLeafTrackProducer', src=cms.InputTag(opts.srcCandidates))
+        'CandidateLeafTrackProducer', src=cms.InputTag(opts.srcCandidates),
+        mode=cms.string('bachelor'))
     _bach_src = cms.InputTag('bplusBachelorTracks')
     _bach_idx = cms.InputTag('bplusBachelorTracks', 'candIdx')
+
+# The refit ARM of the B fit also needs the muon legs refit (add-cvh-refit-tracks-
+# into-bfit). The muons are the leaves of daughter(0) (the J/psi), so a second
+# CandidateLeafTrackProducer in "jpsi" mode extracts them; a cloned single-track
+# maker (trackParticleName='mu') refits them. Leaf-keyed via candIdx/leafIdx.
+# Requires the non-splitter path (the splitter emits no leafIdx).
+if opts.emitRefitTracks and _uses_splitter:
+    raise ValueError('emitRefitTracks=True requires the non-splitter path '
+                     '(srcCandidates must not be jpsiKCandidateSplitter:*): the '
+                     'refit-arm mapping needs CandidateLeafTrackProducer leafIdx')
+if opts.emitRefitTracks:
+    process.bplusJpsiMuonTracks = cms.EDProducer(
+        'CandidateLeafTrackProducer', src=cms.InputTag(opts.srcCandidates),
+        mode=cms.string('jpsi'))
 
 # ---- beamspot --------------------------------------------------------------
 process.offlineBeamSpot = cms.EDProducer('BeamSpotProducer')
@@ -408,6 +423,33 @@ process.RandomNumberGeneratorService.globalCorJpsiKKaon = cms.PSet(
     engineName=cms.untracked.string('HepJamesRandom'),
 )
 
+# ---- single-track maker (J/psi muons, refit arm) --------------------------
+# Clone of the single-track kaon maker but fed the two muon legs (from the
+# "jpsi"-mode CandidateLeafTrackProducer) and propagated with the muon
+# hypothesis (trackParticleName='mu'). Emits refit reco::Tracks + refitOk for
+# the constrained B-vertex fit's REFIT arm. Only scheduled when emitRefitTracks.
+if opts.emitRefitTracks:
+    process.globalCorJpsiKMuon = globalCorJpsiKKaon.clone(
+        src=cms.InputTag('bplusJpsiMuonTracks'),
+        bCandIdxSrc=cms.InputTag('bplusJpsiMuonTracks', 'candIdx'),
+        scalarPotentialInitFile=cms.string(opts.scalarPot3DInitFile),
+        fillJac=cms.bool(bool(opts.fillJac)),
+        runFDClosure=cms.bool(bool(opts.runFDClosure)),
+        epsilonFDClosure=cms.double(float(opts.epsilonFDClosure)),
+        useIdealGeometry=cms.bool(_muon_ideal_geom),
+        corFiles=cms.vstring(*_muon_corfiles),
+        trackParticleName=cms.string('mu'),
+        emitRefitTracks=cms.bool(True),
+        refitMaxRelPtErr=cms.double(float(opts.refitMaxRelPtErr)),
+        CvhMaster=CvhMasterPSet.clone(
+            Particles=cms.vstring('mu+', 'mu-', 'kaon+', 'kaon-')),
+        **_calib_pset,
+    )
+    process.RandomNumberGeneratorService.globalCorJpsiKMuon = cms.PSet(
+        initialSeed=cms.untracked.uint32(345678901),
+        engineName=cms.untracked.string('HepJamesRandom'),
+    )
+
 # ---- magnetic field --------------------------------------------------------
 # Default: load the scalar-potential 3D field producer with a unique label and
 # point Geant4ePropagator + makers at it.
@@ -422,7 +464,10 @@ if opts.useScalarPot3D:
     fieldlabel = 'ScalarPot3DMf'
     process.ScalarPot3DMagneticFieldProducer.label = fieldlabel
     process.Geant4ePropagator.MagneticFieldLabel = fieldlabel
-    for m in (process.globalCorJpsiK, process.globalCorJpsiKKaon):
+    _field_makers = [process.globalCorJpsiK, process.globalCorJpsiKKaon]
+    if opts.emitRefitTracks:
+        _field_makers.append(process.globalCorJpsiKMuon)
+    for m in _field_makers:
         m.MagneticFieldLabel = cms.string(fieldlabel)
 else:
     # Standard CMSSW field. Leave MagneticFieldLabel at its cfi default (empty
@@ -450,15 +495,25 @@ process.Geant4ePropagator.PropagationPtotLimit = cms.double(opts.plimit)
 # nested candidate, and the kaon maker's bachelor tracks come from
 # CandidateLeafTrackProducer. The splitter only reappears on the legacy
 # pre-split A/B path (_uses_splitter).
+# The refit arm needs BOTH single-track makers (kaon + muon), so emitRefitTracks
+# implies mode must schedule the kaon maker (mode in both|kaon). The default
+# mode="both" satisfies this; guard the pathological combination explicitly.
+if opts.emitRefitTracks and opts.mode not in ('both', 'kaon'):
+    raise ValueError('emitRefitTracks=True needs the single-track makers; use '
+                     'mode="both" (default) or "kaon", not mode="%s"' % opts.mode)
 _seq = process.offlineBeamSpot
 if _uses_splitter:
     _seq = _seq * process.jpsiKCandidateSplitter
 elif opts.mode in ('both', 'kaon'):
     _seq = _seq * process.bplusBachelorTracks
+if opts.emitRefitTracks:
+    _seq = _seq * process.bplusJpsiMuonTracks
 if opts.mode in ('both', 'dimuon'):
     _seq = _seq * process.globalCorJpsiK
 if opts.mode in ('both', 'kaon'):
     _seq = _seq * process.globalCorJpsiKKaon
+if opts.emitRefitTracks:
+    _seq = _seq * process.globalCorJpsiKMuon
 process.reconstruction_step = cms.Path(_seq)
 
 # ---- NanoAOD output --------------------------------------------------------
@@ -507,16 +562,39 @@ if opts.nanoOut:
             corEdmval=ExtVar(cms.InputTag(_cor, 'edmval'), float, doc='CVH fit EDM (<0 = not refit)'),
             # Fitted mother candidate. Distinct cvh* names so these can never
             # be confused with BParking's own bkmm_jpsimc_* / bkmm_nomc_*.
-            cvhFitMass=ExtVar(cms.InputTag('bplusFit', 'fitMass'), float, doc='fitted m(mumuK)'),
-            cvhFitMassErr=ExtVar(cms.InputTag('bplusFit', 'fitMassErr'), float, doc='fitted mass error'),
-            cvhFitPt=ExtVar(cms.InputTag('bplusFit', 'fitPt'), float, doc='fitted pt'),
-            cvhFitVtxChi2=ExtVar(cms.InputTag('bplusFit', 'fitVtxChi2'), float, doc='fit vertex chi2'),
-            cvhFitVtxProb=ExtVar(cms.InputTag('bplusFit', 'fitVtxProb'), float, doc='fit vertex prob'),
-            cvhFitOk=ExtVar(cms.InputTag('bplusFit', 'fitOk'), int, doc='1 = kinematic fit succeeded'),
-            # Dimuon (J/psi) fit-quality handles the analysis path cuts on.
-            dimuonVtxProb=ExtVar(cms.InputTag('bplusFit', 'dimuonVtxProb'), float, doc='dimuon vertex prob'),
-            dimuonAlphaBS=ExtVar(cms.InputTag('bplusFit', 'dimuonAlphaBS'), float, doc='dimuon XY pointing angle wrt BS'),
-            dimuonSxy=ExtVar(cms.InputTag('bplusFit', 'dimuonSxy'), float, doc='dimuon 2D Lxy significance wrt BS'),
+            # The unsuffixed cvhFit*/dimuon* columns alias the REFIT arm (the
+            # physics default); cvhFitRaw* are the raw-track arm for the A/B.
+            # nLegsRefit (0-3) is how many legs used a CVH refit track.
+            cvhFitMass=ExtVar(cms.InputTag('bplusFit', 'refFitMass'), float, doc='fitted m(mumuK), refit tracks'),
+            cvhFitMassErr=ExtVar(cms.InputTag('bplusFit', 'refFitMassErr'), float, doc='fitted mass error, refit tracks'),
+            cvhFitPt=ExtVar(cms.InputTag('bplusFit', 'refFitPt'), float, doc='fitted pt, refit tracks'),
+            cvhFitVtxChi2=ExtVar(cms.InputTag('bplusFit', 'refFitVtxChi2'), float, doc='fit vertex chi2, refit tracks'),
+            cvhFitVtxProb=ExtVar(cms.InputTag('bplusFit', 'refFitVtxProb'), float, doc='fit vertex prob, refit tracks'),
+            cvhFitOk=ExtVar(cms.InputTag('bplusFit', 'refFitOk'), int, doc='1 = refit-arm kinematic fit succeeded'),
+            nLegsRefit=ExtVar(cms.InputTag('bplusFit', 'nLegsRefit'), int, doc='number of legs (0-3) using a CVH refit track'),
+            # Refit-track arm, explicit (identical values to the unsuffixed
+            # cvhFit* above -- both alias the refit arm, per the spec A/B).
+            cvhFitRefMass=ExtVar(cms.InputTag('bplusFit', 'refFitMass'), float, doc='fitted m(mumuK), refit tracks'),
+            cvhFitRefMassErr=ExtVar(cms.InputTag('bplusFit', 'refFitMassErr'), float, doc='fitted mass error, refit tracks'),
+            cvhFitRefPt=ExtVar(cms.InputTag('bplusFit', 'refFitPt'), float, doc='fitted pt, refit tracks'),
+            cvhFitRefVtxChi2=ExtVar(cms.InputTag('bplusFit', 'refFitVtxChi2'), float, doc='fit vertex chi2, refit tracks'),
+            cvhFitRefVtxProb=ExtVar(cms.InputTag('bplusFit', 'refFitVtxProb'), float, doc='fit vertex prob, refit tracks'),
+            cvhFitRefOk=ExtVar(cms.InputTag('bplusFit', 'refFitOk'), int, doc='1 = refit-arm kinematic fit succeeded'),
+            # Raw-track arm (A/B against the refit arm; identical fit config).
+            cvhFitRawMass=ExtVar(cms.InputTag('bplusFit', 'rawFitMass'), float, doc='fitted m(mumuK), raw tracks'),
+            cvhFitRawMassErr=ExtVar(cms.InputTag('bplusFit', 'rawFitMassErr'), float, doc='fitted mass error, raw tracks'),
+            cvhFitRawPt=ExtVar(cms.InputTag('bplusFit', 'rawFitPt'), float, doc='fitted pt, raw tracks'),
+            cvhFitRawVtxChi2=ExtVar(cms.InputTag('bplusFit', 'rawFitVtxChi2'), float, doc='fit vertex chi2, raw tracks'),
+            cvhFitRawVtxProb=ExtVar(cms.InputTag('bplusFit', 'rawFitVtxProb'), float, doc='fit vertex prob, raw tracks'),
+            cvhFitRawOk=ExtVar(cms.InputTag('bplusFit', 'rawFitOk'), int, doc='1 = raw-arm kinematic fit succeeded'),
+            # Dimuon (J/psi) fit-quality handles the analysis path cuts on
+            # (from the refit dimuon); *Raw are the raw-arm counterparts.
+            dimuonVtxProb=ExtVar(cms.InputTag('bplusFit', 'refDimuonVtxProb'), float, doc='dimuon vertex prob, refit'),
+            dimuonAlphaBS=ExtVar(cms.InputTag('bplusFit', 'refDimuonAlphaBS'), float, doc='dimuon XY pointing angle wrt BS, refit'),
+            dimuonSxy=ExtVar(cms.InputTag('bplusFit', 'refDimuonSxy'), float, doc='dimuon 2D Lxy significance wrt BS, refit'),
+            dimuonSl3d=ExtVar(cms.InputTag('bplusFit', 'refDimuonSl3d'), float, doc='dimuon true 3D flight significance wrt closest-z PV, refit'),
+            dimuonVtxProbRaw=ExtVar(cms.InputTag('bplusFit', 'rawDimuonVtxProb'), float, doc='dimuon vertex prob, raw'),
+            dimuonSl3dRaw=ExtVar(cms.InputTag('bplusFit', 'rawDimuonSl3d'), float, doc='dimuon true 3D flight significance wrt closest-z PV, raw'),
             # Cross-links into the Track table (-1 = no match). Enables e.g.
             # Track_dedxHarmonic2[BuJpsiK_kaonTrackIdx[i]] downstream.
             mu0TrackIdx=ExtVar(cms.InputTag('bplusLeafIdx', 'mu0TrackIdx'), int, doc='J/psi mu0 row in Track'),
@@ -620,16 +698,37 @@ if opts.nanoOut:
     # a constrained B-vertex fit needs; refitOk flags legs that were not refit.
     # Fitted mother candidate (the Bmm5 chain). The stage-1 mass is a raw
     # four-vector sum; this is the actual vertex/kinematic fit.
+    # Refit-arm leg sources (leaf-keyed). Empty -> the refit arm equals the raw
+    # arm. Each leg: the single-track maker's refit collection + refitOk, plus
+    # the input-track producer's candIdx/leafIdx that key refit track j back to
+    # (candidate, leaf). Muon legs from the muon maker, bachelor from the kaon.
+    _refit_legs = cms.VPSet()
+    if opts.emitRefitTracks:
+        _refit_legs = cms.VPSet(
+            cms.PSet(
+                tracks=cms.InputTag('globalCorJpsiKMuon', 'refit'),
+                refitOk=cms.InputTag('globalCorJpsiKMuon', 'refitOk'),
+                candIdx=cms.InputTag('bplusJpsiMuonTracks', 'candIdx'),
+                leafIdx=cms.InputTag('bplusJpsiMuonTracks', 'leafIdx'),
+            ),
+            cms.PSet(
+                tracks=cms.InputTag('globalCorJpsiKKaon', 'refit'),
+                refitOk=cms.InputTag('globalCorJpsiKKaon', 'refitOk'),
+                candIdx=cms.InputTag('bplusBachelorTracks', 'candIdx'),
+                leafIdx=cms.InputTag('bplusBachelorTracks', 'leafIdx'),
+            ),
+        )
     process.bplusFit = cms.EDProducer(
         'JpsiXKinematicFitProducer',
         src=_src_cands,
-        srcTracks=cms.InputTag('globalCorJpsiKKaon', 'refit') if opts.emitRefitTracks
-                  else cms.InputTag(''),
-        srcRefitOk=cms.InputTag('globalCorJpsiKKaon', 'refitOk'),
+        refitLegs=_refit_legs,
         jpsiConstraint=cms.string(str(opts.jpsiConstraint)),
         jpsiMass=cms.double(3.0969),
         maxChi2=cms.double(-1.),
         beamSpot=cms.InputTag('offlineBeamSpot'),
+        # PV collection for the true 3D dimuon flight-length significance
+        # (dimuonSl3d). offlinePrimaryVertices is persisted in the AlCaReco.
+        primaryVertices=cms.InputTag('offlinePrimaryVertices'),
     )
 
     # Candidate-daughter -> Track row cross-links (flat-tree join keys).
@@ -660,6 +759,26 @@ if opts.nanoOut:
             ),
         )
         _extra_tables.append(process.refitTrackTable)
+        # Refit muon legs (the J/psi leaves), aligned with bplusJpsiMuonTracks.
+        process.refitMuTrackTable = cms.EDProducer(
+            'SimpleTrackFlatTableProducer',
+            src=cms.InputTag('globalCorJpsiKMuon', 'refit'),
+            cut=cms.string(''), name=cms.string('RefitMuTrack'),
+            doc=cms.string('CVH-refit J/psi muon tracks (aligned with input tracks)'),
+            singleton=cms.bool(False), extension=cms.bool(False),
+            variables=cms.PSet(
+                P3Vars,
+                charge=Var('charge', 'int16', doc='charge'),
+                dxy=Var('dxy', float, doc='dxy'), dz=Var('dz', float, doc='dz'),
+                normChi2=Var('normalizedChi2', float, doc='chi2/ndof'),
+                ptErr=Var('ptError', float, doc='pt uncertainty from the refit 5x5'),
+            ),
+            externalVariables=cms.PSet(
+                refitOk=ExtVar(cms.InputTag('globalCorJpsiKMuon', 'refitOk'),
+                               int, doc='1 = refit succeeded, 0 = input copy'),
+            ),
+        )
+        _extra_tables.append(process.refitMuTrackTable)
 
     process.nanoTables = cms.Task(
         process.bplusTable, process.trackTable, process.muonTable,
