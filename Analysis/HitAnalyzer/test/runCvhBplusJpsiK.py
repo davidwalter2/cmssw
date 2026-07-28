@@ -183,6 +183,11 @@ opts.register('globalTag', 'auto:run2_data', VarParsing.VarParsing.multiplicity.
               'CMSSW GlobalTag string. Default auto:run2_data for the R2016H ALCARECO. '
               'For MC ALCARECO pass the MC GT that produced the sample, e.g. '
               '106X_mcRun2_asymptotic_v17 for 2016 postVFP.')
+opts.register('isMC', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'MC input: emit a Gen table + generator weight and gen-match the B '
+              'candidate (genB* columns). Off for data (schema unchanged). When '
+              'True, also pass the MC globalTag, e.g. 106X_mcRun2_asymptotic_v17.')
 opts.register('useIdealGeometry', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'Default False (btojpsik option (B)): propagate against the aligned geometry '
@@ -603,6 +608,18 @@ if opts.nanoOut:
         ),
     )
 
+    # Gen-truth columns (MC only): the closest last-copy b-hadron to the
+    # candidate. genBPdgId ~ +-521 with genBDR < ~0.1 tags a true B+ -> J/psi K.
+    if opts.isMC:
+        _gf = 'bplusFit'
+        process.bplusTable.externalVariables.genBMass = ExtVar(cms.InputTag(_gf, 'genBMass'), float, doc='matched gen b-hadron mass')
+        process.bplusTable.externalVariables.genBPt = ExtVar(cms.InputTag(_gf, 'genBPt'), float, doc='matched gen b-hadron pt')
+        process.bplusTable.externalVariables.genBEta = ExtVar(cms.InputTag(_gf, 'genBEta'), float, doc='matched gen b-hadron eta')
+        process.bplusTable.externalVariables.genBPhi = ExtVar(cms.InputTag(_gf, 'genBPhi'), float, doc='matched gen b-hadron phi')
+        process.bplusTable.externalVariables.genBDR = ExtVar(cms.InputTag(_gf, 'genBDR'), float, doc='dR(candidate, matched gen b-hadron)')
+        process.bplusTable.externalVariables.genBPdgId = ExtVar(cms.InputTag(_gf, 'genBPdgId'), int, doc='matched gen b-hadron pdgId (0 = none)')
+        process.bplusTable.externalVariables.genPartIdx = ExtVar(cms.InputTag(_gf, 'genBIdx'), int, doc='row in Gen of the matched b-hadron (-1 = none)')
+
     # Track -> Muon / Track -> PV cross-links, inverting the persisted
     # associations into row indices (-1 = none) on the Track table.
     process.trackMuonIdx = cms.EDProducer(
@@ -729,6 +746,9 @@ if opts.nanoOut:
         # PV collection for the true 3D dimuon flight-length significance
         # (dimuonSl3d). offlinePrimaryVertices is persisted in the AlCaReco.
         primaryVertices=cms.InputTag('offlinePrimaryVertices'),
+        # Gen-matching (MC only): match the candidate to the closest last-copy
+        # b-hadron. Empty on data -> genB* columns stay sentinel.
+        genParticles=cms.InputTag('genParticles') if opts.isMC else cms.InputTag(''),
     )
 
     # Candidate-daughter -> Track row cross-links (flat-tree join keys).
@@ -779,6 +799,35 @@ if opts.nanoOut:
             ),
         )
         _extra_tables.append(process.refitMuTrackTable)
+
+    if opts.isMC:
+        # Full genParticles as a browsable Gen table; BuJpsiK_genPartIdx indexes
+        # into it. Plus the per-event generator weight (GenEventInfoProduct).
+        process.genTable = cms.EDProducer(
+            'SimpleGenParticleFlatTableProducer',
+            src=cms.InputTag('genParticles'),
+            cut=cms.string(''), name=cms.string('Gen'),
+            doc=cms.string('generator particles (full genParticles)'),
+            singleton=cms.bool(False), extension=cms.bool(False),
+            variables=cms.PSet(
+                P3Vars,
+                mass=Var('mass', float, doc='mass'),
+                pdgId=Var('pdgId', int, doc='PDG id'),
+                status=Var('status', 'int16', doc='status'),
+                charge=Var('charge', 'int16', doc='charge'),
+            ),
+        )
+        process.genWeightTable = cms.EDProducer(
+            'SimpleGenEventFlatTableProducer',
+            src=cms.InputTag('generator'),
+            name=cms.string('GenEvt'),
+            doc=cms.string('generator event info'),
+            extension=cms.bool(False),
+            variables=cms.PSet(
+                weight=Var('weight', float, doc='generator event weight'),
+            ),
+        )
+        _extra_tables += [process.genTable, process.genWeightTable]
 
     process.nanoTables = cms.Task(
         process.bplusTable, process.trackTable, process.muonTable,

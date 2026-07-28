@@ -49,6 +49,9 @@
 #include "DataFormats/TrackReco/interface/TrackFwd.h"
 #include "DataFormats/VertexReco/interface/Vertex.h"
 #include "DataFormats/VertexReco/interface/VertexFwd.h"
+#include "DataFormats/HepMCCandidate/interface/GenParticle.h"
+#include "DataFormats/Common/interface/View.h"
+#include "DataFormats/Math/interface/deltaR.h"
 
 #include "FWCore/Framework/interface/Event.h"
 #include "FWCore/Framework/interface/EventSetup.h"
@@ -109,6 +112,14 @@ void collectLeaves(const reco::Candidate* c,
     collectLeaves(c->daughter(i), out);
 }
 
+// A gen particle whose PDG id carries a b (anti)quark: for mesons the b sits
+// in the hundreds digit (B+ 521, B0 511, Bs 531, Bc 541), for baryons in the
+// thousands digit (Lambda_b 5122). Used to gen-match the reco B candidate.
+inline bool isBHadron(int pdgId) {
+  const int p = std::abs(pdgId);
+  return (p / 100) % 10 == 5 || (p / 1000) % 10 == 5;
+}
+
 // One refit "leg" source: a single-track maker's refit collection + refitOk map,
 // keyed back to (candidate, leaf) via the input-track producer's index vectors.
 struct RefitLegTokens {
@@ -140,9 +151,11 @@ private:
   std::vector<RefitLegTokens> refitLegs_;
   edm::EDGetTokenT<reco::BeamSpot> bsToken_;
   edm::EDGetTokenT<reco::VertexCollection> pvToken_;
+  edm::EDGetTokenT<edm::View<reco::GenParticle>> genToken_;
   const bool useRefitTracks_;
   const bool useBeamSpot_;
   const bool usePV_;
+  const bool haveGen_;
   const std::string mode_;
   const double jpsiMass_;
   const double maxChi2_;
@@ -154,6 +167,10 @@ private:
     edm::EDPutTokenT<edm::ValueMap<float>> mmVtxProb, mmAlphaBS, mmSl3d, mmSl3dPV;
   } raw_, ref_;
   edm::EDPutTokenT<edm::ValueMap<int>> outNLegsRefit_;
+  // Generator matching (MC only; sentinels on data). Arm-independent.
+  edm::EDPutTokenT<edm::ValueMap<float>> outGenBMass_, outGenBPt_, outGenBEta_,
+      outGenBPhi_, outGenBDR_;
+  edm::EDPutTokenT<edm::ValueMap<int>> outGenBPdgId_, outGenBIdx_;
 
   ArmTokens declareArm(const std::string& prefix);
 };
@@ -184,6 +201,7 @@ JpsiXKinematicFitProducer::JpsiXKinematicFitProducer(const edm::ParameterSet& cf
       useRefitTracks_(!cfg.getParameter<std::vector<edm::ParameterSet>>("refitLegs").empty()),
       useBeamSpot_(!cfg.getParameter<edm::InputTag>("beamSpot").label().empty()),
       usePV_(!cfg.getParameter<edm::InputTag>("primaryVertices").label().empty()),
+      haveGen_(!cfg.getParameter<edm::InputTag>("genParticles").label().empty()),
       mode_(cfg.getParameter<std::string>("jpsiConstraint")),
       jpsiMass_(cfg.getParameter<double>("jpsiMass")),
       maxChi2_(cfg.getParameter<double>("maxChi2")) {
@@ -202,6 +220,16 @@ JpsiXKinematicFitProducer::JpsiXKinematicFitProducer(const edm::ParameterSet& cf
     bsToken_ = consumes<reco::BeamSpot>(cfg.getParameter<edm::InputTag>("beamSpot"));
   if (usePV_)
     pvToken_ = consumes<reco::VertexCollection>(cfg.getParameter<edm::InputTag>("primaryVertices"));
+  if (haveGen_)
+    genToken_ = consumes<edm::View<reco::GenParticle>>(cfg.getParameter<edm::InputTag>("genParticles"));
+
+  outGenBMass_ = produces<edm::ValueMap<float>>("genBMass");
+  outGenBPt_ = produces<edm::ValueMap<float>>("genBPt");
+  outGenBEta_ = produces<edm::ValueMap<float>>("genBEta");
+  outGenBPhi_ = produces<edm::ValueMap<float>>("genBPhi");
+  outGenBDR_ = produces<edm::ValueMap<float>>("genBDR");
+  outGenBPdgId_ = produces<edm::ValueMap<int>>("genBPdgId");
+  outGenBIdx_ = produces<edm::ValueMap<int>>("genBIdx");
   outNLegsRefit_ = produces<edm::ValueMap<int>>("nLegsRefit");
   raw_ = declareArm("raw");
   ref_ = declareArm("ref");
@@ -219,6 +247,10 @@ void JpsiXKinematicFitProducer::produce(edm::Event& iEvent, const edm::EventSetu
   edm::Handle<reco::VertexCollection> pvH;
   if (usePV_) iEvent.getByToken(pvToken_, pvH);
   const bool havePV = usePV_ && pvH.isValid() && !pvH->empty();
+
+  edm::Handle<edm::View<reco::GenParticle>> genH;
+  if (haveGen_) iEvent.getByToken(genToken_, genH);
+  const bool haveGen = haveGen_ && genH.isValid();
 
   const size_t n = candH->size();
 
@@ -261,6 +293,9 @@ void JpsiXKinematicFitProducer::produce(edm::Event& iEvent, const edm::EventSetu
   std::vector<float> fMmVtxProb(n, -99.f), fMmAlphaBS(n, -99.f), fMmSl3d(n, -99.f),
       fMmSl3dPV(n, -99.f);
   std::vector<int> nLegsRefit(n, 0);
+  std::vector<float> genBMass(n, -99.f), genBPt(n, -99.f), genBEta(n, -99.f),
+      genBPhi(n, -99.f), genBDR(n, 9.9f);
+  std::vector<int> genBPdgId(n, 0), genBIdx(n, -1);
 
   KinematicParticleFactoryFromTransientTrack factory;
 
@@ -432,6 +467,27 @@ void JpsiXKinematicFitProducer::produce(edm::Event& iEvent, const edm::EventSetu
   for (size_t ic = 0; ic < n; ++ic) {
     const auto& cand = (*candH)[ic];
 
+    // Generator match (MC only): the closest last-copy b-hadron in dR to the
+    // raw candidate direction. Arm-independent; done before any skip.
+    if (haveGen) {
+      double bestDR = 9.9;
+      for (size_t ig = 0; ig < genH->size(); ++ig) {
+        const auto& g = (*genH)[ig];
+        if (!isBHadron(g.pdgId()) || !g.statusFlags().isLastCopy()) continue;
+        const double dr = reco::deltaR(cand, g);
+        if (dr < bestDR) {
+          bestDR = dr;
+          genBDR[ic] = static_cast<float>(dr);
+          genBMass[ic] = g.mass();
+          genBPt[ic] = g.pt();
+          genBEta[ic] = g.eta();
+          genBPhi[ic] = g.phi();
+          genBPdgId[ic] = g.pdgId();
+          genBIdx[ic] = static_cast<int>(ig);
+        }
+      }
+    }
+
     std::vector<const reco::RecoChargedCandidate*> leaves;
     collectLeaves(&cand, leaves);
     if (leaves.size() < 3) continue;  // need a dimuon plus at least one bachelor
@@ -498,6 +554,13 @@ void JpsiXKinematicFitProducer::produce(edm::Event& iEvent, const edm::EventSetu
   putArm(ref_, fMass, fMassErr, fPt, fEta, fPhi, fVchi2, fVndof, fVprob, fOk,
          fMmVtxProb, fMmAlphaBS, fMmSl3d, fMmSl3dPV);
   put(outNLegsRefit_, nLegsRefit);
+  put(outGenBMass_, genBMass);
+  put(outGenBPt_, genBPt);
+  put(outGenBEta_, genBEta);
+  put(outGenBPhi_, genBPhi);
+  put(outGenBDR_, genBDR);
+  put(outGenBPdgId_, genBPdgId);
+  put(outGenBIdx_, genBIdx);
 }
 
 }  // namespace ana_hitanalyzer
