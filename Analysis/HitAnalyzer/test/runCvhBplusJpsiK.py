@@ -530,11 +530,20 @@ if opts.nanoOut:
     process.trackMuonIdx = cms.EDProducer(
         'TrackToMuonIndexProducer',
         trackSrc=cms.InputTag(opts.srcTracks),
-        association=cms.InputTag(opts.srcTracks + 'TrackToMuon'))
+        association=cms.InputTag(opts.srcTracks + 'TrackToMuon'),
+        # Track->Muon association is keyed to the alignment tracks directly, so
+        # no originalIndex bridge is needed (leave the bridge inputs empty).
+        originalIndex=cms.InputTag(''),
+        pvSrc=cms.InputTag(''))
     process.trackPvIdx = cms.EDProducer(
         'TrackToVertexIndexProducer',
         trackSrc=cms.InputTag(opts.srcTracks),
-        association=cms.InputTag('offlinePrimaryVertices'))
+        association=cms.InputTag('offlinePrimaryVertices'),
+        # Track->PV association is keyed to generalTracks, so resolve via the
+        # persisted originalIndex map (alignment track -> generalTracks row)
+        # and the primary vertices' own track refs (task 4.6c).
+        originalIndex=cms.InputTag(opts.srcTracks, 'originalIndex'),
+        pvSrc=cms.InputTag('offlinePrimaryVertices'))
 
     process.trackTable = cms.EDProducer(
         'SimpleTrackFlatTableProducer',
