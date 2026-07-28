@@ -3,6 +3,7 @@
 
 
 #include <memory>
+#include <unordered_set>
 
 // user include files
 #include "FWCore/Framework/interface/Frameworkfwd.h"
@@ -195,6 +196,15 @@ protected:
 
   GloballyPositioned<double> surfaceToDouble(const Surface &surface) const;
 
+  // re-place hits on garbage-shifted modules at the path position implied by
+  // their REPAIRED surfaces: the stored hit order comes from the garbage
+  // constants and can put the repaired surface behind its predecessor,
+  // which aborts the forward-only Geant4e propagation. Sane hits keep their
+  // stored order; each flagged hit is inserted where its projection along
+  // the track momentum fits between them.
+  void reorderGarbageShiftHits(TransientTrackingRecHit::RecHitContainer &hits,
+                               const math::XYZVector &trackmom) const;
+
   GloballyPositioned<double> surfaceToDouble(const Surface &surface, const Basic3DVector<double> &gz) const;
 
   void applyAlignment(GloballyPositioned<double> &surface, const DetId &detid) const;
@@ -346,15 +356,24 @@ protected:
   unsigned int nSym;
 
   // Factored Hessian storage (fillGradsFactored_): the reduced Hessian
-  // wrt the global params has rank ~ ndof + nconstraints << nParms, so
-  // it is stored as B (nRank x nParms, row-major, H = B^T B summed over
-  // rows) instead of the packed dense upper triangle. nFactor =
-  // nRank*nParms is the flat branch dimension.
+  // wrt the global params has rank exactly ndof (the measurement content
+  // incl. constraint rows; the deweighted strip coordinates carry exactly
+  // zero weight) << nParms, so it is stored as B (nRank x nParms,
+  // row-major, H = B^T B summed over rows) instead of the packed dense
+  // upper triangle. nRank = min(ndof, nParms) by counting -- not by
+  // eigenvalue threshold, since the numerical-noise tail of the
+  // double-precision profiling overlaps the smallest genuine modes.
+  // nFactor = nRank*nParms is the flat branch dimension.
   unsigned int nRank;
   unsigned int nFactor;
   // relative eigenvalue mass dropped by the rank truncation,
   // sum(dropped lambda)/sum(kept lambda) -- monitoring quantity
   float hessdroppedmass;
+  // spectral-gap monitor: lambda_{first dropped}/lambda_{last kept}
+  // (0 if nothing dropped). Healthy candidates sit at ~1e-9..1e-4;
+  // a value approaching 1 would flag a defect in the rank counting
+  // (a genuine eigenmode being dropped).
+  float hessrankgap;
 
   // Stage-2 per-row B+ candidate index (filled per Fill() call when the
   // optional bCandIdxToken_ is configured; -1 sentinel otherwise).
@@ -488,10 +507,16 @@ protected:
   bool fillTrackTree_;
   bool fillGrads_;
   bool fillGradsFactored_;
-  double hessFactorTol_;
   bool fillJac_;
   bool fillRunTree_;
   bool alignGlued_ = true;
+  double gluedGarbageTiltThreshold_ = 0.05;
+  double moduleGarbageShiftThreshold_ = 0.4;
+  // modules failing the local-consensus displacement check; their hits are
+  // either re-ordered to match the repaired surface positions (default) or
+  // excluded from the fit entirely, per garbageShiftReorderHits_
+  std::unordered_set<uint32_t> garbageShiftModules_;
+  bool garbageShiftReorderHits_ = true;
   
   bool debugprintout_;
   
@@ -513,6 +538,36 @@ protected:
   // (CPE x-resolution needs charge sharing between >=2 pixels).
   // Default 2 = legacy sizeX>1 cut; 1 admits all clusters.
   int pixelMinSizeX_ = 2;
+
+  // Register the pixel pathological-hit class correction parameters
+  // (parmtypes 16-21, per pixel module, mean/diff basis for the edge
+  // classes) and emit their Jacobian columns in the fit. Meant to be
+  // used together with keepPixelEdgeHits=True pixelMinSizeX=1 so the
+  // pathological hits are actually in the fit. Default false = catalog
+  // unchanged.
+  bool pixelHitClassCorrections_ = false;
+  int genMatchPdgId_ = 13;
+
+  // Physics parameterization of the local-x drift effects: replace the
+  // empirical parmtypes 16 (edge-x-mean) and 20 (sizeX1) with a single
+  // delta-tan(thetaL) parameter per pixel module (parmtype 22) whose
+  // Jacobian column is attached to EVERY valid pixel hit with the
+  // class-dependent response weight w (size-1: 1, x-edge: lorentzWedge,
+  // regular: lorentzWclean) and per-hit scale t/2 (t = sensor thickness).
+  // Coupling the regular hits makes dtanLA separable from the local-x
+  // alignment translation (uniform response) in a simultaneous fit.
+  // Requires pixelHitClassCorrections.
+  bool pixelLorentzParam_ = false;
+  double lorentzWclean_ = 0.69;   // measured, 100k twins: +0.686 +- 0.013
+  double lorentzWsize1_ = 0.07;   // measured: +0.066 +- 0.033 (pixel-center quantisation)
+  double lorentzWedge_ = 0.75;    // measured: lo +0.77+-0.19, hi +0.74+-0.18 (side-symmetric)
+  // Injection test: shift every valid pixel hit's local-x position by
+  // 0.5*t*w_inj(class)*injectLorentzTan, simulating a true Lorentz-angle
+  // mismatch of the given size. injectLorentzWclean lets the injected
+  // clean-hit response differ from the model one (response-model error
+  // study); < -900 = use lorentzWclean.
+  double injectLorentzTan_ = 0.;
+  double injectLorentzWclean_ = -999.;
 
   bool doRes_ = false;
   bool useIdealGeometry_ = false;
