@@ -49,6 +49,7 @@
 <use name="CalibFormats/SiStripObjects"/>
 <use name="CalibTracker/Records"/>
 <use name="SimG4Core/Geometry"/>
+<use name="SimDataFormats/TrackingHit"/>
 <use name="DetectorDescription/Core"/>
 <use name="geant4"/>
 <use name="CLHEP"/>

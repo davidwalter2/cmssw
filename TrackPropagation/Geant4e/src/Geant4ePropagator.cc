@@ -123,7 +123,8 @@ Geant4ePropagator::Geant4ePropagator(const Geant4ePropagator &other)
       plimit_(other.plimit_),
       forCVH_(other.forCVH_),
       ioniTruncAlpha_(other.ioniTruncAlpha_),
-      ioniStepLogging_(other.ioniStepLogging_) {
+      ioniStepLogging_(other.ioniStepLogging_),
+      stepTransportLogging_(other.stepTransportLogging_) {
   // fluct allocation is deferred to the first propagate() call on this
   // thread (under geant4eInitMutex), AFTER the per-thread G4 world has
   // been set up by CvhWorker. Allocating it eagerly in the deep-copy ctor
@@ -650,6 +651,9 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
     ioniStepLog_.clear();
     msStepLog_.clear();
   }
+  if (stepTransportLogging_) {
+    stepTransportLog_.clear();
+  }
 
   // Deferred per-thread Geant4e init under mutex (see propagateGeneric).
   if (!geant4eInitDoneForThread()) {
@@ -1041,6 +1045,17 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
     // transport  + nominal energy loss contribution to jacobian
     jac = (transportJac.leftCols<5>() * jac).eval();
 
+    // Per-step cumulative transport, logged AFTER the update so that it is
+    // the transport from the leg start to the point where this step's noise
+    // was just injected into g4errorEnd/dQ/dQ2 above (see StepTransport).
+    if (stepTransportLogging_) {
+      StepTransport st;
+      Map<Matrix<double, 5, 5, RowMajor>>(st.jacc) = jac.leftCols<5>();
+      st.nMs = static_cast<int>(msStepLog_.size());
+      st.nIoni = static_cast<int>(ioniStepLog_.size());
+      stepTransportLog_.push_back(st);
+    }
+
     //TODO assess relevance of approximations (does the order matter? position/momentum before or after step?)
     //b-field (dBx, dBy, dBz) and material (dxi) contributions to jacobian
     jac.rightCols<4>() += transportJac.rightCols<4>();
@@ -1218,6 +1233,12 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
 
     jac.leftCols<5>() = (Pflip * jac.leftCols<5>() * Pflip).eval();
     jac.rightCols<4>() = (Pflip * jac.rightCols<4>()).eval();
+    // the cumulative per-step transports carry one index in the leg-start
+    // frame and one in the step frame, so they flip on both sides like jac
+    for (auto &st : stepTransportLog_) {
+      Map<Matrix<double, 5, 5, RowMajor>> m(st.jacc);
+      m = (Pflip * m * Pflip).eval();
+    }
     // per-group dxi columns transform like the integrated dxi column
     if (groupJacOut != nullptr) {
       for (auto &gc : *groupJacOut) {

@@ -164,6 +164,36 @@ public:
   };
   const std::vector<MoliereMsStep> &msStepLog() const { return msStepLog_; }
 
+  // Per-step cumulative transport Jacobian, for the clean-propagation-test
+  // model (Analysis/HitAnalyzer/plugins/G4ePropagationExport.cc).
+  //
+  // The step loop transports the accumulated noise and THEN adds the step's
+  // own contribution, so the noise generated at step s is subsequently
+  // transported by steps s+1..N only. Writing Jacc_s for the cumulative
+  // transport from the leg start through the end of step s (the point where
+  // n_s is injected), the exact transport of that noise to the end of the
+  // leg is
+  //     A_s = Jacc_N * Jacc_s^{-1}
+  // which offline turns the per-step Urban/Moliere records into EXACT
+  // per-step weights for any linear functional of the final state -- as
+  // opposed to the RMS-matched scalar weight per pooled block that the fit
+  // exports (resinfv) have to use. That distinction matters precisely in the
+  // tails, which is what the clean test exists to probe.
+  //
+  // One entry per Geant4 step, unconditionally, so that nMs/nIoni (the sizes
+  // of the two physics logs AFTER this step) give an unambiguous mapping
+  // from a physics-log index back to its step: physics entry j belongs to the
+  // first step whose n exceeds j. Separate flag and separate storage from the
+  // Urban/Moliere logs so that existing consumers of those records see no
+  // change in layout.
+  struct StepTransport {
+    double jacc[25] = {0.};  // cumulative 5x5 (row-major), curvilinear
+    int nMs = 0;
+    int nIoni = 0;
+  };
+  void setStepTransportLogging(bool on) { stepTransportLogging_ = on; }
+  const std::vector<StepTransport> &stepTransportLog() const { return stepTransportLog_; }
+
 private:
   typedef std::pair<TrajectoryStateOnSurface, double> TsosPP;
   typedef std::pair<bool, std::shared_ptr<G4ErrorTarget>> ErrorTargetPair;
@@ -291,6 +321,10 @@ private:
   bool ioniStepLogging_ = false;
   mutable std::vector<UrbanIoniStep> ioniStepLog_;
   mutable std::vector<MoliereMsStep> msStepLog_;
+
+  // per-step cumulative transport Jacobian log (see setStepTransportLogging)
+  bool stepTransportLogging_ = false;
+  mutable std::vector<StepTransport> stepTransportLog_;
 };
 
 #endif
