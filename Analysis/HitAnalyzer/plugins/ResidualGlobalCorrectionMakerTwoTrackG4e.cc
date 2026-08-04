@@ -1209,7 +1209,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
     
     const reco::Candidate *mu0gen = nullptr;
     double drmin0 = 0.1;
-    if (doGen_ && !doSim_) {
+    if (doGen_ && (!doSim_ || fitSimHitPositions_)) {
       for (auto const &genpart : *genPartCollection) {
         if (genpart.status() != 1) {
           continue;
@@ -1258,7 +1258,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
       double drmin1 = 0.1;
       
       double massconstraintval = massConstraint_;
-      if (doGen_ && !doSim_) {
+      if (doGen_ && (!doSim_ || fitSimHitPositions_)) {
         for (auto const &genpart : *genPartCollection) {
           if (genpart.status() != 1) {
             continue;
@@ -2600,11 +2600,34 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
                   auto const defcorr = topology.localPosition(mpnull, pred) - topology.localPosition(mpnull);
 
-                  const double hitx = preciseHit->localPosition().x() - defcorr.x();
-                  const double hity = preciseHit->localPosition().y() - defcorr.y();
-                  
-                  // const double hitx = preciseHit->localPosition().x() - 0.*defcorr.x();
-                  // const double hity = preciseHit->localPosition().y() - 0.*defcorr.y();
+                  // Rung-E closure mode (port of the single-track logic):
+                  // fit SIMULATED hit positions with unchanged covariances.
+                  // Per-leg sim-hit match by detid + signed particle type
+                  // (mu- = +13 <-> charge -1 at updtsos[6]); only measured
+                  // coordinates substituted (strip-y stays at the reco
+                  // convention).
+                  const PSimHit *simhit = nullptr;
+                  if (fitSimHitPositions_ && doSim_) {
+                    const int wanttype = updtsos[6] < 0. ? 13 : -13;
+                    for (auto const &simhith : simHits) {
+                      for (const PSimHit &sh : *simhith) {
+                        if (sh.detUnitId() == preciseHit->geographicalId().rawId()
+                            && sh.particleType() == wanttype) {
+                          simhit = &sh;
+                          break;
+                        }
+                      }
+                      if (simhit != nullptr) {
+                        break;
+                      }
+                    }
+                  }
+                  const bool usesimpos = simhit != nullptr;
+                  const double hitxreco = preciseHit->localPosition().x() - defcorr.x();
+                  const double hityreco = preciseHit->localPosition().y() - defcorr.y();
+                  const double hitx = usesimpos ? simhit->localPosition().x() : hitxreco;
+                  const double hity = (usesimpos && ispixel && !hit1d)
+                                      ? simhit->localPosition().y() : hityreco;
 
                   double lyoffset = 0.;
                   double hitphival = -99.;
@@ -2657,14 +2680,29 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                       const double rdir = radialtopology->yAxisOrientation();
                       const double radius = radialtopology->originToIntersection();
 
-                      const double phihit = rdir*std::atan2(hitx, rdir*hity + radius);
-                      const double rhohit = std::sqrt(hitx*hitx + std::pow(rdir*hity + radius, 2));
+                      // Wedge modules measure LOCAL PHI: in sim-position mode
+                      // the residual must use the FULL sim phi (sim x AND
+                      // sim y; mixing sim-x with strip-center-y gives phi
+                      // errors ~ x*dy/r, mm of arc).
+                      double phihit = rdir*std::atan2(hitx, rdir*hity + radius);
+                      double rhohit = std::sqrt(hitx*hitx + std::pow(rdir*hity + radius, 2));
+                      if (usesimpos) {
+                        const double lxs = simhit->localPosition().x();
+                        const double lys = simhit->localPosition().y();
+                        phihit = rdir*std::atan2(lxs, rdir*lys + radius);
+                        rhohit = std::sqrt(lxs*lxs + std::pow(rdir*lys + radius, 2));
+                      }
 
-                      // invert original calculation of covariance matrix to extract variance on polar angle
+                      // invert original calculation of covariance matrix to
+                      // extract variance on polar angle. MUST use the RECO
+                      // phi: the CPE built xx around the reco position, so
+                      // tt > 0 is only guaranteed there (sim-based tan(phi)
+                      // can drive it negative -> indefinite system).
+                      const double phihitreco = rdir*std::atan2(hitxreco, rdir*hityreco + radius);
                       const double detHeight = radialtopology->detHeight();
                       const double radsigma = detHeight*detHeight/12.;
 
-                      const double t1 = std::tan(phihit);
+                      const double t1 = std::tan(phihitreco);
                       const double t2 = t1*t1;
 
                       const double tt = preciseHit->localPositionError().xx() - t2*radsigma;

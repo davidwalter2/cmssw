@@ -50,6 +50,9 @@ opts.register('doRes', True, VarParsing.VarParsing.multiplicity.singleton,
               'register the resolution parameter families (parmtypes 8-11) '
               'and emit their gradient/Hessian rows (default True; set False '
               'for a doRes-off reference run with identical selection)')
+opts.register('propagationPtotLimit', 0.2, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'G4e propagation momentum floor [GeV]; cfi default was 1.0')
 opts.register('doSimHits', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'read tracker PSimHits and match them to hits (input must keep them)')
@@ -317,6 +320,10 @@ process.cvhMasterESProducer.MagneticFieldLabel = cms.string(fieldlabel)
 # dereferences a null fluct->table on the first event.
 process.Geant4ePropagator.ForCVH = cms.bool(True)
 process.Geant4ePropagator.PropagationDirection = cms.string(opts.propagationDirection)
+# Momentum floor for the G4e propagation. The cfi default (1.0 GeV) drops
+# ~2.5% of the flat-pT-gun daughters (fail[plimit], median seed p 0.65);
+# 0.2 GeV matches the ditrack/V0 configuration and recovers them.
+process.Geant4ePropagator.PropagationPtotLimit = cms.double(float(opts.propagationPtotLimit))
 process.Geant4ePropagator.IoniTruncationAlpha = cms.double(float(opts.ioniTruncationAlpha))
 process.globalCor.MagneticFieldLabel = cms.string(fieldlabel)
 
