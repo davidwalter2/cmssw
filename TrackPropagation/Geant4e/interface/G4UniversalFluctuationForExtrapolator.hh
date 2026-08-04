@@ -60,6 +60,38 @@ public:
 
   ~G4UniversalFluctuationForExtrapolator() override;
 
+  // CDF fraction of the delta-electron (1/E^2) spectrum kept when computing
+  // the truncated mean/variance of the ionization straggling (PANDA
+  // PV/01-07 eq. 68-69). The fitted "resolution" is convention-dependent
+  // through this cutoff (truncated sigma grows ~3x from alpha=0.99 to
+  // 0.999), so the resolution-closure diagnostic scans it.
+  void SetIoniTruncationAlpha(double a) { ioniTruncAlpha_ = a; }
+
+  // Per-step Urban-model parameters recorded by the last SampleFluctuations
+  // call. These are the exact ingredients of the analytic compound-Poisson
+  // characteristic function of the step's ionization straggling:
+  //   regime 0: near-Gaussian thick-target regime, variance gsig2 [MeV^2]
+  //   regime 1: Glandz -- excitations as Poisson(a1) at e1 and Poisson(a2)
+  //             at e2, plus a3 delta-electron collisions with spectrum
+  //             ~1/E^2 on [e0r, tmaxr] (all energies MeV; the small-cut
+  //             width correction `scaling` multiplies all energies).
+  //             gsig2 then holds the RETURNED alpha-truncated variance,
+  //             i.e. exactly what enters the track-fit Q matrix -- the
+  //             offline CF fit standardizes with it.
+  // Exported per resolution block by the CVH maker (doRes) so the offline
+  // fit can use the untruncated non-Gaussian model -- unlike the truncated
+  // variance, this has no convention dependence.
+  struct UrbanFluctRecord {
+    int regime = -1;
+    double gsig2 = 0.;
+    double a1 = 0., e1 = 0.;
+    double a2 = 0., e2 = 0.;
+    double a3 = 0., e0r = 0., tmaxr = 0.;
+    double scaling = 1.;
+  };
+  const UrbanFluctRecord& lastRecord() const { return record_; }
+  bool lastRecordValid() const { return recordValid_; }
+
   G4double SampleFluctuations(const G4MaterialCutsCouple*,
                               const G4DynamicParticle*,
                               const G4double,
@@ -102,6 +134,13 @@ protected:
       CLHEP::HepRandomEngine* rndm, G4double a, G4double e, G4double& eav, G4double& eloss, G4double& esig2);
 
   inline void SampleGauss2(CLHEP::HepRandomEngine* rndm, G4double eav, G4double esig2, G4double& eloss);
+
+  // delta-electron tail truncation of the ionization variance (see setter)
+  G4double ioniTruncAlpha_ = 0.999;
+
+  // last-call Urban record (see lastRecord())
+  UrbanFluctRecord record_;
+  G4bool recordValid_ = false;
 
   // particle properties
   G4double particleMass = 0.0;
