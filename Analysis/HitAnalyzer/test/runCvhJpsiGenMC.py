@@ -93,6 +93,15 @@ opts.register('fillGrads', False, VarParsing.VarParsing.multiplicity.singleton,
 opts.register('fillGradsFactored', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'store per-event gradient + low-rank factored Hessian (H = B^T B)')
+opts.register('doRes', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'register resolution families and export the per-candidate '
+              'mass-CF ingredients (dV blocks, step records, mass-projected '
+              'influence weights)')
+opts.register('trackSrc', 'ALCARECOTkAlJpsiX', VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.string,
+              'input track collection (ALCARECOTkAlJpsiMuMu for the standard '
+              'TkAl ALCARECO of the JPsiToMuMu MC; pair with useLegacyPairLoop=True)')
 opts.register('doMassConstraint', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool, 'apply J/psi mass constraint in the two-track fit')
 opts.register('useIdealGeometry', False, VarParsing.VarParsing.multiplicity.singleton,
@@ -300,7 +309,7 @@ process.hltFilter = cms.EDFilter(
 
 process.globalCor = cms.EDProducer(
     "ResidualGlobalCorrectionMakerTwoTrackG4e",
-    src=cms.InputTag("ALCARECOTkAlJpsiX"),
+    src=cms.InputTag(opts.trackSrc),
     fitFromGenParms=cms.bool(bool(opts.fitFromGenParms)),
     fitFromSimParms=cms.bool(False),
     fillTrackTree=cms.bool(True),
@@ -321,7 +330,7 @@ process.globalCor = cms.EDProducer(
     doMuons=cms.bool(False),
     doMuonAssoc=cms.bool(False),
     doTrigger=cms.bool(True),
-    doRes=cms.bool(False),
+    doRes=cms.bool(bool(opts.doRes)),
     useIdealGeometry=cms.bool(bool(opts.useIdealGeometry)),
     bsConstraint=cms.bool(False),
     applyHitQuality=cms.bool(True),

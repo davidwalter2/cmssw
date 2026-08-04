@@ -891,6 +891,10 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           << "ESProducer for label 'Geant4ePropagator' did not deliver a Geant4ePropagator";
     }
     streamPropagator_.reset(templateProp->clone());
+    // Urban/Moliere step logs feed the per-candidate mass-CF export; only
+    // pay the bookkeeping when the resolution machinery is on (same gating
+    // as the single-track maker).
+    streamPropagator_->setIoniStepLogging(doRes_ && (fillGrads_ || fillGradsFactored_));
   }
   const Geant4ePropagator *g4prop = streamPropagator_.get();
   const MagneticField* field = g4prop->magneticField();
@@ -971,6 +975,16 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
   MatrixXd covfull;
   Matrix<double, 6, 6> covrefmom;
+
+  // doRes port (per-candidate mass-CF export): the material process-noise
+  // derivative blocks dV_b (MS and ionization parts of Q), their row
+  // ranges, and the per-block global-parameter labels. Registered fresh
+  // each iteration of the unconstrained (icons==0) pass; the converged
+  // iteration's content feeds the mass-projected influence export.
+  const bool dores = doRes_;
+  std::vector<SparseMatrix<double>> dVs;
+  std::vector<std::array<unsigned int, 2>> resblockrng;
+  std::vector<unsigned int> resglobidx;
 // FullPivLU<MatrixXd> Cinvd;
 // ColPivHouseholderQR<MatrixXd> Cinvd;
   
@@ -1811,6 +1825,18 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           Jfull = MatrixXd::Zero(ncons, npars);
           Vinvfull = MatrixXd::Zero(ncons, ncons);
 
+          if (dores) {
+            // fresh registration each iteration; the converged iteration's
+            // content is what the export reads
+            dVs.clear();
+            resblockrng.clear();
+            resglobidx.clear();
+            ioniurbanidx.clear();
+            ioniurbanv.clear();
+            msmoliidx.clear();
+            msmoliv.clear();
+          }
+
           // Running constraint-row cursor (single-track maker calls this
           // `icons`; renamed `irow` here because `icons` is the outer
           // constrained/unconstrained pass index in this two-track maker).
@@ -2112,6 +2138,48 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
               updtsos = std::get<1>(propresult);
               const Matrix<double, 5, 5> Qcurv = std::get<2>(propresult);
+              const Matrix<double, 5, 5> dQMScurv = std::get<5>(propresult);
+              const Matrix<double, 5, 5> dQIcurv = std::get<6>(propresult);
+
+              // doRes port: material-block global labels (glued detid
+              // convention as in the single-track maker) + the propagator
+              // step-record drains for the physics-CF export. The logs are
+              // cleared at each propagate call, so the drain must happen
+              // here, tagged with this block's labels. icons==0 only (the
+              // unconstrained pass feeds the mass-CF export).
+              unsigned int msglobalidx = 0;
+              unsigned int ioniglobalidx = 0;
+              if (dores && icons == 0) {
+                const uint32_t gluedidprop = trackerTopology->glued(hit->geographicalId());
+                const DetId propdetid = gluedidprop ? DetId(gluedidprop) : hit->geographicalId();
+                msglobalidx = detidparms.at(std::make_pair(10, propdetid));
+                ioniglobalidx = detidparms.at(std::make_pair(11, propdetid));
+                for (auto const &ms : g4prop->msStepLog()) {
+                  msmoliidx.push_back(msglobalidx);
+                  msmoliv.push_back(ms.effZ);
+                  msmoliv.push_back(ms.effA);
+                  msmoliv.push_back(ms.xg);
+                  msmoliv.push_back(ms.pGeV);
+                  msmoliv.push_back(ms.beta);
+                  msmoliv.push_back(ms.thp2);
+                  msmoliv.push_back(ms.dOverX0);
+                  msmoliv.push_back(ms.stepGroup);
+                }
+                for (auto const &us : g4prop->ioniStepLog()) {
+                  ioniurbanidx.push_back(ioniglobalidx);
+                  ioniurbanv.push_back(us.rec.regime);
+                  ioniurbanv.push_back(us.rec.gsig2);
+                  ioniurbanv.push_back(us.rec.a1);
+                  ioniurbanv.push_back(us.rec.e1);
+                  ioniurbanv.push_back(us.rec.a2);
+                  ioniurbanv.push_back(us.rec.e2);
+                  ioniurbanv.push_back(us.rec.a3);
+                  ioniurbanv.push_back(us.rec.e0r);
+                  ioniurbanv.push_back(us.rec.tmaxr);
+                  ioniurbanv.push_back(us.rec.scaling);
+                  ioniurbanv.push_back(us.cs);
+                }
+              }
 
               if (debugPerIterDump_) {
                 const auto& sp = surface.position();
@@ -2175,6 +2243,13 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               Matrix<double, 5, 5> Q = Qcurv;
               if (dolocalupdate) {
                 Q = Hm*Qcurv*Hm.transpose();
+              }
+
+              Matrix<double, 5, 5> dQMS = dQMScurv;
+              Matrix<double, 5, 5> dQI = dQIcurv;
+              if (dolocalupdate) {
+                dQMS = Hm*dQMScurv*Hm.transpose();
+                dQI = Hm*dQIcurv*Hm.transpose();
               }
 
               // Guarded inversion of the process noise: a (near-)zero-length
@@ -2380,6 +2455,20 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                 Jfull.block(irow, parmidx, 5, nlocalparms) =
                     Fprop.middleCols(localparmidx, nlocalparms);
                 Vinvfull.block<5, 5>(irow, irow) = Qinv;
+                if (dores && icons == 0) {
+                  for (auto const *dQpart : {&dQMS, &dQI}) {
+                    std::vector<Triplet<double>> coeffs;
+                    for (unsigned int ir = 0; ir < 5; ++ir) {
+                      for (unsigned int ic = 0; ic < 5; ++ic) {
+                        coeffs.emplace_back(irow + ir, irow + ic, (*dQpart)(ir, ic));
+                      }
+                    }
+                    SparseMatrix<double> &dV = dVs.emplace_back(ncons, ncons);
+                    dV.setFromTriplets(coeffs.begin(), coeffs.end());
+                    resblockrng.push_back({{irow, 5}});
+                    resglobidx.push_back(dQpart == &dQMS ? msglobalidx : ioniglobalidx);
+                  }
+                }
                 irow += 5;
               }
               else {
@@ -2417,6 +2506,20 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                 Jfull.block(irow, parmidx, 5, nlocalparms) =
                     Fprop.middleCols(localparmidx, nlocalparms);
                 Vinvfull.block<5, 5>(irow, irow) = Qinv;
+                if (dores && icons == 0) {
+                  for (auto const *dQpart : {&dQMS, &dQI}) {
+                    std::vector<Triplet<double>> coeffs;
+                    for (unsigned int ir = 0; ir < 5; ++ir) {
+                      for (unsigned int ic = 0; ic < 5; ++ic) {
+                        coeffs.emplace_back(irow + ir, irow + ic, (*dQpart)(ir, ic));
+                      }
+                    }
+                    SparseMatrix<double> &dV = dVs.emplace_back(ncons, ncons);
+                    dV.setFromTriplets(coeffs.begin(), coeffs.end());
+                    resblockrng.push_back({{irow, 5}});
+                    resglobidx.push_back(dQpart == &dQMS ? msglobalidx : ioniglobalidx);
+                  }
+                }
                 irow += 5;
 
               }
@@ -3373,13 +3476,60 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             const Matrix<double, 1, 6> mjacalt =
                 massJacobianAltD(refftsarr[0], refftsarr[1], massForConstraintHelpers);
 
-            
+
             Jpsi_sigmamass = std::sqrt((mjacalt*covrefmom*mjacalt.transpose())[0]);
-            
+
 // std::cout << "covrefmom" << std::endl;
 // std::cout << covrefmom << std::endl;
 // std::cout << "Jpsi_sigmamass = " << Jpsi_sigmamass << std::endl;
-          
+
+            // Mass-projected influence export (per-candidate mass-CF
+            // ingredients, doRes port). The candidate-mass error responds
+            // linearly to the noise vector: delta m = w^T n with
+            // w = (C a)^T F^T Vinv, a = mass Jacobian embedded at the
+            // joint-state momentum block (entries 0..5). Per registered
+            // material block b: resinfv = signed dof weights in
+            // dV^{1/2}-standardized units (5 floats, sign carries the
+            // Landau skew), resinfvarv = |u_b|^2 = the block's variance
+            // contribution to sigma_m^2, resinfcov = their sum. The
+            // GAUSSIAN remainder (hits + beamspot + pointing) is
+            // sigma_m^2 - resinfcov by construction -- unlike the
+            // single-track tree, resinfcov here does NOT include the hit
+            // share. reseigidx labels the entries (MS/ioni global params,
+            // matching msmoliidx/ioniurbanidx records).
+            resinfv.clear();
+            resinfvarv.clear();
+            resinfcov = 0.;
+            reseigidx.clear();
+            reseigv.clear();
+            resinfbv.clear();
+            if (dores && !dVs.empty()) {
+              VectorXd afull = VectorXd::Zero(nstateparms);
+              afull.head<6>() = mjacalt.transpose();
+              VectorXd afree = VectorXd::Zero(nstatefree);
+              for (unsigned int i = 0; i < nstatefree; ++i) {
+                afree(i) = afull(freestateidxs[i]);
+              }
+              const VectorXd wmass = VinvF*Cinvd.solve(afree);
+              for (unsigned int ires = 0; ires < dVs.size(); ++ires) {
+                const unsigned int r0 = resblockrng[ires][0];
+                const unsigned int nb = resblockrng[ires][1];
+                const MatrixXd dVb = MatrixXd(dVs[ires]).block(r0, r0, nb, nb);
+                SelfAdjointEigenSolver<MatrixXd> eigv(dVb);
+                const MatrixXd sqrtdV = eigv.eigenvectors() *
+                                        eigv.eigenvalues().cwiseMax(0.).cwiseSqrt().asDiagonal() *
+                                        eigv.eigenvectors().transpose();
+                const VectorXd ub = sqrtdV * wmass.segment(r0, nb);
+                reseigidx.push_back(resglobidx[ires]);
+                for (unsigned int j = 0; j < 5; ++j) {
+                  resinfv.push_back(j < nb ? ub(j) : 0.f);
+                }
+                const double vb = ub.squaredNorm();
+                resinfvarv.push_back(vb);
+                resinfcov += vb;
+              }
+            }
+
           }
   // 
   // (jacarr[idxplus].topLeftCorner(5, nstateparms)*dxdparms.transpose() + jacarr[idxplus].topRightCorner(5, npars)).cast<float>();

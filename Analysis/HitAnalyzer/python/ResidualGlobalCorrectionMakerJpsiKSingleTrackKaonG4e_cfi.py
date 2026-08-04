@@ -44,5 +44,8 @@ globalCorJpsiKKaon = cms.EDProducer(
     triggers = cms.vstring(),
     trackParticleName = cms.string('kaon'),
     MagneticFieldLabel = cms.string(''),
+    # Decay-in-flight kink finder (per-material-step score test); off by
+    # default, enable for the K -> mu nu / K -> pi pi0 contamination veto.
+    doKinkFinder = cms.bool(False),
     outprefix = cms.untracked.string('globalcor_jpsik_kaon'),
 )

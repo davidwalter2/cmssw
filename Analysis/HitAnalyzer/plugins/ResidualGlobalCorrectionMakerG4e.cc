@@ -170,6 +170,38 @@ private:
   std::vector<double> edmval_iter;
   std::vector<double> edmvalref_iter;
   std::vector<double> deltachisqval_iter;
+
+  // Kink finder (decay-in-flight score test). For each material step the
+  // alternative hypothesis of an unconstrained offset (q/p, dx/dz, dy/dz)
+  // of the propagated state at the step end -- a decay kink plus momentum
+  // step -- is scored against the converged fit without refitting (see the
+  // scan block after the iteration loop). Components are in the local frame
+  // of the step-end surface when dolocalupdate, curvilinear otherwise.
+  bool doKinkFinder_ = false;
+  // Synthetic-kink injection for the closure test: add the given offset to
+  // the material residual dx0 at material step kinkInjectLayer (mimicking a
+  // decay of that size there); the scan must recover it. -1 = off.
+  int kinkInjectLayer_ = -1;
+  double kinkInjectDqop_ = 0.;
+  double kinkInjectDxdz_ = 0.;
+  double kinkInjectDydz_ = 0.;
+  // branch buffers (per material step; hold the winning charge hypothesis)
+  std::vector<float> kinkDchisq;
+  std::vector<float> kinkDchisqAngle;
+  std::vector<float> kinkDchisqQop;
+  std::vector<float> kinkDqop;
+  std::vector<float> kinkDxdz;
+  std::vector<float> kinkDydz;
+  std::vector<float> kinkGlobalR;
+  std::vector<float> kinkGlobalZ;
+  float kinkMax = -1.f;
+  int kinkMaxLayer = -1;
+  // per-iteration cache: row offset of each material block in the constraint
+  // vector, and the step-end global position (rebuilt every iteration; the
+  // final iteration's layout is what the scan consumes)
+  std::vector<unsigned int> kinkConsIdx;
+  std::vector<float> kinkStepR;
+  std::vector<float> kinkStepZ;
 };
 
 ResidualGlobalCorrectionMakerG4e::~ResidualGlobalCorrectionMakerG4e() {
@@ -270,6 +302,18 @@ ResidualGlobalCorrectionMakerG4e::ResidualGlobalCorrectionMakerG4e(const edm::Pa
   materialFDEps_ = iConfig.existsAs<double>("materialFDEps")
       ? iConfig.getParameter<double>("materialFDEps") : 1e-3;
 
+  // Kink finder (existsAs-guarded so legacy cfis are untouched).
+  doKinkFinder_ = iConfig.existsAs<bool>("doKinkFinder")
+      ? iConfig.getParameter<bool>("doKinkFinder") : false;
+  kinkInjectLayer_ = iConfig.existsAs<int>("kinkInjectLayer")
+      ? iConfig.getParameter<int>("kinkInjectLayer") : -1;
+  kinkInjectDqop_ = iConfig.existsAs<double>("kinkInjectDqop")
+      ? iConfig.getParameter<double>("kinkInjectDqop") : 0.;
+  kinkInjectDxdz_ = iConfig.existsAs<double>("kinkInjectDxdz")
+      ? iConfig.getParameter<double>("kinkInjectDxdz") : 0.;
+  kinkInjectDydz_ = iConfig.existsAs<double>("kinkInjectDydz")
+      ? iConfig.getParameter<double>("kinkInjectDydz") : 0.;
+
   outputCorPt_ = produces<edm::ValueMap<float>>("corPt");
   outputCorEta_ = produces<edm::ValueMap<float>>("corEta");
   outputCorPhi_ = produces<edm::ValueMap<float>>("corPhi");
@@ -307,6 +351,23 @@ void ResidualGlobalCorrectionMakerG4e::beginStream(edm::StreamID streamid)
       tree->Branch("edmval_iter",        &edmval_iter);
       tree->Branch("edmvalref_iter",     &edmvalref_iter);
       tree->Branch("deltachisqval_iter", &deltachisqval_iter);
+    }
+    // Kink-finder score-test outputs: one entry per material step (step 0 =
+    // beamline->first hit, including the beampipe). kinkDchisq is the 3-dof
+    // score-test Delta-chi2; the Angle/Qop variants test only the direction /
+    // only the momentum-step subspace. kinkDqop/Dxdz/Dydz are the best-fit
+    // offset at each step (the estimated kink).
+    if (doKinkFinder_) {
+      tree->Branch("kinkDchisq",      &kinkDchisq);
+      tree->Branch("kinkDchisqAngle", &kinkDchisqAngle);
+      tree->Branch("kinkDchisqQop",   &kinkDchisqQop);
+      tree->Branch("kinkDqop",        &kinkDqop);
+      tree->Branch("kinkDxdz",        &kinkDxdz);
+      tree->Branch("kinkDydz",        &kinkDydz);
+      tree->Branch("kinkGlobalR",     &kinkGlobalR);
+      tree->Branch("kinkGlobalZ",     &kinkGlobalZ);
+      tree->Branch("kinkMax",      &kinkMax,      basketSize);
+      tree->Branch("kinkMaxLayer", &kinkMaxLayer, basketSize);
     }
     // Stage-2 per-row B+ candidate index, branched only when the cfi
     // configured bCandIdxSrc (additive, no-op for legacy J/psi/Upsilon/Z).
@@ -544,6 +605,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           << "ESProducer for label 'Geant4ePropagator' did not deliver a Geant4ePropagator";
     }
     streamPropagator_.reset(templateProp->clone());
+    // Urban step log feeds the ioniurbanv physics-CF export; only pay the
+    // bookkeeping when the resolution machinery is on and grads are kept.
+    streamPropagator_->setIoniStepLogging(doRes_ && (fillGrads_ || fillGradsFactored_));
   }
   const Geant4ePropagator *g4prop = streamPropagator_.get();
   const MagneticField* field = g4prop->magneticField();
@@ -709,10 +773,26 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         if (g->status() != 1) {
           continue;
         }
-        if (std::abs(g->pdgId()) != 13) {
+        if (std::abs(g->pdgId()) != genMatchPdgId_) {
           continue;
         }
-        
+        // Same-charge requirement as in the two-track maker. Pure-dR
+        // matching is unsafe in busy MC (B->J/psi+X): soft junk/hadron
+        // tracks collinear with a muon (dR<0.1 is common for collimated
+        // J/psi daughters) get anchored to the muon gen state, and with
+        // fitFromGenParms that produces chi2 ~ 1e6 outliers that dominate
+        // any variance-sensitive fit.
+        if (g->charge() != track.charge()) {
+          continue;
+        }
+        // Loose momentum-compatibility window (gen-matched muon tracks
+        // agree to ~1%; hadron/junk mismatches are off by 10x). Configurable
+        // because decay-in-flight studies need it loosened: the reconstructed
+        // pT of a decayed kaon/pion follows the daughter, far below gen.
+        if (std::abs(g->pt() - track.pt()) > genMatchPtWindow_ * g->pt()) {
+          continue;
+        }
+
         float dR = deltaR(*g, track);
         
         if (dR < drmin)
@@ -734,7 +814,13 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           genY = g->vertex().y();
           genZ = g->vertex().z();
 
-          genl3d = std::sqrt((g->vertex() - *genXyz0).mag2());
+          // genParticles:xyz0 (gen PV) is not kept in every ALCARECO
+          // (the B->J/psi+X MC keeps only the recoGenParticles branch);
+          // fall back to the -99 sentinel rather than throwing. (This
+          // guard was originally a pixel-session working-tree fix that
+          // was lost in the 2026-07-25 session disentangling.)
+          genl3d = genXyz0.isValid()
+              ? std::sqrt((g->vertex() - *genXyz0).mag2()) : -99.;
 
           auto const& vtx = g->vertex();
           auto const& myBeamSpot = bsH->position(vtx.z());
@@ -1088,6 +1174,14 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     
     std::vector<SparseMatrix<double>> dVs;
     dVs.reserve(nhits + nvalid);
+
+    // per dVs entry: [row offset, block size] within the constraint vector
+    // and the entry's global parameter index -- inputs to the exact
+    // block-eigenvalue export (reseigidx/reseigv)
+    std::vector<std::array<unsigned int, 2>> resblockrng;
+    resblockrng.reserve(nhits + nvalid);
+    std::vector<unsigned int> resglobidx;
+    resglobidx.reserve(nhits + nvalid);
     
     std::vector<unsigned int> residxs;
     residxs.reserve(nhits + nvalid);
@@ -1254,7 +1348,16 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             
       hitidxv.clear();
       hitidxv.reserve(nvalid);
-      
+
+      if (doKinkFinder_) {
+        kinkConsIdx.clear();
+        kinkConsIdx.reserve(nhits);
+        kinkStepR.clear();
+        kinkStepR.reserve(nhits);
+        kinkStepZ.clear();
+        kinkStepZ.reserve(nhits);
+      }
+
       if (iiter == 0) {
         dxrecgen.clear();
         dxrecgen.reserve(nvalid);
@@ -1427,6 +1530,18 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       
       dVs.clear();
       residxs.clear();
+      ioniurbanidx.clear();
+      ioniurbanv.clear();
+      msmoliidx.clear();
+      msmoliv.clear();
+      reseigidx.clear();
+      reseigv.clear();
+      resinfv.clear();
+      resinfvarv.clear();
+      resinfcov = 0.;
+      resinfbv.clear();
+      resblockrng.clear();
+      resglobidx.clear();
       
       validdxeigjac = MatrixXd::Zero(2*nvalid, nstateparms);
       
@@ -1967,6 +2082,20 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           const unsigned int fullstateidx = 5*ihit;
           const unsigned int fullparmidx = iparm;
 
+          if (doKinkFinder_) {
+            kinkConsIdx.push_back(icons);
+            kinkStepR.push_back(std::sqrt(updtsos[0]*updtsos[0] + updtsos[1]*updtsos[1]));
+            kinkStepZ.push_back(updtsos[2]);
+            if (kinkInjectLayer_ >= 0 && int(ihit) == kinkInjectLayer_) {
+              // closure test: mimic a decay at this step by offsetting the
+              // material residual (state minus propagated) by the injected
+              // kink; the score-test scan must recover deltahat = injected
+              dx0[0] += kinkInjectDqop_;
+              dx0[1] += kinkInjectDxdz_;
+              dx0[2] += kinkInjectDydz_;
+            }
+          }
+
           rfull.segment<nlocalcons>(icons) = dx0;
 
           // Build the 5 x nlocalparms field+eloss Jacobian: per-mode columns
@@ -2155,6 +2284,22 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             // MS resolution parameter slot sits right after the bfield block
             // and the eloss slot(s).
             residxs.push_back(iparm + nlocalbfield + nlocaleloss);
+            resblockrng.push_back({{icons, nlocalcons}});
+            resglobidx.push_back(msglobalidx);
+
+            // Phase B export: Moliere raw step data of the same leg (log
+            // sync argument as for the Urban export below).
+            for (auto const &ms : g4prop->msStepLog()) {
+              msmoliidx.push_back(msglobalidx);
+              msmoliv.push_back(ms.effZ);
+              msmoliv.push_back(ms.effA);
+              msmoliv.push_back(ms.xg);
+              msmoliv.push_back(ms.pGeV);
+              msmoliv.push_back(ms.beta);
+              msmoliv.push_back(ms.thp2);
+              msmoliv.push_back(ms.dOverX0);
+              msmoliv.push_back(ms.stepGroup);
+            }
           }
 
           if (dores) {
@@ -2169,6 +2314,27 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             // Ionization resolution slot is the second-after-eloss; offset is
             // bfield block + eloss slot(s) + msres.
             residxs.push_back(iparm + nlocalbfield + nlocaleloss + 1);
+            resblockrng.push_back({{icons, nlocalcons}});
+            resglobidx.push_back(ioniglobalidx);
+
+            // Physics-CF export: the propagator's Urban step log corresponds
+            // to the leg propagation whose dQI was stored above (the log is
+            // cleared at each propagate call; the FD-closure / sim re-runs
+            // that would overwrite it are debug-gated off in production).
+            for (auto const &us : g4prop->ioniStepLog()) {
+              ioniurbanidx.push_back(ioniglobalidx);
+              ioniurbanv.push_back(us.rec.regime);
+              ioniurbanv.push_back(us.rec.gsig2);
+              ioniurbanv.push_back(us.rec.a1);
+              ioniurbanv.push_back(us.rec.e1);
+              ioniurbanv.push_back(us.rec.a2);
+              ioniurbanv.push_back(us.rec.e2);
+              ioniurbanv.push_back(us.rec.a3);
+              ioniurbanv.push_back(us.rec.e0r);
+              ioniurbanv.push_back(us.rec.tmaxr);
+              ioniurbanv.push_back(us.rec.scaling);
+              ioniurbanv.push_back(us.cs);
+            }
           }
 
 
@@ -2257,8 +2423,23 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
             auto const defcorr = topology.localPosition(mpnull, pred) - topology.localPosition(mpnull);
 
-            const double hitx = preciseHit->localPosition().x() - defcorr.x();
-            const double hity = preciseHit->localPosition().y() - defcorr.y();
+            // Rung-E closure mode: fit the SIMULATED hit positions instead
+            // of the reconstructed cluster positions (assigned covariances
+            // unchanged, so the fit weighting is identical) -- removes the
+            // cluster-position (CPE) layer from the response, leaving only
+            // the propagator/fit itself. ONLY the measured coordinates are
+            // substituted: x for strips, x and y for pixels. The strip-y is
+            // unmeasured and reco puts it at the strip center by convention;
+            // substituting the true (cm-scale different) sim-y feeds the
+            // wedge-module local-polar variance conversion and de-syncs V
+            // from the registered dV blocks (found via the identity guard:
+            // 33% violations up to 9e3 before this restriction).
+            const bool usesimpos = fitSimHitPositions_ && simhit != nullptr;
+            const double hitxreco = preciseHit->localPosition().x() - defcorr.x();
+            const double hityreco = preciseHit->localPosition().y() - defcorr.y();
+            const double hitx = usesimpos ? simhit->localPosition().x() : hitxreco;
+            const double hity = (usesimpos && ispixel && !hit1d)
+                                          ? simhit->localPosition().y() : hityreco;
 
             double dxrecsimval = -99.;
             double dyrecsimval = -99.;
@@ -2322,14 +2503,33 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                 const double rdir = radialtopology->yAxisOrientation();
                 const double radius = radialtopology->originToIntersection();
 
-                const double phihit = rdir*std::atan2(hitx, rdir*hity + radius);
-                const double rhohit = std::sqrt(hitx*hitx + std::pow(rdir*hity + radius, 2));
+                // Wedge modules measure LOCAL PHI. In sim-position mode the
+                // residual must use the FULL sim phi (sim x AND sim y):
+                // mixing sim-x with the strip-center reco-y gives phi errors
+                // of order x*dy/r -- millimeters of arc (found as 5.8-sigma-
+                // wide mass pulls with a -40 MeV mean).
+                double phihit = rdir*std::atan2(hitx, rdir*hity + radius);
+                double rhohit = std::sqrt(hitx*hitx + std::pow(rdir*hity + radius, 2));
+                if (usesimpos) {
+                  const double lxs = simhit->localPosition().x();
+                  const double lys = simhit->localPosition().y();
+                  phihit = rdir*std::atan2(lxs, rdir*lys + radius);
+                  rhohit = std::sqrt(lxs*lxs + std::pow(rdir*lys + radius, 2));
+                }
 
-                // invert original calculation of covariance matrix to extract variance on polar angle
+                // invert original calculation of covariance matrix to extract
+                // variance on polar angle. The inversion MUST use the RECO
+                // hit phi: the CPE built xx = phierr2*c2i^2 + tan^2*radsigma
+                // around the reco position, so tt > 0 is only guaranteed
+                // there. With substituted sim positions (fitSimHitPositions)
+                // a sim-based tan(phi) can drive tt negative -> negative
+                // variance -> indefinite normal equations (found via the
+                // export identity guard + per-iteration dumps).
+                const double phihitreco = rdir*std::atan2(hitxreco, rdir*hityreco + radius);
                 const double detHeight = radialtopology->detHeight();
                 const double radsigma = detHeight*detHeight/12.;
 
-                const double t1 = std::tan(phihit);
+                const double t1 = std::tan(phihitreco);
                 const double t2 = t1*t1;
 
                 const double tt = preciseHit->localPositionError().xx() - t2*radsigma;
@@ -2476,6 +2676,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               SparseMatrix<double> &dV = dVs.emplace_back(ncons, ncons);
               dV.setFromTriplets(coeffs.begin(), coeffs.end());
               residxs.push_back(iparm + nlocalalignment);
+              resblockrng.push_back({{icons, ispixel ? 2u : 1u}});
+              resglobidx.push_back(xresglobalidx);
             }
             
             // local y resolution variation
@@ -2493,6 +2695,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               SparseMatrix<double> &dV = dVs.emplace_back(ncons, ncons);
               dV.setFromTriplets(coeffs.begin(), coeffs.end());
               residxs.push_back(iparm + nlocalalignment + 1);
+              resblockrng.push_back({{icons, 2u}});
+              resglobidx.push_back(yresglobalidx);
             }
 
             constexpr std::array<unsigned int, 6> alphaidxs = {{0, 2, 3, 4, 5, 1}};
@@ -3251,12 +3455,170 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     
     
     dxdparms = MatrixXd::Zero(nparsfinal, nstateparms);
-    
+
     dxdparms(Eigen::placeholders::all, freestateidxs) = -Cinvd.solve(VinvF.transpose()*Jsparse).transpose();
-    
-    
+
+    // ---- Kink finder: decay-in-flight score test -------------------------
+    // For each material step i, score the alternative hypothesis that the
+    // propagated state acquires an unconstrained offset delta =
+    // (dqop, ddxdz, ddydz) at the step end -- a decay kink plus momentum
+    // step. With the residual model r_i(delta) = dx0_i - S*delta (S selects
+    // components 0..2 of material block i), the chi2 gradient and
+    // state-marginalized Hessian w.r.t. delta at the converged fit are
+    //   g = -2 * Rr[block_i](0:3),   H = 2 * R[block_i, block_i](0:3, 0:3)
+    // giving dchisq = g^T H^+ g / 2 (~ chi2(3) under the null) and best-fit
+    // kink deltahat = -H^+ g, with no refit needed. The angle-only (2x2) and
+    // qop-only (1x1) sub-tests separate hard elastic scatters (angle, no
+    // momentum step) from decays (correlated angle + momentum step; for a
+    // decay deltahat_qop * q > 0, the daughter is softer). H is singular in
+    // directions the downstream hits cannot constrain (notably the last
+    // step), handled by an eigenvalue-thresholded pseudo-inverse: fully
+    // unconstrained directions contribute zero.
+    // These 3 pseudo-parameters per step are deliberately NOT registered in
+    // parmset/detidparms, so nothing leaks into the alignment-fit outputs
+    // (jacrefv/gradv/hesspacked).
+    if (doKinkFinder_) {
+      const unsigned int nsteps = kinkConsIdx.size();
+      kinkDchisq.assign(nsteps, 0.f);
+      kinkDchisqAngle.assign(nsteps, 0.f);
+      kinkDchisqQop.assign(nsteps, 0.f);
+      kinkDqop.assign(nsteps, 0.f);
+      kinkDxdz.assign(nsteps, 0.f);
+      kinkDydz.assign(nsteps, 0.f);
+      kinkGlobalR.assign(kinkStepR.begin(), kinkStepR.end());
+      kinkGlobalZ.assign(kinkStepZ.begin(), kinkStepZ.end());
+      kinkMax = -1.f;
+      kinkMaxLayer = -1;
+
+      // score test with pseudo-inverse: returns dchisq, fills deltahat
+      const auto kinkScore = [](const MatrixXd &H, const VectorXd &g, VectorXd &deltahat) -> double {
+        deltahat = VectorXd::Zero(g.size());
+        SelfAdjointEigenSolver<MatrixXd> eig(H);
+        const double lmax = eig.eigenvalues().cwiseMax(0.).maxCoeff();
+        if (!(lmax > 0.)) {
+          return 0.;
+        }
+        // Relative eigenvalue floor: directions this weakly constrained by
+        // the downstream hits carry no usable kink information, and keeping
+        // them amplifies noise as proj^2/lambda (observed as dchisq > total
+        // chi2 on ~3e-3 of ideal-geometry tracks at 1e-8).
+        const double thresh = 1e-6*lmax;
+        double dchisq = 0.;
+        for (Eigen::Index k = 0; k < eig.eigenvalues().size(); ++k) {
+          const double lambda = eig.eigenvalues()(k);
+          if (lambda > thresh) {
+            const double proj = eig.eigenvectors().col(k).dot(g);
+            dchisq += 0.5*proj*proj/lambda;
+            deltahat -= (proj/lambda)*eig.eigenvectors().col(k);
+          }
+        }
+        return dchisq;
+      };
+
+      for (unsigned int istep = 0; istep < nsteps; ++istep) {
+        const unsigned int r0 = kinkConsIdx[istep];
+
+        const MatrixXd H3 = 2.*R.block(r0, r0, 3, 3);
+        const VectorXd g3 = -2.*Rr.segment(r0, 3);
+        VectorXd d3;
+        kinkDchisq[istep] = kinkScore(H3, g3, d3);
+        kinkDqop[istep] = d3(0);
+        kinkDxdz[istep] = d3(1);
+        kinkDydz[istep] = d3(2);
+
+        const MatrixXd H2 = 2.*R.block(r0 + 1, r0 + 1, 2, 2);
+        const VectorXd g2 = -2.*Rr.segment(r0 + 1, 2);
+        VectorXd d2;
+        kinkDchisqAngle[istep] = kinkScore(H2, g2, d2);
+
+        const MatrixXd H1 = 2.*R.block(r0, r0, 1, 1);
+        const VectorXd g1 = -2.*Rr.segment(r0, 1);
+        VectorXd d1;
+        kinkDchisqQop[istep] = kinkScore(H1, g1, d1);
+
+        if (kinkDchisq[istep] > kinkMax) {
+          kinkMax = kinkDchisq[istep];
+          kinkMaxLayer = istep;
+        }
+      }
+
+      if (kinkInjectLayer_ >= 0) {
+        std::cout << "kink injection closure: injected layer " << kinkInjectLayer_
+                  << " delta = (" << kinkInjectDqop_ << ", " << kinkInjectDxdz_
+                  << ", " << kinkInjectDydz_ << ")";
+        if (kinkInjectLayer_ < int(nsteps)) {
+          std::cout << "  recovered deltahat = (" << kinkDqop[kinkInjectLayer_]
+                    << ", " << kinkDxdz[kinkInjectLayer_]
+                    << ", " << kinkDydz[kinkInjectLayer_] << ")"
+                    << "  dchisq(injected) = " << kinkDchisq[kinkInjectLayer_];
+        }
+        std::cout << "  kinkMax = " << kinkMax << " at layer " << kinkMaxLayer
+                  << " of " << nsteps << std::endl;
+      }
+    }
+    // ---- end kink finder -------------------------------------------------
+
     //additional contributions from resolution variations
-    
+
+    // exact block-eigenvalue export: eigenvalues of dV_b^{1/2} R_bb dV_b^{1/2}
+    // per resolution entry (leg). Small dense blocks (<= 5x5); descending,
+    // zero-padded to 5 floats. Offline validation: sum over the legs of a
+    // parameter of sum(lambda) reproduces its gradllv entry.
+    if (dores && fillTrackTree_ && (fillGrads_ || fillGradsFactored_)) {
+      // Influence of the noise on the 5 reference parameters:
+      // W5 = Vinv F C E5 (one solve with 5 RHS + one sparse matmul); zero
+      // in gen-frozen fits, where the reference state is not free and the
+      // noise never propagates to it.
+      MatrixXd W5 = MatrixXd::Zero(ncons, 5);
+      {
+        MatrixXd E5 = MatrixXd::Zero(nstatefree, 5);
+        bool anyfree = false;
+        for (unsigned int i = 0; i < nstatefree; ++i) {
+          if (freestateidxs[i] < 5) {
+            E5(i, freestateidxs[i]) = 1.;
+            anyfree = true;
+          }
+        }
+        if (anyfree) {
+          W5 = VinvF*Cinvd.solve(E5);
+        }
+      }
+      const VectorXd wqop = W5.col(0);
+
+      for (unsigned int ires = 0; ires < dVs.size(); ++ires) {
+        const unsigned int r0 = resblockrng[ires][0];
+        const unsigned int nb = resblockrng[ires][1];
+        const MatrixXd dVb = MatrixXd(dVs[ires]).block(r0, r0, nb, nb);
+        SelfAdjointEigenSolver<MatrixXd> eigv(dVb);
+        const MatrixXd sqrtdV = eigv.eigenvectors() *
+                                eigv.eigenvalues().cwiseMax(0.).cwiseSqrt().asDiagonal() *
+                                eigv.eigenvectors().transpose();
+        const MatrixXd B = sqrtdV * R.block(r0, r0, nb, nb) * sqrtdV;
+        SelfAdjointEigenSolver<MatrixXd> eigB(B);
+        reseigidx.push_back(resglobidx[ires]);
+        for (unsigned int j = 0; j < 5; ++j) {
+          reseigv.push_back(j < nb ? std::max(eigB.eigenvalues()(nb - 1 - j), 0.) : 0.f);
+        }
+        // influence-weight export, aligned with reseigidx: raw dof weights
+        // and the block's variance contribution to the fitted q/p
+        const double vb = wqop.segment(r0, nb).transpose() * dVb * wqop.segment(r0, nb);
+        resinfvarv.push_back(vb);
+        resinfcov += vb;
+        for (unsigned int j = 0; j < 5; ++j) {
+          resinfv.push_back(j < nb ? wqop(r0 + j) : 0.f);
+        }
+        // generalized functional export: B_b = M_b dV_b^{1/2} (5 x nb,
+        // row-major, dof-padded to 5); reuses sqrtdV from the eigenvalue
+        // block above
+        const MatrixXd Bb = W5.block(r0, 0, nb, 5).transpose() * sqrtdV;
+        for (unsigned int p = 0; p < 5; ++p) {
+          for (unsigned int j = 0; j < 5; ++j) {
+            resinfbv.push_back(j < nb ? Bb(p, j) : 0.f);
+          }
+        }
+      }
+    }
+
     std::vector<SparseMatrix<double>> dVRs;
     dVRs.reserve(dVs.size());
     
@@ -3517,8 +3879,12 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     
     gradchisqv.clear();
     gradchisqv.resize(nparsfinal, 0.);
-    
+
     Map<VectorXf>(gradchisqv.data(), nparsfinal) = grad.cast<float>();
+
+    gradllv.clear();
+    gradllv.resize(nparsfinal, 0.);
+    Map<VectorXf>(gradllv.data(), nparsfinal) = gradll.cast<float>();
     
     grad += gradll;
     

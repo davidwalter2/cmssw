@@ -102,6 +102,23 @@ opts.register('materialFDGroup', -1, VarParsing.VarParsing.multiplicity.singleto
 opts.register('materialFDEps', 1e-3, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.float,
               'epsilon for the material FD closure')
+opts.register('doKinkFinder', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'per-material-step decay-in-flight score test: store kinkDchisq* '
+              'vectors + kinkMax/kinkMaxLayer in the tree (default False)')
+opts.register('kinkInjectLayer', -1, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.int,
+              'closure test: inject a synthetic kink into the material residual '
+              'at this step index (-1 = off); the scan must recover it')
+opts.register('kinkInjectDqop', 0.0, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'injected q/p step [1/GeV] for the kink closure test')
+opts.register('kinkInjectDxdz', 0.0, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'injected dx/dz kink for the kink closure test')
+opts.register('kinkInjectDydz', 0.0, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'injected dy/dz kink for the kink closure test')
 opts.parseArguments()
 if not opts.scalarPot3DInitFile:
     raise SystemExit(
@@ -225,6 +242,11 @@ process.globalCor = cms.EDProducer(
     skipHitlessSurfaces=cms.bool(bool(opts.skipHitlessSurfaces) and bool(opts.globalMaterialModel)),
     materialFDGroup=cms.int32(int(opts.materialFDGroup)),
     materialFDEps=cms.double(float(opts.materialFDEps)),
+    doKinkFinder=cms.bool(bool(opts.doKinkFinder)),
+    kinkInjectLayer=cms.int32(int(opts.kinkInjectLayer)),
+    kinkInjectDqop=cms.double(float(opts.kinkInjectDqop)),
+    kinkInjectDxdz=cms.double(float(opts.kinkInjectDxdz)),
+    kinkInjectDydz=cms.double(float(opts.kinkInjectDydz)),
     outprefix=cms.untracked.string("globalcor_single"),
     # MT G4Error master (GlobalCache) -- owns the G4 world / master field.
     # Muon-only particle set: this driver refits muon tracks only.
