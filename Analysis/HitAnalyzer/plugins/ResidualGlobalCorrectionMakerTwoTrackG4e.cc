@@ -3397,8 +3397,12 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             break;
           }
 
-          const unsigned int idxplus = 0;
-          const unsigned int idxminus = 1;
+          // charge-ordered (was hardcoded 0/1, which made the charge-
+          // required gen matching fail for the ~50% of candidates whose
+          // first leg is the mu-; the constrained block below always
+          // ordered by charge)
+          const unsigned int idxplus = muchargearr[0] > 0 ? 0 : 1;
+          const unsigned int idxminus = muchargearr[0] > 0 ? 1 : 0;
           
           const ROOT::Math::PxPyPzMVector jpsitrkmom = mutrkarr[0] + mutrkarr[1];
           
