@@ -85,6 +85,13 @@ opts.register('pixelHitClassCorrections', False, VarParsing.VarParsing.multiplic
               'register the per-pixel-module pathology-class correction '
               'parameters (parmtypes 16-21) and emit their Jacobian '
               'columns; use with keepPixelEdgeHits=True pixelMinSizeX=1')
+opts.register('fillHitDiagnostics', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'store per-pixel-hit diagnostic branches (hitdiag_*)')
+opts.register('deweightPathoHits', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'deweight pathological pixel hits (x1e-6): unbiased hitdiag '
+              'residuals w.r.t. the clean-hit-anchored trajectory')
 opts.register('pixelMinSizeX', 2, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.int,
               'minimum pixel cluster size in x for a hit to stay in the fit '
@@ -255,6 +262,8 @@ process.globalCor = cms.EDProducer(
     keepPixelEdgeHits=cms.bool(bool(opts.keepPixelEdgeHits)),
     pixelMinSizeX=cms.int32(int(opts.pixelMinSizeX)),
     pixelHitClassCorrections=cms.bool(bool(opts.pixelHitClassCorrections)),
+    fillHitDiagnostics=cms.bool(bool(opts.fillHitDiagnostics)),
+    deweightPathoHits=cms.bool(bool(opts.deweightPathoHits)),
     doVtxConstraint=cms.bool(False),
     doMassConstraint=cms.bool(bool(opts.doMassConstraint)),
     massConstraint=cms.double(3.0969),
