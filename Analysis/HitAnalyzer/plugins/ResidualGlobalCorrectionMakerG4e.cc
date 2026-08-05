@@ -760,6 +760,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     genZ = -99.;
     genParms.fill(0.);
     genl3d = -99.;
+    simPabsFirst = -99.;
+    simPabsLast = -99.;
     
     int genBarcode = -99;
     
@@ -2445,6 +2447,12 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             double dyrecsimval = -99.;
 
             if (simhit != nullptr) {
+              // fit-transmission export: pabs at the first/last matched
+              // sim hit = the track's true in-tracker momentum profile
+              if (simPabsFirst < 0.) {
+                simPabsFirst = simhit->pabs();
+              }
+              simPabsLast = simhit->pabs();
               dxrecsimval = hitx - simhit->localPosition().x();
               dyrecsimval = hity - simhit->localPosition().y();
             }

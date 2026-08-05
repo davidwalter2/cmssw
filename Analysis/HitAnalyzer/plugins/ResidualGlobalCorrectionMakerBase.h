@@ -628,6 +628,11 @@ protected:
   float Pileup_nTrueInt = 0.;
 
   float genl3d = -99.;
+  // fit-transmission study: true momentum (pabs, GeV) at the FIRST and
+  // LAST sim hit matched along the trajectory (doSim); the difference is
+  // the track's true in-tracker energy loss
+  float simPabsFirst = -99.;
+  float simPabsLast = -99.;
   
   std::vector<float> gradchisqv;
   // log-det trace term nu = tr(dV_i R) per parameter, stored DIRECTLY so

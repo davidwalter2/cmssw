@@ -442,6 +442,8 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
     tree->Branch("Pileup_nTrueInt", &Pileup_nTrueInt);
 
     tree->Branch("genl3d", &genl3d);
+    tree->Branch("simPabsFirst", &simPabsFirst);
+    tree->Branch("simPabsLast", &simPabsLast);
     
     nParms = 0.;
 
