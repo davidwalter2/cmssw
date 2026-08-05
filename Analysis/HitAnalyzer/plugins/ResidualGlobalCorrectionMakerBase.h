@@ -552,7 +552,6 @@ protected:
   // pathological hits are actually in the fit. Default false = catalog
   // unchanged.
   bool pixelHitClassCorrections_ = false;
-  int genMatchPdgId_ = 13;
 
   // Physics parameterization of the local-x drift effects: replace the
   // empirical parmtypes 16 (edge-x-mean) and 20 (sizeX1) with a single

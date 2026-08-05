@@ -191,11 +191,6 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   pixelMinSizeX_ = iConfig.existsAs<int>("pixelMinSizeX")
       ? iConfig.getParameter<int>("pixelMinSizeX") : 2;
   // |pdgId| used by the single-track gen matching (doGen); default muon.
-  // Set to 211/321/2212 for the pion/kaon/proton closure drivers -- the
-  // TkAlJpsiX MC track collection contains the other B daughters.
-  genMatchPdgId_ = iConfig.existsAs<int>("genMatchPdgId")
-      ? iConfig.getParameter<int>("genMatchPdgId") : 13;
-
   pixelHitClassCorrections_ = iConfig.existsAs<bool>("pixelHitClassCorrections")
       ? iConfig.getParameter<bool>("pixelHitClassCorrections") : false;
   pixelLorentzParam_ = iConfig.existsAs<bool>("pixelLorentzParam")
