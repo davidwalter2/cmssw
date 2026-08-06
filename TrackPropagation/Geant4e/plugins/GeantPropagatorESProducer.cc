@@ -38,5 +38,12 @@ std::unique_ptr<Propagator> GeantPropagatorESProducer::produce(const TrackingCom
     dir = anyDirection;
   }
 
-  return std::make_unique<Geant4ePropagator>(&(iRecord.get(magFieldToken_)), particleName, dir, plimit_, forCVH_);
+  // Delta-electron truncation of the ionization variance; optional so
+  // hand-written PSets predating the parameter keep working.
+  const double ioniTruncAlpha = pset_.existsAs<double>("IoniTruncationAlpha")
+                                    ? pset_.getParameter<double>("IoniTruncationAlpha")
+                                    : 0.999;
+
+  return std::make_unique<Geant4ePropagator>(
+      &(iRecord.get(magFieldToken_)), particleName, dir, plimit_, forCVH_, ioniTruncAlpha);
 }

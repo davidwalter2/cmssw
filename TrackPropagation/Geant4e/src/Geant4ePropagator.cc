@@ -79,13 +79,18 @@ namespace {
 
 /** Constructor.
  */
-Geant4ePropagator::Geant4ePropagator(
-    const MagneticField *field, std::string particleName, PropagationDirection dir, double plimit, bool forCVH)
+Geant4ePropagator::Geant4ePropagator(const MagneticField *field,
+                                     std::string particleName,
+                                     PropagationDirection dir,
+                                     double plimit,
+                                     bool forCVH,
+                                     double ioniTruncAlpha)
     : Propagator(dir),
       theField(field),
       theParticleName(particleName),
       plimit_(plimit),
-      forCVH_(forCVH) {
+      forCVH_(forCVH),
+      ioniTruncAlpha_(ioniTruncAlpha) {
   LogDebug("Geant4e") << "Geant4e Propagator initialized";
 
   // G4 init is deferred: in MT mode the ESProducer's produce() runs eagerly
@@ -116,7 +121,10 @@ Geant4ePropagator::Geant4ePropagator(const Geant4ePropagator &other)
       theField(other.theField),
       theParticleName(other.theParticleName),
       plimit_(other.plimit_),
-      forCVH_(other.forCVH_) {
+      forCVH_(other.forCVH_),
+      ioniTruncAlpha_(other.ioniTruncAlpha_),
+      ioniStepLogging_(other.ioniStepLogging_),
+      stepTransportLogging_(other.stepTransportLogging_) {
   // fluct allocation is deferred to the first propagate() call on this
   // thread (under geant4eInitMutex), AFTER the per-thread G4 world has
   // been set up by CvhWorker. Allocating it eagerly in the deep-copy ctor
@@ -418,6 +426,7 @@ std::pair<TrajectoryStateOnSurface, double> Geant4ePropagator::propagateGeneric(
     const G4ParticleDefinition *partdef =
         G4ParticleTable::GetParticleTable()->FindParticle(generateParticleName(1));
     fluct->SetParticleAndCharge(partdef, 1.);
+    fluct->SetIoniTruncationAlpha(ioniTruncAlpha_);
   }
   auto *theG4eManager = G4ErrorPropagatorManager::GetErrorPropagatorManager();
   auto *theG4eData = G4ErrorPropagatorData::GetErrorPropagatorData();
@@ -635,6 +644,17 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
                                                     std::vector<Eigen::Matrix<double, 5, 1>> *modeJacOut) const {
   using namespace Eigen;
 
+  // Urban + Moliere step logs: one propagate call = one leg; clearing here
+  // keeps the logs in sync with the call whose noise matrices the caller
+  // consumes.
+  if (ioniStepLogging_) {
+    ioniStepLog_.clear();
+    msStepLog_.clear();
+  }
+  if (stepTransportLogging_) {
+    stepTransportLog_.clear();
+  }
+
   // Deferred per-thread Geant4e init under mutex (see propagateGeneric).
   if (!geant4eInitDoneForThread()) {
     std::lock_guard<std::mutex> lk(geant4eInitMutex());
@@ -663,6 +683,7 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
     const G4ParticleDefinition *partdef =
         G4ParticleTable::GetParticleTable()->FindParticle(generateParticleName(1));
     fluct->SetParticleAndCharge(partdef, 1.);
+    fluct->SetIoniTruncationAlpha(ioniTruncAlpha_);
   }
   auto *theG4eManager = G4ErrorPropagatorManager::GetErrorPropagatorManager();
   auto *theG4eData = G4ErrorPropagatorData::GetErrorPropagatorData();
@@ -990,6 +1011,25 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
     const double X0 = mate->GetRadlen() / CLHEP::cm;
     RItotal += msfact * thisPathLength / X0;
 
+    if (ioniStepLogging_ && thisPathLength > 0.) {
+      const G4Track *trk = g4eTrajState.GetG4Track();
+      const double pGeV = (pforced > 0. ? pforced : trk->GetMomentum().mag() / CLHEP::GeV);
+      const double mass = trk->GetDynamicParticle()->GetMass() / CLHEP::GeV;
+      const double beta = pGeV / std::sqrt(pGeV * pGeV + mass * mass);
+      MoliereMsStep ms;
+      CalculateEffectiveZandA(mate, ms.effZ, ms.effA);
+      // areal density rho*d in g/cm^2 (GetDensity in G4 internal units)
+      ms.xg = (mate->GetDensity() / (CLHEP::g / CLHEP::cm3)) * thisPathLength;
+      ms.pGeV = pGeV;
+      ms.beta = beta;
+      // projected-angle variance as it enters Q (post-msfact):
+      // curvilinear (qop, lambda, phi, yT, zT) -> (lambda, lambda)
+      ms.thp2 = errMSIout(1, 1);
+      ms.dOverX0 = thisPathLength / X0;
+      ms.stepGroup = stepGroup;
+      msStepLog_.push_back(ms);
+    }
+
     const double ionifact = std::exp(dioni) * matStepFact;
 
     errMSIout(0, 0) = ionifact * computeErrorIoni(g4eTrajState.GetG4Track(), pforced);
@@ -1004,6 +1044,17 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
 
     // transport  + nominal energy loss contribution to jacobian
     jac = (transportJac.leftCols<5>() * jac).eval();
+
+    // Per-step cumulative transport, logged AFTER the update so that it is
+    // the transport from the leg start to the point where this step's noise
+    // was just injected into g4errorEnd/dQ/dQ2 above (see StepTransport).
+    if (stepTransportLogging_) {
+      StepTransport st;
+      Map<Matrix<double, 5, 5, RowMajor>>(st.jacc) = jac.leftCols<5>();
+      st.nMs = static_cast<int>(msStepLog_.size());
+      st.nIoni = static_cast<int>(ioniStepLog_.size());
+      stepTransportLog_.push_back(st);
+    }
 
     //TODO assess relevance of approximations (does the order matter? position/momentum before or after step?)
     //b-field (dBx, dBy, dBz) and material (dxi) contributions to jacobian
@@ -1182,6 +1233,12 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
 
     jac.leftCols<5>() = (Pflip * jac.leftCols<5>() * Pflip).eval();
     jac.rightCols<4>() = (Pflip * jac.rightCols<4>()).eval();
+    // the cumulative per-step transports carry one index in the leg-start
+    // frame and one in the step frame, so they flip on both sides like jac
+    for (auto &st : stepTransportLog_) {
+      Map<Matrix<double, 5, 5, RowMajor>> m(st.jacc);
+      m = (Pflip * m * Pflip).eval();
+    }
     // per-group dxi columns transform like the integrated dxi column
     if (groupJacOut != nullptr) {
       for (auto &gc : *groupJacOut) {
@@ -1483,6 +1540,15 @@ double Geant4ePropagator::computeErrorIoni(const G4Track *aTrack, double pforced
       1e-6 * fluct->SampleFluctuations(mate, aTrack->GetDynamicParticle(), Emaxmev, stepLengthmm, ekinmev);
 
   G4double dedxSq = dedxsqurban;
+
+  if (ioniStepLogging_ && fluct->lastRecordValid()) {
+    const double etotGeV = aTrack->GetTotalEnergy() / CLHEP::GeV;
+    const double pGeV = aTrack->GetStep()->GetPreStepPoint()->GetMomentum().mag() / CLHEP::GeV;
+    UrbanIoniStep stepRec;
+    stepRec.rec = fluct->lastRecord();
+    stepRec.cs = etotGeV / (pGeV * pGeV * pGeV);
+    ioniStepLog_.push_back(stepRec);
+  }
 
 #ifdef G4EVERBOSE
   if (iverbose >= 2)

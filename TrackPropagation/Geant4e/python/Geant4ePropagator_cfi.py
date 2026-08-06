@@ -19,5 +19,11 @@ Geant4ePropagator = cms.ESProducer("GeantPropagatorESProducer",
                                    ParticleName=cms.string("mu"),
                                    PropagationPtotLimit = cms.double(1.0), ## GeV/c
                                    MagneticFieldLabel = cms.string(""),
-                                   ForCVH=cms.bool(False)
+                                   ForCVH=cms.bool(False),
+                                   # CDF fraction of the delta-electron spectrum kept in the
+                                   # truncated ionization variance (G4UniversalFluctuationFor-
+                                   # Extrapolator). 0.999 = historical CVH baseline. Scanned by
+                                   # the resolution-closure diagnostic (0.995-0.999): fitted
+                                   # resolution parameters must not depend on it.
+                                   IoniTruncationAlpha=cms.double(0.999)
                                    )

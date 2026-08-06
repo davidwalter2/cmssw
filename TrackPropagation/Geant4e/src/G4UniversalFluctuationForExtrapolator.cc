@@ -305,6 +305,7 @@ G4double G4UniversalFluctuationForExtrapolator::SampleFluctuations2(const G4Mate
 
 G4double G4UniversalFluctuationForExtrapolator::SampleFluctuations(
     const G4Material* material, const G4DynamicParticle* dp, G4double tmax, G4double length, G4double ekin) {
+  recordValid_ = false;
   // Calculate actual loss from the mean loss.
   // The model used to get the fluctuations is essentially the same
   // as in Glandz in Geant3 (Cern program library W5013, phys332).
@@ -353,6 +354,10 @@ G4double G4UniversalFluctuationForExtrapolator::SampleFluctuations(
 
       // thick target case
       if (sn >= 2.0) {
+        record_ = UrbanFluctRecord{};
+        record_.regime = 0;
+        record_.gsig2 = siga * siga;
+        recordValid_ = true;
         return siga * siga;
 
         G4double twomeanLoss = meanLoss + meanLoss;
@@ -364,6 +369,10 @@ G4double G4UniversalFluctuationForExtrapolator::SampleFluctuations(
         // Gamma distribution
       } else {
         G4double neff = sn * sn;
+        record_ = UrbanFluctRecord{};
+        record_.regime = 0;
+        record_.gsig2 = meanLoss * meanLoss / neff;
+        recordValid_ = true;
         return meanLoss * meanLoss / neff;
         loss = meanLoss;
       }
@@ -469,8 +478,7 @@ G4double G4UniversalFluctuationForExtrapolator::SampleFluctuations(
     G4double w2 = alfa * e0;
     if (tmax > w2) {
       G4double w = (tmax - w2) / tmax;
-      const double alpha = 0.999;
-      const double ualpha = alpha;
+      const double ualpha = ioniTruncAlpha_;
       const double f = -std::log(1. - ualpha * w) * w2 / w;
       const double f2 = ualpha * w2 * w2 / (1. - ualpha * w);
       const double sigf2 = f2 - f * f;
@@ -485,6 +493,28 @@ G4double G4UniversalFluctuationForExtrapolator::SampleFluctuations(
 
   loss *= scaling;
   esig2tot *= scaling * scaling;
+
+  // record the underlying (untruncated) Urban model of this step: Poisson
+  // excitations (a1,e1), (a2,e2) plus a3 delta collisions on the 1/E^2
+  // spectrum [e0, tmax]. The alfa/namean split and the ualpha truncation
+  // above are numerical evaluation devices for the returned variance, NOT
+  // part of the model, so they are deliberately not recorded.
+  record_ = UrbanFluctRecord{};
+  record_.regime = 1;
+  // gsig2 in the Glandz regime = the RETURNED (alpha-truncated) variance:
+  // the offline CF fit uses it to reproduce the exact standardization the
+  // track fit applied, so sigma-replica errors cannot leak into the fitted
+  // material scale.
+  record_.gsig2 = esig2tot;
+  record_.a1 = a1;
+  record_.e1 = e1;
+  record_.a2 = a2;
+  record_.e2 = e2;
+  record_.a3 = a3;
+  record_.e0r = e0;
+  record_.tmaxr = tmax;
+  record_.scaling = scaling;
+  recordValid_ = true;
 
   return esig2tot;
 }

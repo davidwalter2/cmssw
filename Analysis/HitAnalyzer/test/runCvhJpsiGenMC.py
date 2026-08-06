@@ -93,6 +93,31 @@ opts.register('fillGrads', False, VarParsing.VarParsing.multiplicity.singleton,
 opts.register('fillGradsFactored', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'store per-event gradient + low-rank factored Hessian (H = B^T B)')
+opts.register('doTrigger', True, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'read TriggerResults::HLT (off for private samples without HLT)')
+opts.register('doVtxConstraint', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'apply the common-vertex constraint in the two-track fit')
+opts.register('doSimHits', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'read tracker PSimHits (input must retain them)')
+opts.register('fitSimHitPositions', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'rung-E closure: fit simulated hit positions (measured '
+              'coordinates only, covariances unchanged); needs doSimHits=True')
+opts.register('propagationPtotLimit', 0.2, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'G4e propagation momentum floor [GeV]; cfi default was 1.0')
+opts.register('doRes', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'register resolution families and export the per-candidate '
+              'mass-CF ingredients (dV blocks, step records, mass-projected '
+              'influence weights)')
+opts.register('trackSrc', 'ALCARECOTkAlJpsiX', VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.string,
+              'input track collection (ALCARECOTkAlJpsiMuMu for the standard '
+              'TkAl ALCARECO of the JPsiToMuMu MC; pair with useLegacyPairLoop=True)')
 opts.register('doMassConstraint', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool, 'apply J/psi mass constraint in the two-track fit')
 opts.register('useIdealGeometry', False, VarParsing.VarParsing.multiplicity.singleton,
@@ -300,7 +325,7 @@ process.hltFilter = cms.EDFilter(
 
 process.globalCor = cms.EDProducer(
     "ResidualGlobalCorrectionMakerTwoTrackG4e",
-    src=cms.InputTag("ALCARECOTkAlJpsiX"),
+    src=cms.InputTag(opts.trackSrc),
     fitFromGenParms=cms.bool(bool(opts.fitFromGenParms)),
     fitFromSimParms=cms.bool(False),
     fillTrackTree=cms.bool(True),
@@ -314,14 +339,15 @@ process.globalCor = cms.EDProducer(
     doGen=cms.bool(True),
     genParticles=cms.InputTag("genParticles"),
     pileupInfo=cms.InputTag("addPileupInfo"),
-    doSim=cms.bool(False),
+    doSim=cms.bool(bool(opts.doSimHits)),
+    fitSimHitPositions=cms.untracked.bool(bool(opts.fitSimHitPositions)),
     # Gen matching (dR < 0.1, same charge, status-1 muons) is required both
     # to anchor fitFromGenParms and to reject combinatorial pairs.
     requireGen=cms.bool(True),
     doMuons=cms.bool(False),
     doMuonAssoc=cms.bool(False),
-    doTrigger=cms.bool(True),
-    doRes=cms.bool(False),
+    doTrigger=cms.bool(bool(opts.doTrigger)),
+    doRes=cms.bool(bool(opts.doRes)),
     useIdealGeometry=cms.bool(bool(opts.useIdealGeometry)),
     bsConstraint=cms.bool(False),
     applyHitQuality=cms.bool(True),
@@ -336,7 +362,7 @@ process.globalCor = cms.EDProducer(
     lorentzWedge=cms.double(float(opts.lorentzWedge)),
     injectLorentzTan=cms.double(float(opts.injectLorentzTan)),
     injectLorentzWclean=cms.double(float(opts.injectLorentzWclean)),
-    doVtxConstraint=cms.bool(False),
+    doVtxConstraint=cms.bool(bool(opts.doVtxConstraint)),
     doMassConstraint=cms.bool(bool(opts.doMassConstraint)),
     massConstraint=cms.double(3.0969),
     massConstraintWidth=cms.double(1e-5),
@@ -439,6 +465,7 @@ process.cvhMasterESProducer.MagneticFieldLabel = cms.string(fieldlabel)
 # fluct->table on the first event.
 process.Geant4ePropagator.ForCVH = cms.bool(True)
 process.Geant4ePropagator.PropagationDirection = cms.string(opts.propagationDirection)
+process.Geant4ePropagator.PropagationPtotLimit = cms.double(float(opts.propagationPtotLimit))
 process.globalCor.MagneticFieldLabel = cms.string(fieldlabel)
 
 # geopro is removed: CvhMasterThread (residual-maker GlobalCache) now

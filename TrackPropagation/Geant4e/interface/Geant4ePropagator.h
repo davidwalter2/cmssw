@@ -39,7 +39,8 @@ public:
                     std::string particleName = "mu",
                     PropagationDirection dir = alongMomentum,
                     double plimit = 1.0,
-                    bool forCVH = false);
+                    bool forCVH = false,
+                    double ioniTruncAlpha = 0.999);
 
   ~Geant4ePropagator() override;
 
@@ -126,6 +127,72 @@ public:
   static void CalculateEffectiveZandA(const G4Material *mate, G4double &effZ, G4double &effA);
 
   bool GetForCVH() const { return forCVH_; }
+
+  // Per-step Urban-model log for the physics-CF export (doRes): one entry
+  // per Geant4 step that produced a nonzero ionization-fluctuation
+  // contribution during the LAST propagateGenericWithJacobianAltD call
+  // (cleared at entry when logging is enabled). cs = Etot/p^3 [GeV^-2] is
+  // the linear map from the step's energy loss (record energies in MeV) to
+  // the local q/p noise: delta(q/p) = cs * 1e-3 * dE[MeV].
+  struct UrbanIoniStep {
+    G4UniversalFluctuationForExtrapolator::UrbanFluctRecord rec;
+    double cs = 0.;
+  };
+  void setIoniStepLogging(bool on) { ioniStepLogging_ = on; }
+  const std::vector<UrbanIoniStep> &ioniStepLog() const { return ioniStepLog_; }
+
+  // Phase B: per-step raw material/kinematic data for the offline Moliere
+  // (screened-Rutherford compound-Poisson) model of the multiple-scattering
+  // tail. Deliberately raw -- chi_c^2 / screening-angle formulas and the CF
+  // live offline where they can be iterated without rebuilds.
+  //   effZ, effA : effective Z, A of the step material
+  //   xg         : areal density rho*d of the step [g/cm^2]
+  //   pGeV, beta : momentum [GeV] and velocity at the step
+  //   thp2       : projected-angle variance ACTUALLY entering Q for this
+  //                step (incl. msfact), i.e. errMSIout(lambda,lambda)
+  //   dOverX0    : step thickness in radiation lengths
+  // Gated by the same setIoniStepLogging flag and cleared per propagate
+  // call together with the Urban log.
+  struct MoliereMsStep {
+    double effZ = 0., effA = 0., xg = 0.;
+    double pGeV = 0., beta = 0.;
+    double thp2 = 0., dOverX0 = 0.;
+    // material-group id of the step (MaterialGroupModel::classify; -1 when
+    // no global material model is active) -- lets the offline fit tie the
+    // MS scale to the parmtype-15 material groups
+    int stepGroup = -1;
+  };
+  const std::vector<MoliereMsStep> &msStepLog() const { return msStepLog_; }
+
+  // Per-step cumulative transport Jacobian, for the clean-propagation-test
+  // model (Analysis/HitAnalyzer/plugins/G4ePropagationExport.cc).
+  //
+  // The step loop transports the accumulated noise and THEN adds the step's
+  // own contribution, so the noise generated at step s is subsequently
+  // transported by steps s+1..N only. Writing Jacc_s for the cumulative
+  // transport from the leg start through the end of step s (the point where
+  // n_s is injected), the exact transport of that noise to the end of the
+  // leg is
+  //     A_s = Jacc_N * Jacc_s^{-1}
+  // which offline turns the per-step Urban/Moliere records into EXACT
+  // per-step weights for any linear functional of the final state -- as
+  // opposed to the RMS-matched scalar weight per pooled block that the fit
+  // exports (resinfv) have to use. That distinction matters precisely in the
+  // tails, which is what the clean test exists to probe.
+  //
+  // One entry per Geant4 step, unconditionally, so that nMs/nIoni (the sizes
+  // of the two physics logs AFTER this step) give an unambiguous mapping
+  // from a physics-log index back to its step: physics entry j belongs to the
+  // first step whose n exceeds j. Separate flag and separate storage from the
+  // Urban/Moliere logs so that existing consumers of those records see no
+  // change in layout.
+  struct StepTransport {
+    double jacc[25] = {0.};  // cumulative 5x5 (row-major), curvilinear
+    int nMs = 0;
+    int nIoni = 0;
+  };
+  void setStepTransportLogging(bool on) { stepTransportLogging_ = on; }
+  const std::vector<StepTransport> &stepTransportLog() const { return stepTransportLog_; }
 
 private:
   typedef std::pair<TrajectoryStateOnSurface, double> TsosPP;
@@ -244,6 +311,20 @@ private:
   // the G4 navigator's world had not yet been set up by CvhWorker.
   mutable G4UniversalFluctuationForExtrapolator *fluct = nullptr;
   bool forCVH_ = false;
+
+  // ionization-variance truncation passed through to fluct (see
+  // G4UniversalFluctuationForExtrapolator::SetIoniTruncationAlpha)
+  double ioniTruncAlpha_ = 0.999;
+
+  // Urban step logging (see setIoniStepLogging); log is mutable because
+  // computeErrorIoni is const.
+  bool ioniStepLogging_ = false;
+  mutable std::vector<UrbanIoniStep> ioniStepLog_;
+  mutable std::vector<MoliereMsStep> msStepLog_;
+
+  // per-step cumulative transport Jacobian log (see setStepTransportLogging)
+  bool stepTransportLogging_ = false;
+  mutable std::vector<StepTransport> stepTransportLog_;
 };
 
 #endif

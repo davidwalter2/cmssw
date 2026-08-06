@@ -175,18 +175,22 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   doGen_ = iConfig.getParameter<bool>("doGen");
   requireGen_ = iConfig.getParameter<bool>("requireGen");
   doSim_ = iConfig.getParameter<bool>("doSim");
+  fitSimHitPositions_ = iConfig.getUntrackedParameter<bool>("fitSimHitPositions", false);
   bsConstraint_ = iConfig.getParameter<bool>("bsConstraint");
   applyHitQuality_ = iConfig.getParameter<bool>("applyHitQuality");
+  genMatchPdgId_ = iConfig.existsAs<int>("genMatchPdgId")
+      ? iConfig.getParameter<int>("genMatchPdgId") : 13;
+  // Relative pT window of the gen match (|pt_gen - pt_reco| < window * pt_gen).
+  // Default 0.5 = legacy. Decay-in-flight studies must LOOSEN this: a
+  // K->mu nu daughter carries as little as 5% of the kaon momentum, so the
+  // 0.5 window silently removes decayed kaons from a requireGen sample.
+  genMatchPtWindow_ = iConfig.existsAs<double>("genMatchPtWindow")
+      ? iConfig.getParameter<double>("genMatchPtWindow") : 0.5;
   keepPixelEdgeHits_ = iConfig.existsAs<bool>("keepPixelEdgeHits")
       ? iConfig.getParameter<bool>("keepPixelEdgeHits") : false;
   pixelMinSizeX_ = iConfig.existsAs<int>("pixelMinSizeX")
       ? iConfig.getParameter<int>("pixelMinSizeX") : 2;
   // |pdgId| used by the single-track gen matching (doGen); default muon.
-  // Set to 211/321/2212 for the pion/kaon/proton closure drivers -- the
-  // TkAlJpsiX MC track collection contains the other B daughters.
-  genMatchPdgId_ = iConfig.existsAs<int>("genMatchPdgId")
-      ? iConfig.getParameter<int>("genMatchPdgId") : 13;
-
   pixelHitClassCorrections_ = iConfig.existsAs<bool>("pixelHitClassCorrections")
       ? iConfig.getParameter<bool>("pixelHitClassCorrections") : false;
   pixelLorentzParam_ = iConfig.existsAs<bool>("pixelLorentzParam")
@@ -402,8 +406,26 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
 // tree->Branch("globalidxv", globalidxv.data(), "globalidxv[nParms]/i", basketSize);
     tree->Branch("globalidxv", &globalidxvfinal, basketSize);
     
-    if (fillJac_) {
+    // gradchisqv (gradient of the chi2 term alone, i.e. gradv MINUS the
+    // log-det/normalisation term gradll) is also needed with fillGrads when
+    // resolution parameters are active: nu = gradv - gradchisqv is the
+    // per-parameter trace term used by the censored-likelihood correction
+    // in fit_global_grads.py (--censor-cut).
+    if (fillJac_ || fillGrads_ || fillGradsFactored_) {
       tree->Branch("gradchisqv", &gradchisqv);
+      tree->Branch("gradllv", &gradllv);
+    }
+    if (doRes_ && (fillGrads_ || fillGradsFactored_)) {
+      tree->Branch("ioniurbanidx", &ioniurbanidx);
+      tree->Branch("ioniurbanv", &ioniurbanv);
+      tree->Branch("msmoliidx", &msmoliidx);
+      tree->Branch("msmoliv", &msmoliv);
+      tree->Branch("reseigidx", &reseigidx);
+      tree->Branch("reseigv", &reseigv);
+      tree->Branch("resinfv", &resinfv);
+      tree->Branch("resinfvarv", &resinfvarv);
+      tree->Branch("resinfcov", &resinfcov);
+      tree->Branch("resinfbv", &resinfbv);
     }
 
     
@@ -452,6 +474,8 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
     tree->Branch("Pileup_nTrueInt", &Pileup_nTrueInt);
 
     tree->Branch("genl3d", &genl3d);
+    tree->Branch("simPabsFirst", &simPabsFirst);
+    tree->Branch("simPabsLast", &simPabsLast);
     
     nParms = 0.;
 

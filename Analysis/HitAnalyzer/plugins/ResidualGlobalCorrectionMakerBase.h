@@ -522,12 +522,18 @@ protected:
   
   bool doGen_;
   bool doSim_;
+  // Rung-E closure: substitute simulated hit positions for cluster
+  // positions in the fit (needs doSim=True for the sim-hit matching)
+  bool fitSimHitPositions_ = false;
   bool doMuons_;
   bool requireGen_;
   
   bool bsConstraint_;
   
   bool applyHitQuality_;
+
+  int genMatchPdgId_ = 13;
+  double genMatchPtWindow_ = 0.5;
 
   // Keep pixel hits whose cluster touches the sensor boundary (isOnEdge) in
   // the fit instead of demoting them to inactive. The sizeX CPE-quality
@@ -546,7 +552,6 @@ protected:
   // pathological hits are actually in the fit. Default false = catalog
   // unchanged.
   bool pixelHitClassCorrections_ = false;
-  int genMatchPdgId_ = 13;
 
   // Physics parameterization of the local-x drift effects: replace the
   // empirical parmtypes 16 (edge-x-mean) and 20 (sizeX1) with a single
@@ -669,9 +674,69 @@ protected:
   float Pileup_nTrueInt = 0.;
 
   float genl3d = -99.;
+  // fit-transmission study: true momentum (pabs, GeV) at the FIRST and
+  // LAST sim hit matched along the trajectory (doSim); the difference is
+  // the track's true in-tracker energy loss
+  float simPabsFirst = -99.;
+  float simPabsLast = -99.;
   
   std::vector<float> gradchisqv;
-  
+  // log-det trace term nu = tr(dV_i R) per parameter, stored DIRECTLY so
+  // small values (ionization: nu ~ 1e-7) keep full relative precision --
+  // the offline reconstruction gradv - gradchisqv loses them to float32
+  // cancellation. Nonzero only for resolution parameters (doRes).
+  std::vector<float> gradllv;
+
+  // Physics-CF export (doRes + grads): per Geant4 step with a nonzero
+  // ionization-fluctuation contribution, the Urban-model compound-Poisson
+  // parameters + the q/p mapping coefficient, tagged by the parmtype-11
+  // global parameter index of the leg. 11 floats per step:
+  // [regime, gsig2, a1, e1, a2, e2, a3, e0, tmax, scaling, cs]
+  // (energies MeV; cs = Etot/p^3 in GeV^-2, see Geant4ePropagator).
+  std::vector<unsigned int> ioniurbanidx;
+  std::vector<float> ioniurbanv;
+
+  // Phase B analogue for multiple scattering: per Geant4 step, raw
+  // material/kinematic data for the offline Moliere compound-Poisson tail
+  // model, tagged by the parmtype-10 global parameter index of the leg.
+  // 8 floats per step: [effZ, effA, x(g/cm2), p(GeV), beta,
+  // thp2-as-in-Q, d/X0, materialGroup] (see Geant4ePropagator::MoliereMsStep).
+  std::vector<unsigned int> msmoliidx;
+  std::vector<float> msmoliv;
+
+  // Per resolution entry (leg), the exact eigenvalues of the block
+  // quadratic form dV_b^{1/2} R_bb dV_b^{1/2} (descending, zero-padded to
+  // 5), tagged by the entry's global parameter index. Replaces the
+  // two-moment r_eff approximation in the offline CF fits and breaks the
+  // k/s_est degeneracy. Validation: sum over legs of sum(lambda) equals
+  // the parameter's gradllv entry.
+  std::vector<unsigned int> reseigidx;
+  std::vector<float> reseigv;
+
+  // q/p influence weights: the linearized-fit response to the noise vector
+  // n is delta x_ref = C F^T Vinv n, so the q/p row w = (C e_qop)^T F^T Vinv
+  // decomposes the fitted q/p error into independent per-block noise
+  // contributions delta(q/p) = sum_b w_b^T n_b. Per resolution entry
+  // (aligned with reseigidx): resinfv = the raw dof weights w_b in fit
+  // units (zero-padded to 5), resinfvarv = the variance contribution
+  // w_b^T dV_b w_b. resinfcov = sum_b resinfvarv, which equals refCov(0,0)
+  // exactly when every noise block carries a resolution entry (coverage
+  // check for the per-track CF-product resolution prediction).
+  std::vector<float> resinfv;
+  std::vector<float> resinfvarv;
+  float resinfcov = 0.;
+
+  // Generalized influence export: per resolution entry the 5x5 (row-major,
+  // dof-padded) matrix B_b = M_b dV_b^{1/2}, where M_b (5 x nb) is the
+  // response of the 5 reference parameters to the block's noise dofs.
+  // For ANY linear functional a of the reference state (mass Jacobian,
+  // pT, ...), the block's signed noise weights are a^T B_b (in
+  // dV^{1/2}-standardized units) and sum_b |a^T B_b|^2 = a^T C a exactly
+  // (per-candidate identity against refCov). Signs preserve the Landau
+  // skew of the ionization contribution.
+  std::vector<float> resinfbv;
+
+
   TH2D *hetaphi = nullptr;
 
   std::string outprefix;
