@@ -135,6 +135,28 @@ struct ArmOut {
   float vchi2 = -99.f, vndof = -99.f, vprob = -99.f;
   int ok = 0;
   float mmVtxProb = -99.f, mmAlphaBS = -99.f, mmSl3d = -99.f, mmSl3dPV = -99.f;
+  // Vertex block, consumed by CandidateVertexGeometryProducer. The same
+  // fixed set every fitter emits, so CandidateVertexGeometryProducer can be
+  // instantiated per arm instead of each fitter deriving its own geometry.
+  // motherPt/Eta/Phi are the FITTED momentum -- the candidate's own p4() is
+  // the raw four-vector sum and must not be used for a pointing angle.
+  float vtxX = -99.f, vtxY = -99.f, vtxZ = -99.f;
+  float cXX = -99.f, cXY = -99.f, cXZ = -99.f, cYY = -99.f, cYZ = -99.f, cZZ = -99.f;
+};
+// Per-event storage for one arm's vertex block. A struct rather than another
+// dozen positional arguments on store()/putArm().
+struct BlockVecs {
+  std::vector<float> x, y, z, cxx, cxy, cxz, cyy, cyz, czz, pt, eta, phi;
+  explicit BlockVecs(std::size_t n)
+      : x(n, -99.f), y(n, -99.f), z(n, -99.f), cxx(n, -99.f), cxy(n, -99.f),
+        cxz(n, -99.f), cyy(n, -99.f), cyz(n, -99.f), czz(n, -99.f),
+        pt(n, -99.f), eta(n, -99.f), phi(n, -99.f) {}
+  void store(std::size_t i, const ArmOut& a) {
+    x[i] = a.vtxX; y[i] = a.vtxY; z[i] = a.vtxZ;
+    cxx[i] = a.cXX; cxy[i] = a.cXY; cxz[i] = a.cXZ;
+    cyy[i] = a.cYY; cyz[i] = a.cYZ; czz[i] = a.cZZ;
+    pt[i] = a.pt; eta[i] = a.eta; phi[i] = a.phi;
+  }
 };
 }  // namespace
 
@@ -165,6 +187,9 @@ private:
     edm::EDPutTokenT<edm::ValueMap<float>> mass, massErr, pt, eta, phi, vchi2, vndof, vprob;
     edm::EDPutTokenT<edm::ValueMap<int>> ok;
     edm::EDPutTokenT<edm::ValueMap<float>> mmVtxProb, mmAlphaBS, mmSl3d, mmSl3dPV;
+    // vertex block
+    edm::EDPutTokenT<edm::ValueMap<float>> vtxX, vtxY, vtxZ,
+        cXX, cXY, cXZ, cYY, cYZ, cZZ, mPt, mEta, mPhi;
   } raw_, ref_;
   edm::EDPutTokenT<edm::ValueMap<int>> outNLegsRefit_;
   // Generator matching (MC only; sentinels on data). Arm-independent.
@@ -191,6 +216,21 @@ JpsiXKinematicFitProducer::declareArm(const std::string& p) {
   t.mmAlphaBS = produces<edm::ValueMap<float>>(p + "DimuonAlphaBS");
   t.mmSl3d = produces<edm::ValueMap<float>>(p + "DimuonSxy");
   t.mmSl3dPV = produces<edm::ValueMap<float>>(p + "DimuonSl3d");
+  // Vertex block, prefixed per arm (rawVtxX / refVtxX ...). The geometry
+  // module takes the prefix as configuration, so one implementation serves
+  // every arm and every channel.
+  t.vtxX = produces<edm::ValueMap<float>>(p + "VtxX");
+  t.vtxY = produces<edm::ValueMap<float>>(p + "VtxY");
+  t.vtxZ = produces<edm::ValueMap<float>>(p + "VtxZ");
+  t.cXX = produces<edm::ValueMap<float>>(p + "VtxCovXX");
+  t.cXY = produces<edm::ValueMap<float>>(p + "VtxCovXY");
+  t.cXZ = produces<edm::ValueMap<float>>(p + "VtxCovXZ");
+  t.cYY = produces<edm::ValueMap<float>>(p + "VtxCovYY");
+  t.cYZ = produces<edm::ValueMap<float>>(p + "VtxCovYZ");
+  t.cZZ = produces<edm::ValueMap<float>>(p + "VtxCovZZ");
+  t.mPt = produces<edm::ValueMap<float>>(p + "MotherPt");
+  t.mEta = produces<edm::ValueMap<float>>(p + "MotherEta");
+  t.mPhi = produces<edm::ValueMap<float>>(p + "MotherPhi");
   return t;
 }
 
@@ -292,6 +332,7 @@ void JpsiXKinematicFitProducer::produce(edm::Event& iEvent, const edm::EventSetu
   std::vector<int> fOk(n, 0);
   std::vector<float> fMmVtxProb(n, -99.f), fMmAlphaBS(n, -99.f), fMmSl3d(n, -99.f),
       fMmSl3dPV(n, -99.f);
+  BlockVecs rBlock(n), fBlock(n);
   std::vector<int> nLegsRefit(n, 0);
   std::vector<float> genBMass(n, -99.f), genBPt(n, -99.f), genBEta(n, -99.f),
       genBPhi(n, -99.f), genBDR(n, 9.9f);
@@ -456,6 +497,15 @@ void JpsiXKinematicFitProducer::produce(edm::Event& iEvent, const edm::EventSetu
       a.phi = p4.phi();
       a.vchi2 = chi2;
       a.vndof = ndof;
+      // Vertex block. KinematicVertex gives a genuine fitted position and its
+      // 3x3 error, which is exactly what the geometry module needs.
+      {
+        const GlobalPoint vp = vtx->position();
+        a.vtxX = vp.x(); a.vtxY = vp.y(); a.vtxZ = vp.z();
+        const auto ve = vtx->error().matrix();
+        a.cXX = ve(0, 0); a.cXY = ve(0, 1); a.cXZ = ve(0, 2);
+        a.cYY = ve(1, 1); a.cYZ = ve(1, 2); a.cZZ = ve(2, 2);
+      }
       a.vprob = (ndof > 0.) ? TMath::Prob(chi2, static_cast<int>(std::lround(ndof))) : -1.;
       a.ok = 1;
     } catch (const std::exception& e) {
@@ -527,6 +577,8 @@ void JpsiXKinematicFitProducer::produce(edm::Event& iEvent, const edm::EventSetu
           rMmVtxProb, rMmAlphaBS, rMmSl3d, rMmSl3dPV);
     store(ref, ic, fMass, fMassErr, fPt, fEta, fPhi, fVchi2, fVndof, fVprob, fOk,
           fMmVtxProb, fMmAlphaBS, fMmSl3d, fMmSl3dPV);
+    rBlock.store(ic, raw);
+    fBlock.store(ic, ref);
   }
 
   auto put = [&](auto token, const auto& vals) {
@@ -553,6 +605,14 @@ void JpsiXKinematicFitProducer::produce(edm::Event& iEvent, const edm::EventSetu
          rMmVtxProb, rMmAlphaBS, rMmSl3d, rMmSl3dPV);
   putArm(ref_, fMass, fMassErr, fPt, fEta, fPhi, fVchi2, fVndof, fVprob, fOk,
          fMmVtxProb, fMmAlphaBS, fMmSl3d, fMmSl3dPV);
+  auto putBlock = [&](const ArmTokens& t, const BlockVecs& b) {
+    put(t.vtxX, b.x); put(t.vtxY, b.y); put(t.vtxZ, b.z);
+    put(t.cXX, b.cxx); put(t.cXY, b.cxy); put(t.cXZ, b.cxz);
+    put(t.cYY, b.cyy); put(t.cYZ, b.cyz); put(t.cZZ, b.czz);
+    put(t.mPt, b.pt); put(t.mEta, b.eta); put(t.mPhi, b.phi);
+  };
+  putBlock(raw_, rBlock);
+  putBlock(ref_, fBlock);
   put(outNLegsRefit_, nLegsRefit);
   put(outGenBMass_, genBMass);
   put(outGenBPt_, genBPt);
