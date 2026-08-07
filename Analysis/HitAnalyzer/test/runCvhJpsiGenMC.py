@@ -134,6 +134,18 @@ opts.register('useOpera3D', False, VarParsing.VarParsing.multiplicity.singleton,
               'use the full 3D TOSCA volumetric grid (160812) as the baseline '
               'field for the propagator + geopro + globalCor; takes precedence '
               'over useScalarPot3D when True.')
+opts.register('useDefaultField', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'use the UNLABELLED default CMSSW field, i.e. what MagneticField_cff '
+              'already loaded: VolumeBasedMagneticField 160812 with '
+              'useParametrizedTrackerField=True -> the OAE_1103l_071212 tracker '
+              'parametrization. REQUIRED for a gen-matched RESOLUTION closure on '
+              'standard MC: the SIM propagates through OAE, so refitting with the '
+              'full 3D grid instead leaks an eta/phi-coherent shift into the pull '
+              'width (measured 2026-08-07: dp/p ~ 8e-4 across eta, 0.155% of unit '
+              'variance, and phi is where OAE is structurally blind). Also matches '
+              'the stated MC practice in CLAUDE.md. Takes precedence over '
+              'useOpera3D and useScalarPot3D.')
 opts.register('scalarPot3DInitFile', '', VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string,
               'coefficient dump file produced by mfs/dump_coeffs_for_cmssw.py. '
@@ -414,7 +426,15 @@ if not opts.useLegacyPairLoop:
 # from scalar-potential field model. Independent from
 # nano_cff.setup3DFieldForRefit (which assumes the full set of seven
 # CVH-side consumers from the NanoAOD configuration).
-if opts.useOpera3D:
+if opts.useDefaultField:
+    # Consume the unlabelled field MagneticField_cff already put in the
+    # EventSetup -- VolumeBasedMagneticField 160812 with
+    # useParametrizedTrackerField=True, i.e. OAE_1103l_071212 inside the
+    # tracker. Nothing to instantiate: the empty label IS the default
+    # producer's label. The CPEs likewise keep their default (empty) label,
+    # so the Lorentz drift uses the same field as everything else.
+    fieldlabel = ""
+elif opts.useOpera3D:
     # Use the full 3D TOSCA volumetric grid (160812) as the baseline field
     # for the propagator / geopro / globalCor instead of the scalar-potential
     # ScalarPot3D model. Provided as an alternative field-model option for

@@ -56,6 +56,10 @@
 #include "G4Proton.hh"
 #include "G4MuonPlus.hh"
 #include "G4MuonMinus.hh"
+#include "G4MuBremsstrahlungModel.hh"
+#include "G4MuPairProductionModel.hh"
+#include "G4DataVector.hh"
+#include "G4Element.hh"
 
 #include <mutex>
 
@@ -650,6 +654,7 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
   if (ioniStepLogging_) {
     ioniStepLog_.clear();
     msStepLog_.clear();
+    radStepLog_.clear();
   }
   if (stepTransportLogging_) {
     stepTransportLog_.clear();
@@ -1028,6 +1033,22 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
       ms.dOverX0 = thisPathLength / X0;
       ms.stepGroup = stepGroup;
       msStepLog_.push_back(ms);
+
+      // radiative (brems + pair) record for the offline CF, one per step and
+      // aligned with the Moliere log so an offline reader can zip them
+      RadiativeStep rs;
+      rs.effZ = ms.effZ;
+      rs.effA = ms.effA;
+      rs.xg = ms.xg;
+      rs.etotGeV = std::sqrt(pGeV * pGeV + mass * mass);
+      rs.pGeV = pGeV;
+      rs.dOverX0 = ms.dOverX0;
+      rs.stepCm = thisPathLength;
+      computeRadiativeDEDX(trk, rs.dedxBrem, rs.dedxPair);
+      rs.dedxRad = rs.dedxBrem + rs.dedxPair;
+      rs.cs = rs.etotGeV / (pGeV * pGeV * pGeV);
+      fillRadiativeSpectrum(trk, rs);
+      radStepLog_.push_back(rs);
     }
 
     const double ionifact = std::exp(dioni) * matStepFact;
@@ -1483,6 +1504,126 @@ std::pair<double, double> Geant4ePropagator::computeLandau(const G4Track *aTrack
 }
 
 //------------------------------------------------------------------------
+namespace {
+  // ComputeDMicroscopicCrossSection is protected in both models; a trivial
+  // derived class exposes it without touching Geant4. Using G4's own
+  // differential cross sections (rather than reimplementing Petrukhin-
+  // Shestakov / Kelner-Kokoulin-Petrukhin offline) removes any re-derivation
+  // risk AND guarantees the spectrum is consistent with the dE/dx table and
+  // with the full simulation, which run the same models.
+  struct BremProbe : public G4MuBremsstrahlungModel {
+    explicit BremProbe(const G4ParticleDefinition *p) : G4MuBremsstrahlungModel(p) {}
+    using G4MuBremsstrahlungModel::ComputeDMicroscopicCrossSection;
+  };
+  struct PairProbe : public G4MuPairProductionModel {
+    explicit PairProbe(const G4ParticleDefinition *p) : G4MuPairProductionModel(p) {}
+    using G4MuPairProductionModel::ComputeDMicroscopicCrossSection;
+  };
+}  // namespace
+
+void Geant4ePropagator::radVGrid(double *v) {
+  const double lo = std::log(kRadVMin), hi = std::log(kRadVMax);
+  for (int i = 0; i < kNRadV; ++i) {
+    v[i] = std::exp(lo + (hi - lo) * double(i) / double(kNRadV - 1));
+  }
+}
+
+void Geant4ePropagator::fillRadiativeSpectrum(const G4Track *aTrack, RadiativeStep &rs) const {
+  const G4ParticleDefinition *part = aTrack->GetDynamicParticle()->GetParticleDefinition();
+  if (std::abs(part->GetPDGEncoding()) != 13) {
+    return;
+  }
+  static thread_local BremProbe *brem = nullptr;
+  static thread_local PairProbe *pair = nullptr;
+  static thread_local const G4ParticleDefinition *muPlus = nullptr;
+  if (brem == nullptr) {
+    muPlus = G4MuonPlus::MuonPlus();
+    G4DataVector cuts(std::max<size_t>(G4Material::GetNumberOfMaterials(), 1), DBL_MAX);
+    brem = new BremProbe(muPlus);
+    pair = new PairProbe(muPlus);
+    brem->Initialise(muPlus, cuts);
+    pair->Initialise(muPlus, cuts);
+    brem->SetUseBaseMaterials(false);
+    pair->SetUseBaseMaterials(false);
+  }
+
+  const G4Material *mate = aTrack->GetVolume()->GetLogicalVolume()->GetMaterial();
+  const double ePre = aTrack->GetStep()->GetPreStepPoint()->GetKineticEnergy();
+  const double ePost = aTrack->GetStep()->GetPostStepPoint()->GetKineticEnergy();
+  const double tkin = 0.5 * (ePre + ePost);
+  const double etot = tkin + part->GetPDGMass();
+  const double stepLen = aTrack->GetStep()->GetStepLength();
+
+  double v[kNRadV];
+  radVGrid(v);
+
+  // sum over the material's ACTUAL elements with their atom densities -- the
+  // cross sections are per atom and go as Z^2, so an effZ shortcut would bias
+  // mixtures. n[i] is in 1/mm^3, stepLen in mm, dsigma/deps in mm^2/MeV, and
+  // deps = E dv, so n * L * dsigma/deps * E is dimensionless: dN/dv.
+  const G4ElementVector *elems = mate->GetElementVector();
+  const double *natoms = mate->GetVecNbOfAtomsPerVolume();
+  const size_t nel = mate->GetNumberOfElements();
+
+  for (int i = 0; i < kNRadV; ++i) {
+    const double eps = v[i] * etot;
+    double sb = 0., sp = 0.;
+    // above the kinematic limit the models are not meaningful; leave zero
+    if (eps > 0. && eps < tkin) {
+      for (size_t ie = 0; ie < nel; ++ie) {
+        const double Z = (*elems)[ie]->GetZ();
+        const double w = natoms[ie] * stepLen * etot;
+        sb += w * brem->ComputeDMicroscopicCrossSection(tkin, Z, eps);
+        sp += w * pair->ComputeDMicroscopicCrossSection(tkin, Z, eps);
+      }
+    }
+    rs.dNdvBrem[i] = (sb > 0. && std::isfinite(sb)) ? sb : 0.;
+    rs.dNdvPair[i] = (sp > 0. && std::isfinite(sp)) ? sp : 0.;
+  }
+}
+
+void Geant4ePropagator::computeRadiativeDEDX(const G4Track *aTrack, double &dedxBrem, double &dedxPair) const {
+  dedxBrem = 0.;
+  dedxPair = 0.;
+  const G4ParticleDefinition *part = aTrack->GetDynamicParticle()->GetParticleDefinition();
+  // radiative loss ~ 1/m^2: a muon-only effect at tracker momenta
+  if (std::abs(part->GetPDGEncoding()) != 13) {
+    return;
+  }
+
+  // Build against muonPlus with unrestricted cuts, EXACTLY as
+  // G4TablesForExtrapolatorForCVH::ComputeMuonDEDX does (that table is built
+  // for muonPlus and used for both charges), so what is exported here is the
+  // radiative part of the mean the propagator actually subtracts. Cached per
+  // thread: model construction is expensive and this runs per Geant4 step.
+  static thread_local G4MuPairProductionModel *pairModel = nullptr;
+  static thread_local G4MuBremsstrahlungModel *bremModel = nullptr;
+  static thread_local const G4ParticleDefinition *muPlus = nullptr;
+  if (pairModel == nullptr) {
+    muPlus = G4MuonPlus::MuonPlus();
+    G4DataVector cuts(std::max<size_t>(G4Material::GetNumberOfMaterials(), 1), DBL_MAX);
+    pairModel = new G4MuPairProductionModel(muPlus);
+    bremModel = new G4MuBremsstrahlungModel(muPlus);
+    pairModel->Initialise(muPlus, cuts);
+    bremModel->Initialise(muPlus, cuts);
+    pairModel->SetUseBaseMaterials(false);
+    bremModel->SetUseBaseMaterials(false);
+  }
+
+  const G4Material *mate = aTrack->GetVolume()->GetLogicalVolume()->GetMaterial();
+  const double ePre = aTrack->GetStep()->GetPreStepPoint()->GetKineticEnergy();
+  const double ePost = aTrack->GetStep()->GetPostStepPoint()->GetKineticEnergy();
+  const double ekin = 0.5 * (ePre + ePost);
+
+  // ComputeDEDXPerVolume(material, particle, kineticEnergy, cut); the table
+  // passes e for both energy and cut, i.e. unrestricted -- matched here.
+  // Kept SEPARATE so each tabulated shape can be normalized to its own
+  // process mean; the sum is exactly what the mean-loss table adds.
+  const double u = CLHEP::GeV / CLHEP::cm;
+  dedxBrem = bremModel->ComputeDEDXPerVolume(mate, muPlus, ekin, ekin) / u;
+  dedxPair = pairModel->ComputeDEDXPerVolume(mate, muPlus, ekin, ekin) / u;
+}
+
 double Geant4ePropagator::computeErrorIoni(const G4Track *aTrack, double pforced) const {
   G4double stepLengthCm = aTrack->GetStep()->GetStepLength() / CLHEP::cm;
 #ifdef G4EVERBOSE

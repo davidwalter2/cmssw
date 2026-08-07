@@ -164,6 +164,83 @@ public:
   };
   const std::vector<MoliereMsStep> &msStepLog() const { return msStepLog_; }
 
+  // Per-step raw data for the offline RADIATIVE (bremsstrahlung + pair
+  // production) energy-loss model.
+  //
+  // Why this is needed at all: the mean and the fluctuation are treated
+  // INCONSISTENTLY today. The mean dE/dx table is built with ionOnly=false
+  // (G4EnergyLossForExtrapolatorForCVH), so the reference trajectory DOES
+  // subtract the radiative mean; the fluctuation tables are built with
+  // ionOnly=true (G4UniversalFluctuationForExtrapolator), so the noise is
+  // ionization-only. The typical muon radiates nothing but has the mean
+  // radiative loss subtracted anyway -- a mean-vs-mode bias that grows with
+  // momentum, on top of the Landau one.
+  //
+  // Excluding radiative loss from the VARIANCE was correct: for dsigma/dnu ~
+  // 1/nu the second moment is dominated by nu -> 1, so a radiative variance
+  // describes the rare catastrophic radiator, not the 99.9% that do not
+  // radiate. The fix is not a variance but a CF term, which is what these
+  // records feed.
+  //
+  //   effZ, effA : effective Z, A of the step material
+  //   xg         : areal density rho*d of the step [g/cm^2]
+  //   etotGeV    : total energy at the step (radiative spectra scale with E)
+  //   pGeV       : momentum at the step [GeV]
+  //   dOverX0    : step thickness in radiation lengths
+  //   stepCm     : step length [cm]
+  //   dedxRad    : radiative dE/dx [GeV/cm] as the propagator's own mean-loss
+  //                table subtracts it. Exported rather than recomputed
+  //                offline so that the CF can be centred on EXACTLY the mean
+  //                that was removed -- an independently computed value would
+  //                trade the missing fluctuation for a residual bias.
+  //   cs         : Etot/p^3 [GeV^-2], the same dE -> d(q/p) map as UrbanIoniStep
+  //
+  // Zero for non-muons: radiative loss scales as 1/m^2, so for the pi/K used
+  // in the multi-species tests it is far below the ionization straggling.
+  // Gated by setIoniStepLogging and cleared with the other physics logs.
+  // Number of log-spaced points, and the range, of the per-step radiative
+  // SPECTRUM tabulation below. The grid is in v = eps/E so it is universal
+  // (kinematics enter only through the model evaluation), which keeps the
+  // offline reader trivial.
+  static constexpr int kNRadV = 48;
+  static constexpr double kRadVMin = 1e-6;
+  static constexpr double kRadVMax = 1.0;
+
+  struct RadiativeStep {
+    double effZ = 0., effA = 0., xg = 0.;
+    double etotGeV = 0., pGeV = 0.;
+    double dOverX0 = 0., stepCm = 0.;
+    double dedxRad = 0.;   // = dedxBrem + dedxPair, i.e. exactly the radiative
+                           // part the mean-loss table subtracts
+    double dedxBrem = 0.;  // per-process means, used to normalize the two
+    double dedxPair = 0.;  // tabulated shapes independently (see below)
+    double cs = 0.;
+    // dN/dv SHAPE for THIS step, summed over the material's elements with
+    // their true atom densities (not effZ), from Geant4's own
+    // G4MuBremsstrahlungModel / G4MuPairProductionModel differential cross
+    // sections.
+    //
+    // NOTE these carry the SHAPE only. ComputeDMicroscopicCrossSection's
+    // absolute normalization convention does not match a naive dsigma/deps
+    // reading -- integrating it against eps overshoots that model's own
+    // ComputeDEDXPerVolume by ~365x for pair production (brems is close but
+    // not exact). So each shape must be normalized offline to its OWN
+    // process mean, dedxBrem / dedxPair above. Doing it per process rather
+    // than on the sum is what makes the brems/pair mixture right, which is
+    // the thing a single hand-built shape got wrong by ~2.5x.
+    //
+    // Tabulating rather than reimplementing is deliberate: a hand-built
+    // brems-shaped spectrum normalized to the combined mean under-predicted
+    // the simulated radiative rate by ~2.5x at 5-15 GeV, because pair
+    // production dominates b but is SOFTER in v. Both processes are now
+    // tabulated separately and summed here, so no shape is assumed.
+    double dNdvBrem[kNRadV] = {0.};
+    double dNdvPair[kNRadV] = {0.};
+  };
+  const std::vector<RadiativeStep> &radStepLog() const { return radStepLog_; }
+  // the shared v grid (same for every step)
+  static void radVGrid(double *v);
+
   // Per-step cumulative transport Jacobian, for the clean-propagation-test
   // model (Analysis/HitAnalyzer/plugins/G4ePropagationExport.cc).
   //
@@ -321,6 +398,16 @@ private:
   bool ioniStepLogging_ = false;
   mutable std::vector<UrbanIoniStep> ioniStepLog_;
   mutable std::vector<MoliereMsStep> msStepLog_;
+  mutable std::vector<RadiativeStep> radStepLog_;
+
+  // radiative (brems + pair) dE/dx of the current step, in GeV/cm, computed
+  // from the SAME G4 models the mean-loss table is built from. 0 for non-muons.
+  // brems and pair dE/dx separately [GeV/cm]; their sum is what the mean-loss
+  // table adds on top of ionization. 0 for non-muons.
+  void computeRadiativeDEDX(const G4Track *aTrack, double &dedxBrem, double &dedxPair) const;
+
+  // per-step dN/dv tabulation on the kNRadV grid; no-op for non-muons
+  void fillRadiativeSpectrum(const G4Track *aTrack, RadiativeStep &rs) const;
 
   // per-step cumulative transport Jacobian log (see setStepTransportLogging)
   bool stepTransportLogging_ = false;

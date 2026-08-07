@@ -107,6 +107,9 @@ private:
   // per-step physics records (same layout as the maker's exports)
   std::vector<double> msmoliv_;
   std::vector<double> ioniurbanv_;
+  std::vector<double> radv_;  // 9 doubles/step, aligned with msmoliv
+  std::vector<double> radspecv_;  // 2*kNRadV doubles/step: dN/dv brem then pair
+  std::vector<double> radvgrid_;  // the shared v grid (kNRadV), written once
   // per-step cumulative transport (25 doubles) + log-size markers
   std::vector<double> stepjacc_;
   std::vector<int> stepnms_, stepnioni_;
@@ -157,6 +160,9 @@ G4ePropagationExport::G4ePropagationExport(const edm::ParameterSet &iConfig)
   tree_->Branch("dQI", &dQI_);
   tree_->Branch("msmoliv", &msmoliv_);
   tree_->Branch("ioniurbanv", &ioniurbanv_);
+  tree_->Branch("radv", &radv_);
+  tree_->Branch("radspecv", &radspecv_);
+  tree_->Branch("radvgrid", &radvgrid_);
   tree_->Branch("stepjacc", &stepjacc_);
   tree_->Branch("stepnms", &stepnms_);
   tree_->Branch("stepnioni", &stepnioni_);
@@ -247,6 +253,9 @@ void G4ePropagationExport::analyze(const edm::Event &iEvent, const edm::EventSet
     dQI_.assign(25, 0.);
     msmoliv_.clear();
     ioniurbanv_.clear();
+    radv_.clear();
+    radspecv_.clear();
+    radvgrid_.clear();
     stepjacc_.clear();
     stepnms_.clear();
     stepnioni_.clear();
@@ -301,6 +310,32 @@ void G4ePropagationExport::analyze(const edm::Event &iEvent, const edm::EventSet
       msmoliv_.push_back(ms.thp2);
       msmoliv_.push_back(ms.dOverX0);
       msmoliv_.push_back(ms.stepGroup);
+    }
+    // radiative (brems + pair) per-step records; same ordering as msmoliv so
+    // the two zip step-for-step offline
+    for (auto const &rs : prop_->radStepLog()) {
+      radv_.push_back(rs.effZ);
+      radv_.push_back(rs.effA);
+      radv_.push_back(rs.xg);
+      radv_.push_back(rs.etotGeV);
+      radv_.push_back(rs.pGeV);
+      radv_.push_back(rs.dOverX0);
+      radv_.push_back(rs.stepCm);
+      radv_.push_back(rs.dedxRad);
+      radv_.push_back(rs.dedxBrem);
+      radv_.push_back(rs.dedxPair);
+      radv_.push_back(rs.cs);
+      for (int i = 0; i < Geant4ePropagator::kNRadV; ++i) {
+        radspecv_.push_back(rs.dNdvBrem[i]);
+      }
+      for (int i = 0; i < Geant4ePropagator::kNRadV; ++i) {
+        radspecv_.push_back(rs.dNdvPair[i]);
+      }
+    }
+    if (radvgrid_.empty()) {
+      double vg[Geant4ePropagator::kNRadV];
+      Geant4ePropagator::radVGrid(vg);
+      radvgrid_.assign(vg, vg + Geant4ePropagator::kNRadV);
     }
     for (auto const &us : prop_->ioniStepLog()) {
       ioniurbanv_.push_back(us.rec.regime);
