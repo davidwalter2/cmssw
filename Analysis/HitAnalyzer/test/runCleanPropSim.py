@@ -52,15 +52,25 @@ process.load('Configuration.StandardSequences.SimIdeal_cff')
 # DeltaOneStep=1e-3 / DeltaIntersection=1e-4 -- 100x looser than the official
 # UL16 SIM and than resolution/simprod/step1_gensim.py.
 #
-# Why it matters HERE in particular: this is the ground-truth sample the whole
-# transport-fluctuation model is validated against, and the chord error of the
-# field integration is a COHERENT trajectory displacement, not a random one.
-# Measured symptom at pT=3, eta=0.30: the gen-matched residual acquires a mean
-# offset <z> that GROWS with layer (0.00 -> 0.086 by layer 12) and flips sign
-# between modules of opposite local-frame orientation, i.e. a global
-# displacement of ~100-200 um projected onto local x. At pT=40 the same
-# quantity is 0.000 at every layer -- consistent with a chord error, which
-# scales with curvature (R = 2.6 m at pT=3 vs 35 m at pT=40).
+# It is kept because 1e-3/1e-4 was simply wrong for the ground-truth sample the
+# whole transport-fluctuation model is validated against, and because it should
+# never have differed from the SIM it is compared with in the first place.
+#
+# CORRECTION 2026-08-08 -- THE SYMPTOM ORIGINALLY QUOTED HERE WAS NOT A CHORD
+# ERROR. This comment used to cite, as evidence, a residual mean <z> at pT=3
+# that grew with layer (0.00 -> 0.086 by layer 12), flipped sign between the
+# two members of each double-sided pair, and was absent at pT=40 -- read as a
+# coherent ~100-200 um displacement scaling with curvature.
+#
+# That pattern is entirely produced by the ANALYSIS-side acceptance cut, not by
+# the field integration. cf_propagation_test.load_sim kept only rays whose
+# whole (module, entry-face) sequence was the modal one; the reference does not
+# cross a module at its centre, so that cut is one-sided in local x, and the
+# two members of a stereo pair project it with opposite sign. Switching to
+# --acceptance perplane on the SAME events takes the mean from 0.068 to 0.001
+# sigma and the closure at u=1 from +0.0198 to +0.0014. See NOTES.md.
+#
+# The tolerances stay tightened; the justification above does not.
 _sp = process.g4SimHits.MagneticField.ConfGlobalMFM.OCMS.StepperParam
 _sp.DeltaOneStepTracker = 1e-5
 _sp.DeltaIntersectionTracker = 1e-6
