@@ -125,6 +125,9 @@ public:
                                        nullptr) const;
 
   static void CalculateEffectiveZandA(const G4Material *mate, G4double &effZ, G4double &effA);
+  // Per-element Moliere sums; definitions in MoliereMsStep below.
+  static void CalculateMoliereSums(const G4Material *mate, double beta,
+                                   double &zzp1OverA, double &lnScreenW);
 
   bool GetForCVH() const { return forCVH_; }
 
@@ -157,6 +160,26 @@ public:
     double effZ = 0., effA = 0., xg = 0.;
     double pGeV = 0., beta = 0.;
     double thp2 = 0., dOverX0 = 0.;
+    // PER-ELEMENT Moliere parameters (added 2026-08-08). effZ/effA are
+    // MASS-FRACTION averages, but both Moliere parameters are NON-LINEAR in
+    // Z, so evaluating them at effZ is wrong for compounds:
+    //   chi_c^2 ~ Z(Z+1)/A  -- effZ(effZ+1)/effA != sum_i w_i Z_i(Z_i+1)/A_i
+    //   chi_a^2 ~ Z^(2/3)(1.13+3.76(alpha Z/beta)^2)(1+exp(-Z^2/1000))
+    // and Geant4 evaluates BOTH per element and sums the cross sections
+    // (G4WentzelOKandVIxSection::SetupTarget is called per element).
+    // Measured 2026-08-07: using effZ for the screening term over-corrects
+    // by ~30% for the CMS tracker mix (an empirical f=0.7 was needed).
+    //
+    // zzp1OverA = sum_i massfrac_i * Z_i(Z_i+1)/A_i        -> chi_c^2
+    // lnScreenW = sum_i w_i ln[Z_i^(2/3)(1.13+3.76(alpha Z_i/beta)^2)
+    //                          (1+exp(-Z_i^2/1000))] / sum_i w_i,
+    //             w_i = massfrac_i Z_i(Z_i+1)/A_i          -> chi_a^2
+    // The weighted GEOMETRIC mean is the right one for chi_a because the
+    // exponent depends on it only through ln(chi_a):
+    //   S ~ -(chi_c^2 tau^2/2)[ln(2/(tau chi_a)) - gamma + 1/2]
+    // so summing per element gives ln(chi_a,eff) = sum_i chi_c,i^2 ln(chi_a,i)
+    // / sum_i chi_c,i^2.  Offline: chi_a^2 = (4.214e-6)^2/p^2 * exp(lnScreenW).
+    double zzp1OverA = 0., lnScreenW = 0.;
     // material-group id of the step (MaterialGroupModel::classify; -1 when
     // no global material model is active) -- lets the offline fit tie the
     // MS scale to the parmtype-15 material groups

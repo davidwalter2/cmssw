@@ -309,6 +309,10 @@ void G4ePropagationExport::analyze(const edm::Event &iEvent, const edm::EventSet
       msmoliv_.push_back(ms.beta);
       msmoliv_.push_back(ms.thp2);
       msmoliv_.push_back(ms.dOverX0);
+      // per-element Moliere sums (2026-08-08): effZ/effA are mass
+      // averages and both parameters are non-linear in Z
+      msmoliv_.push_back(ms.zzp1OverA);
+      msmoliv_.push_back(ms.lnScreenW);
       msmoliv_.push_back(ms.stepGroup);
     }
     // radiative (brems + pair) per-step records; same ordering as msmoliv so

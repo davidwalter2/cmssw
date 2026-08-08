@@ -1023,6 +1023,9 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
       const double beta = pGeV / std::sqrt(pGeV * pGeV + mass * mass);
       MoliereMsStep ms;
       CalculateEffectiveZandA(mate, ms.effZ, ms.effA);
+      // per-element Moliere sums (effZ/effA are mass averages and both
+      // Moliere parameters are non-linear in Z -- see MoliereMsStep)
+      CalculateMoliereSums(mate, beta, ms.zzp1OverA, ms.lnScreenW);
       // areal density rho*d in g/cm^2 (GetDensity in G4 internal units)
       ms.xg = (mate->GetDensity() / (CLHEP::g / CLHEP::cm3)) * thisPathLength;
       ms.pGeV = pGeV;
@@ -1715,6 +1718,43 @@ double Geant4ePropagator::computeErrorIoni(const G4Track *aTrack, double pforced
 }
 
 //------------------------------------------------------------------------
+void Geant4ePropagator::CalculateMoliereSums(const G4Material *mate, double beta,
+                                             double &zzp1OverA, double &lnScreenW) {
+  // Both Moliere parameters are non-linear in Z, and Geant4 evaluates them
+  // PER ELEMENT (G4WentzelOKandVIxSection::SetupTarget is called with each
+  // element's Z, and the cross sections are summed). Averaging Z first --
+  // which is what effZ/effA do -- is therefore wrong for compounds.
+  //
+  //   chi_c,i^2      ~ w_i Z_i(Z_i+1)/A_i                       (scattering power)
+  //   chi_a,i^2      ~ Z_i^(2/3) (1.13 + 3.76 (alpha Z_i/beta)^2)
+  //                      * (1 + exp(-Z_i^2/1000))               (G4 screening radius,
+  //                                G4WentzelOKandVIxSection.cc:154)
+  //
+  // The exponent depends on chi_a only logarithmically, so the correct
+  // effective value is the scattering-power-weighted GEOMETRIC mean.
+  constexpr double kAlpha = 1.0 / 137.035999084;
+  zzp1OverA = 0.;
+  lnScreenW = 0.;
+  double wsum = 0.;
+  const G4int nelem = mate->GetNumberOfElements();
+  const G4double *fracVec = mate->GetFractionVector();   // MASS fractions
+  const double b = (beta > 1e-6) ? beta : 1e-6;
+  for (G4int ii = 0; ii < nelem; ++ii) {
+    const double Z = mate->GetElement(ii)->GetZ();
+    const double A = mate->GetElement(ii)->GetA() / CLHEP::g * CLHEP::mole;
+    if (Z <= 0. || A <= 0.) continue;
+    const double w = fracVec[ii] * Z * (Z + 1.) / A;     // chi_c,i^2 weight
+    if (w <= 0.) continue;
+    const double az = kAlpha * Z / b;
+    const double scr = std::pow(Z, 2. / 3.) * (1.13 + 3.76 * az * az)
+                       * (1. + std::exp(-Z * Z * 1.0e-3));
+    zzp1OverA += w;
+    lnScreenW += w * std::log(scr);
+    wsum += w;
+  }
+  if (wsum > 0.) lnScreenW /= wsum;
+}
+
 void Geant4ePropagator::CalculateEffectiveZandA(const G4Material *mate, G4double &effZ, G4double &effA) {
   effZ = 0.;
   effA = 0.;

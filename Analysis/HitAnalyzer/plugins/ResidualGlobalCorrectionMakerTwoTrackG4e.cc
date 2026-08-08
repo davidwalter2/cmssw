@@ -125,6 +125,7 @@ public:
                   << " (" << (100. * pixHitsDemoted_ / pixHitsSeen_) << "%)"
                   << "  keepPixelEdgeHits=" << keepPixelEdgeHits_
                   << "  pixelMinSizeX=" << pixelMinSizeX_
+                  << "  pixelMinSizeY=" << pixelMinSizeY_
                   << std::endl;
         // Pathology-class combination table (only non-empty bins). Class 0
         // is the healthy bulk; every other combination is a candidate for a
@@ -1550,7 +1551,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                 ++pixHitsClass_[isub][icls];
                 // Boundary veto configurable via keepPixelEdgeHits; sizeX
                 // threshold configurable via pixelMinSizeX (default 2 = legacy).
-                hitquality = (keepPixelEdgeHits_ || !onEdge) && cluster.sizeX() >= pixelMinSizeX_;
+                hitquality = (keepPixelEdgeHits_ || !onEdge) && cluster.sizeX() >= pixelMinSizeX_
+                          && cluster.sizeY() >= pixelMinSizeY_;
                 if (!hitquality) ++pixHitsDemoted_;
                 if (hitquality) ++pixclassarr[id][icls];
                 else ++npixdemotedarr[id];
@@ -2391,6 +2393,10 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                   msmoliv.push_back(ms.beta);
                   msmoliv.push_back(ms.thp2);
                   msmoliv.push_back(ms.dOverX0);
+                  // per-element Moliere sums (2026-08-08): effZ/effA are mass
+                  // averages and both parameters are non-linear in Z
+                  msmoliv.push_back(ms.zzp1OverA);
+                  msmoliv.push_back(ms.lnScreenW);
                   msmoliv.push_back(ms.stepGroup);
                 }
                 for (auto const &us : g4prop->ioniStepLog()) {
