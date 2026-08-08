@@ -231,6 +231,33 @@ private:
   std::vector<unsigned int> kinkConsIdx;
   std::vector<float> kinkStepR;
   std::vector<float> kinkStepZ;
+
+  // Geant4 decay/interaction truth for the gen-matched particle
+  // (doSimDecayTruth_). Raw sim quantities only -- the physics
+  // classification (decay vs nuclear interaction vs delta ray, kink angle,
+  // daughter momentum fraction) is done offline, where the parent direction
+  // at the vertex can be obtained by helix propagation.
+  int simTrkFound = 0;
+  int simTrkPdgId = 0;
+  float simTrkP = -99.f;
+  float simTrkPt = -99.f;
+  float simTrkEta = -99.f;
+  float simTrkPhi = -99.f;
+  float simTrkVtxX = -99.f;
+  float simTrkVtxY = -99.f;
+  float simTrkVtxZ = -99.f;
+  // one entry per SimVertex whose parent is the matched SimTrack
+  std::vector<float> simVtxX;
+  std::vector<float> simVtxY;
+  std::vector<float> simVtxZ;
+  std::vector<int> simVtxProcType;
+  std::vector<int> simVtxNDau;
+  // daughters, flattened; simDauVtx indexes into the simVtx* vectors
+  std::vector<int> simDauVtx;
+  std::vector<int> simDauPdgId;
+  std::vector<float> simDauPx;
+  std::vector<float> simDauPy;
+  std::vector<float> simDauPz;
 };
 
 ResidualGlobalCorrectionMakerG4e::~ResidualGlobalCorrectionMakerG4e() {
@@ -456,7 +483,38 @@ void ResidualGlobalCorrectionMakerG4e::beginStream(edm::StreamID streamid)
     tree->Branch("genX", &genX, basketSize);
     tree->Branch("genY", &genY, basketSize);
     tree->Branch("genZ", &genZ, basketSize);
-    
+    tree->Branch("genPdgId", &genPdgId, basketSize);
+    tree->Branch("genDR", &genDR, basketSize);
+
+    // Geant4 decay/interaction truth of the gen-matched particle. simVtx*
+    // holds every SimVertex the matched SimTrack produced (decay, nuclear
+    // interaction, delta ray, ...) with its G4 process subtype
+    // (201 = Decay, 121 = hadronic inelastic, 111 = hadronic elastic,
+    // 2 = ionisation/delta ray); simDau* are the flattened daughters,
+    // simDauVtx pointing back into simVtx*.
+    if (doSimDecayTruth_) {
+      tree->Branch("simTrkFound", &simTrkFound, basketSize);
+      tree->Branch("simTrkPdgId", &simTrkPdgId, basketSize);
+      tree->Branch("simTrkP", &simTrkP, basketSize);
+      tree->Branch("simTrkPt", &simTrkPt, basketSize);
+      tree->Branch("simTrkEta", &simTrkEta, basketSize);
+      tree->Branch("simTrkPhi", &simTrkPhi, basketSize);
+      tree->Branch("simTrkVtxX", &simTrkVtxX, basketSize);
+      tree->Branch("simTrkVtxY", &simTrkVtxY, basketSize);
+      tree->Branch("simTrkVtxZ", &simTrkVtxZ, basketSize);
+      tree->Branch("simVtxX", &simVtxX);
+      tree->Branch("simVtxY", &simVtxY);
+      tree->Branch("simVtxZ", &simVtxZ);
+      tree->Branch("simVtxProcType", &simVtxProcType);
+      tree->Branch("simVtxNDau", &simVtxNDau);
+      tree->Branch("simDauVtx", &simDauVtx);
+      tree->Branch("simDauPdgId", &simDauPdgId);
+      tree->Branch("simDauPx", &simDauPx);
+      tree->Branch("simDauPy", &simDauPy);
+      tree->Branch("simDauPz", &simDauPz);
+    }
+
+
     tree->Branch("normalizedChi2", &normalizedChi2, basketSize);
     
     tree->Branch("nHits", &nHits, basketSize);
@@ -699,7 +757,16 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     }
     iEvent.getByToken(inputSimTracks_, simTracks);
   }
-  
+
+  edm::Handle<std::vector<SimVertex>> simVertices;
+  if (doSimDecayTruth_) {
+    if (!doSim_) {
+      iEvent.getByToken(genParticlesBarcodeToken_, genPartBarcodes);
+      iEvent.getByToken(inputSimTracks_, simTracks);
+    }
+    iEvent.getByToken(inputSimVertices_, simVertices);
+  }
+
   Handle<edm::View<reco::Muon> > muons;
   if (doMuons_) {
     iEvent.getByToken(inputMuons_, muons);
@@ -827,22 +894,54 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     genZ = -99.;
     genParms.fill(0.);
     genl3d = -99.;
+    genPdgId = 0;
+    genDR = -99.f;
     simPabsFirst = -99.;
     simPabsLast = -99.;
+
+    if (doSimDecayTruth_) {
+      simTrkFound = 0;
+      simTrkPdgId = 0;
+      simTrkP = -99.f;
+      simTrkPt = -99.f;
+      simTrkEta = -99.f;
+      simTrkPhi = -99.f;
+      simTrkVtxX = -99.f;
+      simTrkVtxY = -99.f;
+      simTrkVtxZ = -99.f;
+      simVtxX.clear();
+      simVtxY.clear();
+      simVtxZ.clear();
+      simVtxProcType.clear();
+      simVtxNDau.clear();
+      simDauVtx.clear();
+      simDauPdgId.clear();
+      simDauPx.clear();
+      simDauPy.clear();
+      simDauPz.clear();
+    }
     
     int genBarcode = -99;
     
     
     if (doGen_) {
       
-      float drmin = 0.1;
-      
+      float drmin = genMatchDR_;
+
       for (auto g = genPartCollection->begin(); g != genPartCollection->end(); ++g)
       {
         if (g->status() != 1) {
           continue;
         }
-        if (std::abs(g->pdgId()) != genMatchPdgId_) {
+        // Species allowed into the dR competition (see genMatchPdgIds_).
+        const int abspdg = std::abs(g->pdgId());
+        if (genMatchPdgIds_.empty()) {
+          if (abspdg != genMatchPdgId_) {
+            continue;
+          }
+        }
+        else if (std::find(genMatchPdgIds_.begin(), genMatchPdgIds_.end(), abspdg)
+                 == genMatchPdgIds_.end()) {
           continue;
         }
         // Same-charge requirement as in the two-track maker. Pure-dR
@@ -870,7 +969,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           
           genpart = &(*g);
           
-          if (doSim_) {
+          if (doSim_ || doSimDecayTruth_) {
             genBarcode = (*genPartBarcodes)[g - genPartCollection->begin()];
           }
           
@@ -878,6 +977,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           genEta = g->eta();
           genPhi = g->phi();
           genCharge = g->charge();
+          genPdgId = g->pdgId();
+          genDR = dR;
           
           genX = g->vertex().x();
           genY = g->vertex().y();
@@ -910,6 +1011,26 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           continue;
         }
       }
+
+      // Cross-species arbitration: the winner of the dR competition must be
+      // the species this pass is fitting, otherwise the track is treated as
+      // unmatched. This removes the mismatch background without a pT cut --
+      // a pT window would preferentially discard the genuine hard decays,
+      // which are the signal.
+      if (genpart != nullptr && !genMatchPdgIds_.empty()
+          && std::abs(genPdgId) != genMatchPdgId_) {
+        genpart = nullptr;
+        genBarcode = -99;
+        genPt = -99.;
+        genEta = -99.;
+        genPhi = -99.;
+        genCharge = -99;
+        genX = -99.;
+        genY = -99.;
+        genZ = -99.;
+        genParms.fill(0.);
+        genl3d = -99.;
+      }
     }
     
 // std::cout << "genPt = " << genPt << " genEta = " << genEta << " genPhi = " << genPhi << " genCharge = " << genCharge << " genX = " << genX << " genY = " << genY << " genZ = " << genZ << std::endl;
@@ -919,15 +1040,63 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     }
     
     int simtrackid = -99;
-    if (genpart != nullptr && doSim_) {
+    if (genpart != nullptr && (doSim_ || doSimDecayTruth_)) {
       for (auto const& simTrack : *simTracks) {
         if (simTrack.genpartIndex() == genBarcode) {
           simtrackid = simTrack.trackId();
+          if (doSimDecayTruth_) {
+            simTrkFound = 1;
+            simTrkPdgId = simTrack.type();
+            simTrkP = simTrack.momentum().P();
+            simTrkPt = simTrack.momentum().pt();
+            simTrkEta = simTrack.momentum().eta();
+            simTrkPhi = simTrack.momentum().phi();
+            if (!simTrack.noVertex()) {
+              auto const& pv = (*simVertices)[simTrack.vertIndex()].position();
+              simTrkVtxX = pv.x();
+              simTrkVtxY = pv.y();
+              simTrkVtxZ = pv.z();
+            }
+          }
           break;
         }
       }
     }
-    
+
+    // Every Geant4 vertex produced by the matched SimTrack: the decay
+    // (processType 201) that this study targets, but also nuclear
+    // interactions (111/121) and delta rays (2), which are the physics
+    // backgrounds to the kink tag. Daughters are flattened with a back
+    // pointer so the offline classification can use the full final state.
+    if (doSimDecayTruth_ && simtrackid >= 0) {
+      for (unsigned int iv = 0; iv < simVertices->size(); ++iv) {
+        auto const& simVertex = (*simVertices)[iv];
+        if (simVertex.noParent() || int(simVertex.parentIndex()) != simtrackid) {
+          continue;
+        }
+        const int islot = int(simVtxX.size());
+        auto const& vpos = simVertex.position();
+        simVtxX.push_back(vpos.x());
+        simVtxY.push_back(vpos.y());
+        simVtxZ.push_back(vpos.z());
+        simVtxProcType.push_back(int(simVertex.processType()));
+        int ndau = 0;
+        for (auto const& simTrack : *simTracks) {
+          if (simTrack.noVertex() || simTrack.vertIndex() != int(iv)) {
+            continue;
+          }
+          ++ndau;
+          simDauVtx.push_back(islot);
+          simDauPdgId.push_back(simTrack.type());
+          simDauPx.push_back(simTrack.momentum().x());
+          simDauPy.push_back(simTrack.momentum().y());
+          simDauPz.push_back(simTrack.momentum().z());
+        }
+        simVtxNDau.push_back(ndau);
+      }
+    }
+
+
     
     muonPt = -99.;
     muonLoose = false;

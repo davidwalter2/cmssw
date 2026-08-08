@@ -54,6 +54,15 @@ opts.register('materialGroupsFile', _defaultGroupsFile, VarParsing.VarParsing.mu
 opts.register('doKinkFinder', True, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'per-material-step decay-in-flight score test')
+opts.register('genMatchDR', 0.1, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'dR search window of the gen match')
+opts.register('doSimDecayTruth', True, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'Geant4 decay/interaction truth for the gen-matched particle '
+              '(simTrk*/simVtx*/simDau* branches). Requires the v3+ production, '
+              'which keeps SimTracks+SimVertices; earlier campaigns do not have '
+              'them and the job will fail on the missing product')
 opts.register('genMatchPtWindow', 10.0, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.float,
               'relative pT window of the gen match. Default 10 = effectively '
@@ -116,6 +125,10 @@ process.source = cms.Source(
     # events (~15 events kept out of thousands). NOTE the flip side: tree
     # rows cannot be uniquely keyed by run/lumi/event for this sample.
     duplicateCheckMode=cms.untracked.string("noDuplicateCheck"),
+    # The production is written by thousands of condor jobs and a handful of
+    # outputs are zero-length (job died during the copy out). One such file
+    # aborts the whole cmsRun with a FileOpenError, so skip rather than die.
+    skipBadFiles=cms.untracked.bool(True),
 )
 
 process.options = cms.untracked.PSet(
@@ -152,7 +165,17 @@ process.globalCor = cms.EDProducer(
     pileupInfo=cms.InputTag("addPileupInfo"),
     genMatchPdgId=cms.int32(_pdgid),
     genMatchPtWindow=cms.double(float(opts.genMatchPtWindow)),
+    # Every stable charged species competes for the dR match and the winner
+    # must be the species of this pass. Without this, opening the pT window
+    # (mandatory for decay studies) lets a soft gen hadron steal the match to
+    # an unrelated J/psi muon track: on the v3 MC that mislabelled ~2/3 of
+    # the "decayed kaon" sample and diluted the ROC from AUC 0.78 to 0.59.
+    genMatchPdgIds=cms.vint32(11, 13, 211, 321, 2212),
+    genMatchDR=cms.double(float(opts.genMatchDR)),
     doSim=cms.bool(False),
+    # doSim (PSimHit-based) stays off: the ALCARECO keeps SimTracks and
+    # SimVertices but NOT the TrackerHits*LowTof collections.
+    doSimDecayTruth=cms.bool(bool(opts.doSimDecayTruth)),
     requireGen=cms.bool(True),
     doMuons=cms.bool(False),
     doMuonAssoc=cms.bool(False),

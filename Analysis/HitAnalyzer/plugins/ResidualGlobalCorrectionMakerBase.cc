@@ -175,6 +175,9 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   doGen_ = iConfig.getParameter<bool>("doGen");
   requireGen_ = iConfig.getParameter<bool>("requireGen");
   doSim_ = iConfig.getParameter<bool>("doSim");
+  // existsAs-guarded so legacy cfis are untouched.
+  doSimDecayTruth_ = iConfig.existsAs<bool>("doSimDecayTruth")
+      ? iConfig.getParameter<bool>("doSimDecayTruth") : false;
   fitSimHitPositions_ = iConfig.getUntrackedParameter<bool>("fitSimHitPositions", false);
   bsConstraint_ = iConfig.getParameter<bool>("bsConstraint");
   applyHitQuality_ = iConfig.getParameter<bool>("applyHitQuality");
@@ -186,6 +189,10 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   // 0.5 window silently removes decayed kaons from a requireGen sample.
   genMatchPtWindow_ = iConfig.existsAs<double>("genMatchPtWindow")
       ? iConfig.getParameter<double>("genMatchPtWindow") : 0.5;
+  genMatchPdgIds_ = iConfig.existsAs<std::vector<int>>("genMatchPdgIds")
+      ? iConfig.getParameter<std::vector<int>>("genMatchPdgIds") : std::vector<int>();
+  genMatchDR_ = iConfig.existsAs<double>("genMatchDR")
+      ? iConfig.getParameter<double>("genMatchDR") : 0.1;
   keepPixelEdgeHits_ = iConfig.existsAs<bool>("keepPixelEdgeHits")
       ? iConfig.getParameter<bool>("keepPixelEdgeHits") : false;
   pixelMinSizeX_ = iConfig.existsAs<int>("pixelMinSizeX")
@@ -323,7 +330,17 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
     
     inputSimTracks_ = consumes<std::vector<SimTrack>>(edm::InputTag("g4SimHits"));
   }
-  
+
+  // Decay truth needs only the barcode map + SimTracks + SimVertices (the
+  // PSimHit collections above are absent from the B->J/psi+X ALCARECO).
+  if (doSimDecayTruth_ && !doSim_) {
+    genParticlesBarcodeToken_ = consumes<std::vector<int>>(edm::InputTag("genParticles"));
+    inputSimTracks_ = consumes<std::vector<SimTrack>>(edm::InputTag("g4SimHits"));
+  }
+  if (doSimDecayTruth_) {
+    inputSimVertices_ = consumes<std::vector<SimVertex>>(edm::InputTag("g4SimHits"));
+  }
+
   if (doMuons_) {
 // inputMuons_ = consumes<reco::MuonCollection>(edm::InputTag(iConfig.getParameter<edm::InputTag>("muons")));
     inputMuons_ = consumes<edm::View<reco::Muon>>(edm::InputTag(iConfig.getParameter<edm::InputTag>("muons")));

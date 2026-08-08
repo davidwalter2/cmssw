@@ -54,6 +54,8 @@
 <use name="CalibTracker/Records"/>
 <use name="SimG4Core/Geometry"/>
 <use name="SimDataFormats/TrackingHit"/>
+<use name="SimDataFormats/Track"/>
+<use name="SimDataFormats/Vertex"/>
 <use name="DetectorDescription/Core"/>
 <use name="geant4"/>
 <use name="CLHEP"/>

@@ -85,6 +85,7 @@
 #include "CommonTools/UtilAlgos/interface/TFileService.h"
 
 #include "SimDataFormats/Track/interface/SimTrack.h"
+#include "SimDataFormats/Vertex/interface/SimVertex.h"
 
 #include "DataFormats/Common/interface/TriggerResults.h"
 #include "DataFormats/Provenance/interface/ParameterSetID.h"
@@ -290,7 +291,12 @@ protected:
 // edm::EDGetTokenT<std::vector<PSimHit>> inputSimHits_;
   std::vector<edm::EDGetTokenT<std::vector<PSimHit>>> inputSimHits_;
   edm::EDGetTokenT<std::vector<SimTrack>> inputSimTracks_;
-  
+  // Geant4 vertex collection, consumed only for the decay-truth block
+  // (doSimDecayTruth_). Kept separate from inputSimHits_/doSim_ because the
+  // B->J/psi+X ALCARECO keeps SimTracks+SimVertices but NOT the PSimHit
+  // collections, so the full doSim_ path cannot be switched on there.
+  edm::EDGetTokenT<std::vector<SimVertex>> inputSimVertices_;
+
 // edm::EDGetTokenT<reco::MuonCollection> inputMuons_;
   edm::EDGetTokenT<edm::View<reco::Muon>> inputMuons_;
   edm::EDGetTokenT<int> inputGeometry_;
@@ -343,6 +349,10 @@ protected:
   float genEta;
   float genPhi;
   float genCharge;
+  // pdgId of the winner of the dR competition and its dR to the track:
+  // the match-quality handles the decay studies need offline.
+  int genPdgId = 0;
+  float genDR = -99.f;
   
   float genX;
   float genY;
@@ -522,6 +532,11 @@ protected:
   
   bool doGen_;
   bool doSim_;
+  // Geant4 decay/interaction truth for the gen-matched particle: walks the
+  // SimVertex collection for vertices whose parent is the matched SimTrack.
+  // Needs doGen_ (the gen match provides the barcode -> SimTrack link) but
+  // NOT doSim_ (no PSimHits required).
+  bool doSimDecayTruth_ = false;
   // Rung-E closure: substitute simulated hit positions for cluster
   // positions in the fit (needs doSim=True for the sim-hit matching)
   bool fitSimHitPositions_ = false;
@@ -534,6 +549,13 @@ protected:
 
   int genMatchPdgId_ = 13;
   double genMatchPtWindow_ = 0.5;
+  // Species allowed to compete for the dR match. When non-empty every listed
+  // species is matched and the winner must be genMatchPdgId_, otherwise the
+  // track counts as unmatched. Without this a soft gen hadron can win the
+  // match to an unrelated (usually J/psi muon) track whenever the pT window
+  // is opened up, which is exactly what decay studies have to do.
+  std::vector<int> genMatchPdgIds_;
+  double genMatchDR_ = 0.1;
 
   // Keep pixel hits whose cluster touches the sensor boundary (isOnEdge) in
   // the fit instead of demoting them to inactive. The sizeX CPE-quality
