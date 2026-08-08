@@ -125,6 +125,26 @@ opts.register('pixelMinSizeX', 2, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.int,
               'minimum pixel cluster size in x for a hit to stay in the fit '
               '(default 2 = baseline sizeX>1 cut; 1 admits all clusters)')
+opts.register('globalTag', '106X_mcRun2_asymptotic_v17',
+              VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.string,
+              'conditions GT. MUST match the GT the input MC was PRODUCED '
+              'with: the fit re-evaluates hit positions with its own CPEs, '
+              'so a mismatched SiPixelLorentzAngle / SiPixelTemplate payload '
+              'shifts local-x per module and fakes a pixel hit-quality bias. '
+              'Default 106X_mcRun2_asymptotic_v17 is right for the '
+              'B->J/psi+X MC (produced in CMSSW_10_6_20_patch1). The private '
+              'mu-gun simprod uses auto:run2_design -> 131X_mcRun2_design_v3, '
+              'whose pixel templates are SiPixelTemplates38T_2010_2011_mc; '
+              'pass globalTag=131X_mcRun2_design_v3 for those samples.')
+opts.register('pixelMinSizeY', 1, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.int,
+              'minimum pixel cluster sizeY. Default 1 = NO cut, which is '
+              'deliberate: sizeY==1 is the GEOMETRIC outcome for a track '
+              'crossing perpendicular (sizeY ~ 1 + 1.9|cot theta|), unlike '
+              'sizeX==1 which means the expected Lorentz sharing failed. '
+              'Set to 2 only as an A/B DIAGNOSTIC -- it removes 12.6% of BPix '
+              'and 34.6% of FPix hits, concentrated at central eta.')
 opts.register('corFile', '', VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string,
               'optional correction file (parmtree/x) applied via corparms_, '
@@ -184,7 +204,7 @@ process.load("Configuration.StandardSequences.GeometrySimDB_cff")
 # Conditions the MC was produced with (CMSSW_10_6_20_patch1 production
 # chain) -- alignment/CPE/beamspot consistent with the simulated detector,
 # which is what a gen-closure fit must use.
-process.GlobalTag = GlobalTag(process.GlobalTag, "106X_mcRun2_asymptotic_v17", "")
+process.GlobalTag = GlobalTag(process.GlobalTag, opts.globalTag, "")
 process.GlobalTag.toGet = cms.VPSet(
     cms.PSet(
         record=cms.string("GeometryFileRcd"),
@@ -275,6 +295,7 @@ process.globalCor = cms.EDProducer(
     applyHitQuality=cms.bool(True),
     keepPixelEdgeHits=cms.bool(bool(opts.keepPixelEdgeHits)),
     pixelMinSizeX=cms.int32(int(opts.pixelMinSizeX)),
+    pixelMinSizeY=cms.int32(int(opts.pixelMinSizeY)),
     corFiles=cms.vstring(*( [opts.corFile] if opts.corFile else [] )),
     triggers=cms.vstring(),
     trackParticleName=cms.string(opts.particle),

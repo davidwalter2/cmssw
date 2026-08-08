@@ -544,6 +544,13 @@ protected:
   // (CPE x-resolution needs charge sharing between >=2 pixels).
   // Default 2 = legacy sizeX>1 cut; 1 admits all clusters.
   int pixelMinSizeX_ = 2;
+  // Default 1 = NO cut. sizeY==1 is the GEOMETRIC outcome for a
+  // perpendicular track (sizeY ~ 1 + 1.9|cot theta|), unlike
+  // sizeX==1 which means the expected Lorentz sharing failed.
+  // Provided as an A/B DIAGNOSTIC for the BPix local-x residual,
+  // not as a recommended selection: it would drop 12.6% of BPix
+  // and 34.6% of FPix hits, concentrated at central eta.
+  int pixelMinSizeY_ = 1;
 
   // Register the pixel pathological-hit class correction parameters
   // (parmtypes 16-21, per pixel module, mean/diff basis for the edge

@@ -190,6 +190,8 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
       ? iConfig.getParameter<bool>("keepPixelEdgeHits") : false;
   pixelMinSizeX_ = iConfig.existsAs<int>("pixelMinSizeX")
       ? iConfig.getParameter<int>("pixelMinSizeX") : 2;
+  pixelMinSizeY_ = iConfig.existsAs<int>("pixelMinSizeY")
+      ? iConfig.getParameter<int>("pixelMinSizeY") : 1;
   // |pdgId| used by the single-track gen matching (doGen); default muon.
   pixelHitClassCorrections_ = iConfig.existsAs<bool>("pixelHitClassCorrections")
       ? iConfig.getParameter<bool>("pixelHitClassCorrections") : false;
