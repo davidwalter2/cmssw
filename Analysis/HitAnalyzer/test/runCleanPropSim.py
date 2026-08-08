@@ -46,6 +46,26 @@ process.load('Configuration.StandardSequences.GeometrySimDB_cff')
 process.load('Configuration.StandardSequences.MagneticField_cff')
 process.load('Configuration.StandardSequences.Generator_cff')
 process.load('Configuration.StandardSequences.SimIdeal_cff')
+
+# --- Geant4 field-integration precision -------------------------------------
+# NOT set here before 2026-08-08, so this ran at the CMSSW defaults
+# DeltaOneStep=1e-3 / DeltaIntersection=1e-4 -- 100x looser than the official
+# UL16 SIM and than resolution/simprod/step1_gensim.py.
+#
+# Why it matters HERE in particular: this is the ground-truth sample the whole
+# transport-fluctuation model is validated against, and the chord error of the
+# field integration is a COHERENT trajectory displacement, not a random one.
+# Measured symptom at pT=3, eta=0.30: the gen-matched residual acquires a mean
+# offset <z> that GROWS with layer (0.00 -> 0.086 by layer 12) and flips sign
+# between modules of opposite local-frame orientation, i.e. a global
+# displacement of ~100-200 um projected onto local x. At pT=40 the same
+# quantity is 0.000 at every layer -- consistent with a chord error, which
+# scales with curvature (R = 2.6 m at pT=3 vs 35 m at pT=40).
+_sp = process.g4SimHits.MagneticField.ConfGlobalMFM.OCMS.StepperParam
+_sp.DeltaOneStepTracker = 1e-5
+_sp.DeltaIntersectionTracker = 1e-6
+_sp.DeltaOneStep = 1e-5
+_sp.DeltaIntersection = 1e-6
 process.load('Configuration.StandardSequences.FrontierConditions_GlobalTag_cff')
 
 # Conditions/geometry pinned to exactly what the CVH refit drivers use
