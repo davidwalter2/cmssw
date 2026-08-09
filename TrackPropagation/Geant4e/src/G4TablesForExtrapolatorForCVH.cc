@@ -45,6 +45,7 @@
 
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo....
 
+#include <cstdlib>
 #include "TrackPropagation/Geant4e/interface/G4TablesForExtrapolatorForCVH.h"
 #include "TrackPropagation/Geant4e/interface/Geant4ePropagator.h"
 #include "G4PhysicalConstants.hh"
@@ -415,7 +416,21 @@ void G4TablesForExtrapolatorForCVH::ComputeMuonDEDX(const G4ParticleDefinition* 
       G4double dedx = ionOnly ? dedxioni
                               : dedxioni + pair->ComputeDEDXPerVolume(mat, part, e, e) +
                                     brem->ComputeDEDXPerVolume(mat, part, e, e);
-      aVector->PutValue(j, dedx);
+      // CVH_DEDX_SCALE -- DIAGNOSTIC ONLY, not a proposed fix.
+      // The table above is the unrestricted MEAN loss. The typical muon loses
+      // the MODE, so the reference over-corrects (2026-08-08/09). A uniform
+      // scale is NOT the right correction -- the median/mean ratio is
+      // step-size dependent (0.747 per step vs 0.887 summed over the tracker),
+      // i.e. it is an ESTIMATOR property masquerading as a material one. It is
+      // used here only to answer one question: does moving the central value
+      // actually remove the +1 MeV J/psi mass bias? The lever from dE/dx to
+      // fitted momentum measured ~1/3, so the mapping is not 1:1 and the
+      // mechanism could be partly something else.
+      static const double _dedxScale = []() {
+        const char *v = getenv("CVH_DEDX_SCALE");
+        return v ? atof(v) : 1.0;
+      }();
+      aVector->PutValue(j, dedx * _dedxScale);
       if (1 < verbose) {
         G4cout << "j= " << j << "  e(MeV)= " << e / MeV << " dedx(Mev/cm)= " << dedx * cm / MeV
                << " dedx(Mev/(g/cm2)= " << dedx / ((MeV * mat->GetDensity()) / (g / cm2)) << G4endl;
