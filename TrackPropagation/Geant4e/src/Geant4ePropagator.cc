@@ -27,6 +27,7 @@
 #include "G4ErrorRunManagerHelper.hh"
 #include "G4EventManager.hh"
 #include "G4Field.hh"
+#include <cstdlib>
 #include "G4FieldManager.hh"
 #include "G4GeometryTolerance.hh"
 #include "G4SteppingControl.hh"
@@ -1403,6 +1404,22 @@ Eigen::Matrix<double, 5, 5> Geant4ePropagator::PropagateErrorMSC(const G4Track *
   G4double Xs = X0 * (effZ + 1.) * std::log(287. / std::sqrt(effZ)) / std::log(159. * std::pow(effZ, -1. / 3.)) / effZ;
 
   G4double DD = 2.25e-4 * stepLengthCm * (charge / pBeta * charge / pBeta) / Xs;
+  // CVH_MS_SCALE -- DIAGNOSTIC. Q's MS is Rossi/Xs (15 MeV, NO log term);
+  // Highland is 13.6 MeV * (1 + 0.038 ln(x/X0)), so the magnitude here is
+  // wrong by an amount that depends on the step's material. MS is symmetric so
+  // this cannot bias the reference trajectory -- but it changes the hit-vs-kink
+  // WEIGHTING, and with material rising toward large r that shifts the
+  // effective lever arm and can bias the FITTED momentum. Component 2 (flat,
+  // charge-even, +1.66e-4 above 3 GeV) survives every upstream test:
+  // hits, stepper, reference propagation and energy loss are all excluded.
+  // Scanning this knob tests whether the estimator's weighting is the cause.
+  {
+    static const double _msScale = []() {
+      const char *v = getenv("CVH_MS_SCALE");
+      return v ? atof(v) : 1.0;
+    }();
+    DD *= _msScale;
+  }
 
 #ifdef G4EVERBOSE
   if (iverbose >= 3)
