@@ -1428,6 +1428,29 @@ Eigen::Matrix<double, 5, 5> Geant4ePropagator::PropagateErrorMSC(const G4Track *
   G4double S1 = DD * stepLengthCm * stepLengthCm / 3.;
   G4double S2 = DD;
   G4double S3 = DD * stepLengthCm / 2.;
+  // CVH_MS_DISP_SCALE -- DIAGNOSTIC. Scales the thick-scatterer DISPLACEMENT
+  // term S1 (and the displacement-angle correlation S3) relative to the ANGLE
+  // term S2. CVH_MS_SCALE multiplies DD and therefore scales S1, S2, S3
+  // TOGETHER, leaving their ratios fixed -- so it cannot probe a wrong
+  // S1/S2, which is a SHAPE error. That is exactly the class of defect found
+  // and fixed on the CF side on 2026-08-08 (missing within-step lateral
+  // displacement, 8.8% of the position variance); the fit's Q was never
+  // audited for it. Component 2 (flat, charge-even, +1.66e-4, GROWING WITH
+  // LAYER COUNT) has the signature of a per-layer displacement error: the MS
+  // displacement itself goes as 1/p, so the accumulated sagitta error goes as
+  // 1/p and dp/p comes out FLAT.
+  // S3 is scaled by sqrt(f) so the correlation rho = S3/sqrt(S1 S2) = sqrt(3)/2
+  // is preserved and the 2x2 block stays positive definite.
+  {
+    static const double _dispScale = []() {
+      const char *v = getenv("CVH_MS_DISP_SCALE");
+      return v ? atof(v) : 1.0;
+    }();
+    if (_dispScale != 1.0) {
+      S1 *= _dispScale;
+      S3 *= std::sqrt(_dispScale);
+    }
+  }
 
   G4double CLA = std::sqrt(vpPre.x() * vpPre.x() + vpPre.y() * vpPre.y()) / pPre;
 #ifdef G4EVERBOSE
