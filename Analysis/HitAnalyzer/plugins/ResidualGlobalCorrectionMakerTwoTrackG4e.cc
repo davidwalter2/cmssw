@@ -973,7 +973,28 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
   const bool dogen = fitFromGenParms_;
  
-  constexpr bool dolocalupdate = false;
+  // CVH_LOCAL_UPDATE=1 -- EXPERIMENT (2026-08-10). Default false reproduces the
+  // baseline bit-identically.
+  //
+  // false = the AN's scheme: between Gauss-Newton iterations only the REFERENCE
+  // STATE is updated and each track is re-propagated UNSCATTERED with the
+  // nominal energy loss, so material and Jacobians are evaluated on a
+  // trajectory the particle is increasingly not on. The error is second order
+  // in the scattering deviation (~1/p^2), which matches the observed low-p
+  // breakdown (spike falls as ~p^-3.4, threshold-like below 3 GeV) far better
+  // than the energy-loss 1/p.
+  //
+  // true = the standard GBL iteration: the per-layer states are updated from
+  // the fitted kinks and carried forward, so the next propagation starts from
+  // the DEFORMED trajectory and re-samples the material along it; Hp is
+  // recomputed at the updated state and Q/dQMS/dQI are transformed to local
+  // coordinates. dx0 then holds only the residual w.r.t. the propagated state,
+  // so the kink prior is not double-counted.
+  //
+  // Josh: "all attempts to relax this constraint in the past introduced other
+  // problems ... in principle you need a quasi-continuously deformed
+  // propagation to the next layer". This switch is to find out WHICH problems.
+  static const bool dolocalupdate = (getenv("CVH_LOCAL_UPDATE") != nullptr);
   
   using namespace edm;
 
