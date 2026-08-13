@@ -54,6 +54,17 @@ opts.register('materialGroupsFile', _defaultGroupsFile, VarParsing.VarParsing.mu
 opts.register('doKinkFinder', True, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'per-material-step decay-in-flight score test')
+opts.register('fitAs', '', VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.string,
+              'mass hypothesis used by the fit, if different from the gen-matched '
+              'species. Set fitAs=mu with particle=kaon/pi for the decay-in-flight '
+              'muon-fake study: a hadron that decays and is reconstructed as a '
+              'muon is fitted with the MUON hypothesis in the real analysis, so '
+              'the energy-loss model must match that, not the true species.')
+opts.register('doMuons', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'match tracks to the ALCARECO loose-muon collection and store the '
+              'muon ID flags (needed to ask which tracks actually fake a muon)')
 opts.register('genMatchDR', 0.1, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.float,
               'dR search window of the gen match')
@@ -79,6 +90,10 @@ _species = {'kaon': (321, ('kaon+', 'kaon-')),
             'mu':   (13,  ('mu+', 'mu-'))}
 assert opts.particle in _species, "particle must be one of %s" % list(_species)
 _pdgid, _g4parts = _species[opts.particle]
+# The gen match selects the TRUE species; the fit hypothesis may differ.
+_fitas = opts.fitAs or opts.particle
+assert _fitas in _species, "fitAs must be one of %s" % list(_species)
+_fitname, _g4parts = _fitas, _species[_fitas][1]
 
 process = cms.Process("BENCH", Run2_2016)
 
@@ -177,7 +192,15 @@ process.globalCor = cms.EDProducer(
     # SimVertices but NOT the TrackerHits*LowTof collections.
     doSimDecayTruth=cms.bool(bool(opts.doSimDecayTruth)),
     requireGen=cms.bool(True),
+    # Muon-detector match, from the loose-muon collection the ALCARECO keeps.
+    # Needed to ask which decayed hadrons are actually reconstructed as muons.
+    # The loose-muon collection's own track refs point into generalTracks,
+    # which the ALCARECO drops, so use the shipped track->muon association
+    # instead of the momentum matching (doMuons) that dereferences them.
     doMuons=cms.bool(False),
+    muons=cms.InputTag("ALCARECOTkAlJpsiXLooseMuons"),
+    doMuonTrackAssoc=cms.bool(bool(opts.doMuons)),
+    muonTrackAssoc=cms.InputTag("ALCARECOTkAlJpsiXTrackToMuon"),
     doMuonAssoc=cms.bool(False),
     doTrigger=cms.bool(False),
     doRes=cms.bool(False),
@@ -186,7 +209,7 @@ process.globalCor = cms.EDProducer(
     applyHitQuality=cms.bool(True),
     corFiles=cms.vstring(),
     triggers=cms.vstring(),
-    trackParticleName=cms.string(opts.particle),
+    trackParticleName=cms.string(_fitname),
     MagneticFieldLabel=cms.string(""),
     scalarPotentialInitFile=cms.string(opts.scalarPot3DInitFile),
     materialGroupsFile=cms.string(opts.materialGroupsFile),

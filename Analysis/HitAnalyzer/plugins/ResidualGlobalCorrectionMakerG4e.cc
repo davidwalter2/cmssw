@@ -768,7 +768,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   }
 
   Handle<edm::View<reco::Muon> > muons;
-  if (doMuons_) {
+  if (doMuons_ || doMuonTrackAssoc_) {
     iEvent.getByToken(inputMuons_, muons);
   }
   
@@ -1104,6 +1104,10 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     muonTight = false;
     muonIsTracker = false;
     muonIsGlobal = false;
+    // muonIsPF was missing from this reset, so it carried over from the
+    // previous track in the event: on the B->J/psi+X ALCARECO that made it
+    // true for ~47% of hadron tracks that were never matched to a muon.
+    muonIsPF = false;
     muonIsStandalone = false;
     muonInnerTrackBest = false;
     trackExtraAssoc = false;
@@ -1122,6 +1126,41 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             matchedmuon = &muon;
           }
         }
+      }
+    }
+
+    // Ref-safe muon match for ALCARECO inputs. The muon's bestTrack()/
+    // innerTrack() refs point into generalTracks, which the ALCARECO drops,
+    // so dereferencing them throws; and the shipped track->muon association
+    // is keyed on the unselected track collection, not the preselected copy
+    // this module runs on. Match on the muon's OWN four-momentum instead,
+    // and read only values stored directly on the muon.
+    if (doMuonTrackAssoc_ && muons.isValid()) {
+      const reco::Muon *best = nullptr;
+      double bestdr = 0.01;
+      for (auto const &muon : *muons) {
+        if (muon.charge() != track.charge()) {
+          continue;
+        }
+        if (std::abs(muon.pt() - track.pt()) > 0.05*track.pt()) {
+          continue;
+        }
+        const double dr = deltaR(muon, track);
+        if (dr < bestdr) {
+          bestdr = dr;
+          best = &muon;
+        }
+      }
+      if (best != nullptr) {
+        muonPt = best->pt();
+        muonLoose = best->passed(reco::Muon::CutBasedIdLoose);
+        muonMedium = best->passed(reco::Muon::CutBasedIdMedium);
+        muonTight = best->passed(reco::Muon::CutBasedIdTight);
+        muonIsPF = best->isPFMuon();
+        muonIsTracker = best->isTrackerMuon();
+        muonIsGlobal = best->isGlobalMuon();
+        muonIsStandalone = best->isStandAloneMuon();
+        muonInnerTrackBest = best->muonBestTrackType() == reco::Muon::InnerTrack;
       }
     }
 

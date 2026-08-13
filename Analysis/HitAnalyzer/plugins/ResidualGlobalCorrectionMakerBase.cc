@@ -356,6 +356,12 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   
   debugprintout_ = false;
 
+  doMuonTrackAssoc_ = iConfig.existsAs<bool>("doMuonTrackAssoc")
+      ? iConfig.getParameter<bool>("doMuonTrackAssoc") : false;
+  if (doMuonTrackAssoc_) {
+    inputMuons_ = consumes<edm::View<reco::Muon>>(
+        iConfig.getParameter<edm::InputTag>("muons"));
+  }
   doMuonAssoc_ = iConfig.getParameter<bool>("doMuonAssoc");
   if (doMuonAssoc_) {
     inputMuonAssoc_ = consumes<edm::Association<std::vector<pat::Muon>>>(iConfig.getParameter<edm::InputTag>("src"));

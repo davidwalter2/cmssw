@@ -303,6 +303,12 @@ protected:
 
   edm::EDGetTokenT<edm::Association<std::vector<pat::Muon>>> inputMuonAssoc_;
   bool doMuonAssoc_;
+  // Ref-safe muon match against the ALCARECO loose-muon collection: the
+  // muon's own bestTrack()/innerTrack() refs point into generalTracks, which
+  // the ALCARECO does not keep, so dereferencing them throws. Only quantities
+  // stored directly on the muon (selector bits, type bits, p4) may be read.
+  // See the matching code in the G4e maker.
+  bool doMuonTrackAssoc_ = false;
   
   edm::EDGetTokenT<edm::TriggerResults> inputTriggerResults_;
   bool doTrigger_;
