@@ -32,6 +32,8 @@
 #include "SimG4Core/MagneticField/interface/Field.h"
 #include "G4ErrorPropagatorData.hh"
 
+#include <cstdlib>
+
 //-------------------------------------------------------------------
 G4ErrorEnergyLossForCVH::G4ErrorEnergyLossForCVH(const G4String& processName, G4ProcessType type)
     : G4VContinuousProcess(processName, type) {
@@ -74,6 +76,42 @@ G4VParticleChange* G4ErrorEnergyLossForCVH::AlongStepDoIt(const G4Track& aTrack,
     const G4LogicalVolume* lv = pre->GetTouchableHandle()->GetVolume()->GetLogicalVolume();
     dxieff += prov->materialOffset(lv, mid.perp() / CLHEP::cm, mid.z() / CLHEP::cm);
   }
+
+  // NESTED-CYLINDER INFLUENCE PROBE -- DIAGNOSTIC ONLY (2026-08-14).
+  //
+  // CVH_ELOSS_CYL_R / _Z (cm) + CVH_ELOSS_CYL_EPS: add eps to the log-scale
+  // mean-loss offset for every step INSIDE the cylinder (r < R, |z| < Z).
+  // A nested family of cylinders gives the cumulative influence profile
+  //     Lambda(u) = sum_{steps inside u} w_i mu_i   (from the p_fit response)
+  //     M(u)      = sum_{steps inside u} mu_i       (from the dEref response)
+  // whose derivative w(u) = dLambda/dM is the fit's influence weight as a
+  // function of position along the trajectory. Unlike the material-group
+  // probe this is unambiguous to map onto a cleanprop plane, which carries
+  // (refglobr, refglobz) but no logical-volume name.
+  //
+  // It lives HERE rather than in MaterialGroupModel because this hook is the
+  // MEAN-loss path only -- the step's MS and ionisation variance never see it,
+  // so the probe is mean-only by construction with nothing to switch off.
+  static const double _cylR = []() {
+    const char* v = getenv("CVH_ELOSS_CYL_R");
+    return v ? atof(v) : -1.;
+  }();
+  static const double _cylZ = []() {
+    const char* v = getenv("CVH_ELOSS_CYL_Z");
+    return v ? atof(v) : -1.;
+  }();
+  static const double _cylEps = []() {
+    const char* v = getenv("CVH_ELOSS_CYL_EPS");
+    return v ? atof(v) : 0.;
+  }();
+  if (_cylR > 0. && _cylEps != 0.) {
+    const G4ThreeVector mid =
+        0.5 * (aStep.GetPreStepPoint()->GetPosition() + aStep.GetPostStepPoint()->GetPosition());
+    if (mid.perp() / CLHEP::cm < _cylR && std::abs(mid.z() / CLHEP::cm) < _cylZ) {
+      dxieff += _cylEps;
+    }
+  }
+
   const double xifact = std::exp(dxieff);
 
   G4double kinEnergyStart = aTrack.GetKineticEnergy();

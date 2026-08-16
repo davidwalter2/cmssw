@@ -4,7 +4,9 @@
 
 #include "G4LogicalVolume.hh"
 
+#include <cstdlib>
 #include <fstream>
+#include <iostream>
 #include <sstream>
 
 MaterialGroupModel::MaterialGroupModel(const std::string &rulesFile) {
@@ -56,6 +58,35 @@ MaterialGroupModel::MaterialGroupModel(const std::string &rulesFile) {
   nGroups_ = gnames_.size();
   if (rules_.empty()) {
     throw cms::Exception("MaterialGroupModel") << "no RULE lines in " << rulesFile;
+  }
+
+  // INFLUENCE-WEIGHT PROBE -- DIAGNOSTIC ONLY (2026-08-14).
+  //
+  // CVH_MATGROUP_PROBE=g, CVH_MATGROUP_EPS=e apply a coherent log-scale shift e
+  // to group g's energy loss only (dE -> e^e dE for steps in g). With
+  // CVH_MATGROUP_MEANONLY=1 the shift is applied to the MEAN only, leaving Q
+  // alone. Paired against the nominal run this measures the group's
+  // contribution to the fit's influence weight,
+  //     w_g = d(p_fit at PCA) / d(applied loss in group g),
+  // whose material-weighted sum is the global T_sys = 0.6127 measured
+  // 2026-08-13. See NOTES_TRANSMISSION.md.
+  //
+  // Deliberately env-driven and NOT a config parameter: the corparms_ sync at
+  // the top of produce() overwrites kval_ every event, so the probe has to
+  // live in the separate injection slot.
+  if (const char *g = getenv("CVH_MATGROUP_PROBE")) {
+    const int gi = atoi(g);
+    const char *e = getenv("CVH_MATGROUP_EPS");
+    injGroup_ = gi;
+    injEps_ = e ? atof(e) : 0.;
+    injMeanOnly_ = getenv("CVH_MATGROUP_MEANONLY") != nullptr;
+    if (gi < 0 || gi >= nGroups_) {
+      throw cms::Exception("MaterialGroupModel")
+          << "CVH_MATGROUP_PROBE=" << gi << " outside [0," << nGroups_ - 1 << "]";
+    }
+    std::cout << "### MaterialGroupModel: influence-weight probe on group " << gi << " ("
+              << gnames_[gi] << "), eps = " << injEps_
+              << (injMeanOnly_ ? ", MEAN ONLY (Q untouched)" : ", mean AND Q") << std::endl;
   }
 }
 
