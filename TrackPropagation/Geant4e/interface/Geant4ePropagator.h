@@ -18,6 +18,7 @@
 
 #include "TrackPropagation/Geant4e/interface/G4UniversalFluctuationForExtrapolator.hh"
 #include "SimG4Core/MagneticField/interface/Field.h"
+#include "TrackPropagation/Geant4e/interface/CGFQoPBlock.h"
 
 class MaterialGroupModel;
 
@@ -40,7 +41,8 @@ public:
                     PropagationDirection dir = alongMomentum,
                     double plimit = 1.0,
                     bool forCVH = false,
-                    double ioniTruncAlpha = 0.999);
+                    double ioniTruncAlpha = 0.999,
+                    double stepLengthLimit = 10.0);   // mm
 
   ~Geant4ePropagator() override;
 
@@ -143,6 +145,29 @@ public:
   };
   void setIoniStepLogging(bool on) { ioniStepLogging_ = on; }
   const std::vector<UrbanIoniStep> &ioniStepLog() const { return ioniStepLog_; }
+
+  // CGF q/p block of the LAST propagate call (CVH_CGF_QOP; see the block
+  // comment in propagateGenericWithJacobianAltD). Same accessor idiom as the
+  // step logs above: the caller reads it immediately after the propagate, so
+  // it is in sync with the leg whose noise matrices it just consumed.
+  //
+  // `cgfBlockSigma` is the internal standardization scale, i.e. the leg's
+  // NOMINAL Gaussian q/p sigma, needed to convert the score table's z back to
+  // physical q/p. It is NOT a modelling quantity.
+  // Cached-weight override for the next propagate call (CVH_CGF_QOP).
+  // >= 0 : use this value for Qcurv(0,0) and SKIP the inversion entirely --
+  //        standard IRLS, fixed weights and a moving centre. `I` is a property
+  //        of the block's distribution, and at the fixed point it enters only
+  //        as a PRECONDITIONER (the stationarity condition
+  //        hit_grad + F^T psi(r) = 0 contains no I at all), so freezing it
+  //        cannot move the fixed point -- only the path to it.
+  // <  0 : compute it (the default).
+  // One-shot: consumed and reset at the top of the next propagate call.
+  void setCgfOverride(double q) const { cgfOverrideQ_ = q; }
+
+  const cvhcgf::Result &cgfBlock() const { return cgfLastResult_; }
+  double cgfBlockSigma() const { return cgfLastSigma_; }
+  bool cgfBlockValid() const { return cgfLastResult_.ok; }
 
   // Phase B: per-step raw material/kinematic data for the offline Moliere
   // (screened-Rutherford compound-Poisson) model of the multiple-scattering
@@ -415,11 +440,21 @@ private:
   // ionization-variance truncation passed through to fluct (see
   // G4UniversalFluctuationForExtrapolator::SetIoniTruncationAlpha)
   double ioniTruncAlpha_ = 0.999;
+  // Maximum Geant4e step, applied via "/geant4e/limits/stepLength" [mm].
+  // Was hard-coded to 10.0 mm in two places. It is a real ceiling, not a
+  // physics scale: in a homogeneous medium the model sits exactly ON it
+  // (measured: 25-95th percentile of step lengths = 1.0000 cm), while Geant4
+  // in the SIM steps far more finely, and Moliere's log term is not additive
+  // between the two. That mismatch was the whole homogeneous-toy failure.
+  double stepLengthLimit_ = 10.0;
 
   // Urban step logging (see setIoniStepLogging); log is mutable because
   // computeErrorIoni is const.
   bool ioniStepLogging_ = false;
   mutable std::vector<UrbanIoniStep> ioniStepLog_;
+  mutable cvhcgf::Result cgfLastResult_;
+  mutable double cgfLastSigma_ = 0.;
+  mutable double cgfOverrideQ_ = -1.;
   mutable std::vector<MoliereMsStep> msStepLog_;
   mutable std::vector<RadiativeStep> radStepLog_;
 

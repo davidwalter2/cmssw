@@ -6,6 +6,7 @@
 #include "TrackPropagation/Geant4e/interface/Geant4ePropagator.h"
 #include "TrackPropagation/Geant4e/interface/G4ErrorPhysicsListForCVH.h"
 #include "TrackPropagation/Geant4e/interface/MaterialGroupModel.h"
+#include "TrackPropagation/Geant4e/interface/CGFQoPBlock.h"
 
 // CMSSW
 #include "DataFormats/TrajectorySeed/interface/PropagationDirection.h"
@@ -16,6 +17,7 @@
 #include "DataFormats/GeometrySurface/interface/Cylinder.h"
 #include "DataFormats/GeometrySurface/interface/Plane.h"
 #include "FWCore/MessageLogger/interface/MessageLogger.h"
+#include "FWCore/Utilities/interface/Exception.h"
 #include "TrackingTools/AnalyticalJacobians/interface/AnalyticalCurvilinearJacobian.h"
 
 // Geant4
@@ -89,13 +91,15 @@ Geant4ePropagator::Geant4ePropagator(const MagneticField *field,
                                      PropagationDirection dir,
                                      double plimit,
                                      bool forCVH,
-                                     double ioniTruncAlpha)
+                                     double ioniTruncAlpha,
+                                     double stepLengthLimit)
     : Propagator(dir),
       theField(field),
       theParticleName(particleName),
       plimit_(plimit),
       forCVH_(forCVH),
-      ioniTruncAlpha_(ioniTruncAlpha) {
+      ioniTruncAlpha_(ioniTruncAlpha),
+      stepLengthLimit_(stepLengthLimit) {
   LogDebug("Geant4e") << "Geant4e Propagator initialized";
 
   // G4 init is deferred: in MT mode the ESProducer's produce() runs eagerly
@@ -128,6 +132,7 @@ Geant4ePropagator::Geant4ePropagator(const Geant4ePropagator &other)
       plimit_(other.plimit_),
       forCVH_(other.forCVH_),
       ioniTruncAlpha_(other.ioniTruncAlpha_),
+      stepLengthLimit_(other.stepLengthLimit_),
       ioniStepLogging_(other.ioniStepLogging_),
       stepTransportLogging_(other.stepTransportLogging_) {
   // fluct allocation is deferred to the first propagate() call on this
@@ -184,8 +189,9 @@ void Geant4ePropagator::ensureGeant4eIsInitilized(bool) const {
     man->SetVerboseLevel(0);
     theG4eManager->InitGeant4e();
 
-    // define 10 mm step limit for propagator
-    G4UImanager::GetUIpointer()->ApplyCommand("/geant4e/limits/stepLength 10.0 mm");
+    // step limit for the propagator; configurable, default 10 mm
+    G4UImanager::GetUIpointer()->ApplyCommand(
+        ("/geant4e/limits/stepLength " + std::to_string(stepLengthLimit_) + " mm").c_str());
   }
   const G4Field *field = G4TransportationManager::GetTransportationManager()->GetFieldManager()->GetDetectorField();
   if (field == nullptr) {
@@ -212,8 +218,9 @@ void Geant4ePropagator::ensureGeant4eIsInitilizedForCVH(bool forceInit) const {
     LogDebug("Geant4e") << "G4 not in preinit state: " << G4ErrorPropagatorData::GetErrorPropagatorData()->GetState()
                         << std::endl;
   }
-  // define 10 mm step limit for propagator
-  G4UImanager::GetUIpointer()->ApplyCommand("/geant4e/limits/stepLength 10.0 mm");
+  // step limit for the propagator; configurable, default 10 mm
+  G4UImanager::GetUIpointer()->ApplyCommand(
+      ("/geant4e/limits/stepLength " + std::to_string(stepLengthLimit_) + " mm").c_str());
 }
 
 template <>
@@ -661,6 +668,93 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
     stepTransportLog_.clear();
   }
 
+  // ------------------------------------------------------------------------
+  // CGF q/p PROCESS-NOISE BLOCK WEIGHT -- DIAGNOSTIC/PROTOTYPE, OFF BY DEFAULT.
+  //
+  // CVH_CGF_QOP unset  : nothing below runs. Bit-identical to nominal.
+  //             = 2    : compute 1/I and PRINT it; the returned noise matrices
+  //                      are untouched, so the physics output is still
+  //                      bit-identical (only stdout differs). This is the mode
+  //                      in which the in-fit number is compared against the
+  //                      offline reference.
+  //             = 1    : SUBSTITUTE, i.e. Qcurv(0,0) <- 1/I. This is the
+  //                      first genuine change to the fit's noise model.
+  //
+  // WHAT IS BEING REPLACED. errMSIout(0,0) is the alpha = 0.999 truncated
+  // Urban ionization variance, summed over the leg's steps with each step's
+  // noise transported to the end of the leg. The truncation is a convention
+  // (the 1/E^2 delta-ray channel has no second moment without one) and it is
+  // not additive under step subdivision. The replacement is the inverse
+  // FISHER INFORMATION of the leg's true q/p noise distribution, which needs
+  // no truncation and is the weight a Fisher-scoring estimator applies.
+  //
+  // WHAT IS NOT DONE HERE. This sets the WEIGHT only. The other half of the
+  // IRLS surrogate -- the re-centring mu_eff = r - psi(r)/I -- is data
+  // dependent and belongs in the maker, inside the fit iteration. Without it
+  // the block is still centred on the MEAN, i.e. this changes how hard each
+  // block pulls but not where it pulls to. See Documents/Resolution/
+  // NOTES_CGFFIT.md.
+  //
+  // SCOPE: ionization channel only, q/p (curvilinear component 0) only.
+  // Measured offline on the pT = 3 reference ray, adding MS + radiative moves
+  // 1/I by +0.0 / +0.05 / +0.15 % at planes 0 / 9 / 18.
+  static const int cgfQoPMode = []() {
+    const char *v = getenv("CVH_CGF_QOP");
+    return v ? atoi(v) : 0;
+  }();
+  static const cvhcgf::Config cgfCfg = []() {
+    cvhcgf::Config c;
+    if (const char *v = getenv("CVH_CGF_QOP_NT"))
+      c.nt = atoi(v);
+    if (const char *v = getenv("CVH_CGF_QOP_NPAD"))
+      c.npad = atoi(v);
+    if (const char *v = getenv("CVH_CGF_QOP_LNCUT"))
+      c.lncut = atof(v);
+    return c;
+  }();
+  // CONTROL, not a physics knob: multiplies the internal standardization
+  // scale. 1/I is quoted in units of that scale, so the PHYSICAL answer
+  // sigma^2 * (1/I_z) must be invariant under it. Verified offline to 7e-7
+  // over a factor 16; this is the in-fit version of the same check.
+  static const double cgfSigScale = []() {
+    const char *v = getenv("CVH_CGF_QOP_SIGSCALE");
+    return v ? atof(v) : 1.0;
+  }();
+  // per-step transport Jacobians and Urban records for the block CGF; both
+  // empty and never touched when the switch is off
+  std::vector<Matrix<double, 5, 5>> cgfStepJac;
+  std::vector<std::pair<int, std::pair<G4UniversalFluctuationForExtrapolator::UrbanFluctRecord, double>>> cgfStepRec;
+  // per-step (transport index, cs * dedxRad * steplength) -- the radiative
+  // MEAN the reference no longer subtracts when CVH_IONONLY is set, in q/p
+  // units before transport. Collected only in that configuration.
+  std::vector<std::pair<int, double>> cgfStepRadMean;
+  const bool cgfIonOnly = cvhcgf::referenceIsIonOnly();
+  // one-shot cached weight, consumed here so no stale value can leak into a
+  // later call (including the ones on failure paths)
+  const double cgfOverride = cgfOverrideQ_;
+  cgfOverrideQ_ = -1.;
+  if (cgfQoPMode > 0) {
+    cgfLastResult_ = cvhcgf::Result();  // invalidate: one propagate = one leg
+    cgfLastSigma_ = 0.;
+  }
+  // The configuration that silently biases: the reference has had the
+  // radiative mean removed but the noise block is still the Gaussian one,
+  // pinned at r = 0, which cannot carry a mean. Measured cost at pT = 3:
+  // 1.03e-5 relative on q/p at the outermost plane, growing with momentum
+  // (radiative is 2.5 % of the q/p kappa2 at pT = 3 and 18.6 % at pT = 40).
+  // Warn once rather than throw, because CVH_IONONLY predates this work and
+  // is someone else's diagnostic.
+  [[maybe_unused]] static const bool cgfIonOnlyWarned = [&]() {
+    if (cgfIonOnly && cgfQoPMode != 1) {
+      std::cout << "### CVHCGF WARNING: CVH_IONONLY is set but the CGF block is not "
+                   "substituting (CVH_CGF_QOP != 1). The reference no longer subtracts "
+                   "the radiative mean and NOTHING carries it: this configuration has an "
+                   "uncorrected q/p shift of ~1e-5 relative at pT = 3, growing with momentum."
+                << std::endl;
+    }
+    return true;
+  }();
+
   // Deferred per-thread Geant4e init under mutex (see propagateGeneric).
   if (!geant4eInitDoneForThread()) {
     std::lock_guard<std::mutex> lk(geant4eInitMutex());
@@ -1059,6 +1153,39 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
 
     errMSIout(0, 0) = ionifact * computeErrorIoni(g4eTrajState.GetG4Track(), pforced);
 
+    // CGF block: collect this step's transport and, if it produced one, its
+    // Urban record. The record's index into cgfStepJac is what the backward
+    // transport pass below needs. computeErrorIoni has just been called, so
+    // fluct->lastRecord() is this step's.
+    if (cgfQoPMode > 0) {
+      cgfStepJac.push_back(transportJac.leftCols<5>());
+      if (fluct->lastRecordValid()) {
+        const G4Track *ctrk = g4eTrajState.GetG4Track();
+        const double cEtot = ctrk->GetTotalEnergy() / CLHEP::GeV;
+        const double cP = (ctrk->GetStep()->GetPreStepPoint()->GetMomentum() / CLHEP::GeV).mag();
+        // cs = E/p^3 [GeV^-2], the same dE -> d(q/p) map computeErrorIoni
+        // squares into the variance and the offline reference uses
+        const double cs = (cP > 0.) ? cEtot / (cP * cP * cP) : 0.;
+        cgfStepRec.emplace_back(static_cast<int>(cgfStepJac.size()) - 1,
+                                std::make_pair(fluct->lastRecord(), cs));
+      }
+      if (cgfIonOnly && std::abs(thisPathLength) > 0.) {
+        // The reference no longer subtracts the radiative mean, so the block
+        // must carry it. dedxRad is exactly the term dropped from the table
+        // (same muonPlus/unrestricted-cut construction as
+        // G4TablesForExtrapolatorForCVH::ComputeMuonDEDX). GeV throughout --
+        // no 1e-3, unlike the Urban records.
+        const G4Track *rtrk = g4eTrajState.GetG4Track();
+        double dbrem = 0., dpair = 0.;
+        computeRadiativeDEDX(rtrk, dbrem, dpair);
+        const double rEtot = rtrk->GetTotalEnergy() / CLHEP::GeV;
+        const double rP = (rtrk->GetStep()->GetPreStepPoint()->GetMomentum() / CLHEP::GeV).mag();
+        const double rcs = (rP > 0.) ? rEtot / (rP * rP * rP) : 0.;
+        cgfStepRadMean.emplace_back(static_cast<int>(cgfStepJac.size()) - 1,
+                                    rcs * (dbrem + dpair) * thisPathLength);
+      }
+    }
+
     // separate scaling for ionization and MS
 
     g4errorEnd += errMSIout;
@@ -1167,6 +1294,155 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
     if (theG4eManager->GetPropagator()->CheckIfLastStep(g4eTrajState.GetG4Track())) {
       theG4eManager->GetPropagator()->InvokePostUserTrackingAction(g4eTrajState.GetG4Track());
       continuePropagation = false;
+    }
+  }
+
+  // ------------------------------------------------------------------------
+  // CGF q/p block weight, evaluated once per leg (see the block comment at the
+  // top of this function). Everything here is inside `if (cgfQoPMode > 0)`.
+  if (cgfQoPMode > 0 && cgfOverride >= 0.) {
+    // cached weight: the whole inversion is skipped. This is where the cost of
+    // the scheme goes when `I` is frozen.
+    if (cgfQoPMode == 1 || cgfQoPMode == 3) {
+      g4errorEnd(0, 0) = cgfOverride;
+      dQ2(0, 0) = cgfOverride;
+    }
+  } else if (cgfQoPMode > 0 && !cgfStepRec.empty() && g4errorEnd(0, 0) > 0.) {
+    // Transport weight of each step's noise to the END of the leg. The step
+    // loop transports the ACCUMULATED noise and then adds the step's own, so
+    // the noise injected at step s is subsequently transported by steps
+    // s+1..N only: A_s = T_N T_{N-1} ... T_{s+1}. Only row 0 of A_s is
+    // needed, so carry that row backwards.
+    const size_t nsj = cgfStepJac.size();
+    std::vector<double> wtr(nsj, 0.);
+    {
+      Matrix<double, 1, 5> row = Matrix<double, 1, 5>::Zero();
+      row(0, 0) = 1.;
+      for (size_t s = nsj; s-- > 0;) {
+        wtr[s] = row(0, 0);
+        row = (row * cgfStepJac[s]).eval();
+      }
+    }
+
+    // Internal standardization: the nominal Gaussian sigma of this leg's q/p
+    // noise. Purely a numerical scale to keep the inversion grid conditioned;
+    // the physical answer is sigma^2 * (1/I_z) and must not depend on it.
+    const double cgfSigma = cgfSigScale * std::sqrt(g4errorEnd(0, 0));
+    std::vector<cvhcgf::IoniStep> blk;
+    blk.reserve(cgfStepRec.size());
+    for (const auto &e : cgfStepRec) {
+      const auto &rec = e.second.first;
+      const double cs = e.second.second;
+      const double gam = rec.scaling;
+      cvhcgf::IoniStep s;
+      s.regime = rec.regime;
+      s.gsig2 = rec.gsig2;
+      s.a1 = rec.a1;
+      s.e1 = rec.e1 * gam;
+      s.a2 = rec.a2;
+      s.e2 = rec.e2 * gam;
+      s.a3 = rec.a3;
+      s.e0 = rec.e0r * gam;
+      s.tmax = rec.tmaxr * gam;
+      // record energies are in MeV; the 1e-3 is the propagator's own MeV
+      // convention on cs. The transport weight belongs to the RESIDUAL, never
+      // to the CGF parameters (NOTES_EXPORTS section 4.3) -- that is what
+      // keeps d eta/d a = 0 for alignment and B-field.
+      //
+      // The CHARGE factor is not cosmetic. cs = E/p^3 maps dE -> d(q/p) for a
+      // POSITIVE charge; for q = -1 the map flips, and with it the sign of the
+      // ionization skew, i.e. the mode-vs-mean displacement. It cancels in
+      // 1/I (the Fisher information of a reflected density is the same), so
+      // omitting it would be invisible in the WEIGHT and would silently
+      // reverse the re-centring the next stage adds.
+      const double qsign = (charge >= 0. ? 1. : -1.);
+      s.gs = qsign * wtr[e.first] * cs * 1e-3 / cgfSigma;
+      blk.push_back(s);
+    }
+
+    // THE BLOCK CGF IS NOT REGIME-2/3 AWARE, and this is the failure mode
+    // NOTES_DELTASPEC section 6 named: `cvhcgf::blockExponent` /
+    // `blockKappa2` branch only on `regime == 0` and treat everything else as
+    // regime 1, i.e. they read column `a3` as a COLLISION COUNT. In regime
+    // 2/3 that slot holds `xi` (an ENERGY, ~0.07 MeV against a count of ~7.6),
+    // so the delta channel comes out wrong by ~1e-5 -- and, being a weight, it
+    // does not fail, it just quietly changes the answer. The Kokoulin term is
+    // likewise absent from the block CGF.
+    //
+    // THIS USED TO BE A ONE-SHOT WARNING, on the argument that both switches
+    // were default-off so nothing shipped could be affected. That argument
+    // died on 2026-08-16, when CVH_IONI_EXACTDELTA went DEFAULT-ON: from then
+    // on, anyone enabling the CGF prototype inherits the wrong answer without
+    // doing anything, and a line of stdout is not a guard against that. So it
+    // throws. `cvhcgf::blockExponent`/`blockKappa2` also refuse regime >= 2
+    // themselves; this site exists to fail EARLY and with the remedy in the
+    // message, before an inversion grid is allocated.
+    //
+    // The remedy is one variable, and it is available precisely because the
+    // switch stayed operable in both directions: CVH_IONI_EXACTDELTA=0.
+    if (G4UniversalFluctuationForExtrapolator::exactDeltaEnabled()) {
+      throw cms::Exception("Geant4ePropagator")
+          << "CVH_CGF_QOP is enabled together with CVH_IONI_EXACTDELTA (which is DEFAULT-ON since "
+             "2026-08-16). cvhcgf::blockExponent has no regime-2/3 branch: it reads the Urban record's "
+             "`a3` slot as a delta-ray collision count, but in regime 2/3 that slot holds xi (an energy, "
+             "~0.07 MeV against a count of ~7.6). The block CGF -- and therefore 1/I and psi -- would be "
+             "wrong by ~1e-5 in the delta channel WITHOUT failing. Run the CGF prototype with "
+             "CVH_IONI_EXACTDELTA=0, or give the block CGF the exact knock-on cross section (a direct port "
+             "of cf_track_resolution.exact_delta_exponent; it additionally needs beta2 and etot, which "
+             "cvhcgf::IoniStep does not yet carry).";
+    }
+
+    // THE COUPLED CONVENTION. With CVH_IONONLY the reference is propagated
+    // with ionization-only loss, so the block residual now carries the
+    // radiative MEAN and the block density has to be translated by it. The
+    // centred and uncentred radiative CFs were measured to differ by EXACTLY
+    // `i t dz_rad`, so a rigid translation is not an approximation.
+    //
+    // Each half alone is a bias of the same size and opposite sign; only the
+    // pair is a no-op. That is why the flag is read in ONE place
+    // (cvhcgf::referenceIsIonOnly) rather than at each site.
+    double cgfRadMeanPhys = 0.;
+    for (const auto &e : cgfStepRadMean)
+      cgfRadMeanPhys += wtr[e.first] * e.second;
+    const double qsignBlk = (charge >= 0. ? 1. : -1.);
+    // energy LOST by the particle but not by the reference -> d(q/p) with the
+    // same charge map as the ionization channel
+    cgfRadMeanPhys *= qsignBlk;
+    cvhcgf::Config cfgLeg = cgfCfg;
+    cfgLeg.meanShift = cgfRadMeanPhys / cgfSigma;
+
+    const cvhcgf::Result cgf = cvhcgf::inverseFisher(blk, cfgLeg);
+    // published for the maker's IRLS re-centring, in sync with this leg (same
+    // accessor idiom as the step logs)
+    cgfLastResult_ = cgf;
+    cgfLastSigma_ = cgfSigma;
+    if (cgf.ok) {
+      const double qnom = g4errorEnd(0, 0);
+      const double qcgf = cgf.invFisher * cgfSigma * cgfSigma;
+      if (cgfQoPMode >= 2) {
+        std::cout << "### CVHCGF"
+                  << " nstep=" << cgf.nsteps << " sigma=" << cgfSigma << " kappa2=" << cgf.kappa2
+                  << " invI_z=" << cgf.invFisher << " Qnom=" << qnom << " Qcgf=" << qcgf
+                  << " ratio=" << (qcgf / qnom) << " tmax=" << cgf.tmax << " mass=" << cgf.mass
+                  << " massfrac=" << cgf.massFrac << " zmode=" << cgf.zmode
+                  << " ionOnly=" << int(cgfIonOnly) << " radmean=" << cgfRadMeanPhys
+                  << " shift_z=" << cfgLeg.meanShift << " nzc=" << cgf.nZeroCross
+                  << " psiwin=[" << cgf.psiWinLo << "," << cgf.zhi << "]" << std::endl;
+      }
+      if (cgfQoPMode == 1 || cgfQoPMode == 3) {
+        // The substitution. dQ2 is the ionization-only accumulator, i.e. this
+        // channel and nothing else, so it moves with it; dQ (MS) has a zero
+        // (0,0) element and is untouched.
+        // Mode 3 = weight AND re-centring; mode 1 = weight only. An earlier
+        // version gated this on `== 1` alone, which made mode 3 apply the
+        // re-centring WITHOUT the weight -- an inconsistent pair, caught by
+        // the Gaussian-psi control coming out identical to nominal instead of
+        // identical to mode 1.
+        g4errorEnd(0, 0) = qcgf;
+        dQ2(0, 0) = qcgf;
+      }
+    } else if (cgfQoPMode >= 2) {
+      std::cout << "### CVHCGF FAILED nstep=" << cgf.nsteps << " tmax=" << cgf.tmax << std::endl;
     }
   }
 
