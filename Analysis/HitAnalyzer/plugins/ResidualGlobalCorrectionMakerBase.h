@@ -651,6 +651,13 @@ protected:
   // mutable so the per-job "did the test" flag can be set inside
   // analyze() without making the whole maker non-const.
   mutable bool didFDClosure_ = false;
+
+  // CGF q/p IRLS re-centring counters (CVH_CGF_QOP=3). Diagnostics only; the
+  // clamp count is the one that matters -- it says how often a residual fell
+  // outside the block's own support, where the score is continued rather than
+  // evaluated.
+  mutable unsigned long long nCgfRecentre_ = 0;
+  mutable unsigned long long nCgfClamp_ = 0;
   
   float dxpxb1;
   float dypxb1;

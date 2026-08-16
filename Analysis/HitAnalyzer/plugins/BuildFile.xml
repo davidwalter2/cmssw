@@ -1,3 +1,7 @@
+<use name="SimG4Core/Watcher"/>
+<use name="SimG4Core/Notification"/>
+<use name="CommonTools/UtilAlgos"/>
+<use name="geant4core"/>
 <flags CXXFLAGS="-g -Wno-error -Wno-unused-variable"/>
 <use name="FWCore/Framework"/>
 <use name="FWCore/PluginManager"/>

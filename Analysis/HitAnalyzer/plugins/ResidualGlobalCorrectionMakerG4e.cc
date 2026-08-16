@@ -1,6 +1,7 @@
 #include "ResidualGlobalCorrectionMakerBase.h"
 #include "DataFormats/MuonReco/interface/Muon.h"
 #include "TrackPropagation/Geant4e/interface/Geant4ePropagator.h"
+#include "TrackPropagation/Geant4e/interface/G4UniversalFluctuationForExtrapolator.hh"
 #include "TrackPropagation/Geant4e/interface/MaterialGroupModel.h"
 #include "Analysis/HitAnalyzer/interface/ParticleProperties.h"
 
@@ -1650,6 +1651,30 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     
     const unsigned int niters = (dogen && !dolocalupdate) || (dogen && fitFromSimParms_) ? 1 : nIters_;
     
+    // CGF IRLS (CVH_CGF_QOP=3): the realised q/p noise of each block from
+    // the PREVIOUS solve, r_b^(t) = (Ffull dxfull)_b. Persists across
+    // Gauss-Newton iterations; empty (hence r = 0) on the first, which is
+    // exactly the t = 0 case of the derivation. Sized on first use.
+    //
+    // Carrying it across iterations is legitimate even though the reference
+    // is regenerated every iteration: the reference update propagates a seed
+    // shift through all layers, and a noiseless shift has (F delta)_b = 0 by
+    // construction, so (F dx)_b is INVARIANT under it. It is precisely the
+    // part of dx the reference cannot absorb.
+    std::vector<double> cgfRprev;
+    std::vector<unsigned int> cgfBlkRow;
+    // Cached block weights and score tables (CVH_CGF_QOP_REFRESH). `I` and the
+    // score table are properties of the block's DISTRIBUTION, so freezing them
+    // after the first sweep is standard IRLS -- fixed weights, moving centre.
+    // At the fixed point the stationarity condition is
+    //     hit_grad + F^T psi(r) = 0
+    // which contains no `I` at all, so `I` is a PRECONDITIONER: freezing it
+    // changes the path and cannot change the fixed point. That makes
+    // cached-vs-uncached a genuine path-independence test rather than a
+    // model change (section 33).
+    std::vector<double> cgfCacheQ, cgfCacheSig;
+    std::vector<cvhcgf::Result> cgfCacheRes;
+
     for (unsigned int iiter=0; iiter<niters; ++iiter) {
       if (debugprintout_) {
         std::cout<< "iter " << iiter << std::endl;
@@ -1835,6 +1860,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       
       rfull = VectorXd::Zero(ncons);
       Ffull = MatrixXd::Zero(ncons, nstateparms);
+      cgfBlkRow.clear();
       Jfull = MatrixXd::Zero(ncons, npars);
       Vinvfull = MatrixXd::Zero(ncons, ncons);
       Vinvfullalt = MatrixXd::Zero(ncons, ncons);
@@ -2112,6 +2138,19 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         const Eigen::Matrix<double, 7, 1> propInputState =
             simhitdebug ? propfromtsos : updtsos;
 
+        // cached block weight for this leg, if we have one and are not
+        // refreshing on this iteration
+        {
+          static const int cgfRefresh = []() {
+            const char *v = getenv("CVH_CGF_QOP_REFRESH");
+            return v ? atoi(v) : 0;   // 0 = freeze after the first sweep
+          }();
+          const bool refreshNow = (iiter == 0) ||
+                                  (cgfRefresh > 0 && (iiter % cgfRefresh) == 0);
+          if (!refreshNow && ihit < cgfCacheQ.size() && cgfCacheQ[ihit] > 0.) {
+            g4prop->setCgfOverride(cgfCacheQ[ihit]);
+          }
+        }
         auto const &propresult = simhitdebug
             ? g4prop->propagateGenericWithJacobianAltD(propfromtsos, surface, dB, dxival, dmsval, dionival, -1., g4PartName,
                                                        matModel_.get(), matModel_ ? &groupJacs_ : nullptr,
@@ -2160,6 +2199,17 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         
         updtsos = std::get<1>(propresult);
         const Matrix<double, 5, 5> Qcurv = std::get<2>(propresult);
+        // record the (possibly just-computed) block weight and score table
+        if (g4prop != nullptr && g4prop->cgfBlockValid()) {
+          if (cgfCacheQ.size() <= ihit) {
+            cgfCacheQ.resize(ihit + 1, -1.);
+            cgfCacheSig.resize(ihit + 1, 0.);
+            cgfCacheRes.resize(ihit + 1);
+          }
+          cgfCacheQ[ihit] = Qcurv(0, 0);
+          cgfCacheSig[ihit] = g4prop->cgfBlockSigma();
+          cgfCacheRes[ihit] = g4prop->cgfBlock();
+        }
         const Matrix<double, 5, 9> FdFmcurv = std::get<3>(propresult);
         const double dEdxlast = std::get<4>(propresult);
         const Matrix<double, 5, 5> dQMScurv = std::get<5>(propresult);
@@ -2417,6 +2467,100 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             }
           }
 
+          // ------------------------------------------------------------------
+          // IRLS RE-CENTRING of the q/p process-noise row (CVH_CGF_QOP=3).
+          // OFF unless the mode is exactly 3; modes 0/1/2 leave dx0 untouched.
+          //
+          // The surrogate replaces the block's -ln p by
+          //     1/2 (r - mu)^T I (r - mu),   mu = r - psi(r)/I
+          // so the residual the least-squares sees is (r - mu) = psi(r)/I,
+          // evaluated at the current iterate. With the outer Gauss-Newton loop
+          // already iterating, taking `current` = this iterate is exactly
+          // FISHER SCORING (the increment solves I delta = psi), and at the
+          // fixed point the surrogate score equals the true score EXACTLY.
+          //
+          // In the propagator's standardized units z = r/sigma with
+          // sigma^2 = the leg's nominal Gaussian q/p variance:
+          //     r_used = sigma * (1/I_z) * psi_z(r / sigma)
+          // and the weight Q(0,0) = sigma^2 * (1/I_z) is already substituted.
+          //
+          // GAUSSIAN-LIMIT IDENTITY, and it is the wiring control: for a
+          // Gaussian block psi_z(z) = z / (1/I_z), so r_used = r identically.
+          // CVH_CGF_QOP_GAUSSPSI=1 substitutes exactly that psi and MUST
+          // reproduce mode 1 bit for bit -- which separates "are the units
+          // right" from "is the score right".
+          //
+          // Only component 0 is touched. dx0 is the local 5-parameter
+          // residual whose first component is q/p in both the local and the
+          // curvilinear bases, which is why the standardization by the
+          // CURVILINEAR sigma is the matching one.
+          static const int cgfMode = []() {
+            const char *v = getenv("CVH_CGF_QOP");
+            return v ? atoi(v) : 0;
+          }();
+          static const bool cgfGaussPsi = (getenv("CVH_CGF_QOP_GAUSSPSI") != nullptr);
+          if (cgfMode == 3) {
+            // Block index within this track, in layer order -- the same order
+            // every iteration, which is what makes cgfRprev addressable.
+            const unsigned int iblk = cgfBlkRow.size();
+            cgfBlkRow.push_back(icons);
+            const double rprev = (iblk < cgfRprev.size()) ? cgfRprev[iblk] : 0.;
+            if (ihit < cgfCacheRes.size() && cgfCacheRes[ihit].ok) {
+              const cvhcgf::Result &cgfb = cgfCacheRes[ihit];
+              const double csig = cgfCacheSig[ihit];
+              if (csig > 0. && cgfb.invFisher > 0.) {
+                // rfull_b = -mu_b = -( r^(t) - psi_r(r^(t))/I_r ), and in the
+                // propagator's standardized units
+                //     psi_r/I_r = sigma * (1/I_z) * psi_z(r/sigma)
+                // so           rfull_b = -r^(t) + sigma (1/I_z) psi_z(r/sigma).
+                //
+                // GAUSSIAN LIMIT: psi_z(z) = z/(1/I_z) gives
+                // sigma (1/I_z) (r/sigma)/(1/I_z) = r, hence rfull_b = 0
+                // IDENTICALLY, at every iteration and every r -- not merely at
+                // r = 0. That is the check that this matches the derivation,
+                // and CVH_CGF_QOP_GAUSSPSI=1 runs it.
+                const double z = rprev / csig;
+                double psiz;
+                if (cgfGaussPsi) {
+                  psiz = z / cgfb.invFisher;
+                } else {
+                  bool clamped = false;
+                  psiz = cvhcgf::scoreAt(cgfb, z, &clamped);
+                  if (clamped) {
+                    ++nCgfClamp_;
+                  }
+                }
+                // Written as the NON-GAUSSIAN part of the score, not as
+                // `-r + sigma (1/I) psi`. The two are algebraically identical,
+                // but the latter is a catastrophic cancellation: the Gaussian
+                // piece of psi reconstructs r, so the answer is the difference
+                // of two O(r) numbers and comes out at r * O(eps) instead of
+                // exactly zero. Measured: that residual is 1e-17 of r -- and
+                // the FIT AMPLIFIES IT TO 2.7e-5 on the fitted q/p, so the
+                // difference is not cosmetic (section 25.2).
+                //
+                // With d = psi_z(z) - z/(1/I_z) the Gaussian limit is
+                // bit-exactly zero, and the t = 0 case reduces to
+                // sigma (1/I_z) psi_z(0) as before.
+                const double dscore = psiz - z / cgfb.invFisher;
+                dx0[0] = csig * cgfb.invFisher * dscore;
+                ++nCgfRecentre_;
+                if (getenv("CVH_CGF_QOP_DEBUG") != nullptr) {
+                  static int ndbg = 0;
+                  if (ndbg < 40 && rprev != 0.) {
+                    ++ndbg;
+                    std::cout << "### CGFDBG iiter=" << iiter << " iblk=" << iblk
+                              << " icons=" << icons
+                              << " rprev=" << rprev << " csig=" << csig
+                              << " invI=" << cgfb.invFisher << " psiz=" << psiz
+                              << " dx0out=" << dx0[0] << std::endl;
+                  }
+                }
+              }
+            }
+          }
+          // ------------------------------------------------------------------
+
           rfull.segment<nlocalcons>(icons) = dx0;
 
           // Build the 5 x nlocalparms field+eloss Jacobian: per-mode columns
@@ -2659,6 +2803,13 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               ioniurbanv.push_back(us.rec.tmaxr);
               ioniurbanv.push_back(us.rec.scaling);
               ioniurbanv.push_back(us.cs);
+              // regime 2/3 (CVH_IONI_EXACTDELTA): two extra columns AFTER cs,
+              // so every existing column index is unchanged and the stride is
+              // 11 exactly when the switch is off.
+              if (G4UniversalFluctuationForExtrapolator::exactDeltaEnabled()) {
+                ioniurbanv.push_back(us.rec.beta2);
+                ioniurbanv.push_back(us.rec.etot);
+              }
             }
           }
 
@@ -3525,6 +3676,17 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       if (gnDampAfter_ > 0 && iiter >= gnDampAfter_) {
         dxfree *= gnDampFactor_;
         dxfull *= gnDampFactor_;
+      }
+
+      // CGF IRLS: the realised block residual of the step just taken, for the
+      // next iteration's re-centring. Taken AFTER the momentum-floor clamp and
+      // the damping, so it refers to the step actually applied. One dot
+      // product per block; only the q/p row (icons + 0) is needed.
+      if (!cgfBlkRow.empty()) {
+        cgfRprev.assign(cgfBlkRow.size(), 0.);
+        for (unsigned int ib = 0; ib < cgfBlkRow.size(); ++ib) {
+          cgfRprev[ib] = Ffull.row(cgfBlkRow[ib]).dot(dxfull);
+        }
       }
 
       const double deltachisq = rfull.transpose()*VinvF*dxfree;

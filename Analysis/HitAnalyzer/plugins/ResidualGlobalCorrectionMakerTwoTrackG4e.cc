@@ -33,6 +33,7 @@
 #include "Math/Vector4Dfwd.h"
 
 #include "TrackPropagation/Geant4e/interface/Geant4ePropagator.h"
+#include "TrackPropagation/Geant4e/interface/G4UniversalFluctuationForExtrapolator.hh"
 
 #include "FWCore/Common/interface/TriggerNames.h"
 #include "DataFormats/L1GlobalTrigger/interface/L1GlobalTriggerReadoutRecord.h"
@@ -429,6 +430,18 @@ private:
   unsigned int Muminus_nambiguousmatchedvalid;
   unsigned int Muminus_nvalidFinal;
   unsigned int Muminus_nvalidpixelFinal;
+
+  // TRANSMISSION PROBE (2026-08-13). Total MEAN energy loss that the fit's
+  // reference trajectory actually applies between the reference point and the
+  // outermost hit, summed over propagation steps of the LAST iteration of the
+  // UNCONSTRAINED (icons==0) pass, in GeV. This is the denominator of the
+  // "systematic transmission"
+  //     T_sys = d(p_fit at reference) / d(assumed total energy loss)
+  // measured by re-running with CVH_DEDX_SCALE != 1 and pairing per track.
+  // It is the model's assumed loss, NOT the true (sim) loss: it is exactly
+  // the quantity the coherent dE/dx re-centring moves.
+  float Muplus_dEref;
+  float Muminus_dEref;
 
   // Per-muon pixel pathology-class counts of the hits USED in the fit
   // (16 combination bins, bit0=edgeX bit1=edgeY bit2=sizeX1 bit3=sizeY1;
@@ -842,6 +855,11 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::beginStream(edm::StreamID streami
     tree->Branch("Muminus_nvalidpixelFinal", &Muminus_nvalidpixelFinal);
     tree->Branch("Muminus_nmatchedvalid", &Muminus_nmatchedvalid);
     tree->Branch("Muminus_nambiguousmatchedvalid", &Muminus_nambiguousmatchedvalid);
+
+    // transmission probe: assumed total mean eloss along the reference
+    // trajectory (GeV), icons==0, last iteration. See member declaration.
+    tree->Branch("Muplus_dEref", &Muplus_dEref);
+    tree->Branch("Muminus_dEref", &Muminus_dEref);
 
     tree->Branch("Muplus_pixClass", &Muplus_pixClass);
     tree->Branch("Muminus_pixClass", &Muminus_pixClass);
@@ -1640,6 +1658,11 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
       std::array<unsigned int, 2> nvalidpixelFinalarr = {{ 0, 0 }};
       std::array<unsigned int, 2> nmatchedvalidarr = {{ 0, 0 }};
       std::array<unsigned int, 2> nambiguousmatchedvalidarr = {{ 0, 0 }};
+
+      // transmission probe: per-leg sum of the propagator's applied mean
+      // energy loss (GeV). Reset per leg at the top of each iteration's hit
+      // loop, so after the loop it holds the last (converged) iteration.
+      std::array<double, 2> dErefarr = {{ 0., 0. }};
       
       const std::array<bool, 2> highpurityarr = {{ itrack->quality(reco::TrackBase::highPurity),
                                                   jtrack->quality(reco::TrackBase::highPurity) }};
@@ -2158,8 +2181,14 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             const unsigned int tracknhits = hits.size();
 
             Matrix<double, 7, 1> updtsos = refFts;
-            
-            
+
+            // transmission probe: restart the assumed-eloss accumulator for
+            // this leg on every iteration (and on every backtrack retry,
+            // which re-enters here), so the value surviving the loop belongs
+            // to the converged reference trajectory.
+            dErefarr[id] = 0.;
+
+
             if (bsConstraint_) {
               // apply beamspot constraint
               // TODO add residual corrections for beamspot parameters?
@@ -2388,6 +2417,21 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
 
               updtsos = std::get<1>(propresult);
+
+              // transmission probe: accumulate the mean energy loss this
+              // propagation step actually applied. Taken from the propagator
+              // input/output states rather than from any dE/dx model call, so
+              // it stays correct whatever scales the loss (CVH_DEDX_SCALE,
+              // the global material model's k_g, the per-module dxi). The
+              // difference is formed BEFORE any local state update below, so
+              // only the propagation (not the fit) contributes.
+              {
+                const double m2 = trackMass[id] * trackMass[id];
+                const double eIn = std::sqrt(propInputState.segment<3>(3).squaredNorm() + m2);
+                const double eOut = std::sqrt(updtsos.segment<3>(3).squaredNorm() + m2);
+                dErefarr[id] += eIn - eOut;
+              }
+
               const Matrix<double, 5, 5> Qcurv = std::get<2>(propresult);
               const Matrix<double, 5, 5> dQMScurv = std::get<5>(propresult);
               const Matrix<double, 5, 5> dQIcurv = std::get<6>(propresult);
@@ -2433,6 +2477,13 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                   ioniurbanv.push_back(us.rec.tmaxr);
                   ioniurbanv.push_back(us.rec.scaling);
                   ioniurbanv.push_back(us.cs);
+                  // regime 2/3 (CVH_IONI_EXACTDELTA): two extra columns AFTER
+                  // cs, so every existing column index is unchanged and the
+                  // stride is 11 exactly when the switch is off.
+                  if (G4UniversalFluctuationForExtrapolator::exactDeltaEnabled()) {
+                    ioniurbanv.push_back(us.rec.beta2);
+                    ioniurbanv.push_back(us.rec.etot);
+                  }
                 }
               }
 
@@ -4008,6 +4059,15 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           Muminus_nvalidpixelFinal = nvalidpixelFinalarr[idxminus];
           Muminus_nmatchedvalid = nmatchedvalidarr[idxminus];
           Muminus_nambiguousmatchedvalid = nambiguousmatchedvalidarr[idxminus];
+
+          // transmission probe: the UNCONSTRAINED pass is the one whose
+          // Mu{plus,minus}_pt the dE/dx scan uses, so pin the accumulator to
+          // icons==0 (the mass-constrained pass re-propagates and would
+          // otherwise overwrite it).
+          if (icons == 0) {
+            Muplus_dEref = dErefarr[idxplus];
+            Muminus_dEref = dErefarr[idxminus];
+          }
 
           Muplus_pixClass.assign(pixclassarr[idxplus].begin(), pixclassarr[idxplus].end());
           Muminus_pixClass.assign(pixclassarr[idxminus].begin(), pixclassarr[idxminus].end());
