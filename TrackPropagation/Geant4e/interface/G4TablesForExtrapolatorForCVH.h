@@ -67,7 +67,23 @@ enum ExtTableType {
   fInvRangePositron,
   fInvRangeProton,
   fInvRangeMuon,
-  fMscElectron
+  fMscElectron,
+  // CHARGE-AWARE reference (cvhcgf::referenceIsChargeAware, CVH_REF_CHARGEAWARE).
+  //
+  // The six tables below are the NEGATIVE partners of fDedx/fRange/fInvRange
+  // Muon and Proton. They are built only when the switch is set, by the SAME
+  // ComputeMuonDEDX / ComputeProtonDEDX with G4MuonMinus and G4AntiProton in
+  // place of G4MuonPlus and G4Proton, and are nullptr otherwise.
+  //
+  // Appended at the END of the enum deliberately: the existing values are
+  // stored in nothing, but they are read by a switch with no default and by
+  // several call sites, and renumbering them buys nothing.
+  fDedxMuonMinus,
+  fRangeMuonMinus,
+  fInvRangeMuonMinus,
+  fDedxAntiProton,
+  fRangeAntiProton,
+  fInvRangeAntiProton
 };
 
 class G4TablesForExtrapolatorForCVH {
@@ -103,6 +119,7 @@ private:
   const G4ParticleDefinition* muonPlus;
   const G4ParticleDefinition* muonMinus;
   const G4ParticleDefinition* proton;
+  const G4ParticleDefinition* antiProton;
   const G4ParticleDefinition* currentParticle = nullptr;
 
   G4LossTableBuilder* builder = nullptr;
@@ -122,6 +139,14 @@ private:
   G4PhysicsTable* invRangeProton = nullptr;
   G4PhysicsTable* mscElectron = nullptr;
 
+  // charge-aware partners; nullptr unless chargeAware
+  G4PhysicsTable* dedxMuonMinus = nullptr;
+  G4PhysicsTable* rangeMuonMinus = nullptr;
+  G4PhysicsTable* invRangeMuonMinus = nullptr;
+  G4PhysicsTable* dedxAntiProton = nullptr;
+  G4PhysicsTable* rangeAntiProton = nullptr;
+  G4PhysicsTable* invRangeAntiProton = nullptr;
+
   G4double emin;
   G4double emax;
   G4double mass = 0.0;
@@ -139,6 +164,10 @@ private:
   // tables, so keep that behaviour here.
   G4bool splineFlag = true;
   G4bool ionOnly;
+
+  // cvhcgf::referenceIsChargeAware(), latched once in the constructor so that
+  // the table build and the dispatch cannot see different values.
+  G4bool chargeAware;
 };
 
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo....

@@ -57,8 +57,9 @@
 #include "TrackPropagation/Geant4e/interface/G4TablesForExtrapolatorForCVH.h"
 #include "G4Log.hh"
 #include "G4Threading.hh"
+// needed complete, not forward-declared: isNegative() calls GetPDGCharge()
+#include "G4ParticleDefinition.hh"
 
-class G4ParticleDefinition;
 class G4Material;
 class G4MaterialCutsCouple;
 
@@ -128,6 +129,54 @@ private:
 
   inline const G4PhysicsTable* GetPhysicsTable(ExtTableType type) const;
 
+  // "Should this track use the NEGATIVE particle's tables?"
+  //
+  // The charge comes from the track's own G4ParticleDefinition -- the
+  // propagator builds it from the reconstructed charge
+  // (Geant4ePropagator::generateParticleName, or the V0 ntuplizer's explicit
+  // override) -- and never from a hard-coded PDG list, so mu/pi/K/p and every
+  // one of their antiparticles, and any other singly-charged hadron the
+  // propagator is ever asked for, are covered by the same two lines.
+  //
+  // Returns false unconditionally when the switch is off, which is what makes
+  // the OFF path bit-identical rather than merely equivalent.
+  inline G4bool isNegative(const G4ParticleDefinition* part) const;
+
+  // SPECIES-DEPENDENT dE/dx (cvhcgf::referenceIsSpeciesDedx, CVH_REF_SPECIESDEDX).
+  //
+  // The PDG mass of the particle whose table the hadron branch is about to
+  // read -- G4Proton, or G4AntiProton when the reference is also charge-aware.
+  // The two corrections compose here and nowhere else: `isNegative` picks the
+  // table, this picks the mass of the particle that table was built from, and
+  // the Tmax correction is charge-EVEN so it is the same either way.
+  //
+  // It is deliberately NOT CLHEP::proton_mass_c2 (which is what the ENERGY
+  // scaling above uses): G4Proton's PDG mass is 938.272013 MeV against CLHEP's
+  // 938.27208816, and using the constant instead of the table particle's own
+  // mass would give the proton a 1.4e-11 relative correction where the right
+  // answer is an exact zero.
+  inline G4double tableParticleMass(const G4ParticleDefinition* part) const;
+
+  // The additive dE/dx correction, MeV/mm. Zero unless the switch is on AND
+  // the particle is on the scaled-proton-table branch.
+  G4double speciesDedxDelta(G4double ekin, const G4ParticleDefinition* part, const G4Material* mat) const;
+
+  // D(E) = R_uncorrected(E) - R_corrected(E), the range the Tmax defect costs.
+  //
+  //     R(E) = INT_0^E dE'/dedx(E')   =>   D(E) = INT_0^E  d / (u (u + d)) dE'
+  //
+  // with u = the proton-table dE/dx and d = speciesDedxDelta. This is the
+  // EXACT perturbation (no expansion in d/u): it is what makes ComputeRange
+  // and ComputeEnergy describe the SAME corrected stopping power the dE/dx
+  // branch uses, so that the two branches of EnergyAfterStep lose the same
+  // energy over the same step.
+  //
+  // Composite Simpson in y = ln(1 + E'/m), which maps [0, E] onto [0, y1] with
+  // the integrand's only structure -- the rise from 0 like beta^2 at low
+  // beta*gamma -- resolved uniformly at any E. Not const: ComputeValue writes
+  // the table-lookup hint `index`.
+  G4double speciesRangeDefect(G4double ekin, const G4ParticleDefinition* part, const G4Material* mat);
+
 #ifdef G4MULTITHREADED
   static G4Mutex extrMutex;
 #endif
@@ -139,7 +188,29 @@ private:
   const G4ParticleDefinition* muonPlus = nullptr;
   const G4ParticleDefinition* muonMinus = nullptr;
   const G4ParticleDefinition* proton = nullptr;
+  const G4ParticleDefinition* antiProton = nullptr;
   const G4Material* currentMaterial = nullptr;
+
+  // True when the dE/dx / range / inverse-range tables also exist for the
+  // NEGATIVE muon and the antiproton, i.e. when the reference trajectory is
+  // charge-aware. Latched from cvhcgf::referenceIsChargeAware() at the same
+  // moment the tables are built, so the dispatch below cannot ask for a table
+  // that was not made. See CGFQoPBlock.h for the physics.
+  G4bool chargeAware = false;
+
+  // True when the hadron branch's proton-table lookup is corrected for the
+  // species' own Tmax. Latched from cvhcgf::referenceIsSpeciesDedx() in
+  // Initialisation, in the same place and for the same reason as chargeAware.
+  G4bool speciesDedx = false;
+
+  // One-entry memo of speciesRangeDefect. EnergyAfterStep and
+  // GetContinuousStepLimit call ComputeRange with the SAME (particle,
+  // material, ekin) within a step, so this halves the quadrature cost; it is
+  // a pure memo of a pure function and holds no state of its own.
+  const G4ParticleDefinition* rdPart = nullptr;
+  const G4Material* rdMat = nullptr;
+  G4double rdEkin = -1.0;
+  G4double rdValue = 0.0;
 
   G4double electronDensity = 0.0;
   G4double radLength = 0.0;
@@ -168,6 +239,20 @@ private:
 inline const G4PhysicsTable* G4EnergyLossForExtrapolatorForCVH::GetPhysicsTable(ExtTableType type) const {
   return tables->GetPhysicsTable(type);
 }
+
+//....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo....
+
+inline G4bool G4EnergyLossForExtrapolatorForCVH::isNegative(const G4ParticleDefinition* part) const {
+  return chargeAware && part->GetPDGCharge() < 0.0;
+}
+
+//....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo....
+
+inline G4double G4EnergyLossForExtrapolatorForCVH::tableParticleMass(const G4ParticleDefinition* part) const {
+  const G4ParticleDefinition* ref = isNegative(part) ? antiProton : proton;
+  return (nullptr != ref) ? ref->GetPDGMass() : CLHEP::proton_mass_c2;
+}
+
 
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo....
 

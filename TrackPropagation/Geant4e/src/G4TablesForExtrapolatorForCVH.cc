@@ -58,8 +58,11 @@
 #include "G4Electron.hh"
 #include "G4Positron.hh"
 #include "G4Proton.hh"
+#include "G4AntiProton.hh"
 #include "G4MuonPlus.hh"
 #include "G4MuonMinus.hh"
+#include "TrackPropagation/Geant4e/interface/CGFQoPBlock.h"
+#include "FWCore/Utilities/interface/Exception.h"
 #include "G4EmParameters.hh"
 #include "G4MollerBhabhaModel.hh"
 #include "G4BetheBlochModel.hh"
@@ -82,8 +85,10 @@ G4TablesForExtrapolatorForCVH::G4TablesForExtrapolatorForCVH(
   electron = G4Electron::Electron();
   positron = G4Positron::Positron();
   proton = G4Proton::Proton();
+  antiProton = G4AntiProton::AntiProton();
   muonPlus = G4MuonPlus::MuonPlus();
   muonMinus = G4MuonMinus::MuonMinus();
+  chargeAware = cvhcgf::referenceIsChargeAware();
   Initialisation();
 }
 
@@ -142,6 +147,13 @@ G4TablesForExtrapolatorForCVH::~G4TablesForExtrapolatorForCVH() {
     mscElectron->clearAndDestroy();
     delete mscElectron;
   }
+  for (G4PhysicsTable* t : {dedxMuonMinus, rangeMuonMinus, invRangeMuonMinus,
+                            dedxAntiProton, rangeAntiProton, invRangeAntiProton}) {
+    if (nullptr != t) {
+      t->clearAndDestroy();
+      delete t;
+    }
+  }
   delete pcuts;
   delete builder;
 }
@@ -189,6 +201,25 @@ const G4PhysicsTable* G4TablesForExtrapolatorForCVH::GetPhysicsTable(ExtTableTyp
       break;
     case fMscElectron:
       table = mscElectron;
+      break;
+    case fDedxMuonMinus:
+      table = dedxMuonMinus;
+      break;
+    case fRangeMuonMinus:
+      table = rangeMuonMinus;
+      break;
+    case fInvRangeMuonMinus:
+      table = invRangeMuonMinus;
+      break;
+    case fDedxAntiProton:
+      table = dedxAntiProton;
+      break;
+    case fRangeAntiProton:
+      table = rangeAntiProton;
+      break;
+    case fInvRangeAntiProton:
+      table = invRangeAntiProton;
+      break;
   }
   return table;
 }
@@ -268,6 +299,56 @@ void G4TablesForExtrapolatorForCVH::Initialisation() {
   ComputeProtonDEDX(proton, dedxProton);
   builder->BuildRangeTable(dedxProton, rangeProton);
   builder->BuildInverseRangeTable(rangeProton, invRangeProton);
+
+  // CHARGE-AWARE reference (CVH_REF_CHARGEAWARE, single reader
+  // cvhcgf::referenceIsChargeAware). Everything above builds the POSITIVE
+  // particle's tables and only the positive particle's: muonMinus has been a
+  // member of this class, assigned in the constructor and never used, since
+  // the file was written, and there has never been an antiproton at all.
+  //
+  // The whole fix is these six lines. It is deliberately NOT a hand-written
+  // charge-odd term added on top of the positive table: it is the SAME two
+  // functions called with the other G4ParticleDefinition, so what is added is
+  // by construction whatever Geant4's own G4MuBetheBlochModel /
+  // G4BetheBlochModel say a negative particle's stopping power is. That gets
+  // Barkas and Mott with their correct beta dependence at any beta (the two
+  // exchange dominance below beta*gamma ~ 1, which matters for V0 tracks), it
+  // correctly gets NOTHING from the even Bloch term, and it cannot drift out
+  // of step with Geant4 the way a transcribed formula would.
+  //
+  // Cost: six extra G4PhysicsTables built once per job, no per-step cost.
+  if (chargeAware) {
+    if (verbose > 1) {
+      G4cout << "### G4TablesForExtrapolatorForCVH Builds NEGATIVE muon and antiproton tables" << G4endl;
+    }
+    dedxMuonMinus = PrepareTable(dedxMuonMinus);
+    rangeMuonMinus = PrepareTable(rangeMuonMinus);
+    invRangeMuonMinus = PrepareTable(invRangeMuonMinus);
+    dedxAntiProton = PrepareTable(dedxAntiProton);
+    rangeAntiProton = PrepareTable(rangeAntiProton);
+    invRangeAntiProton = PrepareTable(invRangeAntiProton);
+
+    ComputeMuonDEDX(muonMinus, dedxMuonMinus);
+    builder->BuildRangeTable(dedxMuonMinus, rangeMuonMinus);
+    builder->BuildInverseRangeTable(rangeMuonMinus, invRangeMuonMinus);
+
+    ComputeProtonDEDX(antiProton, dedxAntiProton);
+    builder->BuildRangeTable(dedxAntiProton, rangeAntiProton);
+    builder->BuildInverseRangeTable(rangeAntiProton, invRangeAntiProton);
+
+    // A missing table is NOT allowed to be quiet. ComputeValue returns 0.0 for
+    // a null table, so a half-wired switch would give dE/dx = 0 for every
+    // negative track and the fit would still converge -- the exact silent
+    // failure mode this study has hit before with a weight.
+    for (const G4PhysicsTable* t : {dedxMuonMinus, rangeMuonMinus, invRangeMuonMinus,
+                                    dedxAntiProton, rangeAntiProton, invRangeAntiProton}) {
+      if (nullptr == t || (G4int)t->length() < nmat) {
+        throw cms::Exception("G4TablesForExtrapolatorForCVH")
+            << "CVH_REF_CHARGEAWARE is set but a negative-particle table is missing or short ("
+            << (nullptr == t ? -1 : (G4int)t->length()) << " of " << nmat << " materials)";
+      }
+    }
+  }
 
   ComputeTrasportXS(electron, mscElectron);
 }
