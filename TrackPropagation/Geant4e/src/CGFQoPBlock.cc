@@ -26,24 +26,40 @@ namespace cvhcgf {
   }
 
   bool referenceIsIonOnly() {
-    // DEFAULT OFF -- a diagnostic, not one of the four corrections that went
-    // default-on 2026-08-16.
+    // DEFAULT OFF -- a diagnostic, not one of the four energy-loss corrections.
     static const bool v = envFlag("CVH_IONONLY", false);
     return v;
   }
 
+  // The four energy-loss corrections are DEFAULT-OFF.  They were briefly
+  // flipped default-ON on 2026-08-16 (Documents/Resolution/NOTES_DEFAULTON.md)
+  // and REVERTED the same week: the attribution gate that note's own section 6
+  // names -- the global fit that consumes the exported Jacobians has not been
+  // run, and `CVH_REF_CHARGEAWARE` is charge-odd, i.e. degenerate with the
+  // calibration's `M` -- is unchanged, so the corrections stay opt-in until
+  // that fit has been run BOTH WAYS.  Closure studies enable them explicitly.
+  //
+  // What the flip left behind, and what is deliberately KEPT:
+  //   * the tri-state `envFlag` parse, so `=0` can express "off" and a future
+  //     re-flip needs no reader change;
+  //   * the `refuseExactDelta` throw (the CGF prototype cannot silently read a
+  //     regime-2/3 `xi` as a collision count);
+  //   * the charge-aware `meanLoss` dispatch in
+  //     G4UniversalFluctuationForExtrapolator.
+  // Those three are CORRECTNESS fixes and are independent of which way the
+  // defaults point.
   bool ioniKokoulinEnabled() {
-    static const bool v = envFlag("CVH_IONI_KOKOULIN", true);
+    static const bool v = envFlag("CVH_IONI_KOKOULIN", false);
     return v;
   }
 
   bool referenceIsChargeAware() {
-    static const bool v = envFlag("CVH_REF_CHARGEAWARE", true);
+    static const bool v = envFlag("CVH_REF_CHARGEAWARE", false);
     return v;
   }
 
   bool referenceIsSpeciesDedx() {
-    static const bool v = envFlag("CVH_REF_SPECIESDEDX", true);
+    static const bool v = envFlag("CVH_REF_SPECIESDEDX", false);
     return v;
   }
 

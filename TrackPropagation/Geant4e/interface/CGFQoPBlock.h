@@ -133,10 +133,11 @@ namespace cvhcgf {
   // second site to get wrong. Do not add another getenv("CVH_IONI_KOKOULIN")
   // anywhere.
   //
-  // DEFAULT ON since 2026-08-16 (Documents/Resolution/NOTES_DEFAULTON.md).
-  // Set CVH_IONI_KOKOULIN=0 to restore the pre-2026-08-16 behaviour, in which
-  // case not one line of the correction runs and the export is bit-identical
-  // to the historical one (proven at 27/27 branches, NOTES_QVALID s3).
+  // DEFAULT OFF (see the block comment on the four defaults in
+  // CGFQoPBlock.cc; briefly default-ON 2026-08-16, reverted). Unset or
+  // CVH_IONI_KOKOULIN=0 means not one line of the correction runs and the
+  // export is bit-identical to the historical one (proven at 27/27 branches,
+  // NOTES_QVALID s3). CVH_IONI_KOKOULIN=1 enables it.
   bool ioniKokoulinEnabled();
 
   // Number of Simpson intervals of the log-T quadrature that the fluctuation
@@ -193,13 +194,16 @@ namespace cvhcgf {
   // tables through G4UniversalFluctuationForExtrapolator::SetParticleAndCharge
   // and is charge-aware with it, so the reference's mean and the noise model's
   // mean cannot disagree by the charge-odd term (they did until 2026-08-16;
-  // NOTES_SPECIESDEDX s8 diagnosed it, NOTES_DEFAULTON s1 closed it).
+  // NOTES_SPECIESDEDX s8 diagnosed it, NOTES_DEFAULTON s1 closed it -- that
+  // fix is a CORRECTNESS fix and is kept independently of the default).
   //
-  // DEFAULT ON since 2026-08-16 (Documents/Resolution/NOTES_DEFAULTON.md).
-  // Set CVH_REF_CHARGEAWARE=0 to restore the pre-2026-08-16 behaviour, in
-  // which case not one extra table is built, no dispatch changes, and the
-  // export is bit-identical to the historical one (proven at 27/27 branches,
-  // NOTES_CHARGEODD s3.2). Do not add another
+  // DEFAULT OFF (see the block comment on the four defaults in
+  // CGFQoPBlock.cc; briefly default-ON 2026-08-16, reverted -- this is the
+  // only charge-ODD member of the four and therefore the one degenerate with
+  // the calibration's `M`). Unset or CVH_REF_CHARGEAWARE=0 means not one extra
+  // table is built, no dispatch changes, and the export is bit-identical to
+  // the historical one (proven at 27/27 branches, NOTES_CHARGEODD s3.2).
+  // CVH_REF_CHARGEAWARE=1 enables it. Do not add another
   // getenv("CVH_REF_CHARGEAWARE") anywhere.
   bool referenceIsChargeAware();
 
@@ -274,12 +278,12 @@ namespace cvhcgf {
   // conjugates. It is identically zero for a MUON and for a PROTON, which is
   // the cheapest available regression test: any movement of either is a bug.
   //
-  // DEFAULT ON since 2026-08-16 (Documents/Resolution/NOTES_DEFAULTON.md).
-  // Set CVH_REF_SPECIESDEDX=0 to restore the pre-2026-08-16 behaviour, in
-  // which case not one line of the correction runs and the export is
-  // bit-identical to the historical one (proven at 27/27 branches,
-  // NOTES_SPECIESDEDX s3.2). Do not add another
-  // getenv("CVH_REF_SPECIESDEDX") anywhere.
+  // DEFAULT OFF (see the block comment on the four defaults in
+  // CGFQoPBlock.cc; briefly default-ON 2026-08-16, reverted). Unset or
+  // CVH_REF_SPECIESDEDX=0 means not one line of the correction runs and the
+  // export is bit-identical to the historical one (proven at 27/27 branches,
+  // NOTES_SPECIESDEDX s3.2). CVH_REF_SPECIESDEDX=1 enables it. Do not add
+  // another getenv("CVH_REF_SPECIESDEDX") anywhere.
   bool referenceIsSpeciesDedx();
 
   // Number of Simpson intervals of the range-defect quadrature
@@ -433,8 +437,10 @@ namespace cvhcgf {
   // `a3` slot holds `xi` (an energy) rather than a collision count, so reading
   // it here is wrong by ~1e-5 in the delta channel -- and, being a WEIGHT, it
   // would not fail, it would silently change the answer. The refusal replaced
-  // a one-shot warning when CVH_IONI_EXACTDELTA went default-on 2026-08-16:
-  // a warning is not a safe guard for a default-on hazard.
+  // a one-shot warning, and is KEPT now that CVH_IONI_EXACTDELTA is
+  // default-off again: a warning is not a safe guard for a silent-wrong-answer
+  // hazard at any default, and the two switches can still be set together by
+  // hand.
   std::complex<double> blockExponent(const std::vector<IoniStep> &steps, double t);
 
   // Gaussian-limit variance of the block in residual units, i.e. -S''(0).

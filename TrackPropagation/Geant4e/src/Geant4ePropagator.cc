@@ -1370,24 +1370,28 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
     // likewise absent from the block CGF.
     //
     // THIS USED TO BE A ONE-SHOT WARNING, on the argument that both switches
-    // were default-off so nothing shipped could be affected. That argument
-    // died on 2026-08-16, when CVH_IONI_EXACTDELTA went DEFAULT-ON: from then
-    // on, anyone enabling the CGF prototype inherits the wrong answer without
-    // doing anything, and a line of stdout is not a guard against that. So it
-    // throws. `cvhcgf::blockExponent`/`blockKappa2` also refuse regime >= 2
+    // were default-off so nothing shipped could be affected. A warning is not
+    // a guard against a SILENT WRONG ANSWER at any default: the two switches
+    // can still be set together by hand, and a closure campaign that enables
+    // all four corrections explicitly (which is now the documented way to run
+    // them) would walk straight into it. So it throws, and the throw is KEPT
+    // after the 2026-08-16 default flip was reverted -- it is a correctness
+    // fix, not a consequence of the default.
+    // `cvhcgf::blockExponent`/`blockKappa2` also refuse regime >= 2
     // themselves; this site exists to fail EARLY and with the remedy in the
     // message, before an inversion grid is allocated.
     //
     // The remedy is one variable, and it is available precisely because the
-    // switch stayed operable in both directions: CVH_IONI_EXACTDELTA=0.
+    // switch is operable in both directions: CVH_IONI_EXACTDELTA=0.
     if (G4UniversalFluctuationForExtrapolator::exactDeltaEnabled()) {
       throw cms::Exception("Geant4ePropagator")
-          << "CVH_CGF_QOP is enabled together with CVH_IONI_EXACTDELTA (which is DEFAULT-ON since "
-             "2026-08-16). cvhcgf::blockExponent has no regime-2/3 branch: it reads the Urban record's "
+          << "CVH_CGF_QOP is enabled together with CVH_IONI_EXACTDELTA. cvhcgf::blockExponent has no "
+             "regime-2/3 branch: it reads the Urban record's "
              "`a3` slot as a delta-ray collision count, but in regime 2/3 that slot holds xi (an energy, "
              "~0.07 MeV against a count of ~7.6). The block CGF -- and therefore 1/I and psi -- would be "
              "wrong by ~1e-5 in the delta channel WITHOUT failing. Run the CGF prototype with "
-             "CVH_IONI_EXACTDELTA=0, or give the block CGF the exact knock-on cross section (a direct port "
+             "CVH_IONI_EXACTDELTA=0 (its default), or give the block CGF the exact knock-on cross section "
+             "(a direct port "
              "of cf_track_resolution.exact_delta_exponent; it additionally needs beta2 and etot, which "
              "cvhcgf::IoniStep does not yet carry).";
     }
