@@ -14,6 +14,7 @@
 # ideal geometry, DB grid field, era Run2_2016) so that the model side
 # (runCleanPropModel.py) propagates through identical geometry and field.
 
+import os
 import FWCore.ParameterSet.Config as cms
 import FWCore.ParameterSet.VarParsing as VarParsing
 from Configuration.Eras.Era_Run2_2016_cff import Run2_2016
@@ -71,11 +72,25 @@ process.load('Configuration.StandardSequences.SimIdeal_cff')
 # sigma and the closure at u=1 from +0.0198 to +0.0014. See NOTES.md.
 #
 # The tolerances stay tightened; the justification above does not.
+# looseStepper=True reproduces the CMSSW DEFAULTS, so a matched loose/tight
+# pair can be produced on the SAME ray and the field-integration (chord) error
+# measured directly as the difference of the mean trajectories. Note the
+# tracker-specific values WIN inside the tracker (E > EnergyThTracker = 0.2 GeV,
+# r < RmaxTracker = 8 m), so the official UL16 SIM -- which sets only the
+# GLOBAL pair to 1e-5/1e-6 -- still runs the tracker at DeltaOneStepTracker
+# = 1e-4. Our samples at 1e-5 are therefore TIGHTER than official CMS.
 _sp = process.g4SimHits.MagneticField.ConfGlobalMFM.OCMS.StepperParam
-_sp.DeltaOneStepTracker = 1e-5
-_sp.DeltaIntersectionTracker = 1e-6
-_sp.DeltaOneStep = 1e-5
-_sp.DeltaIntersection = 1e-6
+if os.environ.get("CLEANPROP_LOOSE_STEPPER"):
+    _sp.DeltaOneStepTracker = 1e-4
+    _sp.DeltaIntersectionTracker = 1e-6
+    _sp.DeltaOneStep = 1e-3
+    _sp.DeltaIntersection = 1e-4
+    print(">>> LOOSE stepper (CMSSW defaults):", _sp.DeltaOneStepTracker.value())
+else:
+    _sp.DeltaOneStepTracker = 1e-5
+    _sp.DeltaIntersectionTracker = 1e-6
+    _sp.DeltaOneStep = 1e-5
+    _sp.DeltaIntersection = 1e-6
 process.load('Configuration.StandardSequences.FrontierConditions_GlobalTag_cff')
 
 # Conditions/geometry pinned to exactly what the CVH refit drivers use

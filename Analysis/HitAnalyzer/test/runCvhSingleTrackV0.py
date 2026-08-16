@@ -65,6 +65,13 @@ opts.register('kinkInjectDxdz', 0.0, VarParsing.VarParsing.multiplicity.singleto
               VarParsing.VarParsing.varType.float, 'injected dx/dz kink')
 opts.register('kinkInjectDydz', 0.0, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.float, 'injected dy/dz kink')
+opts.register('fillJac', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'export the per-track reference Jacobian jacrefv (needed to see a '
+              'reference change downstream of the fit)')
+opts.register('fillGrads', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'export the Millepede objects gradv/hesspackedv (implies fillJac)')
 opts.parseArguments()
 if not opts.scalarPot3DInitFile:
     raise SystemExit("scalarPot3DInitFile=<path> is required (coefficient dump file)")
@@ -138,8 +145,8 @@ process.globalCor = cms.EDProducer(
     fitFromGenParms=cms.bool(False),
     fitFromSimParms=cms.bool(False),
     fillTrackTree=cms.bool(True),
-    fillGrads=cms.bool(False),
-    fillJac=cms.bool(False),
+    fillGrads=cms.bool(bool(opts.fillGrads)),
+    fillJac=cms.bool(bool(opts.fillJac) or bool(opts.fillGrads)),
     fillRunTree=cms.bool(True),
     doGen=cms.bool(False),
     doSim=cms.bool(False),

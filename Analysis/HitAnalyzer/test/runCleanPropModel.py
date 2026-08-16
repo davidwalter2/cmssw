@@ -41,6 +41,9 @@ opts.register('ioniTruncationAlpha', 0.999, VarParsing.VarParsing.multiplicity.s
               VarParsing.VarParsing.varType.float, 'ionization variance truncation alpha')
 opts.register('output', 'model.root', VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string, 'output ntuple')
+opts.register('stepLength', 10.0, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'Geant4e max step [mm]; formerly hard-coded in Geant4ePropagator.cc')
 opts.parseArguments()
 
 assert opts.targets, 'must pass targets=<file>'
@@ -108,6 +111,7 @@ process.Geant4ePropagator.MagneticFieldLabel = fieldlabel
 process.Geant4ePropagator.ForCVH = cms.bool(True)
 process.Geant4ePropagator.PropagationDirection = "anyDirection"
 process.Geant4ePropagator.IoniTruncationAlpha = cms.double(float(opts.ioniTruncationAlpha))
+process.Geant4ePropagator.StepLengthLimit = cms.double(float(opts.stepLength))
 
 # PDG id -> (G4 particle name, charge). NOTE the sign conventions differ by
 # species class and getting this wrong is silent: leptons carry charge
@@ -149,6 +153,9 @@ process.propExport = cms.EDAnalyzer(
     particleName=cms.string(_g4name),
     targetDetIds=cms.vuint32(*_detids),
     targetLocalZ=cms.vdouble(*_zoff),
+    targetPlaneOrigin=cms.vdouble(),
+    targetPlaneNormal=cms.vdouble(),
+    targetPlaneU=cms.vdouble(),
     useIdealGeometry=cms.bool(bool(opts.useIdealGeometry)),
 )
 process.TFileService = cms.Service('TFileService', fileName=cms.string(opts.output))

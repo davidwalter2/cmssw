@@ -17,6 +17,11 @@ from Configuration.Eras.Era_Run2_2016_cff import Run2_2016
 from Configuration.AlCa.GlobalTag import GlobalTag
 
 opts = VarParsing.VarParsing('analysis')
+opts.register('tightG4eStepper', True, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'tighten the Geant4e field-integration tolerances in the FIT to '
+              'match the simulation (see the block after geantRefit_cff). '
+              'False reproduces every result before 2026-08-08.')
 opts.register('input', '', VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string,
               'comma-separated absolute paths or root:// URLs of ALCARECO files')
@@ -114,6 +119,15 @@ opts.register('doRes', False, VarParsing.VarParsing.multiplicity.singleton,
               'register resolution families and export the per-candidate '
               'mass-CF ingredients (dV blocks, step records, mass-projected '
               'influence weights)')
+opts.register('globalTag', '106X_mcRun2_asymptotic_v17',
+              VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.string,
+              'conditions. MUST match the sample: the 106X UL16 default is right '
+              'for the UL16 ALCARECO, but a 15_0-native simprod sample needs '
+              '150X_mcRun2_asymptotic_v1. Getting this wrong is not cosmetic -- '
+              'the single-track closure was biased by a 131X GT supplying '
+              '2010-2011 pixel templates against a UL16 simulation, one of the '
+              'two conditions mismatches found on 2026-08-07.')
 opts.register('trackSrc', 'ALCARECOTkAlJpsiX', VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string,
               'input track collection (ALCARECOTkAlJpsiMuMu for the standard '
@@ -258,7 +272,7 @@ process.load("Configuration.StandardSequences.GeometrySimDB_cff")
 # Conditions the MC was produced with (CMSSW_10_6_20_patch1 production
 # chain) -- alignment/CPE/beamspot consistent with the simulated detector,
 # which is what a gen-closure fit must use.
-process.GlobalTag = GlobalTag(process.GlobalTag, "106X_mcRun2_asymptotic_v17", "")
+process.GlobalTag = GlobalTag(process.GlobalTag, opts.globalTag, "")
 process.GlobalTag.toGet = cms.VPSet(
     cms.PSet(
         record=cms.string("GeometryFileRcd"),
@@ -269,6 +283,29 @@ process.GlobalTag.toGet = cms.VPSet(
 process.XMLFromDBSource.label = cms.string("Extended")
 
 process.load("TrackPropagation.Geant4e.geantRefit_cff")
+
+# --- Geant4e field-integration precision in the FIT --------------------------
+# Josh: "really really really important" for the CVH momentum scale -- and it
+# was only ever applied to the SIMULATION. geantRefit_cff builds geopro with
+#     MagneticField = _g4SimHits.MagneticField.clone()
+# i.e. the CFI DEFAULTS, which nothing here overrode. Measured 2026-08-08:
+#     DeltaOneStepTracker      1e-4   (our SIM: 1e-5)   10x looser
+#     DeltaIntersectionTracker 1e-6   (our SIM: 1e-6)   same
+#     DeltaOneStep             1e-3   (our SIM: 1e-5)  100x looser
+#     DeltaIntersection        1e-4   (our SIM: 1e-6)  100x looser
+# So every CVH refit propagated at 10-100x looser precision than the simulation
+# it is compared against. A chord error is a COHERENT trajectory displacement,
+# not a random one, so it biases the momentum rather than broadening it -- the
+# signature of the unexplained ~1e-4 single-track scale offset and the +4.5e-4
+# J/psi two-track mass bias.
+# Default True: matching the SIM is the physically defensible choice, and the
+# flag exists so the change can be measured rather than assumed.
+if opts.tightG4eStepper:
+    _fsp = process.geopro.MagneticField.ConfGlobalMFM.OCMS.StepperParam
+    _fsp.DeltaOneStepTracker = 1e-5
+    _fsp.DeltaIntersectionTracker = 1e-6
+    _fsp.DeltaOneStep = 1e-5
+    _fsp.DeltaIntersection = 1e-6
 from TrackPropagation.Geant4e.cvhMaster_cfi import CvhMasterPSet
 
 process.maxEvents = cms.untracked.PSet(input=cms.untracked.int32(opts.nEvents))
