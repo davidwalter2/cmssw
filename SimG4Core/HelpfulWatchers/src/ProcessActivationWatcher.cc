@@ -1,0 +1,145 @@
+// Deactivates named Geant4 processes on the TRACKING thread, and counts how
+// many steps each process actually defined, so that "the switch took" is a
+// measurement rather than an assumption.
+//
+// THREE ROUTES THAT LOOK RIGHT.  TWO OF THEM ARE SILENTLY WRONG.
+// --------------------------------------------------------------
+// 1. `process.g4SimHits.G4Commands = ['/process/inactivate muBrems']`
+//    INERT.  CMSSW applies G4Commands from RunManagerMT::initG4 and
+//    RunManagerMTWorker::initializeG4 while Geant4 is still in G4State_PreInit
+//    (both call G4UImanager::ApplyCommand and only then SetNewState(Init)),
+//    i.e. before InitializePhysics has constructed any process.  ApplyCommand
+//    returns an error and CMSSW DISCARDS the return code: nothing printed,
+//    nothing done.  Measured: two 2000-event pT = 40 runs at a fixed seed, one
+//    with those commands and one without, came out BIT-IDENTICAL event for
+//    event (0 of 2000 differing).
+//
+// 2. A watcher living OUTSIDE the Simulation biglib (e.g. in
+//    Analysis/HitAnalyzer/plugins), acting through
+//    G4ParticleTable::FindParticle("mu-") or ...->GetProcessManager().
+//    ALSO INERT, and worse.  src/BigProducts/Simulation/BuildFile.xml carries
+//    <use name="geant4static"/> + DROP_DEP="geant4core", so pluginSimulation.so
+//    -- where OscarMTProducer and the whole G4 machinery live -- contains a
+//    PRIVATE, statically linked Geant4 with local symbols
+//    (nm -C --defined-only shows 't G4ProcessTable::GetProcessTable()').  A
+//    plugin in lib/ links the SHARED libG4*.so and therefore talks to a second,
+//    never-initialised Geant4: FindParticle returns nullptr,
+//    G4ProcessTable::Length() is 0, and GetProcessManager() SEGFAULTS on the
+//    tracking thread.  Objects passed in by the simulation (G4Step, G4Track)
+//    are fine; every G4 SINGLETON is the wrong one.  This file therefore has to
+//    live in a package that is part of BigProducts/Simulation.
+//
+// 3. What is used here: G4ProcessTable::SetProcessActivation(name, false) from
+//    BeginOfTrack.  G4ProcessTable is thread-local and its elements store the
+//    G4ProcessManager pointer that was registered WITH the process, so it never
+//    has to resolve a manager from a particle definition -- which is the call
+//    that segfaults.  BeginOfTrack runs on the tracking thread and before the
+//    track is stepped.
+//
+// THE EVIDENCE IS THE STEP COUNTER, NOT THE FLAG
+// ----------------------------------------------
+// Every step is attributed to the process that defined it
+// (GetPostStepPoint()->GetProcessDefinedStep()).  At EndOfRun the per-process
+// counts are printed for the primary and for all tracks.  A working
+// deactivation shows EXACTLY ZERO muBrems and muPairProd steps while muIoni is
+// unchanged; a failed one shows the ordinary non-zero counts.  That is a direct
+// statement about what Geant4 ran, independent of any flag.
+//
+// SCOPE: additive and default-inert.  With an empty `inactivate` list this only
+// counts and prints.
+
+#include "SimG4Core/Watcher/interface/SimWatcher.h"
+#include "SimG4Core/Watcher/interface/SimWatcherFactory.h"
+#include "SimG4Core/Notification/interface/Observer.h"
+#include "SimG4Core/Notification/interface/BeginOfTrack.h"
+#include "SimG4Core/Notification/interface/EndOfRun.h"
+
+#include "FWCore/ParameterSet/interface/ParameterSet.h"
+
+#include "G4ProcessTable.hh"
+#include "G4Step.hh"
+#include "G4StepPoint.hh"
+#include "G4Track.hh"
+#include "G4VProcess.hh"
+#include "G4Threading.hh"
+#include "G4ios.hh"
+#include <iostream>
+
+#include <map>
+#include <string>
+#include <vector>
+
+class ProcessActivationWatcher : public SimWatcher,
+                                 public Observer<const BeginOfTrack *>,
+                                 public Observer<const G4Step *>,
+                                 public Observer<const EndOfRun *> {
+public:
+  explicit ProcessActivationWatcher(const edm::ParameterSet &p);
+  ~ProcessActivationWatcher() override { report("dtor"); }
+
+private:
+  void update(const BeginOfTrack *) override;
+  void update(const G4Step *) override;
+  void update(const EndOfRun *) override;
+  void report(const char *where);
+
+  std::vector<std::string> inactivate_;
+  std::vector<std::string> activate_;
+  bool applied_ = false;
+  bool reported_ = false;
+  std::map<std::string, long> nprim_, nall_;
+};
+
+ProcessActivationWatcher::ProcessActivationWatcher(const edm::ParameterSet &p)
+    : inactivate_(
+          p.getUntrackedParameter<std::vector<std::string>>("inactivate", std::vector<std::string>())),
+      activate_(p.getUntrackedParameter<std::vector<std::string>>("activate", std::vector<std::string>())) {
+  std::cout << "[procact] constructed: inactivate=" << inactivate_.size() << " activate=" << activate_.size()
+         << std::endl;
+  for (const auto &n : inactivate_)
+    std::cout << "[procact]   requested INACTIVE '" << n << "'" << std::endl;
+  for (const auto &n : activate_)
+    std::cout << "[procact]   requested ACTIVE   '" << n << "'" << std::endl;
+}
+
+void ProcessActivationWatcher::update(const BeginOfTrack *) {
+  if (applied_)
+    return;
+  applied_ = true;
+  G4ProcessTable *tbl = G4ProcessTable::GetProcessTable();
+  std::cout << "[procact] BeginOfTrack tid=" << G4Threading::G4GetThreadId()
+         << ": process table length=" << (tbl != nullptr ? (int)tbl->Length() : -1) << std::endl;
+  if (tbl == nullptr)
+    return;
+  for (const auto &n : inactivate_) {
+    tbl->SetProcessActivation(G4String(n), false);
+    std::cout << "[procact]   SetProcessActivation(" << n << ", false)" << std::endl;
+  }
+  for (const auto &n : activate_) {
+    tbl->SetProcessActivation(G4String(n), true);
+    std::cout << "[procact]   SetProcessActivation(" << n << ", true)" << std::endl;
+  }
+}
+
+void ProcessActivationWatcher::update(const G4Step *step) {
+  const G4VProcess *pr = step->GetPostStepPoint()->GetProcessDefinedStep();
+  const std::string nm = (pr != nullptr) ? std::string(pr->GetProcessName()) : std::string("none");
+  ++nall_[nm];
+  if (step->GetTrack()->GetParentID() == 0)
+    ++nprim_[nm];
+}
+
+void ProcessActivationWatcher::update(const EndOfRun *) { report("EndOfRun"); }
+
+void ProcessActivationWatcher::report(const char *where) {
+  if (reported_)
+    return;
+  reported_ = true;
+  std::cout << "[procact] " << where << ": steps by defining process "
+         << "(a deactivated process must show EXACTLY 0)" << std::endl;
+  for (const auto &kv : nall_)
+    std::cout << "[procact]   " << kv.first << "  primary " << nprim_[kv.first] << "  all " << kv.second
+           << std::endl;
+}
+
+DEFINE_SIMWATCHER(ProcessActivationWatcher);
