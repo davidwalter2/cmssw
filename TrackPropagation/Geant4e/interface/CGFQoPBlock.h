@@ -286,6 +286,24 @@ namespace cvhcgf {
   // another getenv("CVH_REF_SPECIESDEDX") anywhere.
   bool referenceIsSpeciesDedx();
 
+  // CVH_REF_HADRAD. The hadron reference is the PROTON dE/dx table looked up at
+  // e = ekin * m_p/m, which preserves beta*gamma -- correct for ionization,
+  // which is a function of beta*gamma, and WRONG for radiative loss, which
+  // carries explicit mass dependence. ComputeProtonDEDX builds only
+  // G4BetheBlochModel, so a hadron's reference subtracts no radiative mean at
+  // all while the simulation runs hBrems/hPairProd.
+  //
+  // Enabling this adds the radiative mean, computed per species from
+  // G4hBremsstrahlungModel/G4hPairProductionModel at the particle's OWN
+  // kinetic energy (no proton scaling), and -- in the propagator -- the
+  // matching radiative fluctuation block.
+  //
+  // BOTH HALVES OR NEITHER. Measured: the missing mean and the missing
+  // fluctuation cancel to ~90%, so the fluctuation alone is 0.00049 against
+  // 0.00005 for the complete correction -- a 10x DEGRADATION. This single
+  // switch drives both so they cannot be enabled separately.
+  bool referenceHasHadronRadiative();
+
   // Number of Simpson intervals of the range-defect quadrature
   // (CVH_REF_SPECIESDEDX_NBIN, default 16, forced even and >= 2). A
   // numerical-accuracy knob only -- exposed, exactly as ioniKokoulinNbin is,

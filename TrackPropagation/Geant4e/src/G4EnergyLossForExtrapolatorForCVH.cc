@@ -234,7 +234,7 @@ G4double G4EnergyLossForExtrapolatorForCVH::ComputeDEDX(G4double ekin,
     // SPECIES-DEPENDENT Tmax (CVH_REF_SPECIESDEDX). Exactly +0.0 for a proton
     // or an antiproton -- the table IS theirs -- and this branch is not
     // reached at all by a muon, so both are bit-for-bit nulls.
-    x += speciesDedxDelta(ekin, part, mat);
+    x += totalDedxDelta(ekin, part, mat);
   }
   return x;
 }
@@ -259,6 +259,42 @@ G4double G4EnergyLossForExtrapolatorForCVH::speciesDedxDelta(G4double ekin,
         << " MeV in " << mat->GetName();
   }
   return d;
+}
+
+G4double G4EnergyLossForExtrapolatorForCVH::radDedxDelta(G4double ekin,
+                                                        const G4ParticleDefinition* part,
+                                                        const G4Material* mat) {
+  if (!hadronRad) {
+    return 0.0;
+  }
+  const G4PhysicsTable* t = tables->GetHadronRadiativeTable(part);
+  if (t == nullptr) {
+    return 0.0;
+  }
+  // The table is built for THIS particle at its own kinetic energy, so ekin is
+  // used directly -- no proton mass scaling. Radiative loss goes as q^2, like
+  // ionization.
+  const G4double q = part->GetPDGCharge() / CLHEP::eplus;
+  const G4double d = ComputeValue(ekin, t, mat->GetIndex()) * q * q;
+  if (!std::isfinite(d)) {
+    throw cms::Exception("G4EnergyLossForExtrapolatorForCVH")
+        << "CVH_REF_HADRAD: non-finite radiative dE/dx for " << part->GetParticleName() << " at ekin " << ekin
+        << " MeV in " << mat->GetName();
+  }
+  // Radiative dE/dx is non-negative by definition and every tabulated value is
+  // >= 0, so a negative here is log-spline undershoot, not physics. It is
+  // routine in vacuum, where the true value is ~1e-27 MeV/mm and the
+  // interpolation noise is the same order (measured: -3.0e-27 for a pi+ at
+  // 30 MeV). Clamping is the correct reading; a genuine sign error would show
+  // up as the closure moving the wrong way, which the physics validation
+  // catches and a threshold here could not without also rejecting vacuum.
+  return (d > 0.0) ? d : 0.0;
+}
+
+G4double G4EnergyLossForExtrapolatorForCVH::totalDedxDelta(G4double ekin,
+                                                          const G4ParticleDefinition* part,
+                                                          const G4Material* mat) {
+  return speciesDedxDelta(ekin, part, mat) + radDedxDelta(ekin, part, mat);
 }
 
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo....
@@ -289,7 +325,7 @@ G4double G4EnergyLossForExtrapolatorForCVH::speciesRangeDefect(G4double ekin,
     if (i > 0) {
       const G4double ep = m * std::expm1(i * dy);
       const G4double u = ComputeValue(ep * massratio, tab, idxMat) * q2;
-      const G4double d = speciesDedxDelta(ep, part, mat);
+      const G4double d = totalDedxDelta(ep, part, mat);
       const G4double ud = u + d;
       // u <= 0 means the table is missing or unpopulated at this energy; ud
       // <= 0 would mean the "correction" has eaten the whole stopping power.
@@ -441,6 +477,7 @@ void G4EnergyLossForExtrapolatorForCVH::Initialisation() {
   // added on top of the proton table's value -- so the latch here is the only
   // place it is read, and the memo below has to be dropped with it.
   speciesDedx = cvhcgf::referenceIsSpeciesDedx();
+  hadronRad = cvhcgf::referenceHasHadronRadiative();
   rdPart = nullptr;
   rdMat = nullptr;
   rdEkin = -1.0;

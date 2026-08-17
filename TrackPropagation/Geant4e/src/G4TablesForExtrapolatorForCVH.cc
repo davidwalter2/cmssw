@@ -68,6 +68,9 @@
 #include "G4BetheBlochModel.hh"
 #include "G4eBremsstrahlungRelModel.hh"
 #include "G4MuPairProductionModel.hh"
+#include "G4hBremsstrahlungModel.hh"
+#include "G4hPairProductionModel.hh"
+#include <cmath>
 #include "G4MuBremsstrahlungModel.hh"
 #include "G4ProductionCuts.hh"
 #include "G4LossTableBuilder.hh"
@@ -526,6 +529,65 @@ void G4TablesForExtrapolatorForCVH::ComputeMuonDEDX(const G4ParticleDefinition* 
 }
 
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo....
+
+const G4PhysicsTable* G4TablesForExtrapolatorForCVH::GetHadronRadiativeTable(const G4ParticleDefinition* part) {
+  if (!cvhcgf::referenceHasHadronRadiative() || part == nullptr) {
+    return nullptr;
+  }
+  // The muon already has brems + pair in its own table (ComputeMuonDEDX); the
+  // electron/positron tables are a different branch entirely. This is only for
+  // the species served by the proton table.
+  if (std::abs(part->GetPDGEncoding()) == 13 || part->GetPDGMass() <= 0.) {
+    return nullptr;
+  }
+  auto it = dedxHadRad.find(part);
+  if (it != dedxHadRad.end()) {
+    return it->second;
+  }
+  G4PhysicsTable* t = PrepareTable(nullptr);
+  ComputeHadronRadiativeDEDX(part, t);
+  dedxHadRad[part] = t;
+  return t;
+}
+
+void G4TablesForExtrapolatorForCVH::ComputeHadronRadiativeDEDX(const G4ParticleDefinition* part,
+                                                              G4PhysicsTable* table) {
+  // G4hBremsstrahlungModel / G4hPairProductionModel are what the SIMULATION
+  // runs for hadrons (hBrems / hPairProd); they are the mass-aware subclasses
+  // of the muon models and take the particle definition, so nothing here is a
+  // muon quantity in disguise.
+  G4hBremsstrahlungModel* brem = new G4hBremsstrahlungModel(part);
+  G4hPairProductionModel* pair = new G4hPairProductionModel(part);
+  brem->Initialise(part, cuts);
+  pair->Initialise(part, cuts);
+  brem->SetUseBaseMaterials(false);
+  pair->SetUseBaseMaterials(false);
+
+  const G4MaterialTable* mtable = G4Material::GetMaterialTable();
+  if (0 < verbose) {
+    G4cout << "G4TablesForExtrapolatorForCVH::ComputeHadronRadiativeDEDX for " << part->GetParticleName()
+           << " (CVH_REF_HADRAD)" << G4endl;
+  }
+  for (G4int i = 0; i < nmat; ++i) {
+    const G4Material* mat = (*mtable)[i];
+    G4PhysicsVector* aVector = (*table)[i];
+    for (G4int j = 0; j <= nbins; ++j) {
+      // NOTE: the particle's OWN kinetic energy. The proton table is looked up
+      // at e = ekin * m_p/m to hold beta*gamma fixed; radiative loss is not a
+      // function of beta*gamma, so applying that scaling here would hand every
+      // hadron the proton's radiative loss.
+      const G4double e = aVector->Energy(j);
+      // unrestricted (cut = e), matching how the ionization tables are built
+      const G4double d = brem->ComputeDEDXPerVolume(mat, part, e, e) + pair->ComputeDEDXPerVolume(mat, part, e, e);
+      aVector->PutValue(j, d);
+    }
+    if (splineFlag) {
+      aVector->FillSecondDerivatives();
+    }
+  }
+  delete brem;
+  delete pair;
+}
 
 void G4TablesForExtrapolatorForCVH::ComputeProtonDEDX(const G4ParticleDefinition* part, G4PhysicsTable* table) {
   G4BetheBlochModel* ioni = new G4BetheBlochModel();

@@ -42,6 +42,7 @@
 #ifndef TrackPropagation_G4TablesForExtrapolatorForCVH_h
 #define TrackPropagation_G4TablesForExtrapolatorForCVH_h 1
 
+#include <map>
 #include "globals.hh"
 #include "G4PhysicsTable.hh"
 #include "G4DataVector.hh"
@@ -94,6 +95,15 @@ public:
 
   const G4PhysicsTable* GetPhysicsTable(ExtTableType type) const;
 
+  // Lazily-built radiative (brems + pair) dE/dx for ONE hadron species, on the
+  // shared grid but at the particle's OWN kinetic energy -- no proton mass
+  // scaling, because radiative loss is not a function of beta*gamma. Returns
+  // nullptr when CVH_REF_HADRAD is off or the particle is not a hadron the
+  // proton table serves. Built on first use per particle and cached; a model
+  // call per lookup would be far too slow (the range-defect integral alone
+  // asks 16 times per step).
+  const G4PhysicsTable* GetHadronRadiativeTable(const G4ParticleDefinition* part);
+
   void Initialisation();
 
   // hide assignment operator
@@ -108,6 +118,8 @@ private:
   void ComputeMuonDEDX(const G4ParticleDefinition* part, G4PhysicsTable* table);
 
   void ComputeProtonDEDX(const G4ParticleDefinition* part, G4PhysicsTable* table);
+
+  void ComputeHadronRadiativeDEDX(const G4ParticleDefinition* part, G4PhysicsTable* table);
 
   void ComputeTrasportXS(const G4ParticleDefinition* part, G4PhysicsTable* table);
 
@@ -129,6 +141,8 @@ private:
   G4PhysicsTable* dedxPositron = nullptr;
   G4PhysicsTable* dedxMuon = nullptr;
   G4PhysicsTable* dedxProton = nullptr;
+  // one radiative table per hadron species actually seen (CVH_REF_HADRAD)
+  std::map<const G4ParticleDefinition*, G4PhysicsTable*> dedxHadRad;
   G4PhysicsTable* rangeElectron = nullptr;
   G4PhysicsTable* rangePositron = nullptr;
   G4PhysicsTable* rangeMuon = nullptr;

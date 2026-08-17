@@ -59,6 +59,9 @@
 #include "G4Proton.hh"
 #include "G4MuonPlus.hh"
 #include "G4MuonMinus.hh"
+#include "G4hBremsstrahlungModel.hh"
+#include "G4hPairProductionModel.hh"
+#include <map>
 #include "G4MuBremsstrahlungModel.hh"
 #include "G4MuPairProductionModel.hh"
 #include "G4DataVector.hh"
@@ -1684,6 +1687,33 @@ Eigen::Matrix<double, 5, 5> Geant4ePropagator::PropagateErrorMSC(const G4Track *
   G4double Xs = X0 * (effZ + 1.) * std::log(287. / std::sqrt(effZ)) / std::log(159. * std::pow(effZ, -1. / 3.)) / effZ;
 
   G4double DD = 2.25e-4 * stepLengthCm * (charge / pBeta * charge / pBeta) / Xs;
+  // ================= READ THIS BEFORE RUNNING THE GLOBAL FIT =================
+  // Q's MS IS ROSSI'S CORE WIDTH, NOT THE SECOND MOMENT, AND IT UNDER-STATES
+  // THE MODELLED MS VARIANCE BY 14 % (2026-08-16, NOTES_MSTERMS s6).
+  //
+  // `2.25e-4 GeV^2 = (15 MeV)^2` with no logarithmic term is Rossi's
+  // scattering power, a fit to the CORE WIDTH of the Moliere distribution.
+  // The offline noise model (cf_ms_exact / cf_track_resolution) uses the FULL
+  // SECOND MOMENT of the same screened-Rutherford density,
+  // kappa2 = chi_c^2 Lm/2, which is log-dominated and includes the single-
+  // scattering tail out to the nuclear form-factor angle. Neither is wrong --
+  // they are two different statistics of ONE distribution -- but they are not
+  // interchangeable, and Q is what the track fit consumes as its MS noise.
+  //
+  //   measured on the layered toy, per leg:  kappa2(CF)/thp2(Q) = 1.216 (plane
+  //     0) / 1.142 (planes 6, 13)
+  //   predicted with no free parameter from the toy material
+  //     (X0 = 34.238, Xs = 40.666 g/cm^2):   1.142
+  //   the plane-0 excess is the offline `ymax` snap, not this code.
+  //
+  // CONSEQUENCE FOR THE FIT: every chi^2 term whose weight comes from Q's MS
+  // block is 14 % too tight relative to the modelled scattering. It cannot
+  // bias a closure study (the Fisher normalization is invariant under a
+  // rescaling of sigma), but it DOES enter the global fit's weighting, and it
+  // enters it with a material dependence, since the 1.142 is a ratio of two
+  // different logs of the same material.
+  // ==========================================================================
+  //
   // CVH_MS_SCALE -- DIAGNOSTIC. Q's MS is Rossi/Xs (15 MeV, NO log term);
   // Highland is 13.6 MeV * (1 + 0.038 ln(x/X0)), so the magnitude here is
   // wrong by an amount that depends on the step's material. MS is symmetric so
@@ -1909,8 +1939,44 @@ void Geant4ePropagator::computeRadiativeDEDX(const G4Track *aTrack, double &dedx
   dedxBrem = 0.;
   dedxPair = 0.;
   const G4ParticleDefinition *part = aTrack->GetDynamicParticle()->GetParticleDefinition();
-  // radiative loss ~ 1/m^2: a muon-only effect at tracker momenta
-  if (std::abs(part->GetPDGEncoding()) != 13) {
+  const bool isMuon = (std::abs(part->GetPDGEncoding()) == 13);
+  if (!isMuon) {
+    // HADRONS. The simulation runs hBrems/hPairProd; the model carried no
+    // radiative block at all, so `radv` came out identically zero. Enabling it
+    // is gated on CVH_REF_HADRAD because the MEAN half lives in the reference
+    // (G4TablesForExtrapolatorForCVH::GetHadronRadiativeTable) and the two must
+    // move together: measured, the missing mean and the missing fluctuation
+    // cancel to ~90%, so the fluctuation ALONE is 0.00049 against 0.00005 for
+    // the complete correction -- a 10x degradation. One switch drives both.
+    if (!cvhcgf::referenceHasHadronRadiative()) {
+      return;
+    }
+    // Cached per (thread, particle): model construction is expensive and this
+    // runs per Geant4 step. G4hBremsstrahlungModel / G4hPairProductionModel are
+    // the mass-aware subclasses the SIM itself uses for hadrons, built here on
+    // the ACTUAL particle -- no muon quantity in disguise, and no proton mass
+    // scaling (radiative loss is not a function of beta*gamma).
+    static thread_local std::map<const G4ParticleDefinition *,
+                                 std::pair<G4hBremsstrahlungModel *, G4hPairProductionModel *>>
+        hadModels;
+    auto it = hadModels.find(part);
+    if (it == hadModels.end()) {
+      G4DataVector cuts(std::max<size_t>(G4Material::GetNumberOfMaterials(), 1), DBL_MAX);
+      auto *hb = new G4hBremsstrahlungModel(part);
+      auto *hp = new G4hPairProductionModel(part);
+      hb->Initialise(part, cuts);
+      hp->Initialise(part, cuts);
+      hb->SetUseBaseMaterials(false);
+      hp->SetUseBaseMaterials(false);
+      it = hadModels.emplace(part, std::make_pair(hb, hp)).first;
+    }
+    const G4Material *hmate = aTrack->GetVolume()->GetLogicalVolume()->GetMaterial();
+    const double hpre = aTrack->GetStep()->GetPreStepPoint()->GetKineticEnergy();
+    const double hpost = aTrack->GetStep()->GetPostStepPoint()->GetKineticEnergy();
+    const double hekin = 0.5 * (hpre + hpost);
+    const double hu = CLHEP::GeV / CLHEP::cm;
+    dedxBrem = it->second.first->ComputeDEDXPerVolume(hmate, part, hekin, hekin) / hu;
+    dedxPair = it->second.second->ComputeDEDXPerVolume(hmate, part, hekin, hekin) / hu;
     return;
   }
 

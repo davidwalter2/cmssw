@@ -161,6 +161,19 @@ private:
   // the particle is on the scaled-proton-table branch.
   G4double speciesDedxDelta(G4double ekin, const G4ParticleDefinition* part, const G4Material* mat) const;
 
+  // Radiative (brems + pair) mean for a hadron, which the proton table does not
+  // carry (CVH_REF_HADRAD). Exactly +0.0 for a muon -- that branch is not
+  // reached -- but NOT zero for a proton: unlike speciesDedxDelta, whose table
+  // IS the proton's, no hadron has a radiative term in the reference today.
+  G4double radDedxDelta(G4double ekin, const G4ParticleDefinition* part, const G4Material* mat);
+
+  // speciesDedxDelta + radDedxDelta. The range/energy defect integral is
+  // generic in the total dE/dx perturbation, so routing both through one
+  // function is what keeps ComputeDEDX, ComputeRange and ComputeEnergy
+  // consistent -- a ComputeDEDX-only change was measured to leave the two
+  // branches of EnergyAfterStep disagreeing by 4.8e-3 for a pion.
+  G4double totalDedxDelta(G4double ekin, const G4ParticleDefinition* part, const G4Material* mat);
+
   // D(E) = R_uncorrected(E) - R_corrected(E), the range the Tmax defect costs.
   //
   //     R(E) = INT_0^E dE'/dedx(E')   =>   D(E) = INT_0^E  d / (u (u + d)) dE'
@@ -202,6 +215,7 @@ private:
   // species' own Tmax. Latched from cvhcgf::referenceIsSpeciesDedx() in
   // Initialisation, in the same place and for the same reason as chargeAware.
   G4bool speciesDedx = false;
+  G4bool hadronRad = false;
 
   // One-entry memo of speciesRangeDefect. EnergyAfterStep and
   // GetContinuousStepLimit call ComputeRange with the SAME (particle,

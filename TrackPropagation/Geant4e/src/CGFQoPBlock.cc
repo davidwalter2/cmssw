@@ -63,6 +63,11 @@ namespace cvhcgf {
     return v;
   }
 
+  bool referenceHasHadronRadiative() {
+    static const bool v = envFlag("CVH_REF_HADRAD", false);
+    return v;
+  }
+
   int speciesDedxNbin() {
     static const int v = []() {
       const char *s = std::getenv("CVH_REF_SPECIESDEDX_NBIN");
