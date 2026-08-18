@@ -34,6 +34,8 @@ BOOLS = (
     "ReferenceHadronRadiative",
     "ReferenceIonizationOnly",
     "IoniUrban2021",
+    "DumpEmParameters",
+    "EmHarmonise",
 )
 INTS = (
     "ReferenceSpeciesDedxNbin",
@@ -43,13 +45,19 @@ FLOATS = (
     "IoniExactDeltaT0",
 )
 
+# DedxScale defaults to 1.0, not -1, so it needs its own "unset" sentinel
+# rather than the <0 rule the others use.
+FLOATS_POS = (
+    "DedxScale",
+)
+
 
 def register(opts):
     for n in BOOLS + INTS:
         opts.register(n, -1, VarParsing.multiplicity.singleton,
                       VarParsing.varType.int,
                       f"Geant4ePropagator.{n} (-1 = leave the cfi default)")
-    for n in FLOATS:
+    for n in FLOATS + FLOATS_POS:
         opts.register(n, -1.0, VarParsing.multiplicity.singleton,
                       VarParsing.varType.float,
                       f"Geant4ePropagator.{n} (<0 = leave the cfi default)")
@@ -70,7 +78,7 @@ def apply(process, opts, propagator="Geant4ePropagator"):
         if v >= 0:
             setattr(prop, n, cms.int32(int(v)))
             named.append(f"{n}={int(v)}")
-    for n in FLOATS:
+    for n in FLOATS + FLOATS_POS:
         v = getattr(opts, n)
         if v >= 0.:
             setattr(prop, n, cms.double(float(v)))
@@ -81,5 +89,5 @@ def apply(process, opts, propagator="Geant4ePropagator"):
     # is that what ran is recoverable, and the log is the first place anyone
     # looks before edmProvDump.
     print("[cvh] effective: " + ", ".join(
-        f"{n}={getattr(prop, n).value()}" for n in BOOLS + INTS + FLOATS))
+        f"{n}={getattr(prop, n).value()}" for n in BOOLS + INTS + FLOATS + FLOATS_POS))
     return process

@@ -56,6 +56,18 @@ Geant4ePropagator = cms.ESProducer("GeantPropagatorESProducer",
                                    # falsified.
                                    ReferenceIonizationOnly=cms.bool(False),
                                    IoniUrban2021=cms.bool(False),
+                                   # Dump the G4EmParameters block (the MODEL
+                                   # half of the SIM/MODEL pair; the SIM half is
+                                   # ProcessActivationWatcher's own parameter),
+                                   # and set the sim's measured EM values in the
+                                   # model job.  Both live in Geant4 classes
+                                   # with no PSet of their own, so they ride
+                                   # here.
+                                   DumpEmParameters=cms.bool(False),
+                                   EmHarmonise=cms.bool(False),
+                                   # dE/dx table scale; a probe for the J/psi
+                                   # mass bias, not a tune.  1.0 = unscaled.
+                                   DedxScale=cms.double(1.0),
 
                                    # Simpson interval counts; must be even and
                                    # >= 2, enforced in cvhcgf::configure.

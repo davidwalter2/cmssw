@@ -32,6 +32,7 @@
 #include <cstdlib>
 #include "G4MscStepLimitType.hh"
 #include "G4EmParameters.hh"
+#include "TrackPropagation/Geant4e/interface/CGFQoPBlock.h"
 #include "globals.hh"
 
 #include "G4PhysicalConstants.hh"
@@ -177,7 +178,7 @@ void G4ErrorPhysicsListForCVH::ConstructParticle() {
 
 //------------------------------------------------------------------------
 void G4ErrorPhysicsListForCVH::ConstructProcess() {
-  // CVH_EM_HARMONISE (diagnostic, default OFF).
+  // EmHarmonise (Geant4ePropagator PSet; diagnostic, default OFF).
   //
   // WHERE THIS HAS TO LIVE, learned by two failures. G4EmParameters is a
   // global singleton that LOCKS once physics is initialised, and its setters
@@ -193,7 +194,7 @@ void G4ErrorPhysicsListForCVH::ConstructProcess() {
   // defaults where the sim takes CMS values -- 12 of 58 differ. Setting the
   // sim's measured values here answers "does that reach anything we use?" by
   // comparing exports. It is a diagnostic, not a fix.
-  if (std::getenv("CVH_EM_HARMONISE")) {
+  if (cvhcgf::switches().emHarmonise) {
     G4EmParameters *emp = G4EmParameters::Instance();
     emp->SetApplyCuts(true);
     emp->SetGeneralProcessActive(true);

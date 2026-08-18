@@ -100,6 +100,13 @@ namespace cvhcgf {
     // Diagnostics, default-OFF: these do NOT move the model toward the sim.
     bool referenceIonOnly = false;
     bool ioniUrban2021 = false;
+    // Diagnostics that live in Geant4 classes with no ParameterSet of their
+    // own (the physics list and the extrapolator tables), so they ride on the
+    // propagator's PSet rather than on getenv.
+    bool dumpEmParameters = false;
+    bool emHarmonise = false;
+    // dE/dx table scale.  A probe for the J/psi mass bias, not a tune.
+    double dedxScale = 1.0;
     // Quadrature/table sizes.
     int speciesDedxNbin = 16;
     int ioniKokoulinNbin = 96;

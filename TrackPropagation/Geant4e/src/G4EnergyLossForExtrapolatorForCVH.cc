@@ -490,7 +490,7 @@ void G4EnergyLossForExtrapolatorForCVH::Initialisation() {
     if (nullptr == tables) {
 #endif
       isMaster = true;
-      // CVH_IONONLY=1 drops the RADIATIVE (brems + pair) mean from the
+      // ReferenceIonizationOnly drops the RADIATIVE (brems + pair) mean from the
       // reference dE/dx table. Diagnostic for the mean-vs-mode energy-loss
       // bias found 2026-08-08: the reference subtracts the MEAN loss while the
       // typical muon loses the MODE, so the fit adds back energy never lost.
@@ -502,7 +502,7 @@ void G4EnergyLossForExtrapolatorForCVH::Initialisation() {
       // cvhcgf::referenceIsIonOnly). Same value as the getenv it replaces.
       const bool _ionOnly = cvhcgf::referenceIsIonOnly();
       if (_ionOnly) {
-        G4cout << "### G4EnergyLossForExtrapolatorForCVH: CVH_IONONLY set -- "
+        G4cout << "### G4EnergyLossForExtrapolatorForCVH: ReferenceIonizationOnly set -- "
                << "radiative mean EXCLUDED from the dE/dx table" << G4endl;
       }
       tables = new G4TablesForExtrapolatorForCVH(verbose, nbins, emin, emax, _ionOnly);

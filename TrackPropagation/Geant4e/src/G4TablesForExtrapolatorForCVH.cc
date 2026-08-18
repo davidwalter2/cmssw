@@ -235,7 +235,7 @@ void G4TablesForExtrapolatorForCVH::Initialisation() {
   // see the twin dump in ProcessActivationWatcher: same singleton, different job
   {
     static bool dumped = false;
-    if (!dumped && std::getenv("CVH_DUMP_EMPARAMS")) {
+    if (!dumped && cvhcgf::switches().dumpEmParameters) {
       dumped = true;
       G4cout << "### CVH_EMPARAMS_BEGIN tag=MODEL" << G4endl;
       G4EmParameters::Instance()->StreamInfo(G4cout);
@@ -523,11 +523,7 @@ void G4TablesForExtrapolatorForCVH::ComputeMuonDEDX(const G4ParticleDefinition* 
       // actually remove the +1 MeV J/psi mass bias? The lever from dE/dx to
       // fitted momentum measured ~1/3, so the mapping is not 1:1 and the
       // mechanism could be partly something else.
-      static const double _dedxScale = []() {
-        const char *v = getenv("CVH_DEDX_SCALE");
-        return v ? atof(v) : 1.0;
-      }();
-      aVector->PutValue(j, dedx * _dedxScale);
+      aVector->PutValue(j, dedx * cvhcgf::switches().dedxScale);
       if (1 < verbose) {
         G4cout << "j= " << j << "  e(MeV)= " << e / MeV << " dedx(Mev/cm)= " << dedx * cm / MeV
                << " dedx(Mev/(g/cm2)= " << dedx / ((MeV * mat->GetDensity()) / (g / cm2)) << G4endl;

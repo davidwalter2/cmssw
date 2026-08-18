@@ -93,6 +93,8 @@ private:
 
   std::vector<std::string> inactivate_;
   std::vector<std::string> activate_;
+  const bool dumpHadModels_;
+  const bool dumpEmParams_;
   bool applied_ = false;
   bool reported_ = false;
   std::map<std::string, long> nprim_, nall_;
@@ -101,7 +103,12 @@ private:
 ProcessActivationWatcher::ProcessActivationWatcher(const edm::ParameterSet &p)
     : inactivate_(
           p.getUntrackedParameter<std::vector<std::string>>("inactivate", std::vector<std::string>())),
-      activate_(p.getUntrackedParameter<std::vector<std::string>>("activate", std::vector<std::string>())) {
+      activate_(p.getUntrackedParameter<std::vector<std::string>>("activate", std::vector<std::string>())),
+      // ParameterSet, not getenv: this watcher already had a PSet, and a
+      // diagnostic that leaves no trace in the job configuration cannot be
+      // matched to the output it produced.
+      dumpHadModels_(p.getUntrackedParameter<bool>("dumpHadronicModels", false)),
+      dumpEmParams_(p.getUntrackedParameter<bool>("dumpEmParameters", false)) {
   std::cout << "[procact] constructed: inactivate=" << inactivate_.size() << " activate=" << activate_.size()
          << std::endl;
   for (const auto &n : inactivate_)
@@ -111,7 +118,7 @@ ProcessActivationWatcher::ProcessActivationWatcher(const edm::ParameterSet &p)
 }
 
 void ProcessActivationWatcher::update(const BeginOfTrack *) {
-  // CVH_DUMP_HADMODELS: which hadronic model and cross-section set actually
+  // dumpHadronicModels: which hadronic model and cross-section set actually
   // handles each hadronic process for THIS particle, in THIS physics list.
   // "Following the G4 implementation" is only meaningful against the concrete
   // assignment, and FTFP_BERT_EMM picks different models per species and
@@ -120,7 +127,7 @@ void ProcessActivationWatcher::update(const BeginOfTrack *) {
   {
     static std::atomic<bool> dumpedHad{false};
     bool exp2 = false;
-    if (std::getenv("CVH_DUMP_HADMODELS") && dumpedHad.compare_exchange_strong(exp2, true)) {
+    if (dumpHadModels_ && dumpedHad.compare_exchange_strong(exp2, true)) {
       std::cout << "### CVH_HADMODELS_BEGIN" << std::endl;
       // per PARTICLE, which is what determines the assignment we must follow
       auto *ptab = G4ParticleTable::GetParticleTable();
@@ -149,7 +156,7 @@ void ProcessActivationWatcher::update(const BeginOfTrack *) {
     }
   }
 
-  // CVH_DUMP_EMPARAMS: the EM parameter block, once. G4EmParameters is a
+  // dumpEmParameters: the EM parameter block, once. G4EmParameters is a
   // GLOBAL SINGLETON, and the sim and the model are separate jobs running
   // different physics lists -- the sim CMS's, the model
   // G4ErrorPhysicsListForCVH, which sets no EM parameter at all. So anything
@@ -162,7 +169,7 @@ void ProcessActivationWatcher::update(const BeginOfTrack *) {
   {
     static std::atomic<bool> dumped{false};
     bool expected = false;
-    if (std::getenv("CVH_DUMP_EMPARAMS") && dumped.compare_exchange_strong(expected, true)) {
+    if (dumpEmParams_ && dumped.compare_exchange_strong(expected, true)) {
       // std::cout, NOT G4cout: SimG4Core installs a G4UIsession that captures
       // G4cout, so a G4cout dump here is swallowed while the same dump in the
       // model job (no such session) appears. That difference cost a run.

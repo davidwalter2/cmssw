@@ -28,6 +28,9 @@ namespace cvhcgf {
     s.referenceHadRad = pset.getParameter<bool>("ReferenceHadronRadiative");
     s.referenceIonOnly = pset.getParameter<bool>("ReferenceIonizationOnly");
     s.ioniUrban2021 = pset.getParameter<bool>("IoniUrban2021");
+    s.dumpEmParameters = pset.getParameter<bool>("DumpEmParameters");
+    s.emHarmonise = pset.getParameter<bool>("EmHarmonise");
+    s.dedxScale = pset.getParameter<double>("DedxScale");
     s.speciesDedxNbin = pset.getParameter<int>("ReferenceSpeciesDedxNbin");
     s.ioniKokoulinNbin = pset.getParameter<int>("IoniKokoulinNbin");
     s.ioniExactDeltaT0 = pset.getParameter<double>("IoniExactDeltaT0");
@@ -53,6 +56,9 @@ namespace cvhcgf {
                         s.referenceHadRad == g_switches.referenceHadRad &&
                         s.referenceIonOnly == g_switches.referenceIonOnly &&
                         s.ioniUrban2021 == g_switches.ioniUrban2021 &&
+                        s.dumpEmParameters == g_switches.dumpEmParameters &&
+                        s.emHarmonise == g_switches.emHarmonise &&
+                        s.dedxScale == g_switches.dedxScale &&
                         s.speciesDedxNbin == g_switches.speciesDedxNbin &&
                         s.ioniKokoulinNbin == g_switches.ioniKokoulinNbin &&
                         s.ioniExactDeltaT0 == g_switches.ioniExactDeltaT0;

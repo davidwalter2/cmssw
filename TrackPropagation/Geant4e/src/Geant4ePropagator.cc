@@ -728,7 +728,7 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
   std::vector<Matrix<double, 5, 5>> cgfStepJac;
   std::vector<std::pair<int, std::pair<G4UniversalFluctuationForExtrapolator::UrbanFluctRecord, double>>> cgfStepRec;
   // per-step (transport index, cs * dedxRad * steplength) -- the radiative
-  // MEAN the reference no longer subtracts when CVH_IONONLY is set, in q/p
+  // MEAN the reference no longer subtracts when ReferenceIonizationOnly is set, in q/p
   // units before transport. Collected only in that configuration.
   std::vector<std::pair<int, double>> cgfStepRadMean;
   const bool cgfIonOnly = cvhcgf::referenceIsIonOnly();
@@ -745,11 +745,11 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
   // pinned at r = 0, which cannot carry a mean. Measured cost at pT = 3:
   // 1.03e-5 relative on q/p at the outermost plane, growing with momentum
   // (radiative is 2.5 % of the q/p kappa2 at pT = 3 and 18.6 % at pT = 40).
-  // Warn once rather than throw, because CVH_IONONLY predates this work and
+  // Warn once rather than throw, because ReferenceIonizationOnly predates this work and
   // is someone else's diagnostic.
   [[maybe_unused]] static const bool cgfIonOnlyWarned = [&]() {
     if (cgfIonOnly && cgfQoPMode != 1) {
-      std::cout << "### CVHCGF WARNING: CVH_IONONLY is set but the CGF block is not "
+      std::cout << "### CVHCGF WARNING: ReferenceIonizationOnly is set but the CGF block is not "
                    "substituting (CVH_CGF_QOP != 1). The reference no longer subtracts "
                    "the radiative mean and NOTHING carries it: this configuration has an "
                    "uncorrected q/p shift of ~1e-5 relative at pT = 3, growing with momentum."
