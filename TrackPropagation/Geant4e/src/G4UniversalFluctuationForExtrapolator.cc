@@ -107,13 +107,14 @@ bool G4UniversalFluctuationForExtrapolator::urban2021Enabled() {
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
 
 bool G4UniversalFluctuationForExtrapolator::exactDeltaEnabled() {
-  // DEFAULT OFF.  Briefly default-ON on 2026-08-16 and reverted the same week
-  // (Documents/Resolution/NOTES_DEFAULTON.md s6, NOTES_CLOSURE_FINAL.md s1):
-  // the global fit that consumes the exported Jacobians has still not been run,
-  // so the four corrections stay opt-in.  CVH_IONI_EXACTDELTA=1 selects the
+  // DEFAULT ON, so the model represents what the simulation does: Geant4
+  // samples the exact knock-on cross section, and the 1/E^2 delta channel is an
+  // approximation to it.  See the block comment on the defaults in
+  // CGFQoPBlock.cc, including the attribution gate that is still open.
+  // CVH_IONI_EXACTDELTA=1 selects the
   // exact knock-on cross section (regime 2/3, 13-wide `ioniurbanv` stride);
   // unset or =0 is the 1/E^2 delta channel with the 11-wide stride.
-  static const bool v = cvhcgf::envFlag("CVH_IONI_EXACTDELTA", false);
+  static const bool v = cvhcgf::envFlag("CVH_IONI_EXACTDELTA", true);
   return v;
 }
 
