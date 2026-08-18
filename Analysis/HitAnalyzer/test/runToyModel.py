@@ -44,6 +44,8 @@ opts.register('stepLength', 10.0, VarParsing.multiplicity.singleton,
               'exactly ON this ceiling (measured median step 1.0000 cm) while '
               'the SIM steps far more finely, and Moliere is not additive '
               'between the two.')
+import TrackPropagation.Geant4e.cvhSwitches as cvhSwitches
+cvhSwitches.register(opts)
 opts.parseArguments()
 
 process = cms.Process('CLEANMODEL', Run2_2016)
@@ -101,6 +103,8 @@ if opts.useOpera3D:
 process.geopro.MagneticFieldLabel = fieldlabel
 process.Geant4ePropagator.MagneticFieldLabel = fieldlabel
 process.Geant4ePropagator.ForCVH = cms.bool(True)
+# CVH energy-loss switches: PSet parameters, not CVH_* env vars
+cvhSwitches.apply(process, opts)
 process.Geant4ePropagator.PropagationDirection = "anyDirection"
 process.Geant4ePropagator.IoniTruncationAlpha = cms.double(float(opts.ioniTruncationAlpha))
 process.Geant4ePropagator.StepLengthLimit = cms.double(float(opts.stepLength))

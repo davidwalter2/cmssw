@@ -8,6 +8,8 @@
 #include "FWCore/Framework/interface/EventSetup.h"
 #include "FWCore/Framework/interface/ModuleFactory.h"
 
+#include "TrackPropagation/Geant4e/interface/CGFQoPBlock.h"
+
 #include <memory>
 #include <string>
 
@@ -20,6 +22,12 @@ GeantPropagatorESProducer::GeantPropagatorESProducer(const edm::ParameterSet &p)
   pset_ = p;
   plimit_ = pset_.getParameter<double>("PropagationPtotLimit");
   forCVH_ = pset_.getParameter<bool>("ForCVH");
+  // The CVH energy-loss switches used to be read from CVH_* environment
+  // variables inside the Geant4 model classes, which left them out of the
+  // output file's provenance entirely.  They are ParameterSet parameters now,
+  // pushed once into the process-global readers here -- in the CONSTRUCTOR, so
+  // they are set before any physics list or fluctuation model is built.
+  cvhcgf::configure(p);
 }
 
 GeantPropagatorESProducer::~GeantPropagatorESProducer() {}

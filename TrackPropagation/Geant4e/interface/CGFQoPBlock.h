@@ -64,31 +64,55 @@
 // and therefore what keeps the existing 50-mode scalar-potential production
 // valid.
 
+#include "FWCore/ParameterSet/interface/ParameterSet.h"
 #include <cstddef>
 #include <complex>
 #include <vector>
 
 namespace cvhcgf {
+  // CONFIGURATION.  These switches are set from the Geant4ePropagator
+  // ESProducer's ParameterSet -- `GeantPropagatorESProducer` calls
+  // `cvhcgf::configure(pset)` in its constructor -- and NOT from the
+  // environment.  That is the CMSSW convention and it buys three things the
+  // getenv readers these replaced could not:
+  //
+  //   * PROVENANCE.  The PSet is written into the output file, so
+  //     `edmProvDump` recovers exactly which corrections produced it.  An
+  //     environment variable leaves no trace in the data, which meant a model
+  //     file could not be told apart from one exported with different physics.
+  //   * VALIDATION.  A misspelled parameter is a configuration error at
+  //     construction; a misspelled CVH_* was silently the default.
+  //   * A SINGLE SOURCE.  The defaults live in `Config`'s member initializers
+  //     and are mirrored once in Geant4ePropagator_cfi.py, instead of being
+  //     spread over a dozen `envFlag(..., default)` call sites.
+  //
+  // `config()` THROWS if `configure()` has not run.  That is deliberate: a
+  // silent default is what made the environment readers hard to audit, so an
+  // unconfigured job must fail rather than quietly pick physics.
+  struct Switches {
+    // The energy-loss corrections.  DEFAULT-ON: the model should model what
+    // Geant4 actually runs.  See the block comment in CGFQoPBlock.cc.
+    bool ioniExactDelta = true;
+    bool ioniKokoulin = true;
+    bool referenceChargeAware = true;
+    bool referenceSpeciesDedx = true;
+    bool referenceHadRad = true;
+    // Diagnostics, default-OFF: these do NOT move the model toward the sim.
+    bool referenceIonOnly = false;
+    bool ioniUrban2021 = false;
+    // Quadrature/table sizes.
+    int speciesDedxNbin = 16;
+    int ioniKokoulinNbin = 96;
+    double ioniExactDeltaT0 = 0.0;
+  };
 
-  // TRI-STATE ENVIRONMENT FLAG -- the mechanism that lets a switch have a
-  // non-trivial DEFAULT and still be operable in both directions.
-  //
-  //     unset                                   -> `dflt`
-  //     "0" / "false" / "off" / "no" / ""       -> false
-  //     anything else (including "1")           -> true
-  //
-  // The original readers were `getenv(name) != nullptr`, i.e. presence-only.
-  // That is fine for a default-OFF knob but cannot express "off" once the
-  // default is ON, and a correction that cannot be turned off cannot be
-  // ATTRIBUTED: the factorial comparison (all four off vs all four on) that
-  // the global fit needs would be impossible to set up. Every switch below
-  // therefore goes through this, whatever its default, so that one convention
-  // covers both directions and `CVH_X=0` always means off.
-  //
-  // Case-insensitive on the false words. Note "" (set but empty) is FALSE,
-  // not true: `export CVH_X=` reads as "I want it off" far more often than as
-  // "I want it on".
-  bool envFlag(const char *name, bool dflt);
+  // Called once, from GeantPropagatorESProducer's constructor.  Calling it
+  // twice with DIFFERENT values throws: the readers below are process-global
+  // singletons (they configure Geant4 model classes), so two propagators
+  // asking for different physics cannot both be served, and silently honouring
+  // the first would be worse than saying so.
+  void configure(const edm::ParameterSet &pset);
+  const Switches &switches();
 
   // THE SINGLE READER of CVH_IONONLY.
   //

@@ -1,5 +1,7 @@
 #include "TrackPropagation/Geant4e/interface/CGFQoPBlock.h"
 
+#include "FWCore/Utilities/interface/Exception.h"
+
 #include <CLHEP/Units/PhysicalConstants.h>
 
 #include <algorithm>
@@ -12,23 +14,73 @@
 
 namespace cvhcgf {
 
-  bool envFlag(const char *name, bool dflt) {
-    const char *s = std::getenv(name);
-    if (nullptr == s) {
-      return dflt;
+  namespace {
+    Switches g_switches;
+    bool g_configured = false;
+  }
+
+  void configure(const edm::ParameterSet &pset) {
+    Switches s;
+    s.ioniExactDelta = pset.getParameter<bool>("IoniExactDelta");
+    s.ioniKokoulin = pset.getParameter<bool>("IoniKokoulin");
+    s.referenceChargeAware = pset.getParameter<bool>("ReferenceChargeAware");
+    s.referenceSpeciesDedx = pset.getParameter<bool>("ReferenceSpeciesDedx");
+    s.referenceHadRad = pset.getParameter<bool>("ReferenceHadronRadiative");
+    s.referenceIonOnly = pset.getParameter<bool>("ReferenceIonizationOnly");
+    s.ioniUrban2021 = pset.getParameter<bool>("IoniUrban2021");
+    s.speciesDedxNbin = pset.getParameter<int>("ReferenceSpeciesDedxNbin");
+    s.ioniKokoulinNbin = pset.getParameter<int>("IoniKokoulinNbin");
+    s.ioniExactDeltaT0 = pset.getParameter<double>("IoniExactDeltaT0");
+
+    for (auto const &nb : {std::make_pair("ReferenceSpeciesDedxNbin", s.speciesDedxNbin),
+                           std::make_pair("IoniKokoulinNbin", s.ioniKokoulinNbin)}) {
+      if (nb.second < 2 || (nb.second % 2) != 0) {
+        throw cms::Exception("Configuration")
+            << nb.first << " must be even and >= 2 (Simpson needs an even interval count); got "
+            << nb.second;
+      }
     }
-    std::string v(s);
-    std::transform(v.begin(), v.end(), v.begin(), [](unsigned char c) { return std::tolower(c); });
-    // Set-but-empty reads as OFF: `export CVH_X=` is far more often "I want it
-    // off" than "I want it on", and the presence-only convention it replaces
-    // would have said on.
-    return !(v.empty() || v == "0" || v == "false" || v == "off" || v == "no");
+
+    if (g_configured) {
+      // The readers below configure PROCESS-GLOBAL Geant4 model classes, so two
+      // propagators asking for different physics cannot both be served.
+      // Honouring whichever was constructed first would be a silent, ordering-
+      // dependent answer -- exactly the failure the move off getenv removes.
+      const bool same = s.ioniExactDelta == g_switches.ioniExactDelta &&
+                        s.ioniKokoulin == g_switches.ioniKokoulin &&
+                        s.referenceChargeAware == g_switches.referenceChargeAware &&
+                        s.referenceSpeciesDedx == g_switches.referenceSpeciesDedx &&
+                        s.referenceHadRad == g_switches.referenceHadRad &&
+                        s.referenceIonOnly == g_switches.referenceIonOnly &&
+                        s.ioniUrban2021 == g_switches.ioniUrban2021 &&
+                        s.speciesDedxNbin == g_switches.speciesDedxNbin &&
+                        s.ioniKokoulinNbin == g_switches.ioniKokoulinNbin &&
+                        s.ioniExactDeltaT0 == g_switches.ioniExactDeltaT0;
+      if (!same) {
+        throw cms::Exception("Configuration")
+            << "cvhcgf::configure called twice with different values. The CVH energy-loss "
+            << "switches configure process-global Geant4 model classes, so every "
+            << "GeantPropagatorESProducer in a job must declare the same ones.";
+      }
+      return;
+    }
+    g_switches = s;
+    g_configured = true;
+  }
+
+  const Switches &switches() {
+    if (!g_configured) {
+      throw cms::Exception("Configuration")
+          << "cvhcgf::switches() used before cvhcgf::configure(). The CVH energy-loss switches "
+          << "are set from the Geant4ePropagator ESProducer's ParameterSet; a job that reaches "
+          << "this code without one is misconfigured. (These were environment variables before "
+          << "and silently defaulted, which is the behaviour this replaces.)";
+    }
+    return g_switches;
   }
 
   bool referenceIsIonOnly() {
-    // DEFAULT OFF -- a diagnostic, not one of the four energy-loss corrections.
-    static const bool v = envFlag("CVH_IONONLY", false);
-    return v;
+    return switches().referenceIonOnly;
   }
 
   // The energy-loss corrections are DEFAULT-ON, so that the MODEL represents
@@ -56,33 +108,26 @@ namespace cvhcgf {
   // falsified the prediction it was built for, so it is a diagnostic, not a
   // correction, and turning it on would NOT move the model toward the sim.
   bool ioniKokoulinEnabled() {
-    static const bool v = envFlag("CVH_IONI_KOKOULIN", true);
-    return v;
+    return switches().ioniKokoulin;
   }
 
   bool referenceIsChargeAware() {
-    static const bool v = envFlag("CVH_REF_CHARGEAWARE", true);
-    return v;
+    return switches().referenceChargeAware;
   }
 
   bool referenceIsSpeciesDedx() {
-    static const bool v = envFlag("CVH_REF_SPECIESDEDX", true);
-    return v;
+    return switches().referenceSpeciesDedx;
   }
 
   bool referenceHasHadronRadiative() {
-    static const bool v = envFlag("CVH_REF_HADRAD", true);
-    return v;
+    return switches().referenceHadRad;
   }
 
   int speciesDedxNbin() {
-    static const int v = []() {
-      const char *s = std::getenv("CVH_REF_SPECIESDEDX_NBIN");
-      const int n = s ? std::atoi(s) : 16;
-      // Simpson needs an even, positive interval count.
-      return (n >= 2 && n % 2 == 0) ? n : 16;
-    }();
-    return v;
+    // Validated in `configure` (Simpson needs an even, positive interval
+    // count), where a bad value is a configuration ERROR rather than being
+    // silently replaced by the default the way the getenv reader did.
+    return switches().speciesDedxNbin;
   }
 
   double speciesTmaxDedx(double ekin, double mass, double refMass, double charge2, double electronDensity) {
@@ -111,13 +156,7 @@ namespace cvhcgf {
   }
 
   int ioniKokoulinNbin() {
-    static const int v = []() {
-      const char *s = std::getenv("CVH_IONI_KOKOULIN_NBIN");
-      const int n = s ? std::atoi(s) : 96;
-      // Simpson needs an even, positive interval count.
-      return (n >= 2 && n % 2 == 0) ? n : 96;
-    }();
-    return v;
+    return switches().ioniKokoulinNbin;
   }
 
   namespace {

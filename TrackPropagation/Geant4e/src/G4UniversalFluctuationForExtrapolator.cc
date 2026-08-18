@@ -100,8 +100,7 @@ bool G4UniversalFluctuationForExtrapolator::urban2021Enabled() {
   // DEFAULT OFF. NOTES_DELTASPEC s10.4 falsified the specific prediction this
   // harmonization was made for; it stays available as a diagnostic and is not
   // one of the four corrections that went default-on 2026-08-16.
-  static const bool v = cvhcgf::envFlag("CVH_IONI_URBAN2021", false);
-  return v;
+  return cvhcgf::switches().ioniUrban2021;
 }
 
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
@@ -114,8 +113,7 @@ bool G4UniversalFluctuationForExtrapolator::exactDeltaEnabled() {
   // CVH_IONI_EXACTDELTA=1 selects the
   // exact knock-on cross section (regime 2/3, 13-wide `ioniurbanv` stride);
   // unset or =0 is the 1/E^2 delta channel with the 11-wide stride.
-  static const bool v = cvhcgf::envFlag("CVH_IONI_EXACTDELTA", true);
-  return v;
+  return cvhcgf::switches().ioniExactDelta;
 }
 
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
@@ -715,10 +713,10 @@ G4double G4UniversalFluctuationForExtrapolator::SampleFluctuations(
   // it here also fixes the variance this function RETURNS, i.e. the track
   // fit's own Q matrix, which the offline route leaves wrong.
   //
-  // DEFAULT OFF.  With the switch unset not one line below runs and the record
-  // is bit-identical to what it was.
+  // With the switch off not one line below runs and the record is bit-identical
+  // to the 1/E^2 delta channel's.
   //
-  // CVH_IONI_EXACTDELTA_T0 (MeV, default = e0) raises the bottom of the exact
+  // `IoniExactDeltaT0` (MeV, 0 = use e0) raises the bottom of the exact
   // channel.  The free-electron cross section is not valid below ~1 keV, where
   // atomic binding matters and the Urban excitation channels are the stand-in;
   // moving T0 from e0 = 10 eV up to 1 keV moves ~12 % of the mean between the
@@ -727,10 +725,7 @@ G4double G4UniversalFluctuationForExtrapolator::SampleFluctuations(
   const bool exactDelta = exactDeltaEnabled();
   // ONE reader, shared with the offline consumer -- cvhcgf::ioniKokoulinEnabled.
   const bool kokoulinOn = cvhcgf::ioniKokoulinEnabled();
-  static const double exactT0 = []() {
-    const char *v = getenv("CVH_IONI_EXACTDELTA_T0");
-    return v ? atof(v) : 0.0;
-  }();
+  const double exactT0 = cvhcgf::switches().ioniExactDeltaT0;
   // Geant4 branches the spectrum on the PDG SPIN, not on the particle id:
   // G4BetheBlochModel::SampleSecondaries adds 0.5 T^2/Etot^2 to the rejection
   // function `if (0.5 == spin)` and G4MuBetheBlochModel (spin 1/2 by

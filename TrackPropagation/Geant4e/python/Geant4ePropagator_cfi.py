@@ -25,5 +25,44 @@ Geant4ePropagator = cms.ESProducer("GeantPropagatorESProducer",
                                    # Extrapolator). 0.999 = historical CVH baseline. Scanned by
                                    # the resolution-closure diagnostic (0.995-0.999): fitted
                                    # resolution parameters must not depend on it.
-                                   IoniTruncationAlpha=cms.double(0.999)
+                                   IoniTruncationAlpha=cms.double(0.999),
+
+                                   # The CVH energy-loss corrections.  These
+                                   # were CVH_* ENVIRONMENT VARIABLES until
+                                   # 2026-08-18; they are configuration now, so
+                                   # that they land in the output provenance
+                                   # (edmProvDump recovers exactly which
+                                   # corrections produced a file), so a typo is
+                                   # a configuration error instead of a silent
+                                   # default, and so the defaults live in one
+                                   # place.  cvhcgf::configure reads them in
+                                   # GeantPropagatorESProducer's constructor.
+                                   #
+                                   # DEFAULT ON: each exists because the model
+                                   # was missing something Geant4 actually
+                                   # runs, so the default configuration should
+                                   # model the simulation.  Turn one off to
+                                   # ATTRIBUTE it, not to get the baseline.
+                                   IoniExactDelta=cms.bool(True),
+                                   IoniKokoulin=cms.bool(True),
+                                   ReferenceChargeAware=cms.bool(True),
+                                   ReferenceSpeciesDedx=cms.bool(True),
+                                   ReferenceHadronRadiative=cms.bool(True),
+
+                                   # Diagnostics.  DEFAULT OFF -- these do NOT
+                                   # move the model toward the simulation.
+                                   # IoniUrban2021 in particular was built for
+                                   # a prediction NOTES_DELTASPEC s10.4
+                                   # falsified.
+                                   ReferenceIonizationOnly=cms.bool(False),
+                                   IoniUrban2021=cms.bool(False),
+
+                                   # Simpson interval counts; must be even and
+                                   # >= 2, enforced in cvhcgf::configure.
+                                   ReferenceSpeciesDedxNbin=cms.int32(16),
+                                   IoniKokoulinNbin=cms.int32(96),
+                                   # MeV; 0 means "use e0".  A scan knob for the
+                                   # exact-delta channel's lower bound, not a
+                                   # tune -- nothing is fitted to it.
+                                   IoniExactDeltaT0=cms.double(0.0)
                                    )

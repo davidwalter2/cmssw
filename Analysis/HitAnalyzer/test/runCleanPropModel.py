@@ -44,6 +44,8 @@ opts.register('output', 'model.root', VarParsing.VarParsing.multiplicity.singlet
 opts.register('stepLength', 10.0, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.float,
               'Geant4e max step [mm]; formerly hard-coded in Geant4ePropagator.cc')
+import TrackPropagation.Geant4e.cvhSwitches as cvhSwitches
+cvhSwitches.register(opts)
 opts.parseArguments()
 
 assert opts.targets, 'must pass targets=<file>'
@@ -109,6 +111,8 @@ if opts.useOpera3D:
 process.geopro.MagneticFieldLabel = fieldlabel
 process.Geant4ePropagator.MagneticFieldLabel = fieldlabel
 process.Geant4ePropagator.ForCVH = cms.bool(True)
+# CVH energy-loss switches: PSet parameters, not CVH_* env vars
+cvhSwitches.apply(process, opts)
 process.Geant4ePropagator.PropagationDirection = "anyDirection"
 process.Geant4ePropagator.IoniTruncationAlpha = cms.double(float(opts.ioniTruncationAlpha))
 process.Geant4ePropagator.StepLengthLimit = cms.double(float(opts.stepLength))
