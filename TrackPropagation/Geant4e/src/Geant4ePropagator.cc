@@ -937,6 +937,10 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
   Matrix<double, 5, 5> dQ2 = Matrix<double, 5, 5>::Zero();
 
   double dEdxlast = 0.;
+  // whether `dEdxlast` has been set from a step of controlled length yet; see
+  // the kMinStepForDEdx block in the stepping loop
+  bool haveDEdxLast = false;
+  static const bool dedxDebug_ = (getenv("CVH_DEDX_DEBUG") != nullptr);
 
   Matrix<double, 5, 5> dErrorDxLast = Matrix<double, 5, 5>::Zero();
 
@@ -1073,8 +1077,75 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
     const double dEdx = (ePost - ePre) / thisPathLength;
     const double mass = g4eTrajState.GetG4Track()->GetDynamicParticle()->GetMass() / CLHEP::GeV;
 
-    if (std::abs(thisPathLength) > 0.) {
+    // dE/dx AT THE TARGET, from a step of controlled length.
+    //
+    // `dEdxlast` is consumed by curv2localJacobianAltelossD as the dE/dx over
+    // the differential path a transversely displaced track needs to reach the
+    // target plane.  That path lies on the side the track ARRIVES from, so the
+    // right value is the dE/dx of the medium being traversed on arrival.
+    //
+    // Taking it from the last step unconditionally does not give that.  When
+    // the target plane sits on a material boundary the propagation terminates
+    // with a DEGENERATE step just past it, and Geant4 attributes that step to
+    // the volume on the FAR side -- so `dEdx` is the material the track has not
+    // entered yet.  MEASURED with CVH_DEDX_DEBUG on the pT = 3 clean-propagation
+    // exports (leg-final steps, length / material):
+    //
+    //   real leg  8   Air 1.00, Air 0.175, Air 0.113, Silicon 1.9e-07  <- sliver
+    //   real leg  2   Air 0.026, Air 0.031, Silicon 1.88e-02, Si 2.7e-08
+    //   real leg  0   Air 0.069, Air 0.128, Air 0.160, Pix_Bar_Hybrid_Full 4.7e-03
+    //   toy  leg 13   Vacuum 1.000, Vacuum 0.892, ToyLayerMat 7.8e-05  <- sliver
+    //
+    // so the two cases must be told apart and NOT treated alike: leg 8 arrives
+    // through air and its silicon reading is wrong, while leg 2 genuinely
+    // traverses 188 um of silicon before the target and its silicon reading is
+    // RIGHT.  A blanket "use the outside material" would break leg 2, and leg 0
+    // shows the arrival medium need not be either silicon or air.  Every toy leg
+    // arrives through vacuum, so 0 is correct there on all 14.
+    //
+    // The floor separates the two by length, which the dump shows is clean:
+    //
+    //   largest terminal sliver     7.8e-05 cm  (toy leg 13; slivers scale with
+    //                                            accumulated path, 4.2e-08 on
+    //                                            the shortest leg)
+    //   smallest genuine traverse   3.1e-03 cm  (31 um of silicon, real legs
+    //                                            5, 7, 12, 17)
+    //
+    // a factor 40 gap.  5e-4 cm sits 6.4x above the largest sliver and 6.3x
+    // below the smallest genuine step, i.e. centred in it in log space.  NOTE
+    // this is an absolute floor against an artifact that scales with path
+    // length; it holds while the sliver scale stays under ~5 um, which on these
+    // legs it does by 6x.  Legs far longer than ~13 cm should be re-checked
+    // with CVH_DEDX_DEBUG before the floor is trusted there.
+    //
+    // Production is unaffected: ResidualGlobalCorrectionMaker*G4e propagate to
+    // surfacemapD_[detid], the DetUnit reference surface, which is the sensor
+    // MID-plane and therefore not a material boundary at all.
+    constexpr double kMinStepForDEdx = 5e-4;  // cm
+    if (std::abs(thisPathLength) > kMinStepForDEdx) {
       dEdxlast = dEdx;
+      haveDEdxLast = true;
+    } else if (!haveDEdxLast && std::abs(thisPathLength) > 0.) {
+      // Nothing of controlled length has been seen yet on this leg. Keep the
+      // old behaviour rather than returning 0, so a degenerate leg degrades to
+      // what it used to report instead of silently losing the term.
+      dEdxlast = dEdx;
+    }
+
+    // CVH_DEDX_DEBUG: per-step (length, dE/dx, material) so the criterion for
+    // `dEdxlast` can be chosen from the actual step structure at the target
+    // rather than inferred from the exported cumulative Jacobians -- those
+    // cannot distinguish a boundary sliver from a genuine short traverse
+    // inside the sensor, and reading them as if they could gave a wrong answer
+    // once already. Inert unless the variable is set.
+    if (dedxDebug_) {
+      const G4VPhysicalVolume *vol = g4eTrajState.GetG4Track()->GetVolume();
+      const G4Material *stepmat = vol != nullptr ? vol->GetLogicalVolume()->GetMaterial() : nullptr;
+      std::cout << "[dedxdbg] iter=" << iterations << " len=" << thisPathLength << " dEdx=" << dEdx
+                << " mat=" << (stepmat != nullptr ? std::string(stepmat->GetName()) : std::string("<null>"))
+                << " rho=" << (stepmat != nullptr ? stepmat->GetDensity() / (CLHEP::g / CLHEP::cm3) : -1.)
+                << " r=" << g4eTrajState.GetPosition().perp() / CLHEP::cm
+                << " accum=" << finalPathLength << std::endl;
     }
 
     const Matrix<double, 5, 9> transportJac = transportJacobianBxByBzD(statepre, thisPathLength, dEdx, mass, dBstep);
