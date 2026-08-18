@@ -56,6 +56,12 @@
 
 #include "FWCore/ParameterSet/interface/ParameterSet.h"
 
+#include "G4EmParameters.hh"
+#include "G4HadronicProcess.hh"
+#include "G4HadronicInteraction.hh"
+#include "G4ParticleTable.hh"
+#include "G4ProcessManager.hh"
+#include "G4ParticleDefinition.hh"
 #include "G4ProcessTable.hh"
 #include "G4Step.hh"
 #include "G4StepPoint.hh"
@@ -63,6 +69,8 @@
 #include "G4VProcess.hh"
 #include "G4Threading.hh"
 #include "G4ios.hh"
+#include <atomic>
+#include <cstdlib>
 #include <iostream>
 
 #include <map>
@@ -103,6 +111,67 @@ ProcessActivationWatcher::ProcessActivationWatcher(const edm::ParameterSet &p)
 }
 
 void ProcessActivationWatcher::update(const BeginOfTrack *) {
+  // CVH_DUMP_HADMODELS: which hadronic model and cross-section set actually
+  // handles each hadronic process for THIS particle, in THIS physics list.
+  // "Following the G4 implementation" is only meaningful against the concrete
+  // assignment, and FTFP_BERT_EMM picks different models per species and
+  // energy range; reading it off the process table is authoritative where
+  // reading the physics-list source is not (CMS's source is not on cvmfs).
+  {
+    static std::atomic<bool> dumpedHad{false};
+    bool exp2 = false;
+    if (std::getenv("CVH_DUMP_HADMODELS") && dumpedHad.compare_exchange_strong(exp2, true)) {
+      std::cout << "### CVH_HADMODELS_BEGIN" << std::endl;
+      // per PARTICLE, which is what determines the assignment we must follow
+      auto *ptab = G4ParticleTable::GetParticleTable();
+      for (G4int i = 0; i < ptab->size(); ++i) {
+        G4ParticleDefinition *pd = ptab->GetParticle(i);
+        if (pd == nullptr) continue;
+        const G4String pn = pd->GetParticleName();
+        if (pn != "pi+" && pn != "pi-" && pn != "kaon+" && pn != "kaon-" &&
+            pn != "proton" && pn != "anti_proton" && pn != "mu+" && pn != "mu-")
+          continue;
+        G4ProcessManager *pm = pd->GetProcessManager();
+        if (pm == nullptr) continue;
+        G4ProcessVector *pv = pm->GetProcessList();
+        for (G4int k = 0; k < (G4int)pv->size(); ++k) {
+          auto *hp = dynamic_cast<G4HadronicProcess *>((*pv)[k]);
+          if (hp == nullptr) continue;
+          for (auto *hi : hp->GetHadronicInteractionList()) {
+            if (hi == nullptr) continue;
+            std::cout << "  " << pn << "  " << hp->GetProcessName() << "  -> " << hi->GetModelName()
+                      << "  E=[" << hi->GetMinEnergy()/CLHEP::GeV << ","
+                      << hi->GetMaxEnergy()/CLHEP::GeV << "] GeV" << std::endl;
+          }
+        }
+      }
+      std::cout << "### CVH_HADMODELS_END" << std::endl;
+    }
+  }
+
+  // CVH_DUMP_EMPARAMS: the EM parameter block, once. G4EmParameters is a
+  // GLOBAL SINGLETON, and the sim and the model are separate jobs running
+  // different physics lists -- the sim CMS's, the model
+  // G4ErrorPhysicsListForCVH, which sets no EM parameter at all. So anything
+  // the model reads from this singleton at Initialise() time silently takes a
+  // Geant4 default where the sim takes a CMS value. That has bitten here
+  // before (a fork queried Spline() and got a different default, see
+  // G4TablesForExtrapolatorForCVH.h). Dumped here rather than at BeginOfRun
+  // because the EM tables are built lazily and are not complete until the
+  // first track.
+  {
+    static std::atomic<bool> dumped{false};
+    bool expected = false;
+    if (std::getenv("CVH_DUMP_EMPARAMS") && dumped.compare_exchange_strong(expected, true)) {
+      // std::cout, NOT G4cout: SimG4Core installs a G4UIsession that captures
+      // G4cout, so a G4cout dump here is swallowed while the same dump in the
+      // model job (no such session) appears. That difference cost a run.
+      std::cout << "### CVH_EMPARAMS_BEGIN tag=SIM" << std::endl;
+      G4EmParameters::Instance()->StreamInfo(std::cout);
+      std::cout << "### CVH_EMPARAMS_END" << std::endl;
+    }
+  }
+
   if (applied_)
     return;
   applied_ = true;

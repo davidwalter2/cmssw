@@ -28,6 +28,10 @@
 //      GEANT 4 class implementation file
 // ------------------------------------------------------------
 
+#include <iostream>
+#include <cstdlib>
+#include "G4MscStepLimitType.hh"
+#include "G4EmParameters.hh"
 #include "globals.hh"
 
 #include "G4PhysicalConstants.hh"
@@ -173,6 +177,34 @@ void G4ErrorPhysicsListForCVH::ConstructParticle() {
 
 //------------------------------------------------------------------------
 void G4ErrorPhysicsListForCVH::ConstructProcess() {
+  // CVH_EM_HARMONISE (diagnostic, default OFF).
+  //
+  // WHERE THIS HAS TO LIVE, learned by two failures. G4EmParameters is a
+  // global singleton that LOCKS once physics is initialised, and its setters
+  // then do nothing AND SAY NOTHING -- an attempt from
+  // G4TablesForExtrapolatorForCVH::Initialisation() printed its banner,
+  // changed not one of the 58 values, and would have reported a false "no
+  // impact" had the dump not been re-read afterwards. A second attempt in
+  // Geant4ePropagator's G4State_PreInit branch never ran at all: that branch
+  // is not reached in the export job. ConstructProcess runs during
+  // G4State_Init, where the singleton is still writable.
+  //
+  // This list otherwise sets NO EM parameter, so the model job inherits Geant4
+  // defaults where the sim takes CMS values -- 12 of 58 differ. Setting the
+  // sim's measured values here answers "does that reach anything we use?" by
+  // comparing exports. It is a diagnostic, not a fix.
+  if (std::getenv("CVH_EM_HARMONISE")) {
+    G4EmParameters *emp = G4EmParameters::Instance();
+    emp->SetApplyCuts(true);
+    emp->SetGeneralProcessActive(true);
+    emp->SetLowestElectronEnergy(25 * CLHEP::keV);
+    emp->SetLowestMuHadEnergy(25 * CLHEP::keV);
+    emp->SetStepFunction(0.8, 1 * CLHEP::mm);
+    emp->SetMscRangeFactor(0.2);
+    emp->SetMscStepLimitType(fMinimal);
+    std::cout << "### CVH_EM_HARMONISE: applied in ConstructProcess" << std::endl;
+  }
+
   // MT-safe re-entry guard. G4VUserPhysicsList::InitializeWorker (called by
   // G4WorkerRunManagerKernel::InitializePhysics on each worker thread)
   // re-invokes ConstructProcess on the same physics-list instance, plus

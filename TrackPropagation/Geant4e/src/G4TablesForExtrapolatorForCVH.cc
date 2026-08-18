@@ -64,6 +64,7 @@
 #include "TrackPropagation/Geant4e/interface/CGFQoPBlock.h"
 #include "FWCore/Utilities/interface/Exception.h"
 #include "G4EmParameters.hh"
+#include "G4MscStepLimitType.hh"
 #include "G4MollerBhabhaModel.hh"
 #include "G4BetheBlochModel.hh"
 #include "G4eBremsstrahlungRelModel.hh"
@@ -230,6 +231,18 @@ const G4PhysicsTable* G4TablesForExtrapolatorForCVH::GetPhysicsTable(ExtTableTyp
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo....
 
 void G4TablesForExtrapolatorForCVH::Initialisation() {
+
+  // see the twin dump in ProcessActivationWatcher: same singleton, different job
+  {
+    static bool dumped = false;
+    if (!dumped && std::getenv("CVH_DUMP_EMPARAMS")) {
+      dumped = true;
+      G4cout << "### CVH_EMPARAMS_BEGIN tag=MODEL" << G4endl;
+      G4EmParameters::Instance()->StreamInfo(G4cout);
+      G4cout << "### CVH_EMPARAMS_END" << G4endl;
+    }
+  }
+
   if (verbose > 1) {
     G4cout << "### G4TablesForExtrapolatorForCVH::Initialisation" << G4endl;
   }
