@@ -270,6 +270,7 @@ def emit_xml(vols, ns, path, split_at=()):
  </PosPartSection>
 """
     open(path, "w").write(hdr + body + "\n</DDDefinition>\n")
+    return len(edges)
 
 
 def main():
@@ -298,7 +299,10 @@ def main():
     # basename must be tracker.xml. Hence its own directory rather than a
     # different name -- and the layered toy at data/tracker.xml is untouched.
     ap.add_argument("--xml", default=os.path.join(DATA, "realmat", "tracker.xml"))
-    ap.add_argument("--planes", default=os.path.join(HERE, "toyPlanesRealMat_pt3.py"))
+    ap.add_argument("--planes", default="",
+                    help="default: toyPlanes_<geometry dir>_pt3.py next to "
+                         "this script, which is the name the runners derive "
+                         "from the geometry path.")
     ap.add_argument("--verify", default="",
                     help="dedxdbg log of the TOY reference; compare the two traversals")
     args = ap.parse_args()
@@ -397,10 +401,14 @@ def main():
                   f"({', '.join(v['mat'] for v in kept[n:])})")
 
     if args.write:
+        if not args.planes:
+            gdir = os.path.basename(os.path.dirname(os.path.abspath(args.xml)))
+            args.planes = os.path.join(HERE, f"toyPlanes_{gdir}_pt3.py")
         ns = material_namespaces()
-        emit_xml(kept, ns, args.xml, split_at=radii)
-        print(f"    {len(scored)} scored volumes split at their plane -> "
-              f"{len(kept) + len(scored)} shells")
+        nsh = emit_xml(kept, ns, args.xml, split_at=radii)
+        print(f"    {len(kept)} volumes -> {nsh} shells "
+              f"({nsh - len(kept)} split at a scoring plane; a plane on a volume "
+              f"FACE is already a boundary and needs no split)")
         org, nrm, uu = helix_frames(radii, args.pt, args.eta, args.phi,
                                     args.bfield, args.charge)
         f = lambda v: ", ".join("%.6f" % x for x in v)

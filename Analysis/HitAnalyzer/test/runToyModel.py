@@ -61,8 +61,12 @@ opts.parseArguments()
 # the same reference helix, not the layered toy's shell faces. After
 # parseArguments, because opts does not exist before it.
 if 'realmat' in opts.toyGeom.lower():
-    import toyPlanesRealMat_pt3 as planes
-    print('[toy] planes: toyPlanesRealMat_pt3 (%d)' % len(planes.radii))
+    # the plane file's name is derived from the geometry DIRECTORY, so a new
+    # variant (realmat, realmat_entry, ...) needs no edit here
+    import importlib
+    _pmod = 'toyPlanes_%s_pt3' % opts.toyGeom.split('/')[-2]
+    planes = importlib.import_module(_pmod)
+    print('[toy] planes: %s (%d)' % (_pmod, len(planes.radii)))
 
 process = cms.Process('CLEANMODEL', Run2_2016)
 

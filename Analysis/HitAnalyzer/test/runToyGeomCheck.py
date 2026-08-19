@@ -244,9 +244,10 @@ if opts.seed:
 _radii = [4.2000, 7.3000, 10.2000, 26.9000, 35.2000, 40.3000, 43.2000, 51.8000,
           61.6000, 67.9000, 75.0000, 85.5000, 94.6000, 106.8000]
 if 'realmat' in opts.toyGeom.lower():
-    import toyPlanesRealMat_pt3 as _rmplanes
-    _radii = list(_rmplanes.radii)
-    print('[toy] watcher radii from toyPlanesRealMat_pt3 (%d)' % len(_radii))
+    import importlib
+    _pmod = 'toyPlanes_%s_pt3' % opts.toyGeom.split('/')[-2]
+    _radii = list(importlib.import_module(_pmod).radii)
+    print('[toy] watcher radii from %s (%d)' % (_pmod, len(_radii)))
 
 process.g4SimHits.Watchers = cms.VPSet(cms.PSet(
     type=cms.string('ToyStateNtuplizer'),
