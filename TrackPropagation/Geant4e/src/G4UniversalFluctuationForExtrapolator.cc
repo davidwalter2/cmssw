@@ -86,7 +86,15 @@ G4UniversalFluctuationForExtrapolator::G4UniversalFluctuationForExtrapolator(con
     G4MUTEXLOCK(&extrMutex);
     if (nullptr == tables) {
 #endif
-      tables = new G4TablesForExtrapolatorForCVH(0, 70, 1. * MeV, 10. * TeV, true);
+      // Grid from G4TablesForExtrapolatorForCVH, not restated here (it used to
+      // be 70 bins to 10 TeV against the reference's 80 to 100 TeV).
+      // `iononly = true` stays: this instance supplies the IONIZATION mean
+      // loss, and the radiative fluctuation is a separate channel.
+      tables = new G4TablesForExtrapolatorForCVH(0,
+                                                G4TablesForExtrapolatorForCVH::kNbins,
+                                                G4TablesForExtrapolatorForCVH::kEminMeV * CLHEP::MeV,
+                                                G4TablesForExtrapolatorForCVH::kEmaxMeV * CLHEP::MeV,
+                                                true);
 #ifdef G4MULTITHREADED
     }
     G4MUTEXUNLOCK(&extrMutex);

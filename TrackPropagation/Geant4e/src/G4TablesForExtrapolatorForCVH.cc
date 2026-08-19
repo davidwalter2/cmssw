@@ -47,7 +47,6 @@
 
 #include <cstdlib>
 #include "TrackPropagation/Geant4e/interface/G4TablesForExtrapolatorForCVH.h"
-#include "TrackPropagation/Geant4e/interface/Geant4ePropagator.h"
 #include "G4PhysicalConstants.hh"
 #include "G4SystemOfUnits.hh"
 #include "G4LossTableManager.hh"
@@ -450,11 +449,6 @@ void G4TablesForExtrapolatorForCVH::ComputeMuonDEDX(const G4ParticleDefinition* 
     G4cout << "G4TablesForExtrapolatorForCVH::ComputeMuonDEDX for " << part->GetParticleName() << G4endl;
   }
 
-  const double mass = 0.1056583745;
-  const double massev = mass * 1e9;
-  G4double eMass = 0.51099906 / GeV;
-  G4double massRatio = eMass / mass;
-
   for (G4int i = 0; i < nmat; ++i) {
     const G4Material* mat = (*mtable)[i];
     if (1 < verbose) {
@@ -462,51 +456,8 @@ void G4TablesForExtrapolatorForCVH::ComputeMuonDEDX(const G4ParticleDefinition* 
     }
     G4PhysicsVector* aVector = (*table)[i];
 
-    G4double effZ, effA;
-    Geant4ePropagator::CalculateEffectiveZandA(mat, effZ, effA);
-    G4double I = 16. * pow(effZ, 0.9);
-    const double f2 = effZ <= 2. ? 0. : 2. / effZ;
-    const double f1 = 1. - f2;
-    const double e2 = 10. * effZ * effZ;
-    const double e1 = pow(I / pow(e2, f2), 1. / f1);
-    const double r = 0.4;
-
     for (G4int j = 0; j <= nbins; ++j) {
       G4double e = aVector->Energy(j);
-      G4double pgev = e / GeV;
-      G4double Etot = sqrt(pgev * pgev + mass * mass);
-      G4double beta = pgev / Etot;
-      G4double gamma = Etot / mass;
-      G4double eta = beta * gamma;
-      G4double etasq = eta * eta;
-      G4double F1 = 2 * eMass * etasq;
-      G4double F2 = 1. + 2. * massRatio * gamma + massRatio * massRatio;
-      G4double Emax = 1.E+6 * F1 / F2;  // now in keV
-
-      const double emaxev = Emax * 1e3;  // keV -> eV
-
-      const double sigma1partial = f1 * (log(2. * massev * beta * beta * gamma * gamma / e1) - beta * beta) / e1 /
-                                   (log(2. * massev * beta * beta * gamma * gamma / I) - beta * beta) * (1. - r);
-
-      const double sigma2partial = f1 * (log(2. * massev * beta * beta * gamma * gamma / e2) - beta * beta) / e2 /
-                                   (log(2. * massev * beta * beta * gamma * gamma / I) - beta * beta) * (1. - r);
-
-      const double sigma3partial = emaxev / I / (emaxev + I) / log((emaxev + I) / I) * r;
-
-      const double e3med = I / (1. - 0.5 * emaxev / (emaxev + I));
-      const double e3mean = I * (emaxev + I) * log((emaxev + I) / I) / emaxev;
-      const double e3mode = I;
-
-      const double emed = sigma1partial * e1 + sigma2partial * e2 + sigma3partial * e3med;
-      const double emean = sigma1partial * e1 + sigma2partial * e2 + sigma3partial * e3mean;
-      const double emode = sigma1partial * e1 + sigma2partial * e2 + sigma3partial * e3mode;
-
-      const double dedxratio = emed / emean;
-      const double moderatio = emode / emean;
-      const double alpha = 0.996;
-
-      const double ealpha = I / (1. - alpha * emaxev / (emaxev + I));
-
       const double dedxioni =
           e > 1000 ? ionialt->ComputeDEDXPerVolume(mat, part, e, e) : ioni->ComputeDEDXPerVolume(mat, part, e, e);
 

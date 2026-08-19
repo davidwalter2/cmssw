@@ -72,8 +72,8 @@ G4TablesForExtrapolatorForCVH* G4EnergyLossForExtrapolatorForCVH::tables = nullp
 
 G4EnergyLossForExtrapolatorForCVH::G4EnergyLossForExtrapolatorForCVH(G4int verb)
     : maxEnergyTransfer(DBL_MAX), verbose(verb) {
-  emin = 1. * CLHEP::MeV;
-  emax = 100. * CLHEP::TeV;
+  emin = G4TablesForExtrapolatorForCVH::kEminMeV * CLHEP::MeV;
+  emax = G4TablesForExtrapolatorForCVH::kEmaxMeV * CLHEP::MeV;
 }
 
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo....

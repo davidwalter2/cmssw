@@ -242,7 +242,7 @@ private:
 
   size_t index = 0;
   size_t nmat = 0;
-  G4int nbins = 80;
+  G4int nbins = G4TablesForExtrapolatorForCVH::kNbins;
   G4int verbose = 0;
 
   G4bool isMaster = false;

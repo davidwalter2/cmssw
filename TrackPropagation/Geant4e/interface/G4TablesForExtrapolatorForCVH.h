@@ -89,6 +89,45 @@ enum ExtTableType {
 
 class G4TablesForExtrapolatorForCVH {
 public:
+  // THE GRID, in one place, because the two instantiation sites used to state
+  // it separately and disagreed: the reference trajectory
+  // (G4EnergyLossForExtrapolatorForCVH) built 80 bins over 1 MeV - 100 TeV
+  // while the fluctuation model (G4UniversalFluctuationForExtrapolator) built
+  // 70 bins over 1 MeV - 10 TeV. Both take it from here now, so the mean loss
+  // the noise model reads and the mean loss the reference integrates come off
+  // the same nodes by construction.
+  //
+  // The two grids happened to be ALIGNED -- (Emax/Emin)^(1/bins) is 10^0.1 for
+  // both, i.e. 10 nodes per decade from the same 1 MeV -- so the short one was
+  // the long one truncated, the node VALUES are whatever the same G4 models say
+  // at the same energies, and the only thing that can move is the spline whose
+  // second derivatives are solved over all nodes.
+  //
+  // MEASURED, not argued: `calibration_studies/resolution/gridharm_g4driver.cc`
+  // fills both vectors with one analytic dE/dx of realistic curvature, calls
+  // Geant4's own FillSecondDerivatives on each, and compares Value(E).
+  //
+  //   the 71 shared nodes coincide to    max |dE|/E = 4.1e-15
+  //   long/short - 1 at 0.5 / 1 / 3.136 / 10 / 40 / 100 GeV and 1 TeV:
+  //                                      |.| <= 2.2e-16   (i.e. rounding)
+  //   long/short - 1 at 5 TeV            -1.7e-08
+  //   long/short - 1 at 9 TeV             3.4e-05   <- the OLD grid's end
+  //                                                    condition, and there the
+  //                                                    long grid is the more
+  //                                                    accurate of the two
+  //                                                    (2.4e-06 against f)
+  //
+  // So this is inert at every energy the fit sees and an improvement in the
+  // last decade of the grid it replaces. The one real behaviour change is above
+  // 10 TeV, where G4PhysicsVector used to clamp and now does not.
+  //
+  // Deliberately NOT harmonised: `iononly`. The fluctuation model needs the
+  // IONIZATION mean loss alone (radiative fluctuation is its own channel),
+  // the reference needs the total. That difference is physics, not drift.
+  static constexpr G4int kNbins = 80;
+  static constexpr G4double kEminMeV = 1.;         // CLHEP::MeV
+  static constexpr G4double kEmaxMeV = 1.e8;       // 100 * CLHEP::TeV
+
   explicit G4TablesForExtrapolatorForCVH(G4int verb, G4int bins, G4double e1, G4double e2, G4bool iononly = false);
 
   ~G4TablesForExtrapolatorForCVH();
