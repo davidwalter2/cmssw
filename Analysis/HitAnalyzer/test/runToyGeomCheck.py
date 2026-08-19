@@ -47,6 +47,14 @@ opts.register('seed', 0, VarParsing.multiplicity.singleton,
               'across jobs: the initial state is fixed and only the G4 seed '
               'varies between events, so N jobs at different seeds are N '
               'chunks of the same sample and the offline side just globs them.')
+opts.register('toyGeom', 'Analysis/HitAnalyzer/data/tracker.xml',
+              VarParsing.multiplicity.singleton, VarParsing.varType.string,
+              'toy geometry xml appended to the standard list. Default is the '
+              'generated layered toy (gen_toy_config.py); pass '
+              'Analysis/HitAnalyzer/data/realmat/tracker.xml for the '
+              'real-material toy built by gen_toy_realmat.py. The basename '
+              'must stay tracker.xml: DDD takes the namespace from the file '
+              'name and the toy has to define tracker:Tracker.')
 opts.parseArguments()
 
 process = cms.Process('TOYGEOM', Run2_2016)
@@ -100,13 +108,27 @@ _DROP = ('Geometry/TrackerCommonData/', 'Geometry/TrackerSimData/',
 # Without it DDG4Builder::convertMaterial throws "material is not valid from
 # the Detector Description" on the dangling reference, on a G4 worker thread,
 # which aborts the job with no readable message.
-_KEEP = ('Geometry/TrackerCommonData/data/trackermaterial.xml',)
+_KEEP = ['Geometry/TrackerCommonData/data/trackermaterial.xml']
+# toyGeom = the REAL-MATERIAL toy (gen_toy_realmat.py) references the tracker's
+# own materials by name -- pixbarmaterial:Pix_Bar_Hybrid_Full and the like -- and
+# those namespaces live under TrackerCommonData, which the cull above removes.
+# All four are MATERIAL-ONLY files (one MaterialSection, no Solid/LogicalPart/
+# PosPart section: checked, not assumed), so keeping them reintroduces no tracker
+# volume -- the same argument trackermaterial.xml is kept on. Conditional so the
+# layered-toy path keeps exactly the file list it always had.
+if 'realmat' in opts.toyGeom.lower():
+    _KEEP += ['Geometry/TrackerCommonData/data/pixbarmaterial.xml',
+              'Geometry/TrackerCommonData/data/tibmaterial.xml',
+              'Geometry/TrackerCommonData/data/tibtidcommonmaterial.xml',
+              'Geometry/TrackerCommonData/data/tobmaterial.xml']
+_KEEP = tuple(_KEEP)
 _files = [f for f in _stdGeom.geomXMLFiles
           if f in _KEEP or not f.startswith(_DROP)]
 # the toy defines tracker:Tracker, which cmsTracker.xml (kept, it lives in
 # CMSCommonData) positions into cms:CMSE. It must come after cms.xml, which
 # defines the TrackBeam*/TrackCalorR constants the envelope references.
-_files.append('Analysis/HitAnalyzer/data/tracker.xml')
+_files.append(opts.toyGeom)
+print('[toy] geometry xml: %s' % opts.toyGeom)
 
 # Load the STANDARD geometry sequence, then override only its file list. It is
 # not enough to supply an XMLIdealGeometryESSource by hand: that provides the
@@ -215,9 +237,20 @@ if opts.seed:
 # The watcher replaces PSimHits: it records the true 5D state wherever the
 # primary ends a step ON a shell boundary (fGeomBoundary), which is exact.
 # Radii must match the shell edges in data/tracker.xml.
+# The watcher radii are a property of the GEOMETRY and must travel with it, or
+# the sim scores surfaces the geometry does not have. gen_toy_config.py patches
+# the literal below for the layered toy; the real-material toy carries its own
+# plane file, so take them from there instead of editing this line.
+_radii = [4.2000, 7.3000, 10.2000, 26.9000, 35.2000, 40.3000, 43.2000, 51.8000,
+          61.6000, 67.9000, 75.0000, 85.5000, 94.6000, 106.8000]
+if 'realmat' in opts.toyGeom.lower():
+    import toyPlanesRealMat_pt3 as _rmplanes
+    _radii = list(_rmplanes.radii)
+    print('[toy] watcher radii from toyPlanesRealMat_pt3 (%d)' % len(_radii))
+
 process.g4SimHits.Watchers = cms.VPSet(cms.PSet(
     type=cms.string('ToyStateNtuplizer'),
-    radii=cms.vdouble(4.2000, 7.3000, 10.2000, 26.9000, 35.2000, 40.3000, 43.2000, 51.8000, 61.6000, 67.9000, 75.0000, 85.5000, 94.6000, 106.8000),
+    radii=cms.vdouble(*_radii),
     tolerance=cms.double(1e-4),
     output=cms.string(opts.output),
 ))

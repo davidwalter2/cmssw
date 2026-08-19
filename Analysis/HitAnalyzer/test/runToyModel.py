@@ -45,8 +45,24 @@ opts.register('stepLength', 10.0, VarParsing.multiplicity.singleton,
               'the SIM steps far more finely, and Moliere is not additive '
               'between the two.')
 import TrackPropagation.Geant4e.cvhSwitches as cvhSwitches
+opts.register('toyGeom', 'Analysis/HitAnalyzer/data/tracker.xml',
+              VarParsing.multiplicity.singleton, VarParsing.varType.string,
+              'toy geometry xml appended to the standard list. Default is the '
+              'generated layered toy (gen_toy_config.py); pass '
+              'Analysis/HitAnalyzer/data/realmat/tracker.xml for the '
+              'real-material toy built by gen_toy_realmat.py. The basename '
+              'must stay tracker.xml: DDD takes the namespace from the file '
+              'name and the toy has to define tracker:Tracker.')
 cvhSwitches.register(opts)
 opts.parseArguments()
+
+# The planes are a property of the GEOMETRY, so they travel with it: the
+# real-material toy scores the sensor mid-planes gen_toy_realmat.py derived from
+# the same reference helix, not the layered toy's shell faces. After
+# parseArguments, because opts does not exist before it.
+if 'realmat' in opts.toyGeom.lower():
+    import toyPlanesRealMat_pt3 as planes
+    print('[toy] planes: toyPlanesRealMat_pt3 (%d)' % len(planes.radii))
 
 process = cms.Process('CLEANMODEL', Run2_2016)
 
@@ -60,10 +76,24 @@ _DROP = ('Geometry/TrackerCommonData/', 'Geometry/TrackerSimData/',
          'Geometry/ForwardCommonData/data/bcm1f.xml',
          'Geometry/ForwardSimData/data/bcm1fsens.xml',
          'Geometry/ForwardCommonData/data/plt.xml')
-_KEEP = ('Geometry/TrackerCommonData/data/trackermaterial.xml',)
+_KEEP = ['Geometry/TrackerCommonData/data/trackermaterial.xml']
+# toyGeom = the REAL-MATERIAL toy (gen_toy_realmat.py) references the tracker's
+# own materials by name -- pixbarmaterial:Pix_Bar_Hybrid_Full and the like -- and
+# those namespaces live under TrackerCommonData, which the cull above removes.
+# All four are MATERIAL-ONLY files (one MaterialSection, no Solid/LogicalPart/
+# PosPart section: checked, not assumed), so keeping them reintroduces no tracker
+# volume -- the same argument trackermaterial.xml is kept on. Conditional so the
+# layered-toy path keeps exactly the file list it always had.
+if 'realmat' in opts.toyGeom.lower():
+    _KEEP += ['Geometry/TrackerCommonData/data/pixbarmaterial.xml',
+              'Geometry/TrackerCommonData/data/tibmaterial.xml',
+              'Geometry/TrackerCommonData/data/tibtidcommonmaterial.xml',
+              'Geometry/TrackerCommonData/data/tobmaterial.xml']
+_KEEP = tuple(_KEEP)
 _files = [f for f in _stdGeom.geomXMLFiles
           if f in _KEEP or not f.startswith(_DROP)]
-_files.append('Analysis/HitAnalyzer/data/tracker.xml')
+_files.append(opts.toyGeom)
+print('[toy] geometry xml: %s' % opts.toyGeom)
 process.load('Configuration.Geometry.GeometryExtended2016_cff')
 process.XMLIdealGeometryESSource.geomXMLFiles = cms.vstring(*_files)
 del process.trackerNumberingGeometry
