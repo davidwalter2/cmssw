@@ -1725,6 +1725,21 @@ void Geant4ePropagator::debugReportTrackState(std::string const &currentContext,
                       << " pt: " << cmsInitMom.perp() << "G4e -  G4  momentum      : " << g4InitMom << " MeV";
 }
 
+// ===================== G4EVERBOSE IS CURRENTLY UNBUILDABLE ==================
+// Every `#ifdef G4EVERBOSE` block below is dead in a stronger sense than being
+// switched off: compiling this file with -DG4EVERBOSE FAILS. `iverbose` and
+// `fError` are members of the upstream G4ErrorPropagator classes that this CVH
+// copy no longer derives from, so the guarded code refers to names that do not
+// exist here (measured 2026-08-19: 10 errors, at lines 1743, 1752, 1806, 1838,
+// 1854, 1855, 2110, 2155, 2168, 2170 of the pre-change file).
+//
+// Consequence for anyone tidying up: variables that exist ONLY to be printed in
+// these blocks (RI here, XI in computeErrorIoni) are declared INSIDE the guard,
+// so the default build neither computes them nor warns. Do not "fix" the
+// warning by deleting the variable and leaving the block -- that makes the
+// verbose path worse. Either repair `iverbose`/`fError` or delete the blocks.
+// ============================================================================
+
 //------------------------------------------------------------------------
 Eigen::Matrix<double, 5, 5> Geant4ePropagator::PropagateErrorMSC(const G4Track *aTrack, double pforced) const {
   G4ThreeVector vpPre = aTrack->GetMomentum() / CLHEP::GeV;
@@ -1747,8 +1762,11 @@ Eigen::Matrix<double, 5, 5> Geant4ePropagator::PropagateErrorMSC(const G4Track *
            << mate->GetNuclearInterLength() / CLHEP::cm << G4endl;
 #endif
 
-  G4double RI = stepLengthCm / (mate->GetRadlen() / CLHEP::cm);
 #ifdef G4EVERBOSE
+  // RI is only ever printed -- see the note on G4EVERBOSE at the top of this
+  // file. Declared inside the guard so the default build neither computes it
+  // nor warns about it, and the verbose text is unchanged.
+  G4double RI = stepLengthCm / (mate->GetRadlen() / CLHEP::cm);
   if (iverbose >= 4)
     G4cout << std::setprecision(6) << std::setw(6) << "G4EP:MSC: RI=X/X0 " << RI << " stepLengthCm " << stepLengthCm
            << " radlen/cm " << (mate->GetRadlen() / CLHEP::cm) << " RI*1.e10:" << RI * 1.e10 << G4endl;
@@ -2103,10 +2121,13 @@ double Geant4ePropagator::computeErrorIoni(const G4Track *aTrack, double pforced
   G4double beta = pPre / Etot;
   G4double gamma = Etot / mass;
 
-  // *     Calculate xi factor (keV).
+#ifdef G4EVERBOSE
+  // *     Calculate xi factor (keV).  Only ever printed, here and in the
+  // "k=Xi/Emax" line further down -- see the note on G4EVERBOSE at the top of
+  // this file.  Declared inside the guard so the default build neither
+  // computes it nor warns about it.
   G4double XI = 153.5 * effZ * stepLengthCm * (mate->GetDensity() / CLHEP::mg * CLHEP::mole) / (effA * beta * beta);
 
-#ifdef G4EVERBOSE
   if (iverbose >= 2) {
     G4cout << "G4EP:IONI: XI/keV " << XI << " beta " << beta << " gamma " << gamma << G4endl;
     G4cout << " density " << (mate->GetDensity() / CLHEP::mg * CLHEP::mole) << " effA " << effA << " step "

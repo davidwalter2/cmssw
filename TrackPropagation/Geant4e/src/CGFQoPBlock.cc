@@ -301,8 +301,18 @@ namespace cvhcgf {
     double siA, cinA, siW, cinW;
     siCin(std::fabs(a), siA, cinA);
     siCin(std::fabs(aw), siW, cinW);
-    const double sgn = (a >= 0. ? 1. : -1.);
-    // y (F(y) - F(x)) with F(iu) = Cin(|u|) - i sgn(u) Si(|u|)
+    // y (F(y) - F(x)) with F(iu) = Cin(|u|) - i sgn(u) Si(|u|), y = ia, x = iaw.
+    //
+    // The sgn is already IN the expression rather than carried as a variable,
+    // which is why the real part has a fabs and the imaginary part does not.
+    // With w > 0 -- always, w is a ratio of energies and N = 1 - 1/w -- both
+    // arguments share s = sgn(a), so
+    //
+    //   y (F(y) - F(x)) = ia [ (CinA - CinW) - i s (SiA - SiW) ]
+    //                   = a s (SiA - SiW)  +  i a (CinA - CinW)
+    //
+    // and a s = a sgn(a) = |a|. (A `sgn` local was computed here and never
+    // used; it was this factor, already folded in.)
     const std::complex<double> ydF(std::fabs(a) * (siA - siW), a * (cinA - cinW));
 
     return (em1y - em1x / w + ydF) / N;
