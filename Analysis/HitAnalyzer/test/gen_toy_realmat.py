@@ -293,6 +293,17 @@ def main():
                          "propagation end in a degenerate sliver that Geant4 "
                          "attributes to the FAR side, which is the whole reason "
                          "dEdxlast needed a step-length floor.")
+    ap.add_argument("--final-plane", action="store_true",
+                    help="append a scoring plane at the OUTER EDGE of the last "
+                         "kept volume. The traversal has one fewer Silicon "
+                         "volume than the real geometry has targets, because the "
+                         "propagation terminates ON each target surface and so "
+                         "never enters the last sensor -- which leaves the real "
+                         "geometry's outermost LEG with no counterpart here. That "
+                         "leg is the most anomalous one in the per-leg "
+                         "decomposition (NOTES_GEOMCLOSURE s12.1), so it needs a "
+                         "control. The edge is already a geometry boundary, so no "
+                         "split is required and the watcher fires there.")
     ap.add_argument("--write", action="store_true", help="write the xml and the plane file")
     # DDD takes the namespace from the FILE NAME, and the toy has to define
     # tracker:Tracker (cmsTracker.xml positions it into cms:CMSE), so the
@@ -348,6 +359,12 @@ def main():
     scored = [v for v in kept if v["mat"] == args.score]
     radii = ([0.5 * (v["r_in"] + v["r_out"]) for v in scored] if args.plane_at == "mid"
              else [v["r_in"] for v in scored])
+    if args.final_plane and kept:
+        redge = kept[-1]["r_out"]
+        if not radii or redge > radii[-1] + 1e-6:
+            radii.append(redge)
+            print(f"\n    + final plane at the traversal's outer edge, "
+                  f"r = {redge:.4f} cm (material before it: {kept[-1]['mat']})")
     where = ("MID-plane (production's own target surface)" if args.plane_at == "mid"
              else "INNER FACE (what the layered toy and the real study use)")
     print(f"\n{len(scored)} scoring planes at the {where} of each "
