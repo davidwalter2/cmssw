@@ -81,6 +81,12 @@ opts.register('genMatchPtWindow', 10.0, VarParsing.VarParsing.multiplicity.singl
               'legacy 0.5 the reco pT of a decayed kaon (daughter mu can '
               'carry 5% of p) fails the match and decays are silently '
               'removed from the requireGen sample')
+# The CVH energy-loss switches are ParameterSet parameters on Geant4ePropagator
+# (Geant4e b372e08), NOT the CVH_* environment variables they used to be. A
+# driver that does not register them cannot pin them at all and silently
+# inherits the cfi default -- which is all-on since e232c20.
+import TrackPropagation.Geant4e.cvhSwitches as cvhSwitches
+cvhSwitches.register(opts)
 opts.parseArguments()
 if not opts.scalarPot3DInitFile:
     raise SystemExit("scalarPot3DInitFile=<path> is required (coefficient dump file)")
@@ -231,6 +237,7 @@ process.ScalarPot3DMagneticFieldProducer.label = fieldlabel
 process.geopro.MagneticFieldLabel = fieldlabel
 process.Geant4ePropagator.MagneticFieldLabel = fieldlabel
 process.Geant4ePropagator.ForCVH = cms.bool(True)
+cvhSwitches.apply(process, opts)
 process.Geant4ePropagator.PropagationDirection = cms.string(opts.propagationDirection)
 process.globalCor.MagneticFieldLabel = cms.string(fieldlabel)
 from TrackPropagation.Geant4e.cvhMasterESProducer_cfi import cvhMasterESProducer

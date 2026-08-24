@@ -94,14 +94,12 @@ Geant4ePropagator::Geant4ePropagator(const MagneticField *field,
                                      PropagationDirection dir,
                                      double plimit,
                                      bool forCVH,
-                                     double ioniTruncAlpha,
                                      double stepLengthLimit)
     : Propagator(dir),
       theField(field),
       theParticleName(particleName),
       plimit_(plimit),
       forCVH_(forCVH),
-      ioniTruncAlpha_(ioniTruncAlpha),
       stepLengthLimit_(stepLengthLimit) {
   LogDebug("Geant4e") << "Geant4e Propagator initialized";
 
@@ -134,7 +132,6 @@ Geant4ePropagator::Geant4ePropagator(const Geant4ePropagator &other)
       theParticleName(other.theParticleName),
       plimit_(other.plimit_),
       forCVH_(other.forCVH_),
-      ioniTruncAlpha_(other.ioniTruncAlpha_),
       stepLengthLimit_(other.stepLengthLimit_),
       ioniStepLogging_(other.ioniStepLogging_),
       stepTransportLogging_(other.stepTransportLogging_) {
@@ -441,7 +438,6 @@ std::pair<TrajectoryStateOnSurface, double> Geant4ePropagator::propagateGeneric(
     const G4ParticleDefinition *partdef =
         G4ParticleTable::GetParticleTable()->FindParticle(generateParticleName(1));
     fluct->SetParticleAndCharge(partdef, 1.);
-    fluct->SetIoniTruncationAlpha(ioniTruncAlpha_);
   }
   auto *theG4eManager = G4ErrorPropagatorManager::GetErrorPropagatorManager();
   auto *theG4eData = G4ErrorPropagatorData::GetErrorPropagatorData();
@@ -635,6 +631,8 @@ std::pair<TrajectoryStateOnSurface, double> Geant4ePropagator::propagateGeneric(
   return TsosPP(TrajectoryStateOnSurface(tParsDest, curvError, pDest, side), finalPathLength);
 }
 
+
+
 std::tuple<bool,
            Eigen::Matrix<double, 7, 1>,
            Eigen::Matrix<double, 5, 5>,
@@ -701,10 +699,10 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
   // SCOPE: ionization channel only, q/p (curvilinear component 0) only.
   // Measured offline on the pT = 3 reference ray, adding MS + radiative moves
   // 1/I by +0.0 / +0.05 / +0.15 % at planes 0 / 9 / 18.
-  static const int cgfQoPMode = []() {
-    const char *v = getenv("CVH_CGF_QOP");
-    return v ? atoi(v) : 0;
-  }();
+  // The estimator, from configuration and not from the environment: this is a
+  // default-ON path now, and which weight produced a file has to be
+  // recoverable from the file.
+  const int cgfQoPMode = cvhcgf::cgfQoPMode();
   static const cvhcgf::Config cgfCfg = []() {
     cvhcgf::Config c;
     if (const char *v = getenv("CVH_CGF_QOP_NT"))
@@ -719,6 +717,17 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
   // scale. 1/I is quoted in units of that scale, so the PHYSICAL answer
   // sigma^2 * (1/I_z) must be invariant under it. Verified offline to 7e-7
   // over a factor 16; this is the in-fit version of the same check.
+  // ATTRIBUTION CONTROL, default off: restore the historical substitution,
+  // which replaced Q(0,0) and left the other 24 elements of the transported
+  // ionization covariance carrying the alpha-truncated magnitude. It is kept
+  // because it is what MEASURES the consequence of that asymmetry -- with it
+  // set, freezing the weight and recomputing it every sweep disagree by
+  // rms 1.8e-3 on the fitted q/p; without it, by 2.5e-6 (NOTES_CGFFIT s54).
+  // A control that can only be described and not run is an argument, not a
+  // measurement.
+  static const bool cgfScalarOnly = (getenv("CVH_CGF_QOP_SCALARONLY") != nullptr);
+  const bool cgfRadOn = (cgfQoPMode > 0) && cvhcgf::cgfRadiativeEnabled();
+
   static const double cgfSigScale = []() {
     const char *v = getenv("CVH_CGF_QOP_SIGSCALE");
     return v ? atof(v) : 1.0;
@@ -731,6 +740,18 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
   // MEAN the reference no longer subtracts when ReferenceIonizationOnly is set, in q/p
   // units before transport. Collected only in that configuration.
   std::vector<std::pair<int, double>> cgfStepRadMean;
+  // RADIATIVE channel of the block: one record per step that has one, holding
+  // the step index (into cgfStepJac, for the transport weight), the step's
+  // total energy in MeV, its cs, and the NORMALIZED dN/dv on the shared grid.
+  // The densities are kept in their own vector so the RadStep pointers can be
+  // attached once it has stopped reallocating.
+  struct CgfRadRec {
+    int idx = -1;
+    double etotMeV = 0.;
+    double cs = 0.;
+  };
+  std::vector<CgfRadRec> cgfRadRec;
+  std::vector<std::array<double, Geant4ePropagator::kNRadV>> cgfRadDens;
   const bool cgfIonOnly = cvhcgf::referenceIsIonOnly();
   // one-shot cached weight, consumed here so no stale value can leak into a
   // later call (including the ones on failure paths)
@@ -786,7 +807,6 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
     const G4ParticleDefinition *partdef =
         G4ParticleTable::GetParticleTable()->FindParticle(generateParticleName(1));
     fluct->SetParticleAndCharge(partdef, 1.);
-    fluct->SetIoniTruncationAlpha(ioniTruncAlpha_);
   }
   auto *theG4eManager = G4ErrorPropagatorManager::GetErrorPropagatorManager();
   auto *theG4eData = G4ErrorPropagatorData::GetErrorPropagatorData();
@@ -935,6 +955,11 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
   Matrix<double, 5, 5> g4errorEnd = Matrix<double, 5, 5>::Zero();
   Matrix<double, 5, 5> dQ = Matrix<double, 5, 5>::Zero();
   Matrix<double, 5, 5> dQ2 = Matrix<double, 5, 5>::Zero();
+  // `dQ2u`, the untruncated twin of `dQ2`, WAS HERE and is gone (2026-08-24).
+  // `computeErrorIoni` returns the record's own second cumulant now, so `dQ2`
+  // IS the untruncated ionization covariance: the twin was a second copy of it,
+  // built with a `blockKappa2` call per step. The substitution below scales
+  // `dQ2` itself.
 
   double dEdxlast = 0.;
   // whether `dEdxlast` has been set from a step of controlled length yet; see
@@ -1243,6 +1268,46 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
         cgfStepRec.emplace_back(static_cast<int>(cgfStepJac.size()) - 1,
                                 std::make_pair(fluct->lastRecord(), cs));
       }
+      // THE RADIATIVE CHANNEL. Gated three ways, and each gate is a cost:
+      //   * the switch, because the channel is worth ~1e-9 on a fitted
+      //     momentum (see the cfi);
+      //   * `cgfOverride < 0.`, because when the weight comes from the cache
+      //     no block is built at all and the spectrum would be tabulated for
+      //     nothing -- this is what keeps the frozen schedule cheap;
+      //   * a non-zero step length, since a zero-length step radiates nothing.
+      // `fillRadiativeSpectrum` is itself a no-op for non-muons.
+      if (cgfRadOn && cgfOverride < 0. && std::abs(thisPathLength) > 0.) {
+        const G4Track *rtrk = g4eTrajState.GetG4Track();
+        RadiativeStep rs;
+        const double rp = (pforced > 0. ? pforced : rtrk->GetMomentum().mag() / CLHEP::GeV);
+        const double rm = rtrk->GetDynamicParticle()->GetMass() / CLHEP::GeV;
+        rs.etotGeV = std::sqrt(rp * rp + rm * rm);
+        rs.pGeV = rp;
+        rs.stepCm = thisPathLength;
+        rs.cs = (rp > 0.) ? rs.etotGeV / (rp * rp * rp) : 0.;
+        computeRadiativeDEDX(rtrk, rs.dedxBrem, rs.dedxPair);
+        rs.dedxRad = rs.dedxBrem + rs.dedxPair;
+        if (rs.cs > 0. && (rs.dedxBrem > 0. || rs.dedxPair > 0.)) {
+          fillRadiativeSpectrum(rtrk, rs);
+          double vg[kNRadV];
+          radVGrid(vg);
+          cgfRadDens.emplace_back();
+          // MeV throughout, because that is the block's convention for every
+          // energy; the record is natively in GeV and dedx*length is a loss in
+          // GeV. The normalization is unit-free (dE/INT vE shape dv), so the
+          // conversion only has to be CONSISTENT, and it is.
+          cvhcgf::makeRadSpectrum(vg, rs.dNdvBrem, rs.dNdvPair,
+                                  rs.dedxBrem * rs.stepCm * 1e3,
+                                  rs.dedxPair * rs.stepCm * 1e3,
+                                  rs.etotGeV * 1e3, kNRadV,
+                                  cgfRadDens.back().data());
+          CgfRadRec rr;
+          rr.idx = static_cast<int>(cgfStepJac.size()) - 1;
+          rr.etotMeV = rs.etotGeV * 1e3;
+          rr.cs = rs.cs;
+          cgfRadRec.push_back(rr);
+        }
+      }
       if (cgfIonOnly && std::abs(thisPathLength) > 0.) {
         // The reference no longer subtracts the radiative mean, so the block
         // must carry it. dedxRad is exactly the term dropped from the table
@@ -1376,10 +1441,25 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
   // top of this function). Everything here is inside `if (cgfQoPMode > 0)`.
   if (cgfQoPMode > 0 && cgfOverride >= 0.) {
     // cached weight: the whole inversion is skipped. This is where the cost of
-    // the scheme goes when `I` is frozen.
+    // the scheme goes when `I` is frozen. The SUBSTITUTION is still the full
+    // one -- same algebra as the uncached branch below, only the value of
+    // `qcgf` comes from the cache instead of from an inversion.
     if (cgfQoPMode == 1 || cgfQoPMode == 3) {
-      g4errorEnd(0, 0) = cgfOverride;
-      dQ2(0, 0) = cgfOverride;
+      if (dQ2(0, 0) > 0. && !cgfScalarOnly) {
+        // Same algebra and the same cancellation-free form as the uncached
+        // branch; only the value comes from the cache.
+        const Matrix<double, 5, 5> qioni = (cgfOverride / dQ2(0, 0)) * dQ2;
+        const Matrix<double, 5, 5> resid = g4errorEnd - dQ - dQ2;
+        if (resid.cwiseAbs().maxCoeff() <= 1e-9 * g4errorEnd.cwiseAbs().maxCoeff()) {
+          g4errorEnd = dQ + qioni;
+        } else {
+          g4errorEnd += qioni - dQ2;
+        }
+        dQ2 = qioni;
+      } else {
+        g4errorEnd(0, 0) = cgfOverride;
+        dQ2(0, 0) = cgfOverride;
+      }
     }
   } else if (cgfQoPMode > 0 && !cgfStepRec.empty() && g4errorEnd(0, 0) > 0.) {
     // Transport weight of each step's noise to the END of the leg. The step
@@ -1398,26 +1478,39 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
       }
     }
 
-    // Internal standardization: the nominal Gaussian sigma of this leg's q/p
-    // noise. Purely a numerical scale to keep the inversion grid conditioned;
-    // the physical answer is sigma^2 * (1/I_z) and must not depend on it.
-    const double cgfSigma = cgfSigScale * std::sqrt(g4errorEnd(0, 0));
-    std::vector<cvhcgf::IoniStep> blk;
-    blk.reserve(cgfStepRec.size());
+    // Internal standardization: a numerical scale that keeps the inversion
+    // grid conditioned. The physical answer is sigma^2 * (1/I_z) and must not
+    // depend on it (scanned: 0.25/1/4 leaves Q(0,0) identical to all printed
+    // digits).
+    //
+    // IT IS NOT TAKEN FROM `g4errorEnd(0,0)` ANY MORE (2026-08-20). That is
+    // the ALPHA-TRUNCATED variance -- the very convention this scheme exists
+    // to remove -- and while the answer is invariant under the scale
+    // ANALYTICALLY, it is not invariant BITWISE, and this fit amplifies
+    // last-bit perturbations of the process-noise rows by ~1e12 (see the
+    // section at the top of NOTES_CGFFIT). Measured with the truncated scale:
+    // moving alpha 0.999 -> 0.997 still moved the CGF-weighted fit by
+    // rms 7.8e-6 on q/p, against 1.0e-5 for the legacy weight -- i.e. the
+    // scheme removed only ~40 % of a dependence it is supposed to remove
+    // ENTIRELY, and the residue was pure numerical leakage through this line.
+    //
+    // The block's own second cumulant is the natural alpha-free scale: it is
+    // built from the same untruncated step record, so `blockKappa2` on the
+    // unstandardized steps IS the physical Gaussian variance of this block.
+    // Build the steps once with unit scale, take the scale from them, and
+    // divide.
+    cvhcgf::Block blk;
+    blk.ioni.reserve(cgfStepRec.size());
     for (const auto &e : cgfStepRec) {
       const auto &rec = e.second.first;
       const double cs = e.second.second;
-      const double gam = rec.scaling;
-      cvhcgf::IoniStep s;
-      s.regime = rec.regime;
-      s.gsig2 = rec.gsig2;
-      s.a1 = rec.a1;
-      s.e1 = rec.e1 * gam;
-      s.a2 = rec.a2;
-      s.e2 = rec.e2 * gam;
-      s.a3 = rec.a3;
-      s.e0 = rec.e0r * gam;
-      s.tmax = rec.tmaxr * gam;
+      // The record -> step mapping is `makeCgfIoniStep`, shared with the
+      // per-step untruncated variance above. The Kokoulin bucket count is the
+      // BLOCK CGF's (IoniKokoulinCgfNbin), which is evaluated at every point
+      // of the inversion grid and is therefore the one that costs -- unlike
+      // the once-per-step count the ratio uses.
+      cvhcgf::IoniStep s =
+          G4UniversalFluctuationForExtrapolator::toIoniStep(rec, cvhcgf::ioniKokoulinEnabled() ? cvhcgf::ioniKokoulinCgfNbin() : 0);
       // record energies are in MeV; the 1e-3 is the propagator's own MeV
       // convention on cs. The transport weight belongs to the RESIDUAL, never
       // to the CGF parameters (NOTES_EXPORTS section 4.3) -- that is what
@@ -1430,45 +1523,58 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
       // omitting it would be invisible in the WEIGHT and would silently
       // reverse the re-centring the next stage adds.
       const double qsign = (charge >= 0. ? 1. : -1.);
-      s.gs = qsign * wtr[e.first] * cs * 1e-3 / cgfSigma;
-      blk.push_back(s);
+      s.gs = qsign * wtr[e.first] * cs * 1e-3;
+      blk.ioni.push_back(s);
     }
 
-    // THE BLOCK CGF IS NOT REGIME-2/3 AWARE, and this is the failure mode
-    // NOTES_DELTASPEC section 6 named: `cvhcgf::blockExponent` /
-    // `blockKappa2` branch only on `regime == 0` and treat everything else as
-    // regime 1, i.e. they read column `a3` as a COLLISION COUNT. In regime
-    // 2/3 that slot holds `xi` (an ENERGY, ~0.07 MeV against a count of ~7.6),
-    // so the delta channel comes out wrong by ~1e-5 -- and, being a weight, it
-    // does not fail, it just quietly changes the answer. The Kokoulin term is
-    // likewise absent from the block CGF.
-    //
-    // THIS USED TO BE A ONE-SHOT WARNING, on the argument that both switches
-    // were default-off so nothing shipped could be affected. A warning is not
-    // a guard against a SILENT WRONG ANSWER at any default: the two switches
-    // can still be set together by hand, and a closure campaign that enables
-    // all four corrections explicitly (which is now the documented way to run
-    // them) would walk straight into it. So it throws, and the throw is KEPT
-    // after the 2026-08-16 default flip was reverted -- it is a correctness
-    // fix, not a consequence of the default.
-    // `cvhcgf::blockExponent`/`blockKappa2` also refuse regime >= 2
-    // themselves; this site exists to fail EARLY and with the remedy in the
-    // message, before an inversion grid is allocated.
-    //
-    // The remedy is one variable, and it is available precisely because the
-    // switch is operable in both directions: CVH_IONI_EXACTDELTA=0.
-    if (G4UniversalFluctuationForExtrapolator::exactDeltaEnabled()) {
-      throw cms::Exception("Geant4ePropagator")
-          << "CVH_CGF_QOP is enabled together with CVH_IONI_EXACTDELTA. cvhcgf::blockExponent has no "
-             "regime-2/3 branch: it reads the Urban record's "
-             "`a3` slot as a delta-ray collision count, but in regime 2/3 that slot holds xi (an energy, "
-             "~0.07 MeV against a count of ~7.6). The block CGF -- and therefore 1/I and psi -- would be "
-             "wrong by ~1e-5 in the delta channel WITHOUT failing. Run the CGF prototype with "
-             "CVH_IONI_EXACTDELTA=0 (its default), or give the block CGF the exact knock-on cross section "
-             "(a direct port "
-             "of cf_track_resolution.exact_delta_exponent; it additionally needs beta2 and etot, which "
-             "cvhcgf::IoniStep does not yet carry).";
+    // The alpha-free standardization scale, and the division that applies it.
+    // `blockKappa2` of the unstandardized block is the block's untruncated
+    // ionization variance in q/p units squared; the fallback to the legacy
+    // variance covers a block whose second moment is not positive (no
+    // ionization channel with weight), which cannot happen with a non-empty
+    // record but is not worth a crash if it does.
+    const double cgfK2Phys = cvhcgf::blockKappa2(blk);  // ionization only, by design
+    const double cgfSigma =
+        cgfSigScale * std::sqrt(cgfK2Phys > 0. ? cgfK2Phys : g4errorEnd(0, 0));
+    // The radiative steps, with the SAME transport weight and charge map the
+    // ionization steps get -- the two channels inject into the same (0,0)
+    // element and are transported by the same Jacobians, so anything else
+    // would be inconsistent.
+    if (!cgfRadRec.empty()) {
+      static thread_local std::vector<double> cgfVGrid;
+      if (cgfVGrid.empty()) {
+        cgfVGrid.resize(kNRadV);
+        radVGrid(cgfVGrid.data());
+      }
+      const double qsignRad = (charge >= 0. ? 1. : -1.);
+      blk.rad.reserve(cgfRadRec.size());
+      for (size_t j = 0; j < cgfRadRec.size(); ++j) {
+        const CgfRadRec &rr = cgfRadRec[j];
+        cvhcgf::RadStep r;
+        r.etot = rr.etotMeV;
+        r.gs = qsignRad * wtr[rr.idx] * rr.cs * 1e-3;
+        r.dNdv = cgfRadDens[j].data();
+        blk.rad.push_back(r);
+      }
+      blk.v = cgfVGrid.data();
+      blk.nv = kNRadV;
     }
+
+    for (auto &s : blk.ioni)
+      s.gs /= cgfSigma;
+    for (auto &r : blk.rad)
+      r.gs /= cgfSigma;
+
+    // THE BLOCK CGF IS REGIME-2/3 AWARE SINCE 2026-08-20. It used to throw
+    // here: `cvhcgf::blockExponent` read the record's `a3` slot as a delta-ray
+    // collision count, which in regime 2/3 (CVH_IONI_EXACTDELTA) holds xi, an
+    // energy -- a ~1e-5 error in a WEIGHT, i.e. one that does not fail. The
+    // refusal was the right behaviour while the channel was missing, but it
+    // made the in-fit CGF unusable on the physics the simulation actually runs
+    // (the exact delta is default-ON, e232c20), so the channel was ported from
+    // `cf_track_resolution.exact_delta_exponent` instead, together with the
+    // Kokoulin correction that `G4UniversalFluctuationForExtrapolator` already
+    // applies to the variance. Both branch on `regime`, never on a heuristic.
 
     // THE COUPLED CONVENTION. With CVH_IONONLY the reference is propagated
     // with ionization-only loss, so the block residual now carries the
@@ -1489,6 +1595,24 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
     cvhcgf::Config cfgLeg = cgfCfg;
     cfgLeg.meanShift = cgfRadMeanPhys / cgfSigma;
 
+    // Regime composition of the block, for the STABILITY diagnostic. Geant4
+    // switches its fluctuation model between a Gaussian and the Urban
+    // compound Poisson on `meanLoss >= minNumberInteractionsBohr * tmax`,
+    // which is a per-STEP condition and therefore moves when the stepping
+    // moves. A variance does not notice the switch (both branches return one);
+    // the Fisher information does, because the two models have completely
+    // different tails. Counting the regimes is how that hypothesis is tested
+    // against the measured drift.
+    int nReg0 = 0, nReg1 = 0, nReg23 = 0;
+    for (const auto &sb : blk.ioni) {
+      if (sb.regime == 0)
+        ++nReg0;
+      else if (sb.regime == 1)
+        ++nReg1;
+      else
+        ++nReg23;
+    }
+
     const cvhcgf::Result cgf = cvhcgf::inverseFisher(blk, cfgLeg);
     // published for the maker's IRLS re-centring, in sync with this leg (same
     // accessor idiom as the step logs)
@@ -1498,7 +1622,15 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
       const double qnom = g4errorEnd(0, 0);
       const double qcgf = cgf.invFisher * cgfSigma * cgfSigma;
       if (cgfQoPMode >= 2) {
+        // The end-of-leg position IDENTIFIES the leg across fit iterations,
+        // which a bare stream of per-leg lines does not: the Geant4 step
+        // subdivision changes as the trajectory moves, so `nstep` is not a
+        // stable label, and aligning iterations by position in the log is
+        // guesswork the moment one propagation fails.
+        const G4ThreeVector &cgfEndPos = g4eTrajState.GetPosition();
         std::cout << "### CVHCGF"
+                  << " endz=" << cgfEndPos.z() << " endr=" << cgfEndPos.perp()
+                  << " nreg0=" << nReg0 << " nreg1=" << nReg1 << " nreg23=" << nReg23
                   << " nstep=" << cgf.nsteps << " sigma=" << cgfSigma << " kappa2=" << cgf.kappa2
                   << " invI_z=" << cgf.invFisher << " Qnom=" << qnom << " Qcgf=" << qcgf
                   << " ratio=" << (qcgf / qnom) << " tmax=" << cgf.tmax << " mass=" << cgf.mass
@@ -1508,16 +1640,68 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
                   << " psiwin=[" << cgf.psiWinLo << "," << cgf.zhi << "]" << std::endl;
       }
       if (cgfQoPMode == 1 || cgfQoPMode == 3) {
-        // The substitution. dQ2 is the ionization-only accumulator, i.e. this
-        // channel and nothing else, so it moves with it; dQ (MS) has a zero
-        // (0,0) element and is untouched.
+        // THE SUBSTITUTION, AND IT IS THE WHOLE IONIZATION BLOCK, NOT ONLY
+        // ITS (0,0) ELEMENT.
+        //
+        // Per step the ionization variance is injected into `errMSIout(0,0)`
+        // alone -- MS writes nothing in the q/p row -- and the loop then
+        // TRANSPORTS the accumulated matrix through the remaining steps. So by
+        // the end of the leg that variance has spread over the whole 5x5:
+        // dQ2 = sum_s v_s (A_s e0)(A_s e0)^T. Overwriting `g4errorEnd(0,0)`
+        // and leaving the rest, which is what this did until 2026-08-20, left
+        // every off-diagonal carrying the alpha-truncated magnitude, and that
+        // is measurably most of the fit's residual alpha dependence.
+        //
+        // `dQ2` is that sum, and since the truncation was deleted each step's
+        // variance in it IS the untruncated second cumulant, so it is
+        // alpha-free in shape as well as in scale, and
+        //
+        //     sc = qcgf / dQ2(0,0)
+        //
+        // is the single factor that makes its (0,0) equal the Fisher weight.
+        // Replacing dQ2 by sc * dQ2 therefore (i) reproduces the previous
+        // (0,0) to the 2e-11 that MS leaks into it through the transport, and
+        // (ii) carries the same weight into every other element. It is exactly what scaling every step's
+        // injected ionization variance would have given, and it needs no
+        // second pass because the transport is linear in the injection.
+        //
         // Mode 3 = weight AND re-centring; mode 1 = weight only. An earlier
         // version gated this on `== 1` alone, which made mode 3 apply the
         // re-centring WITHOUT the weight -- an inconsistent pair, caught by
         // the Gaussian-psi control coming out identical to nominal instead of
         // identical to mode 1.
-        g4errorEnd(0, 0) = qcgf;
-        dQ2(0, 0) = qcgf;
+        if (dQ2(0, 0) > 0. && !cgfScalarOnly) {
+          const double sc = qcgf / dQ2(0, 0);
+          const Matrix<double, 5, 5> qioni = sc * dQ2;
+          // WRITTEN AS A SUM, NOT AS `g4errorEnd += qioni - dQ2`.
+          //
+          // `g4errorEnd` is fed by exactly one statement, `+= errMSIout`, and
+          // `errMS`/`errI` partition that matrix, so `g4errorEnd == dQ + dQ2`
+          // identically -- and in (0,0) the ionization part is the WHOLE of it
+          // (measured on the reference ray: dQMS(0,0)/Q(0,0) = 2e-11 median,
+          // 8e-9 max). Subtracting `dQ2` would therefore cancel (0,0) against
+          // itself and leave a last-bit residue on top of `qcgf` -- and this
+          // fit turns a 1e-17 relative perturbation of the process-noise rows
+          // into 1e-5 on the momentum (NOTES_CGFFIT, the section on
+          // amplification). Summing the two pieces has no cancellation at all.
+          //
+          // The identity is CHECKED rather than trusted: if anything ever adds
+          // to `g4errorEnd` without going through `errMSIout`, this falls back
+          // to the adjustment form instead of silently dropping it.
+          const Matrix<double, 5, 5> resid = g4errorEnd - dQ - dQ2;
+          if (resid.cwiseAbs().maxCoeff() <= 1e-9 * g4errorEnd.cwiseAbs().maxCoeff()) {
+            g4errorEnd = dQ + qioni;
+          } else {
+            g4errorEnd += qioni - dQ2;
+          }
+          dQ2 = qioni;
+        } else {
+          // No untruncated twin (no ionization record on any step of this
+          // leg): fall back to the scalar substitution rather than skip the
+          // weight, which is what shipped before.
+          g4errorEnd(0, 0) = qcgf;
+          dQ2(0, 0) = qcgf;
+        }
       }
     } else if (cgfQoPMode >= 2) {
       std::cout << "### CVHCGF FAILED nstep=" << cgf.nsteps << " tmax=" << cgf.tmax << std::endl;

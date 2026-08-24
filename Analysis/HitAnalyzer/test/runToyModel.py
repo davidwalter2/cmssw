@@ -35,8 +35,6 @@ opts.register('useIdealGeometry', True, VarParsing.multiplicity.singleton,
               VarParsing.varType.bool, 'use the ideal tracker geometry (must be True to match PSimHits)')
 opts.register('useOpera3D', False, VarParsing.multiplicity.singleton,
               VarParsing.varType.bool, 'use the raw 160812 grid field instead of the default')
-opts.register('ioniTruncationAlpha', 0.999, VarParsing.multiplicity.singleton,
-              VarParsing.varType.float, 'ionization variance truncation alpha')
 opts.register('stepLength', 10.0, VarParsing.multiplicity.singleton,
               VarParsing.varType.float,
               'Geant4e max step [mm]. Was hard-coded to 10.0 in '
@@ -140,7 +138,6 @@ process.Geant4ePropagator.ForCVH = cms.bool(True)
 # CVH energy-loss switches: PSet parameters, not CVH_* env vars
 cvhSwitches.apply(process, opts)
 process.Geant4ePropagator.PropagationDirection = "anyDirection"
-process.Geant4ePropagator.IoniTruncationAlpha = cms.double(float(opts.ioniTruncationAlpha))
 process.Geant4ePropagator.StepLengthLimit = cms.double(float(opts.stepLength))
 
 # PDG id -> (G4 particle name, charge). NOTE the sign conventions differ by

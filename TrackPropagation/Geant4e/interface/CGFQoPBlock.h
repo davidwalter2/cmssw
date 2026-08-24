@@ -42,6 +42,12 @@
 //     NOT a claim that they are negligible in general.
 //   * SCALAR: the q/p (curvilinear component 0) marginal of the block. The
 //     joint 5x5 CGF is not attempted.
+//   * All three ionization regimes ARE covered: the Gaussian regime, the Urban
+//     1/E^2 compound Poisson, and -- since 2026-08-20 -- the exact knock-on
+//     cross section of CVH_IONI_EXACTDELTA together with the Kokoulin
+//     radiative correction. The last two used to THROW here, which made the
+//     in-fit CGF and the simulation's own delta-ray physics mutually
+//     exclusive.
 //
 // UNITS AND THE STANDARDIZATION CONVENTION
 // ----------------------------------------
@@ -110,6 +116,31 @@ namespace cvhcgf {
     // Quadrature/table sizes.
     int speciesDedxNbin = 16;
     int ioniKokoulinNbin = 96;
+    // Log-T buckets of the Kokoulin term inside the BLOCK CGF. Separate from
+    // `ioniKokoulinNbin` because the two are used in completely different
+    // regimes: that one is a Simpson rule evaluated ONCE per step, this one is
+    // a piecewise-constant bucketing evaluated at every point of the inversion
+    // grid, where it dominates the cost of the whole transform.
+    // 0 = omit; see the cfi for the cost and the size of what is omitted.
+    int ioniKokoulinCgfNbin = 0;
+    // Radiative (brems + pair) channel in the block CGF. Default OFF, and the
+    // cfi carries the measurement that justifies it.
+    bool cgfRadiative = false;
+    // THE CGF WEIGHT ITSELF.
+    //   0 = the legacy Gaussian weight (diagnostic only since the truncation
+    //       was deleted -- see cgfQoPMode's comment in the cfi),
+    //   1 = the Fisher weight (PRODUCTION DEFAULT),
+    //   2 = 1 plus the per-leg diagnostic print,
+    //   3 = 1 plus the IRLS re-centring (prototype, see NOTES_CGFFIT s58).
+    // It was `CVH_CGF_QOP` in the environment while it was an experiment. A
+    // default-ON estimator may not live in a shell variable: which weight
+    // produced a file has to be recoverable from the file.
+    int cgfQoPMode = 1;
+    // How often the block is recomputed: 0 = freeze after the first
+    // Gauss-Newton sweep, N > 0 = every N sweeps. Freezing is the default and
+    // is justified rather than assumed -- the fixed point is schedule-
+    // independent to 1.4e-6 (NOTES_CGFFIT s59) and freezing is 14x cheaper.
+    int cgfQoPRefresh = 0;
     double ioniExactDeltaT0 = 0.0;
   };
 
@@ -176,6 +207,24 @@ namespace cvhcgf {
   // default 96). A numerical-accuracy knob only -- exposed so convergence can
   // be MEASURED rather than asserted.
   int ioniKokoulinNbin();
+
+  // The CGF weight mode and refresh period. Single readers, as with every
+  // other switch here; the maker asks cvhcgf rather than carrying its own
+  // copy of the parameter, so the propagator and the fit cannot disagree
+  // about which estimator is running.
+  int cgfQoPMode();
+  int cgfQoPRefresh();
+
+  // Is the radiative channel to be built into the block CGF
+  // (CgfRadiativeChannel)? The propagator is the single reader; the transform
+  // itself just sees whether `Block::rad` is empty.
+  bool cgfRadiativeEnabled();
+
+  // Log-T bucket count of the Kokoulin term in the block CGF
+  // (IoniKokoulinCgfNbin, default 16). See the cfi for the measured
+  // convergence; the propagator copies it onto each IoniStep so the transforms
+  // themselves stay free of process-global state.
+  int ioniKokoulinCgfNbin();
 
   // THE SINGLE READER of CVH_REF_CHARGEAWARE.
   //
@@ -364,23 +413,119 @@ namespace cvhcgf {
   // `scaling` factor applied to the energies and the transport weight folded
   // into `gs`.
   struct IoniStep {
-    // 0 = Gaussian regime, 1 = Urban compound Poisson.
-    //
-    // regime 2/3 (the exact knock-on cross section, CVH_IONI_EXACTDELTA) is
-    // REFUSED by blockExponent/blockKappa2 -- see below. It is not that the
-    // struct cannot hold one: it is that in that regime `a3` means something
-    // else, and there is no field for `beta2`/`etot` either.
+    // 0 = Gaussian regime; 1 = Urban compound Poisson (1/E^2 delta channel);
+    // 2 = the EXACT spin-1/2 knock-on cross section, 3 = the same for spin 0
+    // (CVH_IONI_EXACTDELTA). Regimes 2 and 3 differ ONLY by the spin term, and
+    // the split mirrors G4BetheBlochModel's own `0.5 == spin` branch.
     int regime = -1;
     double gsig2 = 0.; // regime-0 variance [MeV^2] (the ALPHA-TRUNCATED one)
     double a1 = 0., e1 = 0.;    // excitation channel 1: count, energy [MeV]
     double a2 = 0., e2 = 0.;    // excitation channel 2
-    // Delta-ray collision COUNT -- in regime 1 only. The Urban record reuses
-    // this slot for `xi` (an energy) in regime 2/3, which is why regime 2/3
-    // must be refused rather than read.
+    // THE SLOT CHANGES MEANING WITH THE REGIME, exactly as the Urban record's
+    // does:
+    //   regime 1   -- the delta-ray collision COUNT (dimensionless, ~7.6),
+    //                 drawn from 1/E^2 on [e0, tmax];
+    //   regime 2/3 -- `xi`, the step's Landau ENERGY scale in MeV (~0.07),
+    //                 normalizing the exact cross section
+    //                 dN/dT = (xi/T^2) [1 - beta2 T/tmax (+ T^2/2E^2)].
+    // An energy takes the record's `scaling` factor and a count does not, so
+    // the caller must apply it for regime 2/3 and must not for regime 1.
+    // Reading one as the other is a ~1e-5 error that does not fail, which is
+    // why the regime -- not a heuristic on the magnitude -- selects the branch
+    // everywhere below.
     double a3 = 0.;
-    double e0 = 0., tmax = 0.;  // 1/E^2 spectrum support [MeV]
+    double e0 = 0., tmax = 0.;  // spectrum support [MeV]
     double gs = 0.;             // (residual units) per MeV, incl. transport
+    // regime 2/3 only: the projectile's beta^2 and TOTAL energy [MeV], both
+    // physical and unscaled. They are not recoverable from `tmax` without the
+    // particle mass (inverting a 3 GeV kaon's Tmax as a muon's returns
+    // beta^2 = 0.9989 instead of 0.9761, and beta^2 multiplies the whole
+    // suppression term), which is why the record carries them.
+    double beta2 = 0., etot = 0.;
+    // Kokoulin radiative correction to this step's knock-on spectrum: the
+    // number of log-T buckets to use, or 0 for "not applied". It rides on the
+    // STEP rather than being read from `switches()` inside the transforms so
+    // that the CGF stays a pure function of its argument -- the standalone
+    // driver and the unit tests run with no ParameterSet at all, and a
+    // transform that reaches for process-global configuration cannot be
+    // tested that way. The propagator sets it from
+    // `cvhcgf::ioniKokoulinEnabled()/ioniKokoulinNbin()`, which remain the
+    // single readers of the switch.
+    int kokNbin = 0;
   };
+
+  // One step's RADIATIVE (bremsstrahlung + pair production) contribution.
+  //
+  // WHY A TABULATED SPECTRUM AND NOT A PARAMETERIZATION. The two processes
+  // have different shapes in v = eps/E and different weights -- pair
+  // production is 58 % of the radiative mean at 100 GeV and is SOFTER than
+  // brems -- so a single hand-built brems-like shape normalized to the
+  // combined mean is wrong by ~2.5x at 5-15 GeV (measured, cf_brems_exact).
+  // The propagator therefore tabulates both from Geant4's OWN
+  // G4MuBremsstrahlungModel / G4MuPairProductionModel differential cross
+  // sections -- the same objects that build the dE/dx table the reference
+  // subtracts -- and this struct carries the result.
+  //
+  // WHY IT IS IN THE CF AND NOT IN THE VARIANCE. For dsigma/dv ~ 1/v the
+  // second moment is dominated by v -> 1, so a radiative VARIANCE describes
+  // the rare catastrophic radiator rather than the 99.9 % of muons that
+  // radiate nothing. That is why the fit's Q has never carried a radiative
+  // term and why it should not start now: the object that is well defined is
+  // the characteristic function, and the Fisher information built from it.
+  struct RadStep {
+    // dN/dv on the block's shared `v` grid, ALREADY normalized to this step's
+    // own per-process mean loss and summed over the two processes
+    // (`makeRadSpectrum` does that, from the propagator's dedxBrem/dedxPair).
+    // Not owned: the caller keeps the storage alive for the call.
+    const double *dNdv = nullptr;
+    // The step's TOTAL energy, in MeV -- the same unit as IoniStep's
+    // energies, so that `gs` below means exactly what it means there. The
+    // records are natively in GeV and the propagator converts; getting this
+    // wrong is a factor 1e3 in the exponent, which collapses the CF to zero
+    // rather than failing (it happened once offline).
+    double etot = 0.;
+    // (residual units) per MeV, including the transport weight and the charge
+    // sign -- identical convention to IoniStep::gs.
+    double gs = 0.;
+  };
+
+  // The process-noise block: the ionization steps, and the radiative steps
+  // that share one v grid.
+  //
+  // A struct rather than more arguments because every entry point needs the
+  // same bundle (`blockExponent`, `blockKappa2`, `tauReach`, `inverseFisher`),
+  // and because the multiple-scattering channel will join it next.
+  struct Block {
+    std::vector<IoniStep> ioni;
+    std::vector<RadStep> rad;
+    // Shared v grid for every RadStep; `nv` entries. Empty rad => unused.
+    const double *v = nullptr;
+    int nv = 0;
+  };
+
+  // dN/dv for one step, from the two Geant4 SHAPES and the two per-process
+  // mean losses:
+  //
+  //     dN/dv = sum_proc shape_proc(v) * dE_proc / INT v E shape_proc dv
+  //
+  // Each process is normalized to its OWN mean because that is what fixes the
+  // mixture; normalizing the sum does not. The normalization also absorbs
+  // ComputeDMicroscopicCrossSection's absolute-normalization convention
+  // (measured: 1.051 for brems, 1.63e-3 for pair, both constant to ~1 %, i.e.
+  // an offset and not a shape error) and the v-grid cutoff, so the modelled
+  // mean equals the mean the reference trajectory subtracted -- which is what
+  // makes the CENTRED exponent below leave no residual bias.
+  //
+  // `v`, `shapeBrem`, `shapePair` and `out` are all `nv` long; `dEBrem` and
+  // `dEPair` are this step's mean losses in MeV; `etot` in MeV.
+  void makeRadSpectrum(const double *v,
+                       const double *shapeBrem,
+                       const double *shapePair,
+                       double dEBrem,
+                       double dEPair,
+                       double etot,
+                       int nv,
+                       double *out);
 
   struct Config {
     // |phi| = e^{lncut} sets the end of the t grid. The contribution of the
@@ -490,17 +635,17 @@ namespace cvhcgf {
   // default-off again: a warning is not a safe guard for a silent-wrong-answer
   // hazard at any default, and the two switches can still be set together by
   // hand.
-  std::complex<double> blockExponent(const std::vector<IoniStep> &steps, double t);
+  std::complex<double> blockExponent(const Block &blk, double t);
 
   // Gaussian-limit variance of the block in residual units, i.e. -S''(0).
   // Throws on regime >= 2 for the same reason as blockExponent.
-  double blockKappa2(const std::vector<IoniStep> &steps);
+  double blockKappa2(const Block &blk);
 
   // t at which Re S(t) = lncut, bisected on a coarse log scan.
-  double tauReach(const std::vector<IoniStep> &steps, double lncut);
+  double tauReach(const Block &blk, double lncut);
 
   // The whole thing: 1/I by exact inversion.
-  Result inverseFisher(const std::vector<IoniStep> &steps, const Config &cfg = Config());
+  Result inverseFisher(const Block &blk, const Config &cfg = Config());
 
   // in-place radix-2 FFT, forward sign convention e^{-2 pi i j k / N}
   void fftInPlace(std::vector<std::complex<double>> &a);

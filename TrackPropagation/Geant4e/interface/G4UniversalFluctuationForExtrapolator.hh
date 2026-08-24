@@ -48,6 +48,7 @@
 #define G4UniversalFluctuationForExtrapolator_h 1
 
 #include "G4VEmFluctuationModel.hh"
+#include "TrackPropagation/Geant4e/interface/CGFQoPBlock.h"
 #include "G4ParticleDefinition.hh"
 #include "G4Poisson.hh"
 #include "G4Threading.hh"
@@ -65,7 +66,6 @@ public:
   // PV/01-07 eq. 68-69). The fitted "resolution" is convention-dependent
   // through this cutoff (truncated sigma grows ~3x from alpha=0.99 to
   // 0.999), so the resolution-closure diagnostic scans it.
-  void SetIoniTruncationAlpha(double a) { ioniTruncAlpha_ = a; }
 
   // Per-step Urban-model parameters recorded by the last SampleFluctuations
   // call. These are the exact ingredients of the analytic compound-Poisson
@@ -119,6 +119,11 @@ public:
     double beta2 = 0., etot = 0.;   // regime 2/3 only; physical, unscaled
   };
   const UrbanFluctRecord& lastRecord() const { return record_; }
+
+  // The record as a block step (gs = 1, energies scaled): the SINGLE mapping,
+  // used here for the variance this class returns and by Geant4ePropagator for
+  // the block CGF.
+  static cvhcgf::IoniStep toIoniStep(const UrbanFluctRecord& rec, int kokNbin);
   bool lastRecordValid() const { return recordValid_; }
 
   // Is CVH_IONI_EXACTDELTA set?  The exporter branches on this to decide the
@@ -188,7 +193,6 @@ protected:
   inline void SampleGauss2(CLHEP::HepRandomEngine* rndm, G4double eav, G4double esig2, G4double& eloss);
 
   // delta-electron tail truncation of the ionization variance (see setter)
-  G4double ioniTruncAlpha_ = 0.999;
 
   // last-call Urban record (see lastRecord())
   UrbanFluctRecord record_;

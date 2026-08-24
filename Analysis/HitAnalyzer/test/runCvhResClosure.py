@@ -110,12 +110,6 @@ opts.register('scalarPot3DInitFile', '', VarParsing.VarParsing.multiplicity.sing
 opts.register('numberOfThreads', 1, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.int,
               'framework numberOfThreads (numberOfStreams follows the same value)')
-opts.register('ioniTruncationAlpha', 0.999, VarParsing.VarParsing.multiplicity.singleton,
-              VarParsing.VarParsing.varType.float,
-              'delta-electron truncation of the ionization variance in the '
-              'G4e error propagation (default 0.999 = historical baseline). '
-              'Scan 0.995-0.999: fitted resolution parameters drifting with '
-              'this knob is the 2022 failure signature')
 opts.register('propagationDirection', 'anyDirection', VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string,
               'Geant4ePropagator PropagationDirection (anyDirection = per-leg '
@@ -403,7 +397,6 @@ process.Geant4ePropagator.PropagationDirection = cms.string(opts.propagationDire
 # ~2.5% of the flat-pT-gun daughters (fail[plimit], median seed p 0.65);
 # 0.2 GeV matches the ditrack/V0 configuration and recovers them.
 process.Geant4ePropagator.PropagationPtotLimit = cms.double(float(opts.propagationPtotLimit))
-process.Geant4ePropagator.IoniTruncationAlpha = cms.double(float(opts.ioniTruncationAlpha))
 process.globalCor.MagneticFieldLabel = cms.string(fieldlabel)
 
 process.reconstruction_step = cms.Path(process.offlineBeamSpot * process.globalCor)

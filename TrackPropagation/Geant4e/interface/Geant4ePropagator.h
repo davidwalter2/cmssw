@@ -41,7 +41,6 @@ public:
                     PropagationDirection dir = alongMomentum,
                     double plimit = 1.0,
                     bool forCVH = false,
-                    double ioniTruncAlpha = 0.999,
                     double stepLengthLimit = 10.0);   // mm
 
   ~Geant4ePropagator() override;
@@ -437,9 +436,6 @@ private:
   mutable G4UniversalFluctuationForExtrapolator *fluct = nullptr;
   bool forCVH_ = false;
 
-  // ionization-variance truncation passed through to fluct (see
-  // G4UniversalFluctuationForExtrapolator::SetIoniTruncationAlpha)
-  double ioniTruncAlpha_ = 0.999;
   // Maximum Geant4e step, applied via "/geant4e/limits/stepLength" [mm].
   // Was hard-coded to 10.0 mm in two places. It is a real ceiling, not a
   // physics scale: in a homogeneous medium the model sits exactly ON it

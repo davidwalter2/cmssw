@@ -33,6 +33,20 @@ namespace cvhcgf {
     s.dedxScale = pset.getParameter<double>("DedxScale");
     s.speciesDedxNbin = pset.getParameter<int>("ReferenceSpeciesDedxNbin");
     s.ioniKokoulinNbin = pset.getParameter<int>("IoniKokoulinNbin");
+    s.ioniKokoulinCgfNbin = pset.getParameter<int>("IoniKokoulinCgfNbin");
+    s.cgfRadiative = pset.getParameter<bool>("CgfRadiativeChannel");
+    s.cgfQoPMode = pset.getParameter<int>("CgfQoPMode");
+    s.cgfQoPRefresh = pset.getParameter<int>("CgfQoPRefresh");
+    if (s.cgfQoPMode < 0 || s.cgfQoPMode > 3) {
+      throw cms::Exception("Configuration")
+          << "CgfQoPMode must be 0 (legacy Gaussian weight, diagnostic only), 1 (the Fisher weight), "
+             "2 (1 + per-leg print) or 3 (1 + IRLS re-centring); got "
+          << s.cgfQoPMode;
+    }
+    if (s.cgfQoPRefresh < 0) {
+      throw cms::Exception("Configuration")
+          << "CgfQoPRefresh must be >= 0 (0 = freeze after the first sweep); got " << s.cgfQoPRefresh;
+    }
     s.ioniExactDeltaT0 = pset.getParameter<double>("IoniExactDeltaT0");
 
     for (auto const &nb : {std::make_pair("ReferenceSpeciesDedxNbin", s.speciesDedxNbin),
@@ -42,6 +56,13 @@ namespace cvhcgf {
             << nb.first << " must be even and >= 2 (Simpson needs an even interval count); got "
             << nb.second;
       }
+    }
+
+    if (s.ioniKokoulinCgfNbin < 0) {
+      throw cms::Exception("Configuration")
+          << "IoniKokoulinCgfNbin must be >= 0 (0 = omit the term in the block CGF, N = N log-T "
+             "buckets); got "
+          << s.ioniKokoulinCgfNbin;
     }
 
     if (g_configured) {
@@ -61,7 +82,11 @@ namespace cvhcgf {
                         s.dedxScale == g_switches.dedxScale &&
                         s.speciesDedxNbin == g_switches.speciesDedxNbin &&
                         s.ioniKokoulinNbin == g_switches.ioniKokoulinNbin &&
-                        s.ioniExactDeltaT0 == g_switches.ioniExactDeltaT0;
+                        s.ioniExactDeltaT0 == g_switches.ioniExactDeltaT0 &&
+                        s.cgfRadiative == g_switches.cgfRadiative &&
+                        s.cgfQoPMode == g_switches.cgfQoPMode &&
+                        s.cgfQoPRefresh == g_switches.cgfQoPRefresh &&
+                        s.ioniKokoulinCgfNbin == g_switches.ioniKokoulinCgfNbin;
       if (!same) {
         throw cms::Exception("Configuration")
             << "cvhcgf::configure called twice with different values. The CVH energy-loss "
@@ -163,6 +188,22 @@ namespace cvhcgf {
 
   int ioniKokoulinNbin() {
     return switches().ioniKokoulinNbin;
+  }
+
+  int ioniKokoulinCgfNbin() {
+    return switches().ioniKokoulinCgfNbin;
+  }
+
+  bool cgfRadiativeEnabled() {
+    return switches().cgfRadiative;
+  }
+
+  int cgfQoPMode() {
+    return switches().cgfQoPMode;
+  }
+
+  int cgfQoPRefresh() {
+    return switches().cgfQoPRefresh;
   }
 
   namespace {
@@ -319,44 +360,359 @@ namespace cvhcgf {
   }
 
   //--------------------------------------------------------------------------
-  // REGIME 2/3 IS REFUSED, NOT MISREAD.
+  // THE EXACT KNOCK-ON CHANNEL (regime 2/3).
   //
-  // blockExponent/blockKappa2 below branch on `regime == 0` and treat
-  // everything else as regime 1, i.e. they read `a3` as a COLLISION COUNT. In
-  // regime 2/3 (CVH_IONI_EXACTDELTA) that slot holds `xi`, an ENERGY -- ~0.072
-  // MeV where the count is ~7.6 -- so the delta channel comes out wrong by
-  // ~1e-5. Being a WEIGHT, it does not fail: it silently changes the answer.
+  // With CVH_IONI_EXACTDELTA the Urban 1/E^2 delta channel is replaced by the
+  // cross section Geant4's own G4BetheBlochModel samples,
   //
-  // That was tolerable while CVH_IONI_EXACTDELTA was default-off. It is not
-  // tolerable now that it is default-ON: anyone enabling the CGF prototype
-  // would inherit the wrong answer without doing anything. The block CGF has
-  // no exact-delta channel (and no Kokoulin term either), so the only correct
-  // behaviours are "implement it" or "refuse". Until the CGF workstream ports
-  // cf_track_resolution.exact_delta_exponent -- which also needs `beta2` and
-  // `etot`, which IoniStep does not carry -- this refuses.
+  //     dN/dT = (xi / T^2) [ 1 - beta^2 T/Tmax + (spin 1/2) T^2/(2 E^2) ] ,
   //
-  // Throwing std::runtime_error rather than cms::Exception keeps this
-  // translation unit free of framework headers, as it has always been; the
-  // in-fit call site (Geant4ePropagator) converts to a cms::Exception before
-  // any record reaches here.
-  namespace {
-    void refuseExactDelta(const std::vector<IoniStep> &steps) {
-      for (const IoniStep &s : steps) {
-        if (s.regime >= 2) {
-          throw std::runtime_error(
-              "cvhcgf: the block CGF has no regime-2/3 (exact-delta) channel. The record's `a3` slot holds xi "
-              "(an energy), not a collision count, so evaluating it here would be wrong by ~1e-5 in the delta "
-              "channel WITHOUT failing. Run with CVH_IONI_EXACTDELTA=0, or give blockExponent/blockKappa2 the "
-              "exact knock-on cross section (cf_track_resolution.exact_delta_exponent).");
+  // on [e0, tmax], with `xi` -- the record's `a3` slot in this regime -- the
+  // step's Landau energy scale in MeV. Its centred log-CF is
+  //
+  //     S = (xi/e0) [ J0 - (beta^2 e0/tmax) J1 ]
+  //         + (spin 1/2) (xi/e0) (e0^2/2E^2) J2 ,
+  //
+  //     J0 = INT_1^w (e^{yu} - 1 - yu)/u^2 du       y = i a,  a = gs e0 t
+  //     J1 = INT_1^w (e^{yu} - 1 - yu)/u   du       w = tmax/e0
+  //     J2 = INT_1^w (e^{yu} - 1 - yu)     du
+  //
+  // -- the same three integrals the tree-level 1/E^2 term already needs (it is
+  // J0/N), so the only new mathematics is J1 and J2.
+  //
+  // UNTIL 2026-08-20 THIS THREW. The refusal was correct while nothing
+  // implemented the channel -- reading `a3` as a collision count when it holds
+  // xi is a ~1e-5 error in a WEIGHT, i.e. one that changes the answer without
+  // failing -- but it made the in-fit CGF and the exact-delta correction
+  // mutually exclusive, and the exact delta is default-ON (e232c20) precisely
+  // because it is what the simulation does. A weight that cannot be evaluated
+  // on the physics the fit runs is not a weight.
+  //
+  // This is a port of `cf_track_resolution.exact_delta_exponent` and
+  // `_delta_terms_exact`, the offline routines every published closure number
+  // in NOTES_DELTASPEC rests on, and it is validated against them step for
+  // step (testCGFQoPBlock + cgf_cxx_validate.py).
+  //
+  // `deltaTerm` above is deliberately NOT refactored to share this code. It
+  // could be -- J0/N is exactly its return value -- but the series branches
+  // differ in their termination test, so sharing would perturb the regime-1
+  // path in its last bits, and bit-identity of what already ships is worth
+  // more than the fifteen lines.
+  //--------------------------------------------------------------------------
+  void deltaTermsExact(double a, double w, std::complex<double> &J0, std::complex<double> &J1,
+                       std::complex<double> &J2) {
+    const std::complex<double> y(0., a), x(0., a * w);
+
+    // THE EXPANSION PARAMETER IS a*w, NOT a -- same trap as `deltaTerm`: the
+    // support reaches u = w ~ 1e8, so a series guarded on |a| is selected in a
+    // regime where it is wrong by orders of magnitude.
+    if (std::fabs(a * w) <= kDtSer) {
+      std::complex<double> tx(1., 0.), ty(1., 0.), s0(0., 0.), s1(0., 0.), s2(0., 0.);
+      for (int k = 1; k < kDtNser; ++k) {
+        tx *= x / static_cast<double>(k);
+        ty *= y / static_cast<double>(k);
+        if (k >= 2) {
+          s0 += (tx / w - ty) / static_cast<double>(k - 1);
+          s1 += (tx - ty) / static_cast<double>(k);
+          s2 += (tx * w - ty) / static_cast<double>(k + 1);
+          // J2 is the largest of the three by a factor w, so it sets the
+          // termination; the |tx| * w on the left is the same quantity.
+          if (std::abs(tx) * w < 1e-19 * std::max(std::abs(s2), 1e-300))
+            break;
         }
+      }
+      J0 = s0;
+      J1 = s1;
+      J2 = s2;
+      return;
+    }
+
+    // Closed form. Ein(-i u) = Cin(|u|) - i sgn(u) Si(|u|), Cin even, Si odd,
+    // so the exponential integral never needs a complex argument.
+    double siA, cinA, siW, cinW;
+    siCin(std::fabs(a), siA, cinA);
+    siCin(std::fabs(a * w), siW, cinW);
+    const double sgn = (a >= 0.) ? 1. : -1.;
+    const std::complex<double> ein(cinA - cinW, -sgn * (siA - siW));
+
+    const double sa = std::sin(a), ca = std::cos(a);
+    const double saw = std::sin(a * w), caw = std::cos(a * w);
+    const std::complex<double> em1y(ca - 1.0, sa);
+    const std::complex<double> em1x(caw - 1.0, saw);
+    const std::complex<double> ey(ca, sa);
+    const std::complex<double> ex(caw, saw);
+
+    J0 = em1y - em1x / w + y * ein;
+    J1 = ein - y * (w - 1.0);
+    J2 = (ex - ey) / y - (w - 1.0) - y * (w * w - 1.0) / 2.0;
+  }
+
+  // One step's exact-delta exponent. `at` = gs * t, i.e. the conjugate
+  // variable in 1/MeV BEFORE the e0 scaling that `deltaTermsExact` works in --
+  // which is what lets the Kokoulin bucketing below call this on a sub-range
+  // [lo, hi] with the same `at`.
+  std::complex<double> exactDeltaExponent(
+      double xi, double e0, double tmax, double beta2, double etot, double at, bool spinHalf) {
+    // `xi` is only required to be NONZERO, not positive: the Kokoulin
+    // bucketing calls this with xi * (f_K - 1), and while Geant4's f_K is >= 1
+    // everywhere it is used, a guard that silently drops negative weights would
+    // turn a sign error into a small answer instead of a visible one.
+    if (!(e0 > 0.) || !(tmax > e0) || xi == 0.)
+      return std::complex<double>(0., 0.);
+    const double w = tmax / e0;
+    std::complex<double> J0, J1, J2;
+    deltaTermsExact(at * e0, w, J0, J1, J2);
+    const double pref = xi / e0;
+    const double c1 = beta2 * e0 / tmax;
+    std::complex<double> S = pref * (J0 - c1 * J1);
+    if (spinHalf && etot > 0.)
+      S += pref * (e0 * e0 / (2.0 * etot * etot)) * J2;
+    return S;
+  }
+
+  //--------------------------------------------------------------------------
+  // KOKOULIN, in the CGF.
+  //
+  // G4MuBetheBlochModel multiplies the knock-on cross section by
+  // f_K(T) = 1 + (alpha/2pi) a1 (a3 - a1) above T = 100 keV for muons above
+  // 1 GeV, and `G4UniversalFluctuationForExtrapolator` already puts it into
+  // the VARIANCE the legacy weight uses. The block CGF has to carry it too, or
+  // switching the fit from the variance to the Fisher information would
+  // silently DROP a correction that is +6 % at the hard end -- exactly where
+  // the Fisher information of this block lives.
+  //
+  // f_K - 1 is smooth in ln T and e^{iaT} is not, so f_K - 1 is made piecewise
+  // constant on a log grid and each bin's oscillatory integral is done in
+  // CLOSED FORM by `exactDeltaExponent` on the sub-range. The substitution
+  // beta^2 -> beta^2 * hi/tmax is what turns that routine's "upper limit == the
+  // beta^2 denominator" convention into a genuine sub-range integral whose
+  // beta^2 term still carries the KINEMATIC Tmax; summing contiguous bins
+  // reproduces the full-range closed form (7e-15 offline).
+  //
+  // The muon guard is Geant4's, mirrored rather than approximated: the factor
+  // exists in G4MuBetheBlochModel and nowhere else, so a kaon's regime-3 record
+  // must not receive it. The mass comes from the record by the identity
+  // m = E sqrt(1 - beta^2) -- no PDG column needed, and no assumption.
+  //--------------------------------------------------------------------------
+  constexpr double kKokAlphaPrime = 1.0 / (2.0 * 3.14159265358979323846 * 137.035999084);
+  constexpr double kKokTMin = 0.1;      // G4MuBetheBlochModel::limitKinEnergy, MeV
+  constexpr double kKokMuMin = 1000.0;  // G4MuBetheBlochModel::lowestKinEnergy, MeV
+  constexpr double kMuMass = 105.6583745;
+  constexpr double kKokMassTol = 1.0;   // separates mu from its neighbour pi (34 MeV away)
+
+  double kokoulinFactor(double T, double etot) {
+    if (!(T > kKokTMin) || !(T < etot - kMuMass))
+      return 1.0;
+    const double a1 = std::log(1.0 + 2.0 * T / CLHEP::electron_mass_c2);
+    const double a3 = std::log(4.0 * etot * (etot - T) / (kMuMass * kMuMass));
+    return 1.0 + kKokAlphaPrime * a1 * (a3 - a1);
+  }
+
+  // Antiderivative of the exact-delta integrand, for the bucketed sum below:
+  //
+  //   F(T) = B0(T) - (beta2/tmax) B1(T) + inv2E2 B2(T),
+  //   B0 = INT (e^{icT}-1-icT)/T^2 dT = -G/T - i c Ein(-icT)
+  //   B1 = INT (e^{icT}-1-icT)/T   dT = -Ein(-icT) - i c T
+  //   B2 = INT (e^{icT}-1-icT)     dT = expm1(icT)/(ic) - T - i c T^2/2
+  //
+  // so a sub-range [lo, hi] costs F(hi) - F(lo) and CONSECUTIVE BUCKETS SHARE
+  // AN EDGE: n+1 evaluations instead of 2n. That is the whole point -- the
+  // Kokoulin term is evaluated at every point of the inversion grid, so its
+  // cost is what decides whether the correction is affordable at all.
+  //
+  // Below |cT| = 2 the closed forms cancel (B2's expm1/(ic) is 1/(ic) plus the
+  // terms that are subtracted off), so the series are used instead; they are
+  // the same expansions with the cancelling orders removed analytically:
+  //   B1 = sum_{k>=2} u^k/(k k!),        u = i c T
+  //   B2 = (1/(ic)) sum_{k>=3} u^k/k!
+  //   B0 = (1/T) sum_{j>=2} u^j [1/((j-1)(j-1)!) - 1/j!]
+  std::complex<double> exactDeltaAnti(double c, double T, double beta2, double tmax, double inv2E2) {
+    if (c == 0. || T <= 0.)
+      return std::complex<double>(0., 0.);
+    const std::complex<double> ic(0., c);
+    const double u = c * T;
+    std::complex<double> B0, B1, B2;
+
+    if (std::fabs(u) <= kDtSer) {
+      const std::complex<double> uu(0., u);
+      std::complex<double> tk(1., 0.);  // u^k / k!  built up
+      std::complex<double> s0(0., 0.), s1(0., 0.), s2(0., 0.);
+      double fact = 1.;
+      for (int k = 1; k < kDtNser; ++k) {
+        tk *= uu / static_cast<double>(k);  // = u^k / k!
+        fact *= k;                          // = k!
+        if (k >= 2) {
+          // u^k/(k k!)
+          s1 += tk / static_cast<double>(k);
+          // u^j [1/((j-1)(j-1)!) - 1/j!] = u^j/j! * [j!/((j-1)(j-1)!) - 1]
+          const double jf = fact / (static_cast<double>(k - 1) * (fact / static_cast<double>(k)));
+          s0 += tk * (jf - 1.);
+        }
+        if (k >= 3)
+          s2 += tk;
+        if (std::abs(tk) < 1e-19 * std::max(std::abs(s2), 1e-300))
+          break;
+      }
+      B0 = s0 / T;
+      B1 = s1;
+      B2 = s2 / ic;
+    } else {
+      double si, cin;
+      siCin(std::fabs(u), si, cin);
+      const double sgn = (u >= 0.) ? 1. : -1.;
+      const std::complex<double> ein(cin, -sgn * si);  // Ein(-i u)
+      const double su = std::sin(u), cu = std::cos(u);
+      const std::complex<double> em1(cu - 1.0, su);    // e^{iu} - 1
+      const std::complex<double> G = em1 - std::complex<double>(0., u);
+      B0 = -G / T - ic * ein;
+      B1 = -ein - std::complex<double>(0., u);
+      B2 = em1 / ic - T - ic * (T * T) * 0.5;
+    }
+    return B0 - (beta2 / tmax) * B1 + inv2E2 * B2;
+  }
+
+  std::complex<double> kokoulinExponent(const IoniStep &s, double at, int nbin) {
+    const double m = s.etot * std::sqrt(std::max(1.0 - s.beta2, 0.0));
+    if (std::fabs(m - kMuMass) >= kKokMassTol)  // not a muon: Geant4 does not correct it
+      return std::complex<double>(0., 0.);
+    if (!(s.etot - kMuMass > kKokMuMin))        // below G4MuIonisation's lowestKinEnergy
+      return std::complex<double>(0., 0.);
+    const double lo0 = std::max(s.e0, kKokTMin);
+    if (!(lo0 < s.tmax))
+      return std::complex<double>(0., 0.);
+    const bool spinHalf = (s.regime == 2);
+    // Edges by `pow(ratio, i/nbin)` rather than by repeated multiplication:
+    // the offline reference builds them that way (`lo0 * (tmax/lo0)**fr`), and
+    // the two differ in the last bits otherwise, which is exactly the sort of
+    // difference a like-for-like validation should not have to absorb.
+    const double ratio = s.tmax / lo0;
+    const double inv2E2 = (spinHalf && s.etot > 0.) ? 1.0 / (2.0 * s.etot * s.etot) : 0.;
+    // One antiderivative per EDGE, reused by the two buckets that share it.
+    std::complex<double> Flo = exactDeltaAnti(at, lo0, s.beta2, s.tmax, inv2E2);
+    std::complex<double> S(0., 0.);
+    for (int i = 0; i < nbin; ++i) {
+      const double lo = lo0 * std::pow(ratio, static_cast<double>(i) / nbin);
+      const double hi = lo0 * std::pow(ratio, static_cast<double>(i + 1) / nbin);
+      const std::complex<double> Fhi = exactDeltaAnti(at, hi, s.beta2, s.tmax, inv2E2);
+      const double kap = kokoulinFactor(std::sqrt(lo * hi), s.etot) - 1.0;
+      if (kap != 0.)
+        S += (s.a3 * kap) * (Fhi - Flo);
+      Flo = Fhi;
+    }
+    return S;
+  }
+
+  // The exact channel's second cumulant, INT T^2 dN/dT dT, in closed form:
+  //   xi [ (tmax - e0) - beta^2 (tmax^2 - e0^2)/(2 tmax)
+  //        + (spin 1/2) (tmax^3 - e0^3)/(6 E^2) ] .
+  // This is the same integrand `kokoulinVarIntegral` reweights in the
+  // fluctuation model, which is what keeps kappa2 here and the variance there
+  // the same object.
+  double exactDeltaKappa2(const IoniStep &s) {
+    if (!(s.e0 > 0.) || !(s.tmax > s.e0) || !(s.a3 > 0.))
+      return 0.;
+    const double t0 = s.e0, t1 = s.tmax;
+    double m2 = (t1 - t0) - s.beta2 * (t1 * t1 - t0 * t0) / (2.0 * t1);
+    if (s.regime == 2 && s.etot > 0.)
+      m2 += (t1 * t1 * t1 - t0 * t0 * t0) / (6.0 * s.etot * s.etot);
+    return s.a3 * m2;
+  }
+
+  // The Kokoulin excess of the same second moment. Composite Simpson in ln T,
+  // mirroring `G4UniversalFluctuationForExtrapolator::kokoulinVarIntegral`
+  // term for term -- the two must not drift apart, because one is the weight
+  // the fit used to use and the other is the weight it uses now.
+  double kokoulinKappa2(const IoniStep &s, int nbin) {
+    const double m = s.etot * std::sqrt(std::max(1.0 - s.beta2, 0.0));
+    if (std::fabs(m - kMuMass) >= kKokMassTol || !(s.etot - kMuMass > kKokMuMin))
+      return 0.;
+    const double lo = std::max(s.e0, kKokTMin);
+    if (!(s.tmax > lo))
+      return 0.;
+    const double du = std::log(s.tmax / lo) / nbin;
+    const double inv2E2 = (s.regime == 2 && s.etot > 0.) ? 1.0 / (2.0 * s.etot * s.etot) : 0.;
+    double acc = 0.;
+    for (int i = 0; i <= nbin; ++i) {
+      const double T = lo * std::exp(i * du);
+      const double wgt = 1.0 - s.beta2 * T / s.tmax + inv2E2 * T * T;
+      const double f = (kokoulinFactor(T, s.etot) - 1.0) * wgt * T;  // dT = T du
+      const double c = (i == 0 || i == nbin) ? 1. : ((i % 2) ? 4. : 2.);
+      acc += c * f;
+    }
+    return s.a3 * acc * du / 3.0;
+  }
+
+  //--------------------------------------------------------------------------
+  // THE RADIATIVE CHANNEL.
+  //
+  // Bremsstrahlung and pair production are a compound Poisson exactly as
+  // ionization is, so the exponent simply adds
+  //
+  //     S_rad(t) = sum_steps INT dv (dN/dv) (e^{i a v E} - 1 - i a v E),
+  //     a = gs * t ,
+  //
+  // with the same centring `-1 - i a eps` that the ionization channels use.
+  // The centring is not a convention here, it is a REQUIREMENT: the reference
+  // trajectory already subtracts the radiative mean (the dE/dx table is built
+  // with ionOnly = false), so the block must describe the fluctuation about
+  // that mean and nothing else. `makeRadSpectrum` normalizes the spectrum to
+  // the same mean the table subtracted, which is what makes S'(0) = 0 exact
+  // rather than approximate.
+  //
+  // The integral is a trapezoid on the shared v grid -- the same rule the
+  // offline reference uses, so the two agree to their common discretization
+  // rather than to a difference of two quadratures.
+  //--------------------------------------------------------------------------
+  void makeRadSpectrum(const double *v,
+                       const double *shapeBrem,
+                       const double *shapePair,
+                       double dEBrem,
+                       double dEPair,
+                       double etot,
+                       int nv,
+                       double *out) {
+    for (int i = 0; i < nv; ++i)
+      out[i] = 0.;
+    if (nv < 2 || v == nullptr || out == nullptr)
+      return;
+    for (int proc = 0; proc < 2; ++proc) {
+      const double *shape = proc == 0 ? shapeBrem : shapePair;
+      const double dE = proc == 0 ? dEBrem : dEPair;
+      if (shape == nullptr || !(dE > 0.))
+        continue;
+      // norm = INT v E shape dv, the mean this shape would produce at unit
+      // normalization; trapezoid on the same grid as the exponent's integral.
+      double norm = 0.;
+      for (int i = 0; i + 1 < nv; ++i) {
+        const double dv = v[i + 1] - v[i];
+        norm += 0.5 * dv * (v[i] * shape[i] + v[i + 1] * shape[i + 1]);
+      }
+      norm *= etot;
+      if (!(norm > 0.))
+        continue;
+      const double f = dE / norm;
+      for (int i = 0; i < nv; ++i)
+        out[i] += shape[i] * f;
+    }
+  }
+
+  namespace {
+    // Trapezoid weights of the shared v grid, formed once per call rather than
+    // per step: the integral is sum_i w_i (dN/dv)_i f(v_i), and folding the
+    // rule into `w` turns each step into one dot product.
+    void trapWeights(const double *v, int nv, std::vector<double> &w) {
+      w.assign(nv, 0.);
+      for (int i = 0; i + 1 < nv; ++i) {
+        const double dv = 0.5 * (v[i + 1] - v[i]);
+        w[i] += dv;
+        w[i + 1] += dv;
       }
     }
   }  // namespace
 
-  std::complex<double> blockExponent(const std::vector<IoniStep> &steps, double t) {
-    refuseExactDelta(steps);
+  std::complex<double> blockExponent(const Block &blk, double t) {
     double sre = 0., sim = 0.;
-    for (const IoniStep &s : steps) {
+    for (const IoniStep &s : blk.ioni) {
       if (s.regime == 0) {
         sre += -0.5 * t * t * s.gsig2 * s.gs * s.gs;
         continue;
@@ -372,25 +728,71 @@ namespace cvhcgf {
         sre += s.a2 * (std::cos(th) - 1.);
         sim += s.a2 * (std::sin(th) - th);
       }
-      // delta rays: 1/E^2 compound Poisson on [e0, tmax]
+      // delta rays. Regime 1: `a3` collisions from 1/E^2 on [e0, tmax].
+      // Regime 2/3: the exact knock-on cross section normalized by xi = `a3`,
+      // plus Geant4's Kokoulin radiative correction when that is on.
       if (s.a3 > 0. && s.tmax > s.e0 && s.e0 > 0.) {
-        const std::complex<double> d = deltaTerm(s.gs * s.e0 * t, s.tmax / s.e0);
-        sre += s.a3 * d.real();
-        sim += s.a3 * d.imag();
+        if (s.regime >= 2) {
+          std::complex<double> d = exactDeltaExponent(
+              s.a3, s.e0, s.tmax, s.beta2, s.etot, s.gs * t, s.regime == 2);
+          if (s.kokNbin > 0)
+            d += kokoulinExponent(s, s.gs * t, s.kokNbin);
+          sre += d.real();
+          sim += d.imag();
+        } else {
+          const std::complex<double> d = deltaTerm(s.gs * s.e0 * t, s.tmax / s.e0);
+          sre += s.a3 * d.real();
+          sim += s.a3 * d.imag();
+        }
+      }
+    }
+
+    // The radiative channel, on the shared v grid.
+    if (!blk.rad.empty() && blk.v != nullptr && blk.nv > 1) {
+      std::vector<double> w;
+      trapWeights(blk.v, blk.nv, w);
+      for (const RadStep &r : blk.rad) {
+        if (r.dNdv == nullptr || !(r.etot > 0.) || r.gs == 0.)
+          continue;
+        const double a = r.gs * t;
+        for (int i = 0; i < blk.nv; ++i) {
+          const double q = w[i] * r.dNdv[i];
+          if (q == 0.)
+            continue;
+          const double x = a * blk.v[i] * r.etot;
+          // e^{ix} - 1 - ix for REAL x: no complex transcendental is needed,
+          // and `cos x - 1` is written as -2 sin^2(x/2), the cancellation-free
+          // form. Below |x| = 1e-4 the leading terms are used instead, for the
+          // same reason -- and the guard is on x itself, never on `a`, which
+          // is the trap the delta-ray term documents.
+          if (std::fabs(x) < 1e-4) {
+            sre += q * (-0.5 * x * x);
+            sim += q * (x * x * x / 6.);
+          } else {
+            const double sh = std::sin(0.5 * x);
+            sre += q * (-2.0 * sh * sh);
+            sim += q * (std::sin(x) - x);
+          }
+        }
       }
     }
     return std::complex<double>(sre, sim);
   }
 
   //--------------------------------------------------------------------------
-  double blockKappa2(const std::vector<IoniStep> &steps) {
+  double blockKappa2(const Block &blk) {
     // kappa2 = sum over channels of (count) * <E^2> * gs^2. For the 1/E^2
     // spectrum on [e0, tmax], <E^2>/N = (tmax - e0) * e0 * tmax / (tmax - e0)
     // ... written out: the normalized density is (e0 tmax/(tmax-e0)) / E^2,
     // so <E^2> = e0 tmax (tmax - e0)/(tmax - e0) = e0 * tmax.
-    refuseExactDelta(steps);  // see the note above blockExponent
+    // IONIZATION ONLY, DELIBERATELY. The radiative second moment is dominated
+    // by v -> 1 -- it is the catastrophic radiator, not the block -- so
+    // including it here would hand the standardization scale and the
+    // Gaussian-shape carrier `dQ2u` to the rarest events on the track. The
+    // radiative channel belongs in the CF (blockExponent) and in the Fisher
+    // information built from it, and that is where it is.
     double k2 = 0.;
-    for (const IoniStep &s : steps) {
+    for (const IoniStep &s : blk.ioni) {
       if (s.regime == 0) {
         k2 += s.gsig2 * s.gs * s.gs;
         continue;
@@ -400,27 +802,35 @@ namespace cvhcgf {
         k2 += s.a1 * s.e1 * s.e1 * g2;
       if (s.a2 > 0. && s.e2 > 0.)
         k2 += s.a2 * s.e2 * s.e2 * g2;
-      if (s.a3 > 0. && s.tmax > s.e0 && s.e0 > 0.)
-        k2 += s.a3 * s.e0 * s.tmax * g2;
+      if (s.a3 > 0. && s.tmax > s.e0 && s.e0 > 0.) {
+        if (s.regime >= 2) {
+          double m2 = exactDeltaKappa2(s);
+          if (s.kokNbin > 0)
+            m2 += kokoulinKappa2(s, s.kokNbin);
+          k2 += m2 * g2;
+        } else {
+          k2 += s.a3 * s.e0 * s.tmax * g2;
+        }
+      }
     }
     return k2;
   }
 
   //--------------------------------------------------------------------------
-  double tauReach(const std::vector<IoniStep> &steps, double lncut) {
+  double tauReach(const Block &blk, double lncut) {
     constexpr double lo = 1e-3, hi = 1e6;
     constexpr int n = 400;
     const double r = std::pow(hi / lo, 1.0 / (n - 1));
     double tprev = lo;
     double t = lo;
     for (int i = 0; i < n; ++i, t = lo * std::pow(r, i)) {
-      if (blockExponent(steps, t).real() < lncut) {
+      if (blockExponent(blk, t).real() < lncut) {
         if (i == 0)
           return lo;
         double a = tprev, b = t;
         for (int k = 0; k < 24; ++k) {
           const double m = std::sqrt(a * b);
-          if (blockExponent(steps, m).real() < lncut)
+          if (blockExponent(blk, m).real() < lncut)
             b = m;
           else
             a = m;
@@ -463,14 +873,14 @@ namespace cvhcgf {
   }
 
   //--------------------------------------------------------------------------
-  Result inverseFisher(const std::vector<IoniStep> &steps, const Config &cfg) {
+  Result inverseFisher(const Block &blk, const Config &cfg) {
     Result out;
-    out.nsteps = static_cast<int>(steps.size());
-    if (steps.empty())
+    out.nsteps = static_cast<int>(blk.ioni.size());
+    if (blk.ioni.empty() && blk.rad.empty())
       return out;
 
-    out.kappa2 = blockKappa2(steps);
-    const double tmax = tauReach(steps, cfg.lncut) * 1.3;
+    out.kappa2 = blockKappa2(blk);
+    const double tmax = tauReach(blk, cfg.lncut) * 1.3;
     out.tmax = tmax;
     if (!(tmax > 0.) || !std::isfinite(tmax))
       return out;
@@ -486,7 +896,7 @@ namespace cvhcgf {
     std::vector<std::complex<double>> cd(N, std::complex<double>(0., 0.));
     for (int j = 0; j < nt; ++j) {
       const double t = dt * j;
-      const std::complex<double> S = blockExponent(steps, t);
+      const std::complex<double> S = blockExponent(blk, t);
       if (S.real() < -745.)  // exp underflows; the tail is already negligible
         continue;
       const std::complex<double> phi = std::exp(S);

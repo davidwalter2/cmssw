@@ -53,11 +53,8 @@ std::unique_ptr<Propagator> GeantPropagatorESProducer::produce(const TrackingCom
   const double stepLengthLimit = pset_.existsAs<double>("StepLengthLimit")
                                      ? pset_.getParameter<double>("StepLengthLimit")
                                      : 10.0;
-  const double ioniTruncAlpha = pset_.existsAs<double>("IoniTruncationAlpha")
-                                    ? pset_.getParameter<double>("IoniTruncationAlpha")
-                                    : 0.999;
 
   return std::make_unique<Geant4ePropagator>(
-      &(iRecord.get(magFieldToken_)), particleName, dir, plimit_, forCVH_, ioniTruncAlpha,
+      &(iRecord.get(magFieldToken_)), particleName, dir, plimit_, forCVH_,
       stepLengthLimit);
 }

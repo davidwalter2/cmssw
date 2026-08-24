@@ -1680,6 +1680,19 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         std::cout<< "iter " << iiter << std::endl;
       }
 
+      // Iteration marker for the CGF diagnostic stream (CVH_CGF_QOP >= 2).
+      // The propagator emits one `### CVHCGF` line per leg with no idea which
+      // track or iteration it belongs to; without this marker the only way to
+      // group them is to guess from the ordering, which breaks the moment a
+      // propagation fails or two tracks cross similar radii.
+      {
+        if (cvhcgf::cgfQoPMode() >= 2) {
+          std::cout << "### CVHITER iiter=" << iiter << " itrack=" << itrack
+                    << " pt=" << trackPt << " eta=" << trackEta << " q=" << track.charge()
+                    << std::endl;
+        }
+      }
+
 // std::cout<< "iter " << iiter << std::endl;
             
       hitidxv.clear();
@@ -2141,10 +2154,10 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         // cached block weight for this leg, if we have one and are not
         // refreshing on this iteration
         {
-          static const int cgfRefresh = []() {
-            const char *v = getenv("CVH_CGF_QOP_REFRESH");
-            return v ? atoi(v) : 0;   // 0 = freeze after the first sweep
-          }();
+          // `cvhcgf` is the single reader; the maker must not carry its own
+          // copy of the schedule, or the propagator and the fit could disagree
+          // about which estimator is running.
+          const int cgfRefresh = cvhcgf::cgfQoPRefresh();
           const bool refreshNow = (iiter == 0) ||
                                   (cgfRefresh > 0 && (iiter % cgfRefresh) == 0);
           if (!refreshNow && ihit < cgfCacheQ.size() && cgfCacheQ[ihit] > 0.) {
@@ -2494,10 +2507,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           // residual whose first component is q/p in both the local and the
           // curvilinear bases, which is why the standardization by the
           // CURVILINEAR sigma is the matching one.
-          static const int cgfMode = []() {
-            const char *v = getenv("CVH_CGF_QOP");
-            return v ? atoi(v) : 0;
-          }();
+          const int cgfMode = cvhcgf::cgfQoPMode();
           static const bool cgfGaussPsi = (getenv("CVH_CGF_QOP_GAUSSPSI") != nullptr);
           if (cgfMode == 3) {
             // Block index within this track, in layer order -- the same order

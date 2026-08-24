@@ -36,10 +36,14 @@ BOOLS = (
     "IoniUrban2021",
     "DumpEmParameters",
     "EmHarmonise",
+    "CgfRadiativeChannel",
 )
 INTS = (
     "ReferenceSpeciesDedxNbin",
     "IoniKokoulinNbin",
+    "IoniKokoulinCgfNbin",
+    "CgfQoPMode",
+    "CgfQoPRefresh",
 )
 FLOATS = (
     "IoniExactDeltaT0",
