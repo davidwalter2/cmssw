@@ -37,6 +37,12 @@ namespace cvhcgf {
     s.cgfRadiative = pset.getParameter<bool>("CgfRadiativeChannel");
     s.cgfQoPMode = pset.getParameter<int>("CgfQoPMode");
     s.cgfQoPRefresh = pset.getParameter<int>("CgfQoPRefresh");
+    s.cgfRecentreDamping = pset.getParameter<double>("CgfRecentreDamping");
+    if (!(s.cgfRecentreDamping >= 0.)) {
+      throw cms::Exception("Configuration")
+          << "CgfRecentreDamping must be >= 0 (0 = no re-centring, 1 = full size); got "
+          << s.cgfRecentreDamping;
+    }
     if (s.cgfQoPMode < 0 || s.cgfQoPMode > 3) {
       throw cms::Exception("Configuration")
           << "CgfQoPMode must be 0 (legacy Gaussian weight, diagnostic only), 1 (the Fisher weight), "
@@ -86,6 +92,7 @@ namespace cvhcgf {
                         s.cgfRadiative == g_switches.cgfRadiative &&
                         s.cgfQoPMode == g_switches.cgfQoPMode &&
                         s.cgfQoPRefresh == g_switches.cgfQoPRefresh &&
+                        s.cgfRecentreDamping == g_switches.cgfRecentreDamping &&
                         s.ioniKokoulinCgfNbin == g_switches.ioniKokoulinCgfNbin;
       if (!same) {
         throw cms::Exception("Configuration")
@@ -204,6 +211,10 @@ namespace cvhcgf {
 
   int cgfQoPRefresh() {
     return switches().cgfQoPRefresh;
+  }
+
+  double cgfRecentreDamping() {
+    return switches().cgfRecentreDamping;
   }
 
   namespace {

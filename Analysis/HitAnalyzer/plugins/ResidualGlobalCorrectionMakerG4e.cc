@@ -2553,7 +2553,12 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                 // bit-exactly zero, and the t = 0 case reduces to
                 // sigma (1/I_z) psi_z(0) as before.
                 const double dscore = psiz - z / cgfb.invFisher;
-                dx0[0] = csig * cgfb.invFisher * dscore;
+                // SHRINKAGE. The re-centring is measured to be anti-correlated
+                // with the truth residual and to add scatter of a comparable
+                // size, so its variance-optimal scale is not 1 (NOTES_CGFFIT
+                // s85). `CgfRecentreDamping` is that scale; 1.0 reproduces
+                // every earlier stage bit for bit.
+                dx0[0] = cvhcgf::cgfRecentreDamping() * csig * cgfb.invFisher * dscore;
                 ++nCgfRecentre_;
                 if (getenv("CVH_CGF_QOP_DEBUG") != nullptr) {
                   static int ndbg = 0;

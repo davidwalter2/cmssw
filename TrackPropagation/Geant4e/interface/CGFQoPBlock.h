@@ -141,6 +141,17 @@ namespace cvhcgf {
     // is justified rather than assumed -- the fixed point is schedule-
     // independent to 1.4e-6 (NOTES_CGFFIT s59) and freezing is 14x cheaper.
     int cgfQoPRefresh = 0;
+    // SHRINKAGE on the mode-3 re-centring, in [0, 1].
+    //
+    // The re-centring is a NOISY BUT CORRECT correction: measured against gen
+    // truth it is anti-correlated with the residual (2 Cov/Var = -5.4e-3, the
+    // only thing in this programme that is) while adding +6.8e-3 of scatter,
+    // because `psi` is evaluated at the REALISED per-block residual, which is
+    // itself an estimate. The net is a wash at full size. Scaling it by
+    // `lambda` gives dVar = lambda^2 Var(delta) + lambda 2Cov, minimised at
+    // lambda* = -Cov/Var(delta) = 0.40 with a predicted -1.1e-3 on the
+    // residual variance. See NOTES_CGFFIT section 85.
+    double cgfRecentreDamping = 1.0;
     double ioniExactDeltaT0 = 0.0;
   };
 
@@ -214,6 +225,7 @@ namespace cvhcgf {
   // about which estimator is running.
   int cgfQoPMode();
   int cgfQoPRefresh();
+  double cgfRecentreDamping();
 
   // Is the radiative channel to be built into the block CGF
   // (CgfRadiativeChannel)? The propagator is the single reader; the transform

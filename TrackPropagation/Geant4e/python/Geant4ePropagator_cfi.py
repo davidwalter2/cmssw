@@ -196,6 +196,19 @@ Geant4ePropagator = cms.ESProducer("GeantPropagatorESProducer",
                                    # not a second fixed point) and it is 14x
                                    # cheaper.
                                    CgfQoPRefresh=cms.int32(0),
+
+                                   # Shrinkage on the mode-3 re-centring.
+                                   # 1.0 = full size (what stage 7 built and
+                                   # what section 85 measured), 0 = none.
+                                   # Against gen truth the correction is
+                                   # anti-correlated with the residual --
+                                   # 2Cov/Var = -5.4e-3, the only thing in this
+                                   # programme that is -- while adding +6.8e-3
+                                   # of scatter, so at full size it is a wash.
+                                   # The variance-minimising value is
+                                   # -Cov/Var(delta) = 0.40, predicted to buy
+                                   # -1.1e-3 on the residual variance.
+                                   CgfRecentreDamping=cms.double(1.0),
                                    # MeV; 0 means "use e0".  A scan knob for the
                                    # exact-delta channel's lower bound, not a
                                    # tune -- nothing is fitted to it.
