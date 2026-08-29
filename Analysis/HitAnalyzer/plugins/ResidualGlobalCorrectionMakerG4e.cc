@@ -14,6 +14,7 @@
 #include <Eigen/Sparse>
 
 #include <iomanip>
+#include <limits>
 #include <iostream>
 
 #include "TRandom.h"
@@ -603,6 +604,7 @@ void ResidualGlobalCorrectionMakerG4e::beginStream(edm::StreamID streamid)
 
       tree->Branch("stripsToEdge", &stripsToEdge);
 
+      tree->Branch("simHitNCand", &simHitNCand);
       tree->Branch("hitDetId", &hitDetId);
       tree->Branch("hitUProj", &hitUProj);
       tree->Branch("hitPitch", &hitPitch);
@@ -1893,6 +1895,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         stripsToEdge.clear();
         stripsToEdge.reserve(nvalid);
 
+        simHitNCand.clear();
+        simHitNCand.reserve(nvalid);
         hitDetId.clear();
         hitDetId.reserve(nvalid);
         hitUProj.clear();
@@ -2141,23 +2145,37 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         const double dionival = dores ? corparms_[ioniglobalidx] : dxival;
         
         const PSimHit *simhit = nullptr;
+        int simhitNCandVal = 0;
+        std::vector<const PSimHit*> simhitCands;
         
         if (doSim_) {
+          // The track can leave MORE THAN ONE PSimHit on a module -- a curling
+          // low-momentum hadron, or a re-entry after a large-angle nuclear
+          // elastic scatter. Taking the first candidate produced a 0.126 %
+          // population of proton strip hits with |(rec-sim)/sigma| > 10 and a
+          // median |rec - sim| of 1.35 mm, which would be read as a hit
+          // resolution tail; the kaon gun shows 40x less of it, so it is
+          // proton kinematics and not a defect of the hit. The CHOICE among
+          // candidates is deferred to the point where the propagated local
+          // position exists (see the simhitCands re-selection below); the
+          // first candidate is kept here so the fitFromSimParms / simhitdebug
+          // paths behave exactly as before.
+          //
+          // Species from the CONFIGURED gen-match hypothesis, not a hardcoded
+          // muon. With |particleType|==13 the sim-hit machinery silently
+          // no-ops on the kaon/pion/proton guns: simhit stays null, so
+          // dxrecsim/dyrecsim are -99 and fitSimHitPositions quietly falls
+          // back to reco positions (usesimpos is && simhit != nullptr).
           for (auto const& simhith : simHits) {
             for (const PSimHit& simHit : *simhith) {
-              // Species from the CONFIGURED gen-match hypothesis, not a hardcoded
-              // muon. With |particleType|==13 the sim-hit machinery silently
-              // no-ops on the kaon/pion/proton guns: simhit stays null, so
-              // dxrecsim/dyrecsim are -99 and fitSimHitPositions quietly falls
-              // back to reco positions (usesimpos is && simhit != nullptr).
               if (simHit.detUnitId() == hit->geographicalId() && int(simHit.trackId()) == simtrackid && std::abs(simHit.particleType()) == genMatchPdgId_) {
-                simhit = &simHit;
-                break;
+                simhitCands.push_back(&simHit);
               }
             }
-            if (simhit != nullptr) {
-              break;
-            }
+          }
+          simhitNCandVal = int(simhitCands.size());
+          if (!simhitCands.empty()) {
+            simhit = simhitCands.front();
           }
         }
 
@@ -2466,6 +2484,23 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           updtsosalign = std::get<1>(propresultsalign);
           
           localparmsalignprop = globalToLocal(updtsosalign, surfacealign);
+        }
+
+        // Now that the PROPAGATED local position exists, choose among the
+        // candidate sim hits on this module the one closest to it. The
+        // tie-break is measurement-independent, so it cannot pull rec - sim
+        // toward zero the way breaking it on the reco position would.
+        if (simhitCands.size() > 1) {
+          double bestd2 = std::numeric_limits<double>::max();
+          for (const PSimHit *cand : simhitCands) {
+            const double dxp = cand->localPosition().x() - localparmsalignprop[3];
+            const double dyp = cand->localPosition().y() - localparmsalignprop[4];
+            const double d2 = dxp*dxp + dyp*dyp;
+            if (d2 < bestd2) {
+              bestd2 = d2;
+              simhit = cand;
+            }
+          }
         }
 
         //TODO optimize this without ternary functions
@@ -3129,6 +3164,19 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               }
             }
             
+            // Configurable multiplier on the ASSIGNED hit covariance. Applied
+            // here, where iV is finished and before anything reads it, so
+            // Vinvfull, the resolution dV blocks and the dxerr export are all
+            // consistent with one another. Defaults are 1.0 = no change.
+            // This is the dead `scalecov = ispixel ? 0.8 : 1.2` of the
+            // Vinvfullalt branch turned into something measurable.
+            {
+              const double covscale = ispixel ? hitCovScalePixel_ : hitCovScaleStrip_;
+              if (covscale != 1.0) {
+                iV *= covscale;
+              }
+            }
+
             rxfull.row(ivalidhit) = R.row(0).cast<float>();
             ryfull.row(ivalidhit) = R.row(1).cast<float>();
             
@@ -3471,6 +3519,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
                   dxrecsim.push_back(dxrecsimval);
                   dyrecsim.push_back(dyrecsimval);
+                  simHitNCand.push_back(simhitNCandVal);
 
 
                   
@@ -3566,6 +3615,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                   dysimgenlocal.push_back(-99.);
                   dxrecsim.push_back(-99.);
                   dyrecsim.push_back(-99.);
+                  simHitNCand.push_back(simhitNCandVal);
                   dE.push_back(-99.);
                   
                   simlocalqop.push_back(-99.);

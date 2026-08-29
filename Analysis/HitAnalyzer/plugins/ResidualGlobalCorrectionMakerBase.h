@@ -445,12 +445,19 @@ protected:
 
   std::vector<int> stripsToEdge;
 
+  // Multipliers on the assigned hit covariance (1.0 = the CPE value as-is).
+  double hitCovScalePixel_ = 1.0;
+  double hitCovScaleStrip_ = 1.0;
+
   // Hit-resolution study exports (per valid hit, filled on iteration 0
   // alongside dxerr/dxrecsim). hitUProj is the CPE's OWN independent
   // variable -- the track path across the sensor projected onto the
   // measurement direction, in strip-pitch units, INCLUDING the Lorentz
   // drift -- so a pull binned in it is binned in the parametrisation being
   // tested rather than in a proxy. -99 for pixels.
+  // Number of PSimHits on this module belonging to the fitted sim track. > 1
+  // means the closest-to-the-propagated-state tie-break above actually chose.
+  std::vector<int> simHitNCand;
   std::vector<unsigned int> hitDetId;
   std::vector<float> hitUProj;
   std::vector<float> hitPitch;

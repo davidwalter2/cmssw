@@ -144,6 +144,15 @@ opts.register('pixelMinSizeY', 1, VarParsing.VarParsing.multiplicity.singleton,
               'sizeX==1 which means the expected Lorentz sharing failed. '
               'Set to 2 only as an A/B DIAGNOSTIC -- it removes 12.6% of BPix '
               'and 34.6% of FPix hits, concentrated at central eta.')
+opts.register('hitCovScalePixel', 1.0, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'multiplier on the assigned PIXEL hit covariance (1.0 = the CPE '
+              'value as-is). Turns the dead scalecov=0.8 hypothesis into a '
+              'measurable configuration.')
+opts.register('hitCovScaleStrip', 1.0, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'multiplier on the assigned STRIP hit covariance (1.0 = as-is; '
+              'the dead hypothesis was 1.2)')
 opts.register('corFile', '', VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string,
               'optional correction file (parmtree/x) applied via corparms_, '
@@ -331,6 +340,8 @@ process.globalCor = cms.EDProducer(
     pixelMinSizeY=cms.int32(int(opts.pixelMinSizeY)),
     corFiles=cms.vstring(*( [opts.corFile] if opts.corFile else [] )),
     triggers=cms.vstring(),
+    hitCovScalePixel=cms.double(float(opts.hitCovScalePixel)),
+    hitCovScaleStrip=cms.double(float(opts.hitCovScaleStrip)),
     trackParticleName=cms.string(opts.particle),
     genMatchPdgId=cms.int32(_pcfg['pdg']),
     MagneticFieldLabel=cms.string(""),

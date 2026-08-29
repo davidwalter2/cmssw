@@ -181,6 +181,10 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   fitSimHitPositions_ = iConfig.getUntrackedParameter<bool>("fitSimHitPositions", false);
   bsConstraint_ = iConfig.getParameter<bool>("bsConstraint");
   applyHitQuality_ = iConfig.getParameter<bool>("applyHitQuality");
+  hitCovScalePixel_ = iConfig.existsAs<double>("hitCovScalePixel")
+      ? iConfig.getParameter<double>("hitCovScalePixel") : 1.0;
+  hitCovScaleStrip_ = iConfig.existsAs<double>("hitCovScaleStrip")
+      ? iConfig.getParameter<double>("hitCovScaleStrip") : 1.0;
   genMatchPdgId_ = iConfig.existsAs<int>("genMatchPdgId")
       ? iConfig.getParameter<int>("genMatchPdgId") : 13;
   // Relative pT window of the gen match (|pt_gen - pt_reco| < window * pt_gen).
