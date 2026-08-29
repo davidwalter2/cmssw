@@ -21,6 +21,15 @@
 #include "Geometry/CommonTopologies/interface/TrapezoidalStripTopology.h"
 #include "Geometry/CommonTopologies/interface/PixelTopology.h"
 
+// Hit-resolution study: the strip CPE is queried DIRECTLY (in addition to
+// going through the cloner) so its own independent variable -- the
+// drift-included projected path in strip-pitch units -- can be exported per
+// hit. Reconstructing it offline would need the per-module Lorentz drift.
+#include "RecoLocalTracker/SiStripRecHitConverter/interface/StripCPE.h"
+#include "RecoLocalTracker/Records/interface/TkStripCPERecord.h"
+#include "RecoLocalTracker/ClusterParameterEstimator/interface/StripClusterParameterEstimator.h"
+#include "Geometry/TrackerGeometryBuilder/interface/StripGeomDetUnit.h"
+
 
 
 class ResidualGlobalCorrectionMakerG4e : public ResidualGlobalCorrectionMakerBase
@@ -108,6 +117,7 @@ private:
 
   edm::ESGetToken<TransientTrackingRecHitBuilder, TransientRecHitRecord> ttrhToken_;
   edm::ESGetToken<Propagator, TrackingComponentsRecord> g4ePropToken_;
+  edm::ESGetToken<StripClusterParameterEstimator, TkStripCPERecord> stripCPEToken_;
 
   SiStripClusterInfo siStripClusterInfo_;
 
@@ -322,6 +332,7 @@ ResidualGlobalCorrectionMakerG4e::ResidualGlobalCorrectionMakerG4e(const edm::Pa
     : ResidualGlobalCorrectionMakerBase(iConfig),
       ttrhToken_(esConsumes(edm::ESInputTag("", "WithAngleAndTemplate"))),
       g4ePropToken_(esConsumes(edm::ESInputTag("", "Geant4ePropagator"))),
+      stripCPEToken_(esConsumes(edm::ESInputTag("", "StripCPEfromTrackAngle"))),
       siStripClusterInfo_(consumesCollector())
 {
 
@@ -591,6 +602,11 @@ void ResidualGlobalCorrectionMakerG4e::beginStream(edm::StreamID streamid)
       tree->Branch("clusterSN", &clusterSN);
 
       tree->Branch("stripsToEdge", &stripsToEdge);
+
+      tree->Branch("hitDetId", &hitDetId);
+      tree->Branch("hitUProj", &hitUProj);
+      tree->Branch("hitPitch", &hitPitch);
+      tree->Branch("hitThickness", &hitThickness);
       
       tree->Branch("dxreccluster", &dxreccluster);
       tree->Branch("dyreccluster", &dyreccluster);
@@ -779,6 +795,14 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   }
   
   TkClonerImpl const& cloner = static_cast<TkTransientTrackingRecHitBuilder const *>(ttrh.product())->cloner();
+
+  // Same StripCPEfromTrackAngle instance the cloner uses (single ES
+  // product for the label), queried only for its AlgoParam so the
+  // hit-resolution export can record the CPE's own uProj.
+  const StripCPE *stripCPEForExport = nullptr;
+  if (fillTrackTree_ && fitFromGenParms_) {
+    stripCPEForExport = dynamic_cast<const StripCPE*>(iSetup.getHandle(stripCPEToken_).product());
+  }
 
   run = iEvent.run();
   lumi = iEvent.luminosityBlock();
@@ -1869,6 +1893,15 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         stripsToEdge.clear();
         stripsToEdge.reserve(nvalid);
 
+        hitDetId.clear();
+        hitDetId.reserve(nvalid);
+        hitUProj.clear();
+        hitUProj.reserve(nvalid);
+        hitPitch.clear();
+        hitPitch.reserve(nvalid);
+        hitThickness.clear();
+        hitThickness.reserve(nvalid);
+
       }      
       
       rfull = VectorXd::Zero(ncons);
@@ -2112,7 +2145,12 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         if (doSim_) {
           for (auto const& simhith : simHits) {
             for (const PSimHit& simHit : *simhith) {
-              if (simHit.detUnitId() == hit->geographicalId() && int(simHit.trackId()) == simtrackid && std::abs(simHit.particleType()) == 13) {
+              // Species from the CONFIGURED gen-match hypothesis, not a hardcoded
+              // muon. With |particleType|==13 the sim-hit machinery silently
+              // no-ops on the kaon/pion/proton guns: simhit stays null, so
+              // dxrecsim/dyrecsim are -99 and fitSimHitPositions quietly falls
+              // back to reco positions (usesimpos is && simhit != nullptr).
+              if (simHit.detUnitId() == hit->geographicalId() && int(simHit.trackId()) == simtrackid && std::abs(simHit.particleType()) == genMatchPdgId_) {
                 simhit = &simHit;
                 break;
               }
@@ -3325,6 +3363,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
               const TrackerSingleRecHit* tkhit = dynamic_cast<const TrackerSingleRecHit*>(preciseHit.get());
               assert(tkhit != nullptr);
+
+              hitDetId.push_back(preciseHit->geographicalId().rawId());
+              hitThickness.push_back(tkhit->det()->surface().bounds().thickness());
               
               if (ispixel) {
                 const SiPixelCluster& cluster = *tkhit->cluster_pixel();
@@ -3346,6 +3387,14 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                 
                 clusterSN.push_back(-99.);
                 stripsToEdge.push_back(-99);
+
+                // uProj is a STRIP CPE concept; the pixel template is
+                // indexed by (angle, qbin) instead, and those are already
+                // exported as localdxdz/localdydz and clusterChargeBin.
+                hitUProj.push_back(-99.f);
+                const PixelTopology *pixtopology =
+                    dynamic_cast<const PixelTopology*>(&(tkhit->det()->topology()));
+                hitPitch.push_back(pixtopology != nullptr ? pixtopology->pitch().first : -99.f);
               }
               else {
                 const StripTopology* striptopology = dynamic_cast<const StripTopology*>(&(tkhit->det()->topology()));
@@ -3364,6 +3413,19 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                 const uint16_t firstStrip = cluster.firstStrip();
                 const uint16_t lastStrip = cluster.firstStrip() + cluster.amplitudes().size() - 1;
                 stripsToEdge.push_back(std::min<int>(firstStrip, striptopology->nstrips() - 1 - lastStrip));
+
+                // The CPE's own independent variable. getAlgoParam is given
+                // the SAME LocalTrajectoryParameters the cloner passed, so
+                // this is the uProj that produced localPositionError() above,
+                // not a reconstruction of it.
+                float uProjVal = -99.f;
+                const StripGeomDetUnit *stripdu =
+                    dynamic_cast<const StripGeomDetUnit*>(tkhit->det());
+                if (stripCPEForExport != nullptr && stripdu != nullptr) {
+                  uProjVal = stripCPEForExport->getAlgoParam(*stripdu, locparm).afullProjection;
+                }
+                hitUProj.push_back(uProjVal);
+                hitPitch.push_back(striptopology->localPitch(preciseHit->localPosition()));
               }
               
   // if (ispixel) {

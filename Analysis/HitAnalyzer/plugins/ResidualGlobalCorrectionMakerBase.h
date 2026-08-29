@@ -444,6 +444,17 @@ protected:
   std::vector<int> clusterCharge;
 
   std::vector<int> stripsToEdge;
+
+  // Hit-resolution study exports (per valid hit, filled on iteration 0
+  // alongside dxerr/dxrecsim). hitUProj is the CPE's OWN independent
+  // variable -- the track path across the sensor projected onto the
+  // measurement direction, in strip-pitch units, INCLUDING the Lorentz
+  // drift -- so a pull binned in it is binned in the parametrisation being
+  // tested rather than in a proxy. -99 for pixels.
+  std::vector<unsigned int> hitDetId;
+  std::vector<float> hitUProj;
+  std::vector<float> hitPitch;
+  std::vector<float> hitThickness;
   
   std::vector<int> clusterChargeBin;
   std::vector<int> clusterOnEdge;
