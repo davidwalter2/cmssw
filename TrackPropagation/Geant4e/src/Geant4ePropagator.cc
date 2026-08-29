@@ -94,11 +94,13 @@ Geant4ePropagator::Geant4ePropagator(const MagneticField *field,
                                      PropagationDirection dir,
                                      double plimit,
                                      bool forCVH,
+                                     double ioniTruncAlpha,
                                      double stepLengthLimit)
     : Propagator(dir),
       theField(field),
       theParticleName(particleName),
       plimit_(plimit),
+      ioniTruncAlpha_(ioniTruncAlpha),
       forCVH_(forCVH),
       stepLengthLimit_(stepLengthLimit) {
   LogDebug("Geant4e") << "Geant4e Propagator initialized";
@@ -131,6 +133,7 @@ Geant4ePropagator::Geant4ePropagator(const Geant4ePropagator &other)
       theField(other.theField),
       theParticleName(other.theParticleName),
       plimit_(other.plimit_),
+      ioniTruncAlpha_(other.ioniTruncAlpha_),
       forCVH_(other.forCVH_),
       stepLengthLimit_(other.stepLengthLimit_),
       ioniStepLogging_(other.ioniStepLogging_),
@@ -438,6 +441,7 @@ std::pair<TrajectoryStateOnSurface, double> Geant4ePropagator::propagateGeneric(
     const G4ParticleDefinition *partdef =
         G4ParticleTable::GetParticleTable()->FindParticle(generateParticleName(1));
     fluct->SetParticleAndCharge(partdef, 1.);
+    fluct->SetIoniTruncationAlpha(ioniTruncAlpha_);
   }
   auto *theG4eManager = G4ErrorPropagatorManager::GetErrorPropagatorManager();
   auto *theG4eData = G4ErrorPropagatorData::GetErrorPropagatorData();
@@ -807,6 +811,7 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
     const G4ParticleDefinition *partdef =
         G4ParticleTable::GetParticleTable()->FindParticle(generateParticleName(1));
     fluct->SetParticleAndCharge(partdef, 1.);
+    fluct->SetIoniTruncationAlpha(ioniTruncAlpha_);
   }
   auto *theG4eManager = G4ErrorPropagatorManager::GetErrorPropagatorManager();
   auto *theG4eData = G4ErrorPropagatorData::GetErrorPropagatorData();

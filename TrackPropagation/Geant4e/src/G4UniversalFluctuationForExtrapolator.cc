@@ -126,22 +126,112 @@ bool G4UniversalFluctuationForExtrapolator::exactDeltaEnabled() {
 
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
 //
-// THE KOKOULIN VARIANCE INTEGRAL WAS HERE and went with the truncation
-// (2026-08-24). It integrated (f_K - 1) over the ALPHA-TRUNCATED range to
-// correct the variance this class returned. The variance is the record's own
-// cumulant now, and `cvhcgf::kokoulinKappa2` does the same integral over the
-// FULL range as part of it -- one formula, and it is the one the block CGF
-// uses too. `cvhcgf::kokoulinFactor` carries f_K itself.
+// KOKOULIN RADIATIVE CORRECTION TO THE KNOCK-ON SPECTRUM -- variance only.
+//
+// The switch itself lives in cvhcgf::ioniKokoulinEnabled() -- ONE reader,
+// shared with the offline consumer through the environment variable name, so
+// the two cannot be turned on separately (see the long comment there).
+//
+// WHAT IS CORRECTED AND WHAT IS NOT.
+//
+//  * The MEAN is already right and must not move. G4MuIonisation's dE/dx table
+//    -- which is what `meanLoss` above is read from, and what the reference
+//    trajectory integrates -- already contains this correction (Geant4's own
+//    CrossSectionPerVolume reproduces the Kokoulin-weighted rate to 5
+//    significant digits, NOTES_SAMPLERGAP section 2b). So NOTHING here touches
+//    meanLoss, the a1/a2 rescale `fexc`, or the recorded channel weights.
+//  * The FLUCTUATION is not. The exact-delta channel is the tree-level PDG
+//    spectrum, so the second moment this function returns -- i.e. the track
+//    fit's Q(0,0) -- is short by the Kokoulin weight of the hard end.
+//    That is the whole of what is added below.
+//
+// CONSEQUENCE FOR THE RECORD. Every recorded field except `gsig2` is
+// untouched: a1, e1, a2, e2, a3 (= xi), e0r, tmaxr, scaling, beta2, etot are
+// bit-identical with the switch on. `gsig2` IS the returned variance by
+// definition, so it moves -- and it must, since it is the number the fit
+// consumes. The offline model needs no new column: f_K depends only on T and
+// E, both already in the stride-13 record.
+//
+// THE TRUNCATION CONVENTION IS DELIBERATELY LEFT ALONE. `ta` (the alpha =
+// 0.999 quantile) is derived from the TREE-LEVEL collision count n0. Folding
+// f_K into n0 as well would move ta by ~0.06 % (the measured rate change,
+// 7.61885 -> 7.62353 at pT = 3), i.e. three orders of magnitude below the
+// variance change itself, at the cost of making a convention change and a
+// physics change at the same time. Same reasoning as the exact-delta branch's
+// term-for-term mirroring of the 1/E^2 truncation.
+//
+// WHY MUONS ONLY. Geant4 applies this in G4MuBetheBlochModel, which
+// G4MuIonisation uses above lowestKinEnergy = 1 GeV; G4BetheBlochModel (used
+// for hadrons, and for muons below 1 GeV) has no radiative correction. Both
+// conditions are mirrored rather than approximated, so a 3 GeV kaon's regime-3
+// record is untouched by design.
+namespace {
+  constexpr double kKokAlphaPrime = 1.0 / (2.0 * 3.14159265358979323846 * 137.035999084);
+  constexpr double kKokTMin = 0.1;      // G4MuBetheBlochModel::limitKinEnergy, MeV
+  constexpr double kKokMuMin = 1000.0;  // G4MuBetheBlochModel::lowestKinEnergy, MeV
+
+  // f_K(T) - 1. `etot` and `mass` are PHYSICAL (MeV); so is T.
+  //
+  // The lower guard is STRICT (`<`, not `<=`) and that is not cosmetic. f_K - 1
+  // is DISCONTINUOUS at 100 keV -- it jumps from 0 to ~3e-3 -- and the
+  // quadrature below starts exactly there whenever the channel's own bottom is
+  // lower. Returning 0 at the endpoint puts the jump inside the rule instead of
+  // on its boundary, which degrades Simpson from O(h^4) to O(h): measured, the
+  // nbin 48/96/192/384 scan converged as 1/nbin at the 1e-6 level instead of
+  // saturating. Taking the RIGHT limit at the endpoint makes the integrand
+  // continuous on the interval and restores the order.
+  inline double kokoulinExcess(double T, double etot, double mass) {
+    if (T < kKokTMin || T >= etot - mass) {
+      return 0.;
+    }
+    const double a1 = std::log(1. + 2. * T / CLHEP::electron_mass_c2);
+    const double a3 = std::log(4. * etot * (etot - T) / (mass * mass));
+    return kKokAlphaPrime * a1 * (a3 - a1);
+  }
+
+  // INT_{max(t0, 100 keV/escale)}^{t1} (f_K - 1) [1 - beta2 T/tmax (+ T^2/2E^2)] dT
+  //
+  // i.e. exactly the integrand of the exact-delta branch's `i2` reweighted by
+  // the radiative correction, in the SAME (pre-`scaling`) energy variable the
+  // branch works in. f_K is evaluated at the CONSUMER's energy `escale * T`,
+  // which is what the offline model does with its own `gam = scaling` column;
+  // for the momenta in play scaling - 1 < 1e-6, so this is bookkeeping rather
+  // than physics, but it is bookkeeping that has to match on both sides.
+  //
+  // Composite Simpson in ln T. The integrand is analytic and slowly varying in
+  // ln T (f_K - 1 is nearly linear in it), so the default 96 intervals are far
+  // past converged; the interval count is exposed so that is measurable.
+  double kokoulinVarIntegral(
+      double t0, double t1, double tmax, double beta2, double etot, double mass, bool spinHalf, double escale) {
+    const double lo = std::max(t0, kKokTMin / escale);
+    if (!(t1 > lo) || !(tmax > 0.)) {
+      return 0.;
+    }
+    const int nb = cvhcgf::ioniKokoulinNbin();
+    const double du = std::log(t1 / lo) / nb;
+    const double inv2E2 = spinHalf ? 1. / (2. * etot * etot) : 0.;
+    double acc = 0.;
+    for (int i = 0; i <= nb; ++i) {
+      const double T = lo * std::exp(i * du);
+      const double w = 1. - beta2 * T / tmax + inv2E2 * T * T;
+      // dT = T du
+      const double f = kokoulinExcess(escale * T, etot, mass) * w * T;
+      const double c = (i == 0 || i == nb) ? 1. : ((i % 2) ? 4. : 2.);
+      acc += c * f;
+    }
+    return acc * du / 3.;
+  }
+}  // namespace
 
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
 
 cvhcgf::IoniStep G4UniversalFluctuationForExtrapolator::toIoniStep(const UrbanFluctRecord& rec, int kokNbin) {
   // ONE mapping from the record to a block step, shared by this class (for the
-  // variance it returns) and by Geant4ePropagator (for the block CGF). Two
-  // copies is how the two would come to disagree about whether `a3` is a count
-  // or an energy, or whether `scaling` has been applied -- both silent, both
-  // ~1e-5. `gs` stays 1: the caller supplies the transport weight and the
-  // standardization.
+  // variance it returns in the CGF configuration) and by Geant4ePropagator
+  // (for the block CGF). Two copies is how the two would come to disagree
+  // about whether `a3` is a count or an energy, or whether `scaling` has been
+  // applied -- both silent, both ~1e-5. `gs` stays 1: the caller supplies the
+  // transport weight and the standardization.
   const double gam = rec.scaling;
   cvhcgf::IoniStep s;
   s.regime = rec.regime;
@@ -716,21 +806,104 @@ G4double G4UniversalFluctuationForExtrapolator::SampleFluctuations(
   }
   // ------------------------------------------------------------------------
 
-  // EVERYTHING THAT USED TO BE HERE IS GONE (2026-08-24), WITH THE TRUNCATION.
-  //
-  // This entry point returns a VARIANCE and nothing else: `SampleFluctuations2`
-  // keeps its own copy of the Urban logic for the sampling path, and the mean
-  // computed here was never read. The variance is now the recorded model's own
-  // second cumulant, formed once at the return statement, so the accumulation
-  // that used to stand here -- `AddExcitation` into emean/sig2e, `SampleGauss`,
-  // and the two ALPHA-TRUNCATED ionization branches (the 1/E^2 channel's
-  // `ualpha` split and the exact channel's `ta` quantile, plus its Kokoulin
-  // integral over the truncated range) -- computes a number nothing reads.
-  //
-  // Deleting it is not a tidy-up. It removes the SECOND formula for this
-  // block's variance, and the thing that used to reconcile the two formulas
-  // was the truncation quantile itself.
+  //'nearly' Gaussian fluctuation if a1>nmaxCont&&a2>nmaxCont&&a3>nmaxCont
+  G4double emean = 0.;
+  G4double sig2e = 0.;
+  G4double esig2tot = 0.;
 
+  // excitation of type 1
+  if (a1 > 0.0) {
+    AddExcitation(a1, e1, emean, loss, sig2e, esig2tot);
+  }
+
+  // excitation of type 2
+  if (a2 > 0.0) {
+    AddExcitation(a2, e2, emean, loss, sig2e, esig2tot);
+  }
+
+  if (sig2e > 0.0) {
+    SampleGauss(emean, sig2e, loss, esig2tot);
+  }
+
+  // ionisation
+  if (useExact) {
+    // Exact spin-1/2 knock-on channel.  The alpha-truncation CONVENTION is
+    // mirrored from the 1/E^2 branch below, term for term, so that the change
+    // in the returned variance is the physics change and not a change of
+    // convention:
+    //
+    //   * the 1/E^2 branch splits the channel at w2 = alfa e0, chosen so the
+    //     number of collisions ABOVE w2 is p3 = nmaxCont a3/(nmaxCont + a3)
+    //     (an identity, for any w1); below w2 it takes the exact variance,
+    //     above w2 it truncates at the alpha-quantile OF THAT SUB-SPECTRUM,
+    //     i.e. at the T where N(>T) = (1-alpha) p3;
+    //   * here the same two limits are used, and since
+    //     int_a^b T^2 dN/dT dT is additive the two pieces collapse to a single
+    //     integral from t0 to T_alpha.
+    //
+    // N(>T) = xi/T to O(T/tmax), so T_alpha = 1/((1-alpha) p3/xi + 1/tmax).
+    // NOTE the consequence, which is a property of the convention and not of
+    // this change: T_alpha is proportional to xi, so the TRUNCATED variance
+    // goes as xi^2 and grows by (xi/a3C)^2 ~ 1.65, not by 1.28.  The offline
+    // closure never sees this (it is normalized by the Fisher scale of the
+    // untruncated CF, which carries no alpha), but the track fit's Q does.
+    const G4double etot = ekin + particleMass;
+    G4double i0 = (1. / t0Ex - 1. / tmax) - beta2 * G4Log(tmax / t0Ex) / tmax;
+    if (spinHalf) {
+      i0 += (tmax - t0Ex) / (2. * etot * etot);
+    }
+    const G4double n0 = xiEx * i0;
+    const G4double p3 = (n0 > nmaxCont) ? nmaxCont * n0 / (nmaxCont + n0) : n0;
+    G4double ta = 1.0 / ((1. - ioniTruncAlpha_) * p3 / xiEx + 1. / tmax);
+    if (ta > tmax) {
+      ta = tmax;
+    }
+    G4double i2 = (ta - t0Ex) - beta2 * (ta * ta - t0Ex * t0Ex) / (2. * tmax);
+    G4double i1t = G4Log(ta / t0Ex) - beta2 * (ta - t0Ex) / tmax;
+    if (spinHalf) {
+      i2 += (ta * ta * ta - t0Ex * t0Ex * t0Ex) / (6. * etot * etot);
+      i1t += (ta * ta - t0Ex * t0Ex) / (4. * etot * etot);
+    }
+    loss += xiEx * i1t;
+    esig2tot += xiEx * i2;
+    // Geant4's Kokoulin radiative correction to the SAME channel. Variance
+    // only -- see the block comment above kokoulinVarIntegral. Muons above
+    // 1 GeV only, which is where G4MuIonisation selects G4MuBetheBlochModel.
+    if (kokoulinOn && ekin > kKokMuMin && particle != nullptr && std::abs(particle->GetPDGEncoding()) == 13) {
+      esig2tot += xiEx * kokoulinVarIntegral(t0Ex, ta, tmax, beta2, etot, particleMass, spinHalf, scaling);
+    }
+  } else if (a3 > 0.) {
+    emean = 0.;
+    sig2e = 0.;
+    G4double p3 = a3;
+    G4double alfa = 1.;
+    if (a3 > nmaxCont) {
+      alfa = w1 * (nmaxCont + a3) / (w1 * nmaxCont + a3);
+      G4double alfa1 = alfa * G4Log(alfa) / (alfa - 1.);
+      G4double namean = a3 * w1 * (alfa - 1.) / ((w1 - 1.) * alfa);
+      emean += namean * e0 * alfa1;
+      sig2e += e0 * e0 * namean * (alfa - alfa1 * alfa1);
+      p3 = a3 - namean;
+    }
+
+    G4double w2 = alfa * e0;
+    if (tmax > w2) {
+      G4double w = (tmax - w2) / tmax;
+      const double ualpha = ioniTruncAlpha_;
+      const double f = -std::log(1. - ualpha * w) * w2 / w;
+      const double f2 = ualpha * w2 * w2 / (1. - ualpha * w);
+      const double sigf2 = f2 - f * f;
+
+      loss += p3 * f;
+      esig2tot += f * f * p3 + p3 * sigf2;
+    }
+    if (sig2e > 0.0) {
+      SampleGauss(emean, sig2e, loss, esig2tot);
+    }
+  }
+
+  loss *= scaling;
+  esig2tot *= scaling * scaling;
 
   // record the underlying (untruncated) Urban model of this step: Poisson
   // excitations (a1,e1), (a2,e2) plus a3 delta collisions on the 1/E^2
@@ -743,9 +916,10 @@ G4double G4UniversalFluctuationForExtrapolator::SampleFluctuations(
   // the offline CF fit uses it to reproduce the exact standardization the
   // track fit applied, so sigma-replica errors cannot leak into the fitted
   // material scale.
-  // Filled from the cumulant just below: this is the column an offline
-  // consumer uses to reproduce the variance the fit saw, so it must BE that
-  // variance.
+  // `gsig2` IS the variance this function returns, whichever that is. An
+  // offline consumer uses this column to reproduce the variance the fit saw,
+  // so the two may not diverge -- it is set below, once, from the value
+  // actually returned.
   record_.gsig2 = 0.;
   record_.a1 = a1;
   record_.e1 = e1;
@@ -766,25 +940,36 @@ G4double G4UniversalFluctuationForExtrapolator::SampleFluctuations(
   record_.etot = ekin + particleMass;
   recordValid_ = true;
 
-  // THE RETURNED VARIANCE IS THE RECORD'S OWN SECOND CUMULANT.
+  // WHICH VARIANCE THIS RETURNS IS THE FIT'S OWN CHOICE OF WEIGHT.
   //
-  // There used to be two formulas for this block's variance -- the truncated
-  // integral built above, and `cvhcgf::blockKappa2`, which is what the fit
-  // normalizes the block CGF by -- and an alpha to reconcile them. Now there
-  // is one, it is untruncated, and the two cannot disagree.
+  //   CgfQoPMode == 0 -- the LEGACY Gaussian weight. The delta channel's second
+  //     moment does not converge, so a Gaussian weight needs a cut and
+  //     `IoniTruncationAlpha` is it: the alpha-quantile machinery above runs
+  //     and its truncated integral is returned, exactly as it did before
+  //     9a7c692. This is a convention, and scanning it moves the fitted q/p by
+  //     rms 1.2e-5 (NOTES_CGFFIT s51) -- but it is the configuration the fit
+  //     was built and validated on, and it is ~6x cheaper than the CGF on MC
+  //     (s77), which is why it is an option again rather than deleted.
+  //
+  //   CgfQoPMode >= 1 -- the Fisher weight. `Q(0,0)` is replaced by the block's
+  //     inverse Fisher information downstream, so the number returned here is
+  //     only the SHAPE carrier for the substitution, and the right object is
+  //     the record's own untruncated second cumulant. There is then exactly one
+  //     formula for it, `cvhcgf::blockKappa2`, and no alpha anywhere.
+  //
+  // The two are tied to ONE switch on purpose: a truncated variance under a
+  // Fisher weight, or an untruncated one under a Gaussian weight, are both
+  // silently wrong, and neither would fail.
   //
   // The Kokoulin excess uses the FLUCTUATION model's bucket count
-  // (`ioniKokoulinNbin`, default 96), not the block CF's: this is a
-  // once-per-step closed-form quadrature and there is nothing to economize.
-  //
-  // IT IS NOT A GOOD GAUSSIAN WEIGHT and is not meant to be: for a 1/E^2
-  // spectrum the second moment is dominated by the hard edge. That is exactly
-  // why the fit's weight is the block's Fisher information (CgfQoPMode = 1,
-  // the default) and why mode 0 is a diagnostic limit rather than a
-  // configuration.
-  const G4double k2 = blockKappa2Of(record_, cvhcgf::ioniKokoulinEnabled() ? cvhcgf::ioniKokoulinNbin() : 0);
-  record_.gsig2 = k2;
-  return k2;
+  // (`ioniKokoulinNbin`, default 96) in both branches: it is a once-per-step
+  // closed-form quadrature and there is nothing to economize.
+  const G4double var =
+      (cvhcgf::cgfQoPMode() == 0)
+          ? esig2tot
+          : blockKappa2Of(record_, cvhcgf::ioniKokoulinEnabled() ? cvhcgf::ioniKokoulinNbin() : 0);
+  record_.gsig2 = var;
+  return var;
 }
 
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......

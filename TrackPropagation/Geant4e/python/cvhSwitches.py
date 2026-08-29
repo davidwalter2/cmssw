@@ -58,6 +58,8 @@ FLOATS_POS_EXTRA = ()
 FLOATS_POS = (
     "DedxScale",
     "CgfRecentreDamping",
+    # Only read when CgfQoPMode=0 (legacy truncated-Q refit); inert otherwise.
+    "IoniTruncationAlpha",
 )
 
 

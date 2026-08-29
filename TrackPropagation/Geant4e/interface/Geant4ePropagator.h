@@ -41,6 +41,7 @@ public:
                     PropagationDirection dir = alongMomentum,
                     double plimit = 1.0,
                     bool forCVH = false,
+                    double ioniTruncAlpha = 0.999,
                     double stepLengthLimit = 10.0);   // mm
 
   ~Geant4ePropagator() override;
@@ -434,6 +435,11 @@ private:
   // methods). Allocating in the ctors aborted on MT worker threads where
   // the G4 navigator's world had not yet been set up by CvhWorker.
   mutable G4UniversalFluctuationForExtrapolator *fluct = nullptr;
+  // The delta-ray truncation quantile, used ONLY when `CgfQoPMode == 0`
+  // selects the legacy Gaussian weight (see the return of
+  // G4UniversalFluctuationForExtrapolator::SampleFluctuations). Inert under
+  // the Fisher weight, which needs no cut.
+  double ioniTruncAlpha_ = 0.999;
   bool forCVH_ = false;
 
   // Maximum Geant4e step, applied via "/geant4e/limits/stepLength" [mm].

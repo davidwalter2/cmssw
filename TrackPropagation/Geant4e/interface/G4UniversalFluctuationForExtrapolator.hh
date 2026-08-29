@@ -118,6 +118,12 @@ public:
     double scaling = 1.;
     double beta2 = 0., etot = 0.;   // regime 2/3 only; physical, unscaled
   };
+  // The alpha quantile at which the delta-ray spectrum is truncated when this
+  // class forms a VARIANCE. Only reached with `CgfQoPMode == 0`, the legacy
+  // Gaussian weight -- the Fisher weight needs no cut and the setter is inert
+  // for it.
+  void SetIoniTruncationAlpha(double a) { ioniTruncAlpha_ = a; }
+
   const UrbanFluctRecord& lastRecord() const { return record_; }
 
   // The record as a block step (gs = 1, energies scaled): the SINGLE mapping,
@@ -196,6 +202,7 @@ protected:
 
   // last-call Urban record (see lastRecord())
   UrbanFluctRecord record_;
+  G4double ioniTruncAlpha_ = 0.999;
   G4bool recordValid_ = false;
 
   // particle properties

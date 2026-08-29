@@ -20,21 +20,20 @@ Geant4ePropagator = cms.ESProducer("GeantPropagatorESProducer",
                                    PropagationPtotLimit = cms.double(1.0), ## GeV/c
                                    MagneticFieldLabel = cms.string(""),
                                    ForCVH=cms.bool(False),
-                                   # `IoniTruncationAlpha` WAS HERE and is gone
-                                   # (2026-08-24).  It was the CDF fraction of
-                                   # the delta-electron spectrum kept when the
-                                   # ionization variance was formed -- a
-                                   # convention that existed only because a
-                                   # Gaussian weight needs a second moment and
-                                   # the Urban delta channel's does not
-                                   # converge.  With CgfQoPMode = 1 the weight
-                                   # is the block's Fisher information, which
-                                   # needs no cut, and the variance this class
-                                   # still returns is the untruncated second
-                                   # cumulant of the recorded model.  Scanning
-                                   # the old knob moved the fitted q/p by
-                                   # rms 1.2e-5 -- the Z-mass target itself --
-                                   # and there is now nothing to scan.
+                                   # The CDF fraction of the delta-electron
+                                   # spectrum kept when the ionization variance
+                                   # is formed.  This is a convention, and it
+                                   # exists only because a Gaussian weight needs
+                                   # a second moment while the Urban delta
+                                   # channel's does not converge.  It is read
+                                   # ONLY under `CgfQoPMode = 0` (the legacy
+                                   # truncated-Q refit); under the default
+                                   # Fisher weight the cut has no meaning and
+                                   # this value is never used.  For the record:
+                                   # scanning it under the legacy weight moves
+                                   # the fitted q/p by rms 1.2e-5, i.e. the
+                                   # Z-mass target itself.
+                                   IoniTruncationAlpha=cms.double(0.999),
 
                                    # The CVH energy-loss corrections.  These
                                    # were CVH_* ENVIRONMENT VARIABLES until
@@ -158,13 +157,23 @@ Geant4ePropagator = cms.ESProducer("GeantPropagatorESProducer",
 
                                    # THE PROCESS-NOISE WEIGHT FOR q/p.
                                    #
-                                   #   0 = the legacy Gaussian weight.  Since
-                                   #       the ionization truncation was
-                                   #       deleted this is the UNTRUNCATED
-                                   #       variance, which is dominated by the
-                                   #       rare hard delta ray and is a poor
-                                   #       weight -- mode 0 is a diagnostic
-                                   #       limit, not a fit configuration.
+                                   #   0 = THE LEGACY CVH REFIT.  The Gaussian
+                                   #       weight on the delta-truncated
+                                   #       variance, with `IoniTruncationAlpha`
+                                   #       live -- i.e. the estimator this fit
+                                   #       was built and validated on, restored
+                                   #       bit for bit (verified: 95/95 branches
+                                   #       identical to a build at 663639e, the
+                                   #       commit before the CGF default).  It
+                                   #       is a supported configuration and not
+                                   #       merely a diagnostic limit: it carries
+                                   #       an unphysical convention the Fisher
+                                   #       weight does not, but it costs
+                                   #       114 ms/track against the CGF's
+                                   #       1562 ms/track -- a factor 13.7 --
+                                   #       and the CGF has NO measured accuracy
+                                   #       advantage over it against gen truth
+                                   #       (NOTES_CGFFIT s88, s89).
                                    #   1 = the FISHER INFORMATION of the block,
                                    #       by exact inversion of its
                                    #       characteristic function.  THE
