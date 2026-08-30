@@ -191,6 +191,14 @@ opts.register('skipHitlessSurfaces', True, VarParsing.VarParsing.multiplicity.si
               VarParsing.VarParsing.varType.bool,
               'drop hitless module surfaces from the fit (default True; '
               'effective only with globalMaterialModel=True)')
+# The CVH energy-loss / process-noise switches, so this driver can select the
+# ESTIMATOR as well as the sample. Without this hook the closure campaigns
+# could only ever run the cfi default -- which since 9a7c692 is the CGF Fisher
+# weight, making the legacy truncated-Q refit (CgfQoPMode=0) unreachable from
+# the one driver every resolution study uses.
+import TrackPropagation.Geant4e.cvhSwitches as cvhSwitches
+cvhSwitches.register(opts)
+
 opts.parseArguments()
 if not opts.scalarPot3DInitFile:
     raise SystemExit(
@@ -409,6 +417,10 @@ process.Geant4ePropagator.PropagationDirection = cms.string(opts.propagationDire
 # 0.2 GeV matches the ditrack/V0 configuration and recovers them.
 process.Geant4ePropagator.PropagationPtotLimit = cms.double(float(opts.propagationPtotLimit))
 process.globalCor.MagneticFieldLabel = cms.string(fieldlabel)
+
+# After every explicit propagator assignment above, so a command-line switch
+# wins over the driver's own defaults and the effective state is echoed once.
+cvhSwitches.apply(process, opts)
 
 process.reconstruction_step = cms.Path(process.offlineBeamSpot * process.globalCor)
 process.schedule = cms.Schedule(process.reconstruction_step)
