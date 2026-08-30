@@ -577,6 +577,29 @@ void ResidualGlobalCorrectionMakerG4e::beginStream(edm::StreamID streamid)
 
     tree->Branch("trackExtraAssoc", &trackExtraAssoc);
     
+    // Per-hit CLASS variables, booked in BOTH fit modes. The offline CF
+    // (cf_track_resolution.py) reads NOMINAL-fit productions
+    // (fitFromGenParms=False) and needs to know which class each parmtype-8/9
+    // resolution block belongs to, otherwise the hit families can only be
+    // summed into one Gaussian -- which is exactly the term the hit-resolution
+    // model is meant to replace. The gen-anchored pull study uses the same
+    // branches, so there is one definition rather than two.
+    if (fillTrackTree_) {
+      tree->Branch("dxerr", &dxerr);
+      tree->Branch("dyerr", &dyerr);
+      tree->Branch("clusterSizeX", &clusterSizeX);
+      tree->Branch("clusterSizeY", &clusterSizeY);
+      tree->Branch("clusterCharge", &clusterCharge);
+      tree->Branch("clusterChargeBin", &clusterChargeBin);
+      tree->Branch("clusterOnEdge", &clusterOnEdge);
+      tree->Branch("hitDetId", &hitDetId);
+      tree->Branch("hitUProj", &hitUProj);
+      tree->Branch("hitPitch", &hitPitch);
+      tree->Branch("hitThickness", &hitThickness);
+      tree->Branch("localdxdz", &localdxdz);
+      tree->Branch("localdydz", &localdydz);
+    }
+
     if (fitFromGenParms_) {
       tree->Branch("hitidxv", &hitidxv);
       tree->Branch("dxrecgen", &dxrecgen);
@@ -589,15 +612,8 @@ void ResidualGlobalCorrectionMakerG4e::beginStream(edm::StreamID streamid)
       tree->Branch("dysimgenlocal", &dysimgenlocal);
       tree->Branch("dxrecsim", &dxrecsim);
       tree->Branch("dyrecsim", &dyrecsim);
-      tree->Branch("dxerr", &dxerr);
-      tree->Branch("dyerr", &dyerr);
       
       tree->Branch("clusterSize", &clusterSize);
-      tree->Branch("clusterSizeX", &clusterSizeX);
-      tree->Branch("clusterSizeY", &clusterSizeY);
-      tree->Branch("clusterCharge", &clusterCharge);
-      tree->Branch("clusterChargeBin", &clusterChargeBin);
-      tree->Branch("clusterOnEdge", &clusterOnEdge);
       
       tree->Branch("clusterProbXY", &clusterProbXY);
       tree->Branch("clusterSN", &clusterSN);
@@ -605,10 +621,6 @@ void ResidualGlobalCorrectionMakerG4e::beginStream(edm::StreamID streamid)
       tree->Branch("stripsToEdge", &stripsToEdge);
 
       tree->Branch("simHitNCand", &simHitNCand);
-      tree->Branch("hitDetId", &hitDetId);
-      tree->Branch("hitUProj", &hitUProj);
-      tree->Branch("hitPitch", &hitPitch);
-      tree->Branch("hitThickness", &hitThickness);
       
       tree->Branch("dxreccluster", &dxreccluster);
       tree->Branch("dyreccluster", &dyreccluster);
@@ -629,8 +641,6 @@ void ResidualGlobalCorrectionMakerG4e::beginStream(edm::StreamID streamid)
       tree->Branch("landauW", &landauW);
       
       tree->Branch("localqop", &localqop);
-      tree->Branch("localdxdz", &localdxdz);
-      tree->Branch("localdydz", &localdydz);
       tree->Branch("localx", &localx);
       tree->Branch("localy", &localy);
       
@@ -1916,6 +1926,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       Vinvfullalt = MatrixXd::Zero(ncons, ncons);
       
       dVs.clear();
+      resvalidhit_.clear();
       residxs.clear();
       ioniurbanidx.clear();
       ioniurbanv.clear();
@@ -1925,6 +1936,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       reseigv.clear();
       resinfv.clear();
       resinfvarv.clear();
+      reshitidx.clear();
       resinfcov = 0.;
       resinfbv.clear();
       resblockrng.clear();
@@ -2839,6 +2851,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             residxs.push_back(iparm + nlocalbfield + nlocaleloss);
             resblockrng.push_back({{icons, nlocalcons}});
             resglobidx.push_back(msglobalidx);
+            resvalidhit_.push_back(-1);          // material block, not a hit
 
             // Phase B export: Moliere raw step data of the same leg (log
             // sync argument as for the Urban export below).
@@ -2873,6 +2886,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             residxs.push_back(iparm + nlocalbfield + nlocaleloss + 1);
             resblockrng.push_back({{icons, nlocalcons}});
             resglobidx.push_back(ioniglobalidx);
+            resvalidhit_.push_back(-1);          // material block, not a hit
 
             // Physics-CF export: the propagator's Urban step log corresponds
             // to the leg propagation whose dQI was stored above (the log is
@@ -3269,6 +3283,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               residxs.push_back(iparm + nlocalalignment);
               resblockrng.push_back({{icons, ispixel ? 2u : 1u}});
               resglobidx.push_back(xresglobalidx);
+              resvalidhit_.push_back(int(ivalidhit));
             }
             
             // local y resolution variation
@@ -3288,6 +3303,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               residxs.push_back(iparm + nlocalalignment + 1);
               resblockrng.push_back({{icons, 2u}});
               resglobidx.push_back(yresglobalidx);
+              resvalidhit_.push_back(int(ivalidhit));
             }
 
             constexpr std::array<unsigned int, 6> alphaidxs = {{0, 2, 3, 4, 5, 1}};
@@ -4228,6 +4244,10 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         const MatrixXd B = sqrtdV * R.block(r0, r0, nb, nb) * sqrtdV;
         SelfAdjointEigenSolver<MatrixXd> eigB(B);
         reseigidx.push_back(resglobidx[ires]);
+        // which valid hit this block belongs to (-1 = material). Without it
+        // the parmtype-8/9 blocks can only be matched to hits by guessing the
+        // ordering, which breaks the moment a propagation fails.
+        reshitidx.push_back(resvalidhit_[ires]);
         for (unsigned int j = 0; j < 5; ++j) {
           reseigv.push_back(j < nb ? std::max(eigB.eigenvalues()(nb - 1 - j), 0.) : 0.f);
         }

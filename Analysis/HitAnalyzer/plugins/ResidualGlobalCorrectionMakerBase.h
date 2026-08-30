@@ -444,6 +444,8 @@ protected:
   std::vector<int> clusterCharge;
 
   std::vector<int> stripsToEdge;
+  // transient, per fit iteration: block -> valid-hit index (see reshitidx)
+  std::vector<int> resvalidhit_;
 
   // Multipliers on the assigned hit covariance (1.0 = the CPE value as-is).
   double hitCovScalePixel_ = 1.0;
@@ -782,6 +784,11 @@ protected:
   // w_b^T dV_b w_b. resinfcov = sum_b resinfvarv, which equals refCov(0,0)
   // exactly when every noise block carries a resolution entry (coverage
   // check for the per-track CF-product resolution prediction).
+  // Valid-hit index of each resolution block, parallel to reseigidx; -1 for
+  // the material (parmtype 10/11) blocks. Lets the offline CF give every
+  // parmtype-8/9 block its own per-hit class instead of summing the hit
+  // families into a single Gaussian.
+  std::vector<int> reshitidx;
   std::vector<float> resinfv;
   std::vector<float> resinfvarv;
   float resinfcov = 0.;

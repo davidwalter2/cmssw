@@ -451,6 +451,7 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
       tree->Branch("msmoliv", &msmoliv);
       tree->Branch("reseigidx", &reseigidx);
       tree->Branch("reseigv", &reseigv);
+      tree->Branch("reshitidx", &reshitidx);
       tree->Branch("resinfv", &resinfv);
       tree->Branch("resinfvarv", &resinfvarv);
       tree->Branch("resinfcov", &resinfcov);
