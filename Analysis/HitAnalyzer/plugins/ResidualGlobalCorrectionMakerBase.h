@@ -462,6 +462,11 @@ protected:
   std::vector<int> simHitNCand;
   std::vector<unsigned int> hitDetId;
   std::vector<float> hitUProj;
+  // strip coordinates: reco, truth, and the cluster's first strip, so the
+  // true impact point can be referred to the cluster's own lattice
+  std::vector<float> hitStripRec;
+  std::vector<float> hitStripSim;
+  std::vector<int> hitFirstStrip;
   std::vector<float> hitPitch;
   std::vector<float> hitThickness;
   

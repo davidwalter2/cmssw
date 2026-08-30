@@ -594,6 +594,9 @@ void ResidualGlobalCorrectionMakerG4e::beginStream(edm::StreamID streamid)
       tree->Branch("clusterOnEdge", &clusterOnEdge);
       tree->Branch("hitDetId", &hitDetId);
       tree->Branch("hitUProj", &hitUProj);
+      tree->Branch("hitStripRec", &hitStripRec);
+      tree->Branch("hitStripSim", &hitStripSim);
+      tree->Branch("hitFirstStrip", &hitFirstStrip);
       tree->Branch("hitPitch", &hitPitch);
       tree->Branch("hitThickness", &hitThickness);
       tree->Branch("localdxdz", &localdxdz);
@@ -1915,6 +1918,12 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         hitDetId.reserve(nvalid);
         hitUProj.clear();
         hitUProj.reserve(nvalid);
+        hitStripRec.clear();
+        hitStripRec.reserve(nvalid);
+        hitStripSim.clear();
+        hitStripSim.reserve(nvalid);
+        hitFirstStrip.clear();
+        hitFirstStrip.reserve(nvalid);
         hitPitch.clear();
         hitPitch.reserve(nvalid);
         hitThickness.clear();
@@ -3460,6 +3469,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                 // indexed by (angle, qbin) instead, and those are already
                 // exported as localdxdz/localdydz and clusterChargeBin.
                 hitUProj.push_back(-99.f);
+                hitStripRec.push_back(-99.f);
+                hitStripSim.push_back(-99.f);
+                hitFirstStrip.push_back(-99);
                 const PixelTopology *pixtopology =
                     dynamic_cast<const PixelTopology*>(&(tkhit->det()->topology()));
                 hitPitch.push_back(pixtopology != nullptr ? pixtopology->pitch().first : -99.f);
@@ -3494,6 +3506,18 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                 }
                 hitUProj.push_back(uProjVal);
                 hitPitch.push_back(striptopology->localPitch(preciseHit->localPosition()));
+
+                // Strip COORDINATES, so the true impact point can be expressed
+                // in the lattice frame of the cluster that measured it. The
+                // eta / S-curve is E[rec - sim | position within the cluster],
+                // and referring the phase to the ABSOLUTE lattice instead
+                // mixes the two possible strip assignments near a boundary:
+                // measured on the muon gun, that compresses the N=1 ramp from
+                // the geometric +-0.5 to +-0.29 and its slope from -1 to -0.49.
+                hitStripRec.push_back(striptopology->strip(preciseHit->localPosition()));
+                hitStripSim.push_back(simhit != nullptr
+                    ? striptopology->strip(simhit->localPosition()) : -99.f);
+                hitFirstStrip.push_back(int(cluster.firstStrip()));
               }
               
   // if (ispixel) {
