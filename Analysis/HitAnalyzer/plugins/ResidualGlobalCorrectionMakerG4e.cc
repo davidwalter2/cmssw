@@ -811,8 +811,12 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   // Same StripCPEfromTrackAngle instance the cloner uses (single ES
   // product for the label), queried only for its AlgoParam so the
   // hit-resolution export can record the CPE's own uProj.
+  // NOT gated on fitFromGenParms_: hitUProj is exactly the class variable the
+  // offline CF needs on the NOMINAL-fit productions, and gating it there left
+  // every strip hit at -99 (found by the conditioning study, which then put
+  // the whole strip tracker in one uProj bin).
   const StripCPE *stripCPEForExport = nullptr;
-  if (fillTrackTree_ && fitFromGenParms_) {
+  if (fillTrackTree_) {
     stripCPEForExport = dynamic_cast<const StripCPE*>(iSetup.getHandle(stripCPEToken_).product());
   }
 
