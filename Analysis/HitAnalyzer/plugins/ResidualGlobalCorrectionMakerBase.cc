@@ -447,6 +447,28 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
     if (doRes_ && (fillGrads_ || fillGradsFactored_)) {
       tree->Branch("ioniurbanidx", &ioniurbanidx);
       tree->Branch("ioniurbanv", &ioniurbanv);
+      // per-leg CGF substitution factor for the ionization block, [sc, nstep]
+      // per leg -- 1.0 under CgfQoPMode=0. See the member docs.
+      tree->Branch("ioniqscaleidx", &ioniqscaleidx);
+      tree->Branch("ioniqscalev", &ioniqscalev);
+      // radiative (brems + pair) per-step export; strides and v grid are
+      // exported alongside so the reader never has to guess them.
+      tree->Branch("radstepidx", &radstepidx);
+      tree->Branch("radstepv", &radstepv, basketSize);
+      tree->Branch("radstepspecv", &radstepspecv, basketSize);
+      tree->Branch("radvgrid", &radvgrid);
+      tree->Branch("radstepstride", &radstepstride);
+      tree->Branch("radstepnv", &radstepnv);
+      // Filled ONCE, here, and never cleared: the grid is a compile-time
+      // constant of the propagator, so every entry writes the same 48 floats
+      // and ROOT compresses them away. Doing it here rather than at the drain
+      // point also means the grid is present even on entries whose legs
+      // produced no radiative steps (non-muons).
+      {
+        double vg[RADSTEP_NV];
+        Geant4ePropagator::radVGrid(vg);
+        radvgrid.assign(vg, vg + RADSTEP_NV);
+      }
       tree->Branch("msmoliidx", &msmoliidx);
       tree->Branch("msmoliv", &msmoliv);
       tree->Branch("reseigidx", &reseigidx);

@@ -673,6 +673,13 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
     stepTransportLog_.clear();
   }
 
+  // Ionization-block scale of THIS call (see cgfQScale()). Reset
+  // UNCONDITIONALLY, not under `ioniStepLogging_`: the caller reads it after
+  // every propagate, and a leg that computes no block must report 1.0 rather
+  // than the previous leg's factor. Every write below is inside the
+  // `cgfQoPMode > 0` section.
+  cgfQScaleLast_ = 1.;
+
   // ------------------------------------------------------------------------
   // CGF q/p PROCESS-NOISE BLOCK WEIGHT -- DIAGNOSTIC/PROTOTYPE, OFF BY DEFAULT.
   //
@@ -1452,8 +1459,12 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
     if (cgfQoPMode == 1 || cgfQoPMode == 3) {
       if (dQ2(0, 0) > 0. && !cgfScalarOnly) {
         // Same algebra and the same cancellation-free form as the uncached
-        // branch; only the value comes from the cache.
-        const Matrix<double, 5, 5> qioni = (cgfOverride / dQ2(0, 0)) * dQ2;
+        // branch; only the value comes from the cache. `sc` is named rather
+        // than inlined only so it can be published through cgfQScale(); the
+        // arithmetic is the same double division and scalar-matrix product.
+        const double sc = cgfOverride / dQ2(0, 0);
+        cgfQScaleLast_ = sc;
+        const Matrix<double, 5, 5> qioni = sc * dQ2;
         const Matrix<double, 5, 5> resid = g4errorEnd - dQ - dQ2;
         if (resid.cwiseAbs().maxCoeff() <= 1e-9 * g4errorEnd.cwiseAbs().maxCoeff()) {
           g4errorEnd = dQ + qioni;
@@ -1462,6 +1473,14 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
         }
         dQ2 = qioni;
       } else {
+        // Scalar fallback: only (0,0) is replaced. The exported factor is
+        // still (0,0)-based, which is what the offline normalisation uses;
+        // when there is no untruncated twin at all (dQ2(0,0) <= 0) there is
+        // no step sum to rescale either, so 1.0 is both the honest and the
+        // harmless value.
+        if (dQ2(0, 0) > 0.) {
+          cgfQScaleLast_ = cgfOverride / dQ2(0, 0);
+        }
         g4errorEnd(0, 0) = cgfOverride;
         dQ2(0, 0) = cgfOverride;
       }
@@ -1677,6 +1696,7 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
         // identical to mode 1.
         if (dQ2(0, 0) > 0. && !cgfScalarOnly) {
           const double sc = qcgf / dQ2(0, 0);
+          cgfQScaleLast_ = sc;   // published for the maker's ioniqscale export
           const Matrix<double, 5, 5> qioni = sc * dQ2;
           // WRITTEN AS A SUM, NOT AS `g4errorEnd += qioni - dQ2`.
           //
@@ -1703,7 +1723,11 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
         } else {
           // No untruncated twin (no ionization record on any step of this
           // leg): fall back to the scalar substitution rather than skip the
-          // weight, which is what shipped before.
+          // weight, which is what shipped before. See the cached branch for
+          // why the exported factor stays 1.0 when dQ2(0,0) is not positive.
+          if (dQ2(0, 0) > 0.) {
+            cgfQScaleLast_ = qcgf / dQ2(0, 0);
+          }
           g4errorEnd(0, 0) = qcgf;
           dQ2(0, 0) = qcgf;
         }

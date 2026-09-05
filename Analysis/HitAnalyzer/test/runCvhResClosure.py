@@ -58,6 +58,65 @@ opts.register('doRes', True, VarParsing.VarParsing.multiplicity.singleton,
 opts.register('propagationPtotLimit', 0.2, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.float,
               'G4e propagation momentum floor [GeV]; cfi default was 1.0')
+opts.register('maxMomentumStepFactor', 2.0, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'RELATIVE Gauss-Newton step damping: the max factor by which a '
+              'track momentum may change in one iteration (default 2 = p may '
+              'at most halve or double). Implemented as the effective floor '
+              'max(clampMomentumFloor, p_ref/f) and the symmetric cap p_ref*f, '
+              'so the bound is ALWAYS strictly inside p_ref -- unlike the bare '
+              'absolute floor it can neither pin a genuinely soft track at a '
+              'fixed momentum nor scale the step to exactly zero. Set <=1 to '
+              'switch it off and get the legacy absolute-floor-only clamp '
+              '(bit-identical).')
+opts.register('stepBacktracking', True, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'chi2-based (Armijo) retroactive step backtracking. The chi2 '
+              'assembled in iteration k is the realized chi2 of the step taken '
+              'at k-1; if it fails the sufficient-decrease test the previous '
+              'linearization is restored, that step is halved and the iteration '
+              'redone. Costs no extra propagation on the accept path.')
+opts.register('stepBacktrackFromIter', 2, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.int,
+              'first Gauss-Newton iteration at which the chi2 backtracking test '
+              'may fire (default 2). NOT 1: at iteration 0 the GBL '
+              'propagation/kink residuals are identically zero by construction, '
+              'so the iteration-0 chi2 is a different objective from every later '
+              'one and comparing across that boundary would backtrack every '
+              'candidate.')
+opts.register('maxChi2Backtrack', 4, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.int,
+              'max chi2-backtracking halvings per accepted step (default 4). '
+              'NOTE: distinct from the two/N-track maxBacktracks, which is the '
+              'failed-propagation-leg retry budget.')
+opts.register('armijoC', 1.e-4, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'Armijo sufficient-decrease coefficient c1 (default 1e-4).')
+opts.register('armijoSlack', 1.0, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'relative chi2 slack in the Armijo test (default 1.0 = the chi2 may '
+              'not more than DOUBLE in one iteration). This is a DIVERGENCE TRAP, '
+              'not a line-search tolerance: the CVH/GBL iteration does NOT '
+              'monotonically decrease r^T Vinv r (it drifts up ~0.3-0.5 per '
+              'iteration even at 1/16 step), so a textbook 1e-4..1e-3 makes it '
+              'halve the step forever -- 57 % of gun candidates, 15.6 halvings '
+              'each, 6x the propagation cost, no change in the result. Scan in '
+              'NOTES.md 2026-09-05.')
+opts.register('clampMomentumFloor', -1.0, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'Gauss-Newton momentum floor [GeV] for the refit step clamp. '
+              '<0 (default) = derive it from propagationPtotLimit as '
+              '1.25*plimit. THE FLOOR MUST STAY ABOVE THE PROPAGATION LIMIT: '
+              'the clamp exists only to keep the Gauss-Newton state out of '
+              'the propagator refusal region, so it has to bracket that limit '
+              'from above with a small margin. It must NOT be set any higher '
+              'than that -- a floor above the physical momentum spectrum pins '
+              'soft tracks at the floor (momentum-high, chi2/ndof >> 1) and, '
+              'where p_ref is already below it, scales the step to zero and '
+              'freezes the fit at its seed. The hard-coded 2.0 GeV floor '
+              'against the 0.2 GeV limit did exactly that to 12 % of the '
+              'flat-pT J/psi-gun candidates and carried the entire +0.21e-3 '
+              'mass-scale offset (NOTES.md 2026-09-04).')
 opts.register('doSimHits', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'read tracker PSimHits and match them to hits (input must keep them)')
@@ -416,6 +475,34 @@ process.Geant4ePropagator.PropagationDirection = cms.string(opts.propagationDire
 # ~2.5% of the flat-pT-gun daughters (fail[plimit], median seed p 0.65);
 # 0.2 GeV matches the ditrack/V0 configuration and recovers them.
 process.Geant4ePropagator.PropagationPtotLimit = cms.double(float(opts.propagationPtotLimit))
+# Gauss-Newton momentum floor for the refit step clamp, derived from the
+# propagation limit unless given explicitly (see the option's help). The pair
+# is echoed because the two are only correct together.
+_clampFloor = (float(opts.clampMomentumFloor) if float(opts.clampMomentumFloor) > 0.
+               else 1.25 * float(opts.propagationPtotLimit))
+if _clampFloor <= float(opts.propagationPtotLimit):
+    raise RuntimeError(
+        "clampMomentumFloor (%g GeV) must be ABOVE propagationPtotLimit (%g GeV): "
+        "the Gauss-Newton clamp exists to keep the state out of the propagator's "
+        "refusal region." % (_clampFloor, float(opts.propagationPtotLimit)))
+process.globalCor.clampMomentumFloor = cms.double(_clampFloor)
+print("[cvh] effective: PropagationPtotLimit=%g GeV, clampMomentumFloor=%g GeV"
+      % (float(opts.propagationPtotLimit), _clampFloor))
+# Relative step damping + chi2 backtracking (2026-09-05 replacement for the
+# bare momentum floor; see the option help and NOTES.md). Defaults are the new
+# behaviour; maxMomentumStepFactor<=1 + stepBacktracking=False reproduce the
+# legacy clamp bit-identically.
+process.globalCor.maxMomentumStepFactor = cms.double(float(opts.maxMomentumStepFactor))
+process.globalCor.stepBacktracking = cms.bool(bool(opts.stepBacktracking))
+process.globalCor.maxChi2Backtrack = cms.uint32(int(opts.maxChi2Backtrack))
+process.globalCor.stepBacktrackFromIter = cms.uint32(int(opts.stepBacktrackFromIter))
+process.globalCor.armijoC = cms.double(float(opts.armijoC))
+process.globalCor.armijoSlack = cms.double(float(opts.armijoSlack))
+print("[cvh] effective: maxMomentumStepFactor=%g, stepBacktracking=%s "
+      "(fromIter=%d, maxChi2Backtrack=%d, armijoC=%g, armijoSlack=%g)"
+      % (float(opts.maxMomentumStepFactor), bool(opts.stepBacktracking),
+         int(opts.stepBacktrackFromIter), int(opts.maxChi2Backtrack),
+         float(opts.armijoC), float(opts.armijoSlack)))
 process.globalCor.MagneticFieldLabel = cms.string(fieldlabel)
 
 # After every explicit propagator assignment above, so a command-line switch

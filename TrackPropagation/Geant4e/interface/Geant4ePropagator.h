@@ -169,6 +169,31 @@ public:
   double cgfBlockSigma() const { return cgfLastSigma_; }
   bool cgfBlockValid() const { return cgfLastResult_.ok; }
 
+  // THE FACTOR BY WHICH THE LAST PROPAGATE SCALED ITS IONIZATION BLOCK.
+  //
+  //   cgfQScale() = Q_ioni_applied(0,0) / dQ2_pre(0,0)
+  //
+  // i.e. the ratio between the ionization process-noise matrix this call
+  // actually RETURNED (tuple element 6, `dQ2`) and the one the per-step Urban
+  // records add up to. It is exactly 1.0 whenever no substitution happened --
+  // CgfQoPMode = 0, any propagate that computes no block, and any leg that
+  // fails -- and equals the CGF substitution's `sc` otherwise, in BOTH the
+  // cached (`setCgfOverride`) and the uncached branch.
+  //
+  // WHY IT HAS TO BE EXPORTED. The maker's `ioniurbanv` carries the record's
+  // own `gsig2`, which under CgfQoPMode >= 1 is the UNTRUNCATED second
+  // cumulant (`G4UniversalFluctuationForExtrapolator::SampleFluctuations`
+  // returns `blockKappa2Of(record_)` in that mode), while the matrix that went
+  // into the fit is the Fisher-weighted one. Offline code that recovers the
+  // block's scalar weight as sqrt(v_b / sum_steps gsig2 cs^2) is therefore
+  // wrong by sqrt(this factor) -- measured ~400x too small in the exponent --
+  // unless it multiplies the step sum by it. Nothing else in the exports can
+  // reconstruct it: the two quantities live on opposite sides of the
+  // substitution.
+  //
+  // Reset to 1.0 at the top of every propagate call, so it is never stale.
+  double cgfQScale() const { return cgfQScaleLast_; }
+
   // Phase B: per-step raw material/kinematic data for the offline Moliere
   // (screened-Rutherford compound-Poisson) model of the multiple-scattering
   // tail. Deliberately raw -- chi_c^2 / screening-angle formulas and the CF
@@ -457,6 +482,8 @@ private:
   mutable cvhcgf::Result cgfLastResult_;
   mutable double cgfLastSigma_ = 0.;
   mutable double cgfOverrideQ_ = -1.;
+  // see cgfQScale(); 1.0 means "no substitution was applied to dQ2"
+  mutable double cgfQScaleLast_ = 1.;
   mutable std::vector<MoliereMsStep> msStepLog_;
   mutable std::vector<RadiativeStep> radStepLog_;
 

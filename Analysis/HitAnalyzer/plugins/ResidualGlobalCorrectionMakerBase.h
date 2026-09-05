@@ -2,6 +2,7 @@
 #define HitAnalyzer_ResidualGlobalCorrectionMakerBase_h
 
 
+#include <cmath>
 #include <memory>
 #include <unordered_set>
 
@@ -702,17 +703,17 @@ protected:
   float simlocalxref;
   float simlocalyref;
   
-  float simtestz;
-  float simtestvz;
-  float simtestzlocalref;
-  float simtestrho;
-  float simtestdx;
-  float simtestdxrec;
-  float simtestdy;
-  float simtestdyrec;
-  float simtestdxprop;
-  float simtestdyprop;
-  unsigned int simtestdetid;
+  float simtestz = -99.f;
+  float simtestvz = -99.f;
+  float simtestzlocalref = -99.f;
+  float simtestrho = -99.f;
+  float simtestdx = -99.f;
+  float simtestdxrec = -99.f;
+  float simtestdy = -99.f;
+  float simtestdyrec = -99.f;
+  float simtestdxprop = -99.f;
+  float simtestdyprop = -99.f;
+  unsigned int simtestdetid = 0;
   
   std::vector<float> rx;
   std::vector<float> ry;
@@ -727,10 +728,10 @@ protected:
   // per-track count of GN iterations where the clamp caught a q/p sign
   // crossing (charge-flip protection through p->inf). >0 flags a track that
   // "wanted" the opposite charge -> trigger the two-hypothesis second fit.
-  unsigned int nChargeFlipProtect;
+  unsigned int nChargeFlipProtect = 0;
   // 1 if the two-hypothesis fit kept the OPPOSITE charge (opposite converged
   // with lower chi2 than the nominal seed), 0 otherwise.
-  unsigned int chargeHypFlipped;
+  unsigned int chargeHypFlipped = 0;
   
   float chisqval;
   unsigned int ndof;
@@ -762,6 +763,61 @@ protected:
   // (energies MeV; cs = Etot/p^3 in GeV^-2, see Geant4ePropagator).
   std::vector<unsigned int> ioniurbanidx;
   std::vector<float> ioniurbanv;
+
+  // THE SCALE THAT WAS APPLIED TO EACH IONIZATION BLOCK (2026-09-03).
+  //
+  // `ioniurbanv`'s gsig2 column is the RECORD's variance; the matrix that
+  // entered the fit (and hence `resinfvarv` = w_b^T dV_b w_b) is
+  // Q_applied = sc * dQ2_record whenever the CGF substitution ran
+  // (CgfQoPMode 1/3; see Geant4ePropagator::cgfQScale). sc == 1.0 exactly
+  // otherwise -- CgfQoPMode=0, every two-track fit that pins mode 0, and any
+  // leg with no block. Without it the offline `var` normalisation
+  // sqrt(v_b / sum_steps gsig2 cs^2) is wrong by sqrt(sc) (~400x in the
+  // exponent on mode-1 files).
+  //
+  // ONE ENTRY PER LEG, tagged with the SAME parmtype-11 global index as that
+  // leg's `ioniurbanidx` rows, and 2 floats per entry:
+  //
+  //     [ sc , nIoniSteps ]
+  //
+  // `nIoniSteps` is how many `ioniurbanv` rows this leg contributed. It is
+  // there because several legs can share one global index (a track crossing
+  // the same module twice; ~1/3 of blocks), and the pooled step sum is then
+  // sum_legs sc_l * (step sum of leg l), NOT a single scalar times the pooled
+  // sum. The legs' step rows are contiguous and in drain order for a given
+  // index, so the counts split them exactly -- and the split self-checks
+  // (the counts must add up to the number of pooled rows).
+  std::vector<unsigned int> ioniqscaleidx;
+  std::vector<float> ioniqscalev;
+
+  // RADIATIVE (brems + pair) STEP EXPORT (2026-09-03), for the offline
+  // radiative CF term (cf_brems_exact.py). One entry per Geant4 step of the
+  // leg -- i.e. aligned 1:1 with `msmoliv`, NOT with `ioniurbanv`, which only
+  // has rows for steps that produced a fluctuation record -- tagged with the
+  // leg's parmtype-11 global index (the q/p block, since this is a q/p noise
+  // channel and its offline weight comes from the ionization block).
+  //
+  // `radstepv`: RADSTEP_STRIDE = 11 floats per step, in exactly the order
+  // G4ePropagationExport.cc writes its `radv` branch, so cf_brems_exact.py's
+  // R_* column constants, step_spectrum() and rad_exponent() apply verbatim:
+  //     [effZ, effA, xg(g/cm2), etot(GeV), p(GeV), d/X0, step(cm),
+  //      dedxRad, dedxBrem, dedxPair (all GeV/cm), cs(GeV^-2)]
+  // `radstepspecv`: 2*RADSTEP_NV = 96 floats per step, dN/dv SHAPE for
+  // bremsstrahlung (48) then pair production (48) on the shared v grid.
+  // These are shapes only; each must be renormalized offline to its own
+  // process mean dedxBrem/dedxPair (see Geant4ePropagator::RadiativeStep).
+  // `radvgrid`: the shared v grid, RADSTEP_NV points, written on EVERY entry
+  // (it is constant, so it compresses to nothing) so no reader has to
+  // hard-code it. `radstepstride`/`radstepnv` are the two strides as scalar
+  // branches for the same reason.
+  static constexpr int RADSTEP_STRIDE = 11;
+  static constexpr int RADSTEP_NV = Geant4ePropagator::kNRadV;
+  std::vector<unsigned int> radstepidx;
+  std::vector<float> radstepv;
+  std::vector<float> radstepspecv;
+  std::vector<float> radvgrid;
+  int radstepstride = RADSTEP_STRIDE;
+  int radstepnv = RADSTEP_NV;
 
   // Phase B analogue for multiple scattering: per Geant4 step, raw
   // material/kinematic data for the offline Moliere compound-Poisson tail
@@ -845,6 +901,91 @@ void ResidualGlobalCorrectionMakerBase::init_twice_active_var(T &ad, const unsig
     ad.derivatives()(idx).derivatives()  = T::DerType::Scalar::DerType::Zero(d_num);
   }
 }
+
+
+// ---------------------------------------------------------------------------
+// Gauss-Newton step control shared by the single-track, two-track and N-track
+// makers (2026-09-05). See NOTES.md "the momentum-floor clamp -> proper step
+// damping" entry.
+//
+// The legacy guard was a single ABSOLUTE momentum floor: a step that would put
+// a leg below `clampMomentumFloor` was scaled so that the leg lands exactly on
+// the floor. That protects the propagator (which refuses p < PropagationPtotLimit)
+// but it is a hard non-linearity at a fixed momentum: every track whose TRUE
+// momentum is below the floor is pinned at it, and a leg whose reference
+// momentum is ALREADY below the floor gets a negative scale, which max(s,0)
+// turns into a frozen (zero) step.
+//
+// The replacement is a relative trust region in q/p: per iteration a leg's
+// momentum may change by at most a factor f = maxMomentumStepFactor (default
+// 2, i.e. p may at most halve or double). The effective lower bound is
+//     p_lo = max(absFloor, p_ref/f)   if p_ref > absFloor
+//     p_lo = p_ref/f                  otherwise
+// which is ALWAYS strictly below p_ref -- so the scale is never zero, no leg
+// is ever pinned at a fixed momentum, and a leg already below the absolute
+// floor can still climb out. The upper bound p_hi = p_ref*f catches the
+// opposite runaway (a stiff track pulled toward p -> inf / across q/p = 0).
+namespace cvhstep {
+
+  // Largest s in (0,1] such that qop_ref + s*dqop respects the momentum window
+  // described above for ONE leg. Callers take the minimum over legs and scale
+  // the whole (coupled) step vector by it, so the step direction is preserved.
+  //
+  //   absFloor     absolute momentum floor [GeV]; must stay above the
+  //                propagator's PropagationPtotLimit refusal.
+  //   f            max per-iteration momentum change factor; f <= 1 disables
+  //                the relative window (caller should then use its legacy path).
+  //   qopFlipAllow |q/p| at or below which a genuine charge flip is permitted
+  //                (i.e. p_ref >= allowChargeFlipAboveP). Same semantics as the
+  //                legacy single-track clamp: such a flip is let through subject
+  //                only to the momentum floor on the far side.
+  //   flipProtect  set to true when a NON-permitted flip was capped (the legacy
+  //                nChargeFlipProtect bookkeeping).
+  //
+  // At the default f = 2 the cap on a non-permitted flip is numerically
+  // identical to the legacy "stop half-way toward q/p = 0" rule.
+  inline double legStepScaleRel(double qopref, double dqop, double absFloor,
+                                double f, double qopFlipAllow,
+                                bool *flipProtect = nullptr) {
+    if (qopref == 0. || dqop == 0. || !(f > 1.) || !std::isfinite(dqop)) {
+      return 1.;
+    }
+    const double pref = std::abs(1. / qopref);
+    double pLo = pref / f;
+    if (pref > absFloor) {
+      pLo = std::max(pLo, absFloor);
+    }
+    const double qopHi = 1. / pLo;               // |q/p| may not exceed this
+    const double qopLo = std::abs(qopref) / f;   // |q/p| may not fall below this
+    const double qopupd = qopref + dqop;
+    const bool flip = qopupd * qopref <= 0.;
+    const bool flipAllowed = std::abs(qopref) <= qopFlipAllow;
+    double s = 1.;
+    if (flip && flipAllowed) {
+      // permitted (ambiguous-charge) flip: only the momentum floor applies
+      if (std::abs(qopupd) > qopHi) {
+        s = (std::copysign(qopHi, qopref) - qopref) / dqop;
+      }
+    } else if (flip) {
+      // divergence-like flip: treat as the extreme upward step and cap it
+      s = (std::copysign(qopLo, qopref) - qopref) / dqop;
+      if (flipProtect != nullptr) {
+        *flipProtect = true;
+      }
+    } else if (std::abs(qopupd) > qopHi) {
+      s = (std::copysign(qopHi, qopref) - qopref) / dqop;
+    } else if (std::abs(qopupd) < qopLo) {
+      s = (std::copysign(qopLo, qopref) - qopref) / dqop;
+    }
+    if (!(s < 1.)) {
+      return 1.;
+    }
+    // pLo < p_ref and qopLo < |qopref| strictly, so s > 0 by construction;
+    // the clamp below only defends against a non-finite dqop.
+    return std::isfinite(s) ? std::max(s, 0.) : 0.;
+  }
+
+}  // namespace cvhstep
 
 template <typename T>
 void ResidualGlobalCorrectionMakerBase::init_twice_active_null(T &ad, const unsigned int d_num) const {

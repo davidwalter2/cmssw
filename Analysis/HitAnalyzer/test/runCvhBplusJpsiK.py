@@ -162,6 +162,51 @@ opts.register('plimit', 0.05, VarParsing.VarParsing.multiplicity.singleton,
               '(muons clear 1.0 trivially); the knob affects the kaon mode.')
 # CVH joint-refit convergence knobs
 # (default values reproduce the published baseline bit-identically).
+opts.register('clampMomentumFloor', -1.0, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'Gauss-Newton momentum floor [GeV] of the refit step clamp. '
+              '<0 (default) = derive it from plimit as 1.25*plimit. THE FLOOR '
+              'MUST STAY ABOVE THE PROPAGATION LIMIT (the clamp exists only to '
+              'keep the Gauss-Newton state out of the propagator refusal '
+              'region) and NOT ABOVE THE PHYSICAL MOMENTUM SPECTRUM: a floor '
+              'above it pins soft tracks at the floor and, where p_ref is '
+              'already below it, scales the step to zero and freezes the fit '
+              'at its seed. The makers built-in 2.0 GeV default does exactly '
+              'that to the 0.3-0.9 GeV bachelor kaon (NOTES.md 2026-09-04).')
+opts.register('maxMomentumStepFactor', 2.0, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'RELATIVE Gauss-Newton step damping: the max factor by which a '
+              'track momentum may change in one iteration (default 2 = p may '
+              'at most halve or double). Effective floor '
+              'max(clampMomentumFloor, p_ref/f) plus the symmetric cap '
+              'p_ref*f, so the bound is ALWAYS strictly inside p_ref: neither '
+              'the soft bachelor kaon nor any other leg can be pinned at a '
+              'fixed momentum or frozen by a zero step. <=1 = legacy '
+              'absolute-floor-only clamp (bit-identical).')
+opts.register('stepBacktracking', True, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'chi2-based (Armijo) retroactive step backtracking: if the chi2 '
+              'realized by the previous step fails the sufficient-decrease '
+              'test, restore that linearization, halve the step and redo the '
+              'iteration. No extra propagation on the accept path.')
+opts.register('stepBacktrackFromIter', 2, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.int,
+              'first Gauss-Newton iteration at which the chi2 backtracking test '
+              'may fire (default 2). NOT 1: at iteration 0 the GBL '
+              'propagation/kink residuals are identically zero by construction, '
+              'so the iteration-0 chi2 is a different objective from every later '
+              'one and comparing across that boundary would backtrack every '
+              'candidate.')
+opts.register('maxChi2Backtrack', 4, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.int,
+              'max chi2-backtracking halvings per accepted step (default 4). '
+              'Distinct from maxBacktracks, the failed-leg retry budget.')
+opts.register('armijoC', 1.e-4, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'Armijo sufficient-decrease coefficient c1 (default 1e-4).')
+opts.register('armijoSlack', 1.0, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'relative chi2 slack in the Armijo test (default 1.0 = the chi2 may not more than DOUBLE in one iteration). This is a DIVERGENCE TRAP, not a line-search tolerance: the CVH/GBL iteration does not monotonically decrease r^T Vinv r, so a textbook 1e-4..1e-3 makes it halve the step forever at 6x the propagation cost for no change in the result (scan in NOTES.md 2026-09-05).')
 opts.register('nIters', 10, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.int,
               'CVH Gauss-Newton iteration cap per icons phase. Default 10 '
@@ -545,6 +590,16 @@ process.cvhMasterESProducer = cvhMasterESProducer.clone()
 process.cvhMasterESProducer.MagneticFieldLabel = cms.string(fieldlabel)
 process.Geant4ePropagator.ForCVH = cms.bool(True)
 process.Geant4ePropagator.PropagationPtotLimit = cms.double(opts.plimit)
+
+# Gauss-Newton momentum floor of every residual maker scheduled in this
+# process, derived from the propagation limit unless given explicitly. Applied
+# generically (the maker set depends on `mode`), after all modules exist.
+_clampFloor = (float(opts.clampMomentumFloor) if float(opts.clampMomentumFloor) > 0.
+               else 1.25 * float(opts.plimit))
+if _clampFloor <= float(opts.plimit):
+    raise RuntimeError(
+        "clampMomentumFloor (%g GeV) must be ABOVE PropagationPtotLimit (%g GeV)"
+        % (_clampFloor, float(opts.plimit)))
 
 # ---- path / schedule -------------------------------------------------------
 # geopro is intentionally NOT on the path: CvhMasterThread (residual-maker
@@ -1089,6 +1144,29 @@ if opts.nanoOut:
 process.schedule = cms.Schedule(process.reconstruction_step)
 if opts.nanoOut:
     process.schedule.extend([process.nano_step, process.nano_out_step])
+
+# Momentum floor -> every residual-maker instance actually scheduled (see the
+# `_clampFloor` block next to PropagationPtotLimit above).
+_clamped = []
+for _n, _m in process.producers.items():
+    if str(_m.type_()).startswith('ResidualGlobalCorrectionMaker'):
+        _m.clampMomentumFloor = cms.double(_clampFloor)
+        # Relative step damping + chi2 backtracking (2026-09-05 replacement for
+        # the bare momentum floor; see the option help and NOTES.md).
+        _m.maxMomentumStepFactor = cms.double(float(opts.maxMomentumStepFactor))
+        _m.stepBacktracking = cms.bool(bool(opts.stepBacktracking))
+        _m.maxChi2Backtrack = cms.uint32(int(opts.maxChi2Backtrack))
+        _m.stepBacktrackFromIter = cms.uint32(int(opts.stepBacktrackFromIter))
+        _m.armijoC = cms.double(float(opts.armijoC))
+        _m.armijoSlack = cms.double(float(opts.armijoSlack))
+        _clamped.append(_n)
+print("[cvh] effective: PropagationPtotLimit=%g GeV, clampMomentumFloor=%g GeV on %s"
+      % (float(opts.plimit), _clampFloor, ",".join(_clamped) or "NO maker"))
+print("[cvh] effective: maxMomentumStepFactor=%g, stepBacktracking=%s "
+      "(fromIter=%d, maxChi2Backtrack=%d, armijoC=%g, armijoSlack=%g)"
+      % (float(opts.maxMomentumStepFactor), bool(opts.stepBacktracking),
+         int(opts.stepBacktrackFromIter), int(opts.maxChi2Backtrack),
+         float(opts.armijoC), float(opts.armijoSlack)))
 
 from PhysicsTools.PatAlgos.tools.helpers import associatePatAlgosToolsTask
 associatePatAlgosToolsTask(process)
