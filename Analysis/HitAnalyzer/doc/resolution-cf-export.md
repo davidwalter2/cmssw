@@ -59,18 +59,24 @@ raw Geant4 step records had to be exported in the first place. Doing the
 evaluation in the `doRes` pass, from the same flat arrays the tree would have
 carried, removes both halves of the cost:
 
-Measured on the 30-event smokes (compressed bytes per entry, whole file):
+Measured (compressed TREE bytes per entry; the runtree is a fixed 4.54 MB per
+file and is quoted separately):
 
 | | single track | two track |
 |---|---|---|
-| the exponents | 1 453 | 1 420 |
+| the exponents | 1 453 | 1 419 |
 | the raw step records they replace | 165 377 | 329 466 |
-| file, `exportStepRecords=True` | 306 279 | 605 597 |
-| file, `exportStepRecords=False` | **140 864** | **276 075** |
+| `exportStepRecords=True` | 230 180 | 448 055 |
+| `exportStepRecords=False` | **64 803** | **118 589** |
 | per-candidate evaluation time | 41.7 ms | 95.8 ms |
 | the offline extraction it replaces | 2.2 s | 2.2 s |
 
-i.e. the switch removes 54 % of the file, and the evaluation is 53x faster
+Projected over 20M J/psi + 8M Z + 10M Upsilon = 38M dimuon candidates: 17.0 TB
+today, **4.51 TB** with the switch off, and ~0.84 TB once `fillGradsFactored`
+also replaces the dense Hessian (which is 4.10 TB of the 4.51). The exponents
+themselves are 54 GB.
+
+i.e. the switch removes 72 % of the two-track tree, and the evaluation is 53x faster
 than the offline extraction of the same object — inside a fit that costs O(1 s)
 per candidate, so 4–10 % of it. Two thirds of that time is the radiative
 channel (`nsteps x nv x ntau` trigonometric evaluations); a further factor ~2
