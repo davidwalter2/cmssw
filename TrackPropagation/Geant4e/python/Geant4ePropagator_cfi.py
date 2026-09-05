@@ -194,7 +194,19 @@ Geant4ePropagator = cms.ESProducer("GeantPropagatorESProducer",
                                    # no cut.  Measured: schedule-independent to
                                    # 1.4e-6, no convergence cost (8.60 against
                                    # 8.56 mean iterations), +11 % wall clock.
-                                   CgfQoPMode=cms.int32(1),
+                                   # Default moved BACK to 0 on 2026-09-05: the
+                                   # weight has no measured accuracy advantage
+                                   # against gen truth (NOTES_CGFFIT stages 12,
+                                   # 78-87), and every maker without the
+                                   # setCgfOverride cache (two-track, N-track,
+                                   # DiMuon, cosmics, the NanoAOD path) recomputes
+                                   # the block on every propagate call: measured
+                                   # 8.6 s vs 0.63 s per Z candidate, 15.7 s/event
+                                   # on the J/psi gun. Fourteen drivers inherit
+                                   # this default. The J/psi calibration production
+                                   # runs mode 0; keep the legs consistent. Mode 1
+                                   # stays available as an explicit opt-in.
+                                   CgfQoPMode=cms.int32(0),
 
                                    # Recompute the block every N Gauss-Newton
                                    # sweeps; 0 = freeze after the first.
