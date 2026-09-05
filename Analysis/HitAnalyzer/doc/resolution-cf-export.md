@@ -59,11 +59,27 @@ raw Geant4 step records had to be exported in the first place. Doing the
 evaluation in the `doRes` pass, from the same flat arrays the tree would have
 carried, removes both halves of the cost:
 
-| | before | after |
+Measured on the 30-event smokes (compressed bytes per entry, whole file):
+
+| | single track | two track |
 |---|---|---|
-| per-candidate export | ~430 kB | ~1.6 kB |
-| per-candidate offline extraction | 2.2 s | 0 |
-| at 40M candidates | 16 TB, 24k core-hours | ~64 GB, none |
+| the exponents | 1 453 | 1 420 |
+| the raw step records they replace | 165 377 | 329 466 |
+| file, `exportStepRecords=True` | 306 279 | 605 597 |
+| file, `exportStepRecords=False` | **140 864** | **276 075** |
+| per-candidate evaluation time | 41.7 ms | 95.8 ms |
+| the offline extraction it replaces | 2.2 s | 2.2 s |
+
+i.e. the switch removes 54 % of the file, and the evaluation is 53x faster
+than the offline extraction of the same object — inside a fit that costs O(1 s)
+per candidate, so 4–10 % of it. Two thirds of that time is the radiative
+channel (`nsteps x nv x ntau` trigonometric evaluations); a further factor ~2
+is available there from the half-angle identity and was not taken, because the
+exactness of the port is worth more at this size.
+
+What is LEFT after the switch is dominated by `hesspackedv` (59 kB/track,
+108 kB/candidate) — a separate problem with a separate solution already in the
+tree (`fillGradsFactored`).
 
 The inputs are the **export arrays**, not the propagator's internal logs, so
 the in-maker pooling by global parameter index is identical to the offline
@@ -119,6 +135,20 @@ both off reproduces a pre-2026-09-05 tree exactly.
 validated yet.** Its purpose is to make a DIFFERENT model derivable from the
 same files; once it is off, changing the model means re-running the fit.
 
+## One switch that must agree on both sides
+
+`cvhcf` exports the **Kokoulin-OFF** ionization model (`cfmodel` says
+`ioni:kokoulin=0`), which is what the offline production builds: the shard
+runner sets `CVH_IONI_KOKOULIN=0` explicitly, for a term that costs >7x and
+moves the model by ~1e-3. The PROPAGATOR may still have `IoniKokoulin=True` --
+that is the correction in the fit's Q matrix and in `ioniurbanv`'s `gsig2`, a
+different object.
+
+`cf_track_resolution.IONI_KOKOULIN` defaults to ON when the environment does
+not say otherwise, so an offline extraction run without `CVH_IONI_KOKOULIN=0`
+builds a DIFFERENT model from the one the maker exported. That is exactly what
+`cfmodel` is in the file for: compare it before mixing caches.
+
 ## Reading it back
 
 `calibration_studies/resolution/cf_inmaker.py` turns these branches into the
@@ -145,5 +175,13 @@ export CMSSW_SRC=/work/submit/david_w/ZMass/CMSSW_15_0_19_patch2_dev/src
 python3 cvhcf_validate.py --file <globalcor.root> --ntracks 40
 ```
 
-The requirement is 1e-6 absolute on the exponent; the measured agreement is
-~1e-11 (see `Documents/Resolution/NOTES.md`, 2026-09-05).
+The requirement is 1e-6 absolute on the exponent. Measured on the reference
+smokes: **1.2e-11** (single track, 40 tracks / 515 blocks) and **1.6e-11**
+(two track, 28 candidates / 734 blocks) per block and per track, and 9.5e-7 on
+the floats the maker wrote — which IS the float32 storage floor at those |S|,
+every other family being 100x below it.
+
+End to end (`cvhcf_e2e_260905.sh`, 1891 gun ditrack candidates): the unbinned
+mass likelihood moves by `d(alpha) = 2e-10` in its 1e-3 units, i.e. 2e-9 of its
+own sigma, and the single-track even closure is identical to every printed
+digit. See `Documents/Resolution/NOTES.md`, 2026-09-05.

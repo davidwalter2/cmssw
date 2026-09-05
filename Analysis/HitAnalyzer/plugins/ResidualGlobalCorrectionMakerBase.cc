@@ -951,13 +951,17 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       // one exported under this. Constant across entries, so ROOT compresses
       // them to nothing -- the same argument `radvgrid` already rides on.
       if (exportCfExponents_) {
-        cftau.assign(cvhcf::tauGrid(), cvhcf::tauGrid() + cvhcf::kNTau);
-        cfmodel = cvhcf::modelTag();
         runtree->Branch("cftau", &cftau);
         runtree->Branch("cfmodel", &cfmodel);
       }
     }
     
+    if (fillRunTree_ && exportCfExponents_) {
+      // (re)armed HERE and not only at branch creation, so a second beginRun
+      // does not write an empty grid.
+      cftau.assign(cvhcf::tauGrid(), cvhcf::tauGrid() + cvhcf::kNTau);
+      cfmodel = cvhcf::modelTag();
+    }
     unsigned int globalidx = 0;
     for (const auto& key: parmset) {
 // std::cout << "parmtype = " << key.first << " detid = " << key.second.rawId() << std::endl;
@@ -1174,6 +1178,15 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       
       if (fillRunTree_) {
         runtree->Fill();
+        // ONCE, not per parameter. The CF grid and model tag are constants of
+        // the job, and the runtree has one entry per GLOBAL PARAMETER -- 126452
+        // of them on the full tracker, which cost 1.9 MB per file when they
+        // were written on every entry (measured). Clearing after the first fill
+        // leaves entry 0 carrying them and the rest empty, so
+        // `runtree["cftau"].array()[0]` -- what every reader does -- is
+        // unchanged and the cost is 260 bytes.
+        cftau.clear();
+        cfmodel.clear();
       }
     }
     
