@@ -93,6 +93,9 @@ private:
 
   std::vector<std::string> inactivate_;
   std::vector<std::string> activate_;
+  // empty = the all-particle overload (unchanged behaviour); non-empty =
+  // deactivate `inactivate_` only for these particle names
+  std::vector<std::string> particles_;
   const bool dumpHadModels_;
   const bool dumpEmParams_;
   bool applied_ = false;
@@ -104,6 +107,8 @@ ProcessActivationWatcher::ProcessActivationWatcher(const edm::ParameterSet &p)
     : inactivate_(
           p.getUntrackedParameter<std::vector<std::string>>("inactivate", std::vector<std::string>())),
       activate_(p.getUntrackedParameter<std::vector<std::string>>("activate", std::vector<std::string>())),
+      particles_(
+          p.getUntrackedParameter<std::vector<std::string>>("particles", std::vector<std::string>())),
       // ParameterSet, not getenv: this watcher already had a PSet, and a
       // diagnostic that leaves no trace in the job configuration cannot be
       // matched to the output it produced.
@@ -115,6 +120,8 @@ ProcessActivationWatcher::ProcessActivationWatcher(const edm::ParameterSet &p)
     std::cout << "[procact]   requested INACTIVE '" << n << "'" << std::endl;
   for (const auto &n : activate_)
     std::cout << "[procact]   requested ACTIVE   '" << n << "'" << std::endl;
+  for (const auto &n : particles_)
+    std::cout << "[procact]   restricted to particle '" << n << "'" << std::endl;
 }
 
 void ProcessActivationWatcher::update(const BeginOfTrack *) {
@@ -188,8 +195,23 @@ void ProcessActivationWatcher::update(const BeginOfTrack *) {
   if (tbl == nullptr)
     return;
   for (const auto &n : inactivate_) {
-    tbl->SetProcessActivation(G4String(n), false);
-    std::cout << "[procact]   SetProcessActivation(" << n << ", false)" << std::endl;
+    if (particles_.empty()) {
+      tbl->SetProcessActivation(G4String(n), false);
+      std::cout << "[procact]   SetProcessActivation(" << n << ", false)  [all particles]" << std::endl;
+    } else {
+      // PER-PARTICLE. Necessary for any process whose NAME is shared across
+      // species: 'msc' belongs to e-, e+, mu+/- and the charged hadrons alike,
+      // so the all-particle overload would also straighten the delta-ray
+      // electrons -- and their transport is what sets cluster shapes, i.e. it
+      // would change the hit resolution, which is the quantity an MS ablation
+      // is meant to isolate. Irrelevant for muBrems / muPairProd, whose names
+      // are muon-only, which is why the default stays the global overload.
+      for (const auto &pa : particles_) {
+        tbl->SetProcessActivation(G4String(n), G4String(pa), false);
+        std::cout << "[procact]   SetProcessActivation(" << n << ", " << pa
+               << ", false)" << std::endl;
+      }
+    }
   }
   for (const auto &n : activate_) {
     tbl->SetProcessActivation(G4String(n), true);
