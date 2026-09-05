@@ -197,6 +197,18 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
       ? iConfig.getParameter<std::vector<int>>("genMatchPdgIds") : std::vector<int>();
   genMatchDR_ = iConfig.existsAs<double>("genMatchDR")
       ? iConfig.getParameter<double>("genMatchDR") : 0.1;
+  // THE SLIMMING SWITCH.  `exportStepRecords` writes the raw per-step
+  // ionization / Moliere / radiative records the resolution-CF model is built
+  // from -- 430 kB and, offline, 2.2 s per candidate.  With the in-maker
+  // exponents (`exportCfExponents`, cvhcf) validated against the offline
+  // reference it is needed only to re-derive them under a DIFFERENT model, so
+  // production runs with it off.  Default TRUE, so nothing that exists today
+  // changes until a driver says otherwise.  existsAs-guarded: legacy cfis are
+  // untouched.
+  exportStepRecords_ = iConfig.existsAs<bool>("exportStepRecords")
+                           ? iConfig.getParameter<bool>("exportStepRecords") : true;
+  exportCfExponents_ = iConfig.existsAs<bool>("exportCfExponents")
+                           ? iConfig.getParameter<bool>("exportCfExponents") : true;
   keepPixelEdgeHits_ = iConfig.existsAs<bool>("keepPixelEdgeHits")
       ? iConfig.getParameter<bool>("keepPixelEdgeHits") : false;
   pixelMinSizeX_ = iConfig.existsAs<int>("pixelMinSizeX")
@@ -445,17 +457,33 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
       tree->Branch("gradllv", &gradllv);
     }
     if (doRes_ && (fillGrads_ || fillGradsFactored_)) {
-      tree->Branch("ioniurbanidx", &ioniurbanidx);
-      tree->Branch("ioniurbanv", &ioniurbanv);
+      // THE RAW PER-STEP EXPORT.  Everything in this block is what the
+      // resolution-CF exponents are BUILT from, and nothing else reads it; it
+      // is 430 kB/candidate, i.e. 16 TB over the 40M candidates of the full
+      // calibration.  With `exportCfExponents` on, the exponents themselves
+      // (6 x 64 floats) are in the tree and this is dead weight -- keep it
+      // only while a model change might have to be re-derived from the same
+      // files.  `resinfvarv` / `resinfcov` / `reshitidx` / `ioniqscale*` are
+      // NOT here: they are small, and they are what a reader still needs to
+      // reconstruct the per-block variance shares and the hit classes.
+      //
+      // `resinfbv` (the 5x5 B_b per block, ~6 kB/candidate) goes with the raw
+      // records: its only consumer is `cf_mass_likelihood.leg_exponents`, the
+      // single-track pairing route that the two-track maker's own `cfmass_*`
+      // export supersedes.
+      if (exportStepRecords_) {
+        tree->Branch("ioniurbanidx", &ioniurbanidx);
+        tree->Branch("ioniurbanv", &ioniurbanv);
+        // radiative (brems + pair) per-step export; strides and v grid are
+        // exported alongside so the reader never has to guess them.
+        tree->Branch("radstepidx", &radstepidx);
+        tree->Branch("radstepv", &radstepv, basketSize);
+        tree->Branch("radstepspecv", &radstepspecv, basketSize);
+      }
       // per-leg CGF substitution factor for the ionization block, [sc, nstep]
       // per leg -- 1.0 under CgfQoPMode=0. See the member docs.
       tree->Branch("ioniqscaleidx", &ioniqscaleidx);
       tree->Branch("ioniqscalev", &ioniqscalev);
-      // radiative (brems + pair) per-step export; strides and v grid are
-      // exported alongside so the reader never has to guess them.
-      tree->Branch("radstepidx", &radstepidx);
-      tree->Branch("radstepv", &radstepv, basketSize);
-      tree->Branch("radstepspecv", &radstepspecv, basketSize);
       tree->Branch("radvgrid", &radvgrid);
       tree->Branch("radstepstride", &radstepstride);
       tree->Branch("radstepnv", &radstepnv);
@@ -469,15 +497,33 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
         Geant4ePropagator::radVGrid(vg);
         radvgrid.assign(vg, vg + RADSTEP_NV);
       }
-      tree->Branch("msmoliidx", &msmoliidx);
-      tree->Branch("msmoliv", &msmoliv);
+      if (exportStepRecords_) {
+        tree->Branch("msmoliidx", &msmoliidx);
+        tree->Branch("msmoliv", &msmoliv);
+        tree->Branch("reseigv", &reseigv);
+        tree->Branch("resinfv", &resinfv);
+        tree->Branch("resinfbv", &resinfbv);
+      }
       tree->Branch("reseigidx", &reseigidx);
-      tree->Branch("reseigv", &reseigv);
       tree->Branch("reshitidx", &reshitidx);
-      tree->Branch("resinfv", &resinfv);
       tree->Branch("resinfvarv", &resinfvarv);
       tree->Branch("resinfcov", &resinfcov);
-      tree->Branch("resinfbv", &resinfbv);
+
+      // THE IN-MAKER RESOLUTION-CF EXPONENTS.  Six families of 64 floats on
+      // `cftau` (written into the runtree), plus the Gaussian share and the
+      // completeness flag: 1.6 kB/candidate against the 430 kB above.
+      if (exportCfExponents_) {
+        tree->Branch((cfprefix_ + "_ms").c_str(), &cfmsv);
+        tree->Branch((cfprefix_ + "_del").c_str(), &cfdelv);
+        tree->Branch((cfprefix_ + "_ioni_re").c_str(), &cfiorev);
+        tree->Branch((cfprefix_ + "_ioni_im").c_str(), &cfioimv);
+        tree->Branch((cfprefix_ + "_rad_re").c_str(), &cfradrev);
+        tree->Branch((cfprefix_ + "_rad_im").c_str(), &cfradimv);
+        tree->Branch((cfprefix_ + "_vgf").c_str(), &cfvgf);
+        tree->Branch((cfprefix_ + "_ok").c_str(), &cfok);
+        tree->Branch((cfprefix_ + "_nblock").c_str(), &cfnblock);
+        tree->Branch((cfprefix_ + "_npooled").c_str(), &cfnpooled);
+      }
     }
 
     
@@ -897,6 +943,19 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       runtree->Branch("lyy", &lyy);
       runtree->Branch("lyz", &lyz);
 
+      // THE CF EXPORT GRID AND ITS MODEL, once per global parameter.
+      //
+      // They belong with the DATA, not in somebody's notes: the exponents are
+      // meaningless without the tau they were sampled at, and a file exported
+      // under a different switch configuration must not be silently mixed with
+      // one exported under this. Constant across entries, so ROOT compresses
+      // them to nothing -- the same argument `radvgrid` already rides on.
+      if (exportCfExponents_) {
+        cftau.assign(cvhcf::tauGrid(), cvhcf::tauGrid() + cvhcf::kNTau);
+        cfmodel = cvhcf::modelTag();
+        runtree->Branch("cftau", &cftau);
+        runtree->Branch("cfmodel", &cfmodel);
+      }
     }
     
     unsigned int globalidx = 0;

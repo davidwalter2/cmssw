@@ -178,6 +178,20 @@ opts.register('doRes', False, VarParsing.VarParsing.multiplicity.singleton,
               'register resolution families and export the per-candidate '
               'mass-CF ingredients (dV blocks, step records, mass-projected '
               'influence weights)')
+opts.register('exportStepRecords', True, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'write the RAW per-step resolution export (ioniurbanv, msmoliv, '
+              'radstepv/radstepspecv, reseigv, resinfv, resinfbv). It is 430 kB '
+              'per candidate -- 16 TB over the 40M candidates of the full '
+              'calibration -- and its only consumer was the offline exponent '
+              'extractor, which the in-maker cfqop_*/cfmass_* export replaces. '
+              'Default True; set False for production once the exponents have '
+              'been validated on the sample at hand')
+opts.register('exportCfExponents', True, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'compute the resolution-CF exponents in the maker and write them '
+              'on the 64-point tau grid (cfqop_* single-track, cfmass_* '
+              'two-track). Default True')
 opts.register('globalTag', '106X_mcRun2_asymptotic_v17',
               VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string,
@@ -477,6 +491,9 @@ process.globalCor = cms.EDProducer(
     doMuonAssoc=cms.bool(False),
     doTrigger=cms.bool(bool(opts.doTrigger)),
     doRes=cms.bool(bool(opts.doRes)),
+    exportStepRecords=cms.bool(bool(opts.exportStepRecords)),
+    exportCfExponents=cms.bool(bool(opts.exportCfExponents)),
+
     useIdealGeometry=cms.bool(bool(opts.useIdealGeometry)),
     bsConstraint=cms.bool(False),
     applyHitQuality=cms.bool(True),

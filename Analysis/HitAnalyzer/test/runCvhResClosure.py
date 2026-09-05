@@ -55,6 +55,20 @@ opts.register('doRes', True, VarParsing.VarParsing.multiplicity.singleton,
               'register the resolution parameter families (parmtypes 8-11) '
               'and emit their gradient/Hessian rows (default True; set False '
               'for a doRes-off reference run with identical selection)')
+opts.register('exportStepRecords', True, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'write the RAW per-step resolution export (ioniurbanv, msmoliv, '
+              'radstepv/radstepspecv, reseigv, resinfv, resinfbv). It is 430 kB '
+              'per candidate -- 16 TB over the 40M candidates of the full '
+              'calibration -- and its only consumer was the offline exponent '
+              'extractor, which the in-maker cfqop_*/cfmass_* export replaces. '
+              'Default True; set False for production once the exponents have '
+              'been validated on the sample at hand')
+opts.register('exportCfExponents', True, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'compute the resolution-CF exponents in the maker and write them '
+              'on the 64-point tau grid (cfqop_* single-track, cfmass_* '
+              'two-track). Default True')
 opts.register('propagationPtotLimit', 0.2, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.float,
               'G4e propagation momentum floor [GeV]; cfi default was 1.0')
@@ -399,6 +413,9 @@ process.globalCor = cms.EDProducer(
     doMuonAssoc=cms.bool(False),
     doTrigger=cms.bool(False),
     doRes=cms.bool(bool(opts.doRes)),
+    exportStepRecords=cms.bool(bool(opts.exportStepRecords)),
+    exportCfExponents=cms.bool(bool(opts.exportCfExponents)),
+
     useIdealGeometry=cms.bool(bool(opts.useIdealGeometry)),
     bsConstraint=cms.bool(False),
     applyHitQuality=cms.bool(True),

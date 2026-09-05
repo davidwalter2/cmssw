@@ -12,6 +12,8 @@
 #include "Math/Vector4Dfwd.h"
 #include "Math/Vector4D.h"
 
+#include <algorithm>
+#include <array>
 #include <Eigen/Sparse>
 
 #include <iomanip>
@@ -2052,6 +2054,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       
       dVs.clear();
       resvalidhit_.clear();
+      resfamily_.clear();
       residxs.clear();
       ioniurbanidx.clear();
       ioniurbanv.clear();
@@ -2982,6 +2985,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             resblockrng.push_back({{icons, nlocalcons}});
             resglobidx.push_back(msglobalidx);
             resvalidhit_.push_back(-1);          // material block, not a hit
+            resfamily_.push_back(10);            // multiple scattering
 
             // Phase B export: Moliere raw step data of the same leg (log
             // sync argument as for the Urban export below).
@@ -3017,6 +3021,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             resblockrng.push_back({{icons, nlocalcons}});
             resglobidx.push_back(ioniglobalidx);
             resvalidhit_.push_back(-1);          // material block, not a hit
+            resfamily_.push_back(11);            // ionization
 
             // Physics-CF export: the propagator's Urban step log corresponds
             // to the leg propagation whose dQI was stored above (the log is
@@ -3447,6 +3452,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               resblockrng.push_back({{icons, ispixel ? 2u : 1u}});
               resglobidx.push_back(xresglobalidx);
               resvalidhit_.push_back(int(ivalidhit));
+              resfamily_.push_back(8);           // hit resolution, local x
             }
             
             // local y resolution variation
@@ -3467,6 +3473,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               resblockrng.push_back({{icons, 2u}});
               resglobidx.push_back(yresglobalidx);
               resvalidhit_.push_back(int(ivalidhit));
+              resfamily_.push_back(9);           // hit resolution, local y
             }
 
             constexpr std::array<unsigned int, 6> alphaidxs = {{0, 2, 3, 4, 5, 1}};
@@ -4519,6 +4526,62 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             resinfbv.push_back(j < nb ? Bb(p, j) : 0.f);
           }
         }
+      }
+
+      // ---- THE RESOLUTION-CF EXPONENTS, for the q/p functional -----------
+      //
+      // Here and not offline because the block weights `sqrt(v_b/sq2)/sigma`
+      // are the FIT's own influence coefficients and do not exist until it has
+      // converged -- which is also why the raw step records had to be exported
+      // at all. Everything the offline extractor reads is in scope now, so the
+      // 6 x 64 floats it would have spent 2.2 s and 430 kB producing cost a
+      // few ms here.
+      //
+      // The inputs are the EXPORT ARRAYS, not the propagator's logs, so the
+      // pooling is identical to `cf_track_resolution.extract`'s join by
+      // construction and cannot drift from it.
+      if (exportCfExponents_) {
+        cvhcf::TrackInput cfin;
+        cfin.resglobidx = resglobidx.data();
+        cfin.resfamily = resfamily_.data();
+        cfin.resvarv = resinfvarv.data();
+        cfin.nres = int(std::min({resglobidx.size(), resfamily_.size(), resinfvarv.size()}));
+        cfin.ms = {msmoliidx.data(), msmoliv.data(), int(msmoliidx.size()),
+                   msmoliidx.empty() ? 0 : int(msmoliv.size() / msmoliidx.size())};
+        cfin.ioni = {ioniurbanidx.data(), ioniurbanv.data(), int(ioniurbanidx.size()),
+                     ioniurbanidx.empty() ? 0 : int(ioniurbanv.size() / ioniurbanidx.size())};
+        cfin.qsc = {ioniqscaleidx.data(), ioniqscalev.data(), int(ioniqscaleidx.size()), 2};
+        cfin.rad = {radstepidx.data(), radstepv.data(), int(radstepidx.size()), RADSTEP_STRIDE};
+        cfin.radspec = radstepspecv.data();
+        cfin.radvgrid = radvgrid.data();
+        cfin.radnv = int(radvgrid.size());
+        // sigma from the FLOAT the tree carries, so the in-maker weight is
+        // exactly the one a reader of the same file would have recovered.
+        const double c00 = refCov[0];
+        cfin.sigma = c00 > 0. ? std::sqrt(c00) : 0.;
+        // THE CHARGE. `ioniurbanv`'s cs = E/p^3 is positive for every track
+        // and the physical map is d(q/p) = q cs dE, so the ionization (and
+        // radiative) step weight is charge-signed -- the same factor
+        // `Geant4ePropagator` puts into the in-fit CGF block's `gs`.
+        cfin.ioniSign = refParms[0] >= 0.f ? 1. : -1.;
+        cfin.wantDelta = true;
+        cvhcf::TrackResult cfres;
+        cvhcf::trackExponents(cfin, cfres);
+        cfok = cfres.ok;
+        cfnblock = cfres.nblockms + cfres.nblockioni;
+        cfnpooled = cfres.npooled;
+        cfvgf = (c00 > 0.) ? float(cfres.vgauss / c00) : 0.f;
+        auto storecf = [](const std::array<double, cvhcf::kNTau> &a, std::vector<float> &v) {
+          v.resize(cvhcf::kNTau);
+          for (int j = 0; j < cvhcf::kNTau; ++j)
+            v[j] = float(a[j]);
+        };
+        storecf(cfres.S.ms, cfmsv);
+        storecf(cfres.S.del, cfdelv);
+        storecf(cfres.S.ioRe, cfiorev);
+        storecf(cfres.S.ioIm, cfioimv);
+        storecf(cfres.S.radRe, cfradrev);
+        storecf(cfres.S.radIm, cfradimv);
       }
     }
 

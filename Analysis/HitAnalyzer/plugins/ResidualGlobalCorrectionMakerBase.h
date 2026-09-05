@@ -115,6 +115,7 @@
 #include <functional>
 
 #include "TrackPropagation/Geant4e/interface/MaterialGroupModel.h"
+#include "TrackPropagation/Geant4e/interface/CvhCfExponents.h"
 #include "Analysis/HitAnalyzer/interface/ScalarPotFieldModeProvider.h"
 
 using namespace Eigen;
@@ -447,6 +448,13 @@ protected:
   std::vector<int> stripsToEdge;
   // transient, per fit iteration: block -> valid-hit index (see reshitidx)
   std::vector<int> resvalidhit_;
+  // Family (parmtype) of each resolution entry, parallel to `resvalidhit_`
+  // and to the makers' local `resglobidx`: 8/9 = hit, 10 = multiple
+  // scattering, 11 = ionization. Pushed at the same four sites as
+  // `resvalidhit_`, because `cvhcf` has to tell an MS block from an
+  // ionization one to pool them the way the offline `extract()` does, and the
+  // valid-hit index only separates hits from material.
+  std::vector<int> resfamily_;
 
   // Multipliers on the assigned hit covariance (1.0 = the CPE value as-is).
   double hitCovScalePixel_ = 1.0;
@@ -863,6 +871,52 @@ protected:
   // (per-candidate identity against refCov). Signs preserve the Landau
   // skew of the ionization contribution.
   std::vector<float> resinfbv;
+
+
+  // ======================================================================
+  // IN-MAKER RESOLUTION-CF EXPONENTS (cvhcf).
+  //
+  // The four family exponents of this track / candidate on the 64-point
+  // standardized tau grid, computed in the doRes pass from the SAME flat
+  // arrays above -- see TrackPropagation/Geant4e/interface/CvhCfExponents.h
+  // for why they are computed here and not offline.
+  //
+  // Branch names carry `cfprefix_`: `cfqop_*` in the single-track maker (the
+  // q/p functional) and `cfmass_*` in the two-track one (the candidate-mass
+  // functional). The two are DIFFERENT functionals of the same blocks -- they
+  // differ in the standardization sigma and in the sign the ionization and
+  // radiative weights carry -- so they must not share a name.
+  std::string cfprefix_ = "cfqop";
+  std::vector<float> cfmsv;     // S_ms   (real)
+  std::vector<float> cfdelv;    // S_del  (real, delta-ray recoil minus carve)
+  std::vector<float> cfiorev;   // Re S_ioni
+  std::vector<float> cfioimv;   // Im S_ioni
+  std::vector<float> cfradrev;  // Re S_rad
+  std::vector<float> cfradimv;  // Im S_rad
+  // The GAUSSIAN share of the functional's variance: sum_b v_b over the hit
+  // families divided by refCov(0,0) in the single-track maker, and
+  // (sigma_m^2 - resinfcov)/sigma_m^2 -- hits + beamspot + pointing -- in the
+  // two-track one. It is what `vgf` means in the offline caches.
+  float cfvgf = 0.f;
+  // 0 iff a registered MS/ionization block had no step rows under its global
+  // index, i.e. the model would be missing a block. The offline extractor
+  // drops such a track; the flag lets the reader drop it identically.
+  bool cfok = false;
+  int cfnblock = 0;   // MS + ionization blocks entering the exponents
+  int cfnpooled = 0;  // of those, how many pooled more than one leg
+  // Runtree: the tau grid and the model provenance, written once per global
+  // parameter (constant, so ROOT compresses them away) rather than per event.
+  std::vector<float> cftau;
+  std::string cfmodel;
+
+  // Export switches.
+  //   exportCfExponents_  -- compute and write the cf* branches at all.
+  //   exportStepRecords_  -- write the RAW per-step export the exponents are
+  //                          built from. It is the whole 430 kB/candidate;
+  //                          with the exponents validated it is only needed
+  //                          to re-derive them with a different model.
+  bool exportCfExponents_ = true;
+  bool exportStepRecords_ = true;
 
 
   TH2D *hetaphi = nullptr;

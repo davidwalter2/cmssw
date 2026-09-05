@@ -5,6 +5,8 @@
 // Sparse GBL design-matrix formulation (ported from the single-track
 // maker). base.h provides Eigen/Core + Eigen/Eigenvalues + `using
 // namespace Eigen`; the sparse solver path needs Eigen/Sparse too.
+#include <algorithm>
+#include <array>
 #include <Eigen/Sparse>
 
 // required for Transient Tracks
@@ -582,6 +584,10 @@ ResidualGlobalCorrectionMakerTwoTrackG4e::ResidualGlobalCorrectionMakerTwoTrackG
       transTrackBuilderToken_(esConsumes(edm::ESInputTag("", "TransientTrackBuilder"))),
       l1MenuToken_(esConsumes())
 {
+  // The resolution-CF exponents this maker exports are the CANDIDATE-MASS
+  // functional, not the single-track q/p one: different standardization,
+  // different ionization sign. They must not share a branch name with it.
+  cfprefix_ = "cfmass";
   doVtxConstraint_ = iConfig.getParameter<bool>("doVtxConstraint");
   doMassConstraint_ = iConfig.getParameter<bool>("doMassConstraint");
   massConstraint_ = iConfig.getParameter<double>("massConstraint");
@@ -2222,6 +2228,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             dVs.clear();
             resblockrng.clear();
             resglobidx.clear();
+            resfamily_.clear();
             ioniurbanidx.clear();
             ioniurbanv.clear();
             ioniqscaleidx.clear();
@@ -2945,6 +2952,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                     dV.setFromTriplets(coeffs.begin(), coeffs.end());
                     resblockrng.push_back({{irow, 5}});
                     resglobidx.push_back(dQpart == &dQMS ? msglobalidx : ioniglobalidx);
+                    // family (parmtype) of the entry, for the cvhcf pooling
+                    resfamily_.push_back(dQpart == &dQMS ? 10 : 11);
                   }
                 }
                 irow += 5;
@@ -2996,6 +3005,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                     dV.setFromTriplets(coeffs.begin(), coeffs.end());
                     resblockrng.push_back({{irow, 5}});
                     resglobidx.push_back(dQpart == &dQMS ? msglobalidx : ioniglobalidx);
+                    // family (parmtype) of the entry, for the cvhcf pooling
+                    resfamily_.push_back(dQpart == &dQMS ? 10 : 11);
                   }
                 }
                 irow += 5;
@@ -4229,6 +4240,16 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             reseigidx.clear();
             reseigv.clear();
             resinfbv.clear();
+            cfmsv.clear();
+            cfdelv.clear();
+            cfiorev.clear();
+            cfioimv.clear();
+            cfradrev.clear();
+            cfradimv.clear();
+            cfvgf = 0.f;
+            cfok = false;
+            cfnblock = 0;
+            cfnpooled = 0;
             if (dores && !dVs.empty()) {
               VectorXd afull = VectorXd::Zero(nstateparms);
               afull.head<6>() = mjacalt.transpose();
@@ -4253,6 +4274,66 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                 const double vb = ub.squaredNorm();
                 resinfvarv.push_back(vb);
                 resinfcov += vb;
+              }
+
+              // ---- THE RESOLUTION-CF EXPONENTS, for the MASS functional ---
+              //
+              // Same blocks, same step records, DIFFERENT functional: the
+              // standardization is sigma_m rather than sqrt(refCov(0,0)), and
+              // the ionization (and radiative) weight carries the sign -1 for
+              // BOTH legs and BOTH charges. That sign is not a convention:
+              // dm = (dm/d(q/p)) q cs dE = -p^2 cs (dm/dp) dE < 0, i.e. q^2
+              // removes the charge and an energy loss on EITHER muon can only
+              // LOWER the pair mass, so the two legs' Landau skews ADD.
+              // (cf_mass_likelihood.IONI_SGN; using sign(sum u_b) instead --
+              // an arbitrary noise-eigenvector convention, +1 on 50.5 % of
+              // candidates -- cancelled the skew and moved the unbinned scale
+              // by 0.1e-3.)
+              //
+              // The DELTA-RAY family is computed but is not part of the
+              // reference mass model (`build_pairs_tt` has no `Sdel`); it is
+              // exported so the two can be compared, and the reader leaves it
+              // out of the pairs cache unless asked.
+              if (exportCfExponents_) {
+                cvhcf::TrackInput cfin;
+                cfin.resglobidx = resglobidx.data();
+                cfin.resfamily = resfamily_.data();
+                cfin.resvarv = resinfvarv.data();
+                cfin.nres = int(std::min({resglobidx.size(), resfamily_.size(), resinfvarv.size()}));
+                cfin.ms = {msmoliidx.data(), msmoliv.data(), int(msmoliidx.size()),
+                           msmoliidx.empty() ? 0 : int(msmoliv.size() / msmoliidx.size())};
+                cfin.ioni = {ioniurbanidx.data(), ioniurbanv.data(), int(ioniurbanidx.size()),
+                             ioniurbanidx.empty() ? 0 : int(ioniurbanv.size() / ioniurbanidx.size())};
+                cfin.qsc = {ioniqscaleidx.data(), ioniqscalev.data(), int(ioniqscaleidx.size()), 2};
+                cfin.rad = {radstepidx.data(), radstepv.data(), int(radstepidx.size()), RADSTEP_STRIDE};
+                cfin.radspec = radstepspecv.data();
+                cfin.radvgrid = radvgrid.data();
+                cfin.radnv = int(radvgrid.size());
+                cfin.sigma = Jpsi_sigmamass;
+                cfin.ioniSign = -1.;
+                cfin.wantDelta = true;
+                cvhcf::TrackResult cfres;
+                cvhcf::trackExponents(cfin, cfres);
+                cfok = cfres.ok;
+                cfnblock = cfres.nblockms + cfres.nblockioni;
+                cfnpooled = cfres.npooled;
+                // The GAUSSIAN REMAINDER: hits + beamspot + pointing, i.e.
+                // sigma_m^2 minus the material share, BY CONSTRUCTION --
+                // unlike the single-track tree, resinfcov here does not carry
+                // the hit blocks at all (they are not registered).
+                const double sm2 = double(Jpsi_sigmamass) * double(Jpsi_sigmamass);
+                cfvgf = (sm2 > 0.) ? float((sm2 - resinfcov) / sm2) : 0.f;
+                auto storecf = [](const std::array<double, cvhcf::kNTau> &a, std::vector<float> &v) {
+                  v.resize(cvhcf::kNTau);
+                  for (int j = 0; j < cvhcf::kNTau; ++j)
+                    v[j] = float(a[j]);
+                };
+                storecf(cfres.S.ms, cfmsv);
+                storecf(cfres.S.del, cfdelv);
+                storecf(cfres.S.ioRe, cfiorev);
+                storecf(cfres.S.ioIm, cfioimv);
+                storecf(cfres.S.radRe, cfradrev);
+                storecf(cfres.S.radIm, cfradimv);
               }
             }
 
