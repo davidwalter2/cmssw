@@ -257,6 +257,15 @@ opts.register('eventsToProcess', '', VarParsing.VarParsing.multiplicity.singleto
               VarParsing.VarParsing.varType.string,
               'comma-separated run:event list to select specific events '
               '(e.g. 278769:15462343,278769:16101980); empty = all')
+opts.register('skipEvents', 0, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.int,
+              'skip the first N events of the input (PoolSource skipEvents). '
+              'Combined with nEvents this splits ONE input file across several '
+              'batch tasks -- a 50k-event ALCARECO file is 7-12 h of CVH in a '
+              'single job, so production chunks it into quarters '
+              '(skipEvents=k*C nEvents=C). NOTE: PoolSource counts the skip '
+              'across the WHOLE fileNames list, so chunking is only '
+              'well-defined with a single input file per task.')
 opts.register('nIters', 10, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.int,
               'Gauss-Newton iteration cap per constraint phase (default 10 = baseline)')
@@ -427,6 +436,13 @@ process.source = cms.Source(
     # the default duplicate check silently drops most of the sample.
     duplicateCheckMode=cms.untracked.string('noDuplicateCheck'),
 )
+
+if int(opts.skipEvents) > 0:
+    assert len(_urls) == 1, (
+        "skipEvents is only well-defined with exactly one input file per job "
+        "(PoolSource skips across the concatenated fileNames list); got %d"
+        % len(_urls))
+    process.source.skipEvents = cms.untracked.uint32(int(opts.skipEvents))
 
 if opts.eventsToProcess:
     process.source.eventsToProcess = cms.untracked.VEventRange(
