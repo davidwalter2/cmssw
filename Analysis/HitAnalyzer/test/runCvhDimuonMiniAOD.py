@@ -180,6 +180,14 @@ opts.register('exportStepRecords', False, VarParsing.VarParsing.multiplicity.sin
               'exponent extractor that the in-maker cfmass_* export replaces. '
               'Default False here (the maker cfi defaults it True when the '
               'parameter is absent -- it is always passed explicitly).')
+opts.register('exportMaterialNoise', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'register the parmtype-15 MATERIAL-GROUP process noise as a '
+              'resolution family, so the quadratic term differentiates a '
+              "group's WIDTH (its MS covariance and ionization variance, both "
+              'scaled by exp(k_g)) as well as its mean loss. It CHANGES the '
+              'exported gradient and Hessian of the parmtype-15 columns -- not '
+              'the track fit -- so it is off by default')
 opts.register('exportHitResBlocks', True, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'register the parmtype-8/9 HIT-RESOLUTION dV blocks in the '
@@ -586,6 +594,7 @@ process.trackrefitdimuon = ResidualGlobalCorrectionMakerDiMuonG4e.clone(
     exportCfExponents=cms.bool(bool(opts.exportCfExponents)),
     exportCfGroupExponents=cms.bool(bool(opts.exportCfGroupExponents)),
     exportHitResBlocks=cms.bool(bool(opts.exportHitResBlocks)),
+    exportMaterialNoise=cms.bool(bool(opts.exportMaterialNoise)),
     produceValueMaps=cms.bool(bool(opts.produceValueMaps)),
     # --- gen (MiniAOD retags)
     doGen=cms.bool(bool(opts.doGen)),

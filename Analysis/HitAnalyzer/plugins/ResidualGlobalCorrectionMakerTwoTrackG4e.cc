@@ -312,6 +312,10 @@ private:
   // Global material model: per-leg per-group dxi columns from the
   // propagator (reused buffer; see doc/global-material-model-plan.md).
   mutable std::vector<std::pair<int, Eigen::Matrix<double, 5, 1>>> groupJacs_;
+  // Per-group PROCESS NOISE of the last propagation (the width counterpart of
+  // groupJacs_'s mean). Filled only under doRes + the global material model;
+  // see the parmtype-15 dV registration.
+  mutable std::vector<std::pair<int, Eigen::Matrix<double, 5, 5>>> groupQs_;
   // per-step field-mode columns from the propagator (reused buffer)
   mutable std::vector<Eigen::Matrix<double, 5, 1>> modeJacs_;
 
@@ -2663,6 +2667,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                                                                           0., 0., -1., g4PartName,
                                                                           matModel_.get(),
                                                                           matModel_ ? &groupJacs_ : nullptr,
+                                                                          (matModel_ && doRes_ && exportMaterialNoise_) ? &groupQs_ : nullptr,
                                                                           fieldModeProvider_.get(),
                                                                           fieldModeProvider_ ? &modeJacs_ : nullptr);
               if (!std::get<0>(propresult)) {
@@ -4526,6 +4531,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             resinfvarv.clear();
             resinfcov = 0.;
             resinfcovhit = 0.f;
+            resinfcovgrp = 0.f;
             reshitidx.clear();
             reshitcls.clear();
             cfhitclsv.clear();

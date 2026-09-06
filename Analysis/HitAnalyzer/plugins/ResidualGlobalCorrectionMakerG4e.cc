@@ -255,6 +255,10 @@ private:
   int materialFDGroup_ = -1;
   double materialFDEps_ = 1e-3;
   mutable std::vector<std::pair<int, Eigen::Matrix<double, 5, 1>>> groupJacs_;
+  // Per-group PROCESS NOISE of the last propagation (the width counterpart of
+  // groupJacs_'s mean). Filled only under doRes + the global material model;
+  // see the parmtype-15 dV registration.
+  mutable std::vector<std::pair<int, Eigen::Matrix<double, 5, 5>>> groupQs_;
   // per-step field-mode columns from the propagator (reused buffer)
   mutable std::vector<Eigen::Matrix<double, 5, 1>> modeJacs_;
   mutable double v2MaxRelDiff_ = 0.;
@@ -2082,6 +2086,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       cfhitvv.clear();
       resinfcov = 0.;
       resinfcovhit = 0.f;
+      resinfcovgrp = 0.f;
       resinfbv.clear();
       resblockrng.clear();
       resglobidx.clear();
@@ -2379,10 +2384,12 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         auto const &propresult = simhitdebug
             ? g4prop->propagateGenericWithJacobianAltD(propfromtsos, surface, dB, dxival, dmsval, dionival, -1., g4PartName,
                                                        matModel_.get(), matModel_ ? &groupJacs_ : nullptr,
+                                                       (matModel_ && doRes_ && exportMaterialNoise_) ? &groupQs_ : nullptr,
                                                        fieldModeProvider_.get(),
                                                        fieldModeProvider_ ? &modeJacs_ : nullptr)
             : g4prop->propagateGenericWithJacobianAltD(updtsos,      surface, dB, dxival, dmsval, dionival, -1., g4PartName,
                                                        matModel_.get(), matModel_ ? &groupJacs_ : nullptr,
+                                                       (matModel_ && doRes_ && exportMaterialNoise_) ? &groupQs_ : nullptr,
                                                        fieldModeProvider_.get(),
                                                        fieldModeProvider_ ? &modeJacs_ : nullptr);
 
@@ -2503,6 +2510,42 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                           << " fd = " << fd
                           << " ratio fd/analytic = "
                           << (anacol[0] != 0. ? fd / anacol[0] : 0.) << std::endl;
+
+                // V3: THE PER-GROUP PROCESS NOISE, the width counterpart of
+                // V1's mean.  `setInjection(g, eps)` multiplies group g's
+                // `matStepFact` by e^eps, and that factor multiplies the
+                // step's MS covariance and ionization variance as well as its
+                // mean loss, so
+                //     Q(eps) - Q(0) = (e^eps - 1) dQ_g + O(eps^2)
+                // with dQ_g exactly the block this maker now registers as the
+                // parmtype-15 resolution family.  Comparing at the Q level
+                // rather than end-to-end on the chi2 is deliberate: the
+                // gradient/Hessian assembly downstream is the SAME code the
+                // parmtype-10/11 families already go through and is validated
+                // by them; what is new is only this matrix.
+                auto itq = std::find_if(groupQs_.begin(), groupQs_.end(),
+                                        [this](auto const &e) { return e.first == materialFDGroup_; });
+                if (itq != groupQs_.end()) {
+                  const Matrix<double, 5, 5> &anaQ = itq->second;
+                  const Matrix<double, 5, 5> qNom = std::get<2>(propresult);
+                  const Matrix<double, 5, 5> qPert = std::get<2>(pertres);
+                  const double scale = std::expm1(materialFDEps_);
+                  const Matrix<double, 5, 5> fdQ = (qPert - qNom) / scale;
+                  const double refn = anaQ.cwiseAbs().maxCoeff();
+                  const double relQ = refn > 0. ? (fdQ - anaQ).cwiseAbs().maxCoeff() / refn : -1.;
+                  // and the sum rule the split has to obey exactly
+                  Matrix<double, 5, 5> qsum = Matrix<double, 5, 5>::Zero();
+                  for (auto const &gq : groupQs_) {
+                    qsum += gq.second;
+                  }
+                  const Matrix<double, 5, 5> qmsi = dQMScurv + dQIcurv;
+                  const double refs = qmsi.cwiseAbs().maxCoeff();
+                  const double relS = refs > 0. ? (qsum - qmsi).cwiseAbs().maxCoeff() / refs : -1.;
+                  std::cout << "material FD closure (V3, process noise): group " << materialFDGroup_
+                            << " max|dQ_g| = " << refn
+                            << " max|fd - analytic|/max|dQ_g| = " << relQ
+                            << " ; sum rule max|sum_g dQ_g - (dQMS+dQI)|/max = " << relS << std::endl;
+                }
               }
             }
           }
@@ -2915,7 +2958,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               fieldModeProvider_->setInjection(imode, eps);
               auto const &pertResult = g4prop->propagateGenericWithJacobianAltD(
                   propInputState, surface, dB, dxival, dmsval, dionival, -1., g4PartName,
-                  matModel_.get(), nullptr, fieldModeProvider_.get(), nullptr);
+                  matModel_.get(), nullptr, nullptr, fieldModeProvider_.get(), nullptr);
               fieldModeProvider_->setInjection(-1, 0.);
               if (!std::get<0>(pertResult)) {
                 std::cout << "  mode " << imode << ": perturbed propagation failed" << std::endl;
@@ -3118,6 +3161,53 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             }
           }
 
+
+          // ---- PARMTYPE-15: THE MATERIAL GROUP'S OWN PROCESS NOISE ------
+          //
+          // `k_g` scales the step's MEAN loss AND, coherently, its MS
+          // covariance and ionization variance (`matStepFact` in the
+          // propagator's M1 block).  The mean dependence has always been
+          // differentiated -- it is the parmtype-15 column of
+          // `transportJacobianBxByBzD`, whose only non-zero row is `dqopdxi`
+          // -- but the WIDTH dependence never was.  So the quadratic term
+          // measured a group's mean loss only while the mass CF measured its
+          // width: two functionals of one parameter, one of them blind, which
+          // is exactly the configuration in which a -37 % `tec_services` pull
+          // can sit unexplained (NOTES 2026-09-06, `resolution/qmsmodel/`).
+          //
+          // dV/dk_g is the same object the parmtype-10/11 blocks use, split by
+          // group: the propagator accumulates (errMS + errI) per group in
+          // `groupQs_`, transported by the same Jacobian as dQ/dQ2 and
+          // localized by the same `Hm`, so `sum_g dQ_g == dQMS + dQI` exactly.
+          if (dores && exportMaterialNoise_ && globalMaterialModel_) {
+            for (auto const &gq : groupQs_) {
+              if (gq.first < 0 || unsigned(gq.first) >= nMatGroups) {
+                continue;
+              }
+              Matrix<double, 5, 5> dQG = gq.second;
+              if (dolocalupdate) {
+                dQG = Hm * gq.second * Hm.transpose();
+              }
+              if (!(dQG.cwiseAbs().maxCoeff() > 0.)) {
+                continue;
+              }
+              std::vector<Triplet<double>> coeffs;
+              coeffs.reserve(nlocalcons * nlocalcons);
+              for (unsigned int irow = 0; irow < nlocalcons; ++irow) {
+                for (unsigned int icol = 0; icol < nlocalcons; ++icol) {
+                  coeffs.emplace_back(icons + irow, icons + icol, dQG(irow, icol));
+                }
+              }
+              SparseMatrix<double> &dV = dVs.emplace_back(ncons, ncons);
+              dV.setFromTriplets(coeffs.begin(), coeffs.end());
+              // this group's own column of THIS propagation's parameter block
+              residxs.push_back(iparm + nlocalbfield + gq.first);
+              resblockrng.push_back({{icons, nlocalcons}});
+              resglobidx.push_back(matGroupGlobalIdx_[gq.first]);
+              resvalidhit_.push_back(-1);
+              resfamily_.push_back(15);          // global material group
+            }
+          }
 
           icons += nlocalcons;
 
@@ -4571,12 +4661,20 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         // and the block's variance contribution to the fitted q/p
         const double vb = wqop.segment(r0, nb).transpose() * dVb * wqop.segment(r0, nb);
         resinfvarv.push_back(vb);
-        resinfcov += vb;
-        // The hit share on its own, so the two trees expose the same
-        // decomposition. Unlike the two-track maker, `resinfcov` HERE has
-        // always included the hit blocks, and that is left alone.
         {
           const int fam = ires < resfamily_.size() ? resfamily_[ires] : -1;
+          // The parmtype-15 blocks are a RE-PARTITION of the parmtype-10/11
+          // noise, not an addition to it, so they must NOT enter `resinfcov`:
+          // that would double-count the material share and break the offline
+          // coverage cut `|resinfcov/refCov(0,0) - 1| < 5e-3`.
+          if (fam == 15) {
+            resinfcovgrp += float(vb);
+          } else {
+            resinfcov += vb;
+          }
+          // The hit share on its own, so the two trees expose the same
+          // decomposition. Unlike the two-track maker, `resinfcov` HERE has
+          // always included the hit blocks, and that is left alone.
           if (fam == 8 || fam == 9) {
             resinfcovhit += float(vb);
           }

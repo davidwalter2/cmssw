@@ -657,6 +657,8 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
                                                     const MaterialGroupModel *matGroups,
                                                     std::vector<std::pair<int, Eigen::Matrix<double, 5, 1>>>
                                                         *groupJacOut,
+                                                    std::vector<std::pair<int, Eigen::Matrix<double, 5, 5>>>
+                                                        *groupQOut,
                                                     const sim::FieldModeProvider *fieldModes,
                                                     std::vector<Eigen::Matrix<double, 5, 1>> *modeJacOut) const {
   using namespace Eigen;
@@ -834,6 +836,9 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
   cmsField->SetMaterialOffsetProvider(matGroups);
   if (groupJacOut != nullptr) {
     groupJacOut->clear();
+  }
+  if (groupQOut != nullptr) {
+    groupQOut->clear();
   }
   if (fieldModes != nullptr && modeJacOut != nullptr) {
     modeJacOut->assign(fieldModes->nModes(), Matrix<double, 5, 1>::Zero());
@@ -1192,6 +1197,14 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
 
     dQ = (transportJac.leftCols<5>() * dQ * transportJac.leftCols<5>().transpose()).eval();
     dQ2 = (transportJac.leftCols<5>() * dQ2 * transportJac.leftCols<5>().transpose()).eval();
+    // The per-group process noise is transported HERE, with dQ/dQ2 and by the
+    // same Jacobian, so that `sum_g groupQ == dQ + dQ2` holds step by step and
+    // not merely at the end.
+    if (groupQOut != nullptr) {
+      for (auto &gq : *groupQOut) {
+        gq.second = (transportJac.leftCols<5>() * gq.second * transportJac.leftCols<5>().transpose()).eval();
+      }
+    }
 
     // Global material model, step group + coherent (M1) scaling: the same
     // per-step k_g that scales the mean energy loss (applied by the eloss
@@ -1415,6 +1428,20 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
 
     dQ += errMS;
     dQ2 += errI;
+
+    // ... and accumulated HERE, from the same two matrices, into the group the
+    // step was classified into a few lines above. Both `errMS` and `errI`
+    // carry the step's `matStepFact = exp(k_g)`, so their sum IS dQ/dk_g of
+    // that group at the current k.
+    if (matGroups != nullptr && groupQOut != nullptr) {
+      auto it = std::find_if(groupQOut->begin(), groupQOut->end(),
+                             [stepGroup](auto const &e) { return e.first == stepGroup; });
+      if (it == groupQOut->end()) {
+        groupQOut->emplace_back(stepGroup, errMS + errI);
+      } else {
+        it->second += errMS + errI;
+      }
+    }
 
     LogDebug("Geant4e") << "step Length was " << thisPathLength << " cm, current global position: "
                         << TrackPropagation::hepPoint3DToGlobalPoint(g4eTrajState.GetPosition()) << std::endl;
@@ -1845,6 +1872,12 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
     if (groupJacOut != nullptr) {
       for (auto &gc : *groupJacOut) {
         gc.second = (Pflip * gc.second).eval();
+      }
+    }
+    // per-group process noise transforms like dQ / g4errorEnd
+    if (groupQOut != nullptr) {
+      for (auto &gq : *groupQOut) {
+        gq.second = (Pflip * gq.second * Pflip).eval();
       }
     }
     // per-mode field columns transform like the dB columns

@@ -141,6 +141,74 @@ In the single-track tree `resinfcov` has always included the hit blocks and
 still does; `resinfcovhit` is the same sum on its own, and `sum_c cfqop_hitv`
 equals `cfqop_vgf` exactly.
 
+### The material group's own PROCESS NOISE (2026-09-06, `exportMaterialNoise`)
+
+`k_g` — the parmtype-15 material-group amount — scales the step's MEAN energy
+loss AND, coherently, its MS covariance and ionization variance: they all carry
+the same `matStepFact = exp(k_g)` in the propagator's M1 block. The MEAN
+dependence has always been differentiated (it is the parmtype-15 column of
+`transportJacobianBxByBzD`, whose only non-zero row is `dqopdxi`). The WIDTH
+dependence never was. So the fit's quadratic hit-chi2 term measured a group's
+mean loss only, while the mass CF measured its width — two functionals of one
+parameter, one of them blind, which is exactly the configuration in which a
+−37 % `tec_services` pull can sit unexplained.
+
+With `exportMaterialNoise=True` the propagator accumulates, per material group,
+the sum of that group's steps' `(errMS + errI)`, transported by the same
+Jacobian as `dQ`/`dQ2` and localized by the same `Hm`. The maker registers each
+as a resolution block of family 15, so the existing log-det machinery —
+`gradll(i) += tr(dV_i R)`, `hess(i,j) += tr(dV_i R dV_j R)`, `grad += -rᵀR dV R r`
+— gives `k_g` its width term with no new algebra:
+
+    dG/dk_g,  dH/dk_g  now include  -rᵀV⁻¹(∂V/∂k_g)V⁻¹r + tr(V⁻¹ ∂V/∂k_g)
+
+| branch | meaning |
+|---|---|
+| `resinfcovgrp` | `sum_b v_b` over the parmtype-15 blocks |
+
+`resinfcovgrp` is a SEPARATE scalar and the parmtype-15 blocks are excluded from
+`resinfcov`, because they are a **re-partition** of the parmtype-10/11 noise
+(`sum_g dQ_g == dQMS + dQI` exactly), not an addition to it. Folding them in
+would double-count the material share and break the offline coverage cut
+`|resinfcov/refCov(0,0) − 1| < 5e-3`. `resinfcovgrp` should therefore equal the
+parmtype-10 + parmtype-11 part of `resinfcov` per candidate — measured on 120
+gun tracks: ratio 1 to **3.6e-7**, the float32 storage floor.
+
+**Only the SINGLE-TRACK maker has this.** The two-track maker has no `gradll`
+and no log-det machinery at all — its `dVs` feed the influence export and
+nothing else — so the equivalent there is a new implementation, not a port, and
+is not done.
+
+**Validation** (`materialFDGroup=<g> materialFDEps=<eps>`, which injects
+`k_g -> k_g + eps` and re-propagates):
+
+| check | measured |
+|---|---|
+| V3, `max\|fd − analytic\|/max\|dQ_g\|` | **1.6e-4** (`bpix_support`), **3.4e-5** (`tib_active_L2`), unchanged between eps = 1e-3 and 1e-4 |
+| sum rule `max\|sum_g dQ_g − (dQMS+dQI)\|/max` | **4.9e-16 / 5.3e-16** — float64 round-off |
+| `exportMaterialNoise=False` | every gradient/Hessian branch (`gradv`, `gradllv`, `gradchisqv`, `hesspackedv`) BIT-IDENTICAL to the pre-2026-09-06 build |
+| CPU | +17 ms/track on the low-pT muon gun (46.1 s vs 44.1 s user over 120 tracks), ~4.6 % |
+| bytes | none: same parameters, same H layout; `resinfcovgrp` is 4 B and the blocks ride in the existing `reseigidx`/`resinfvarv` arrays (~53 more entries per track) |
+
+The V3 residual does NOT shrink with eps, so it is not a finite-difference
+truncation: the injection also changes the group's MEAN loss, hence the
+momentum along the leg, hence subsequent MS. That indirect path is 1.6e-4 of
+the direct scaling and is deliberately NOT in the analytic block — the same
+approximation the parmtype-10/11 families make.
+
+### The per-leg reference energy loss (2026-09-06)
+
+| branch | meaning |
+|---|---|
+| `Mu{plus,minus}_dEref` | ΔE summed along the leg (two-track; pre-existing) |
+| `Mu{plus,minus}_maxfracloss` | max over the leg's propagations of `(E_in − E_out)/p_in` |
+| `dEref`, `maxfracloss` | the same two on the single-track tree |
+
+A `dE_ref/p < 0.01` quality requirement on the quadratic term's material
+information, imposable without the step records. The granularity is the
+PROPAGATION step (surface to surface) — the granularity at which the fit
+applies the loss — not the Geant4 step.
+
 ### The two legs' reference momentum covariance (2026-09-06)
 
 | branch | type | meaning |

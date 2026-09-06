@@ -223,6 +223,8 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
                            ? iConfig.getParameter<bool>("exportCfGroupExponents") : false;
   exportHitResBlocks_ = iConfig.existsAs<bool>("exportHitResBlocks")
                            ? iConfig.getParameter<bool>("exportHitResBlocks") : true;
+  exportMaterialNoise_ = iConfig.existsAs<bool>("exportMaterialNoise")
+                           ? iConfig.getParameter<bool>("exportMaterialNoise") : false;
   keepPixelEdgeHits_ = iConfig.existsAs<bool>("keepPixelEdgeHits")
       ? iConfig.getParameter<bool>("keepPixelEdgeHits") : false;
   pixelMinSizeX_ = iConfig.existsAs<int>("pixelMinSizeX")
@@ -528,6 +530,7 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
       tree->Branch("resinfcov", &resinfcov);
       tree->Branch("reshitcls", &reshitcls);
       tree->Branch("resinfcovhit", &resinfcovhit);
+      tree->Branch("resinfcovgrp", &resinfcovgrp);
 
       // THE IN-MAKER RESOLUTION-CF EXPONENTS.  Six families of 64 floats on
       // `cftau` (written into the runtree), plus the Gaussian share and the

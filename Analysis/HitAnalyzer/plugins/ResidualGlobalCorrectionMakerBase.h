@@ -893,6 +893,14 @@ protected:
   // exactly that total, so changing it would have been a silent physics
   // change (MASSCFTERM_SPEC section 3, option D).
   float resinfcovhit = 0.f;
+  // Sum of v_b over the parmtype-15 MATERIAL-GROUP blocks. They are a
+  // RE-PARTITION of the same process noise the parmtype-10/11 blocks carry
+  // (`sum_g dQ_g == dQMS + dQI` exactly), so adding them to `resinfcov` would
+  // double-count it and break the offline coverage check
+  // `|resinfcov/refCov(0,0) - 1| < 5e-3`. They get their own scalar instead,
+  // and `resinfcovgrp` should equal the parmtype-10 + parmtype-11 part of
+  // `resinfcov` per candidate -- a free closure test of the split.
+  float resinfcovgrp = 0.f;
   // Per-hit-class Gaussian variance shares of the candidate: `cf*_hitcls` is
   // the ascending class index and `cf*_hitv` the summed v_b of that class
   // DIVIDED by the functional's sigma^2, i.e. directly the `v_{c,i}` of
@@ -1018,6 +1026,15 @@ protected:
   //                          nothing but the influence export -- so it
   //                          cannot move the fit.
   bool exportHitResBlocks_ = true;
+  //   exportMaterialNoise_ -- register the parmtype-15 MATERIAL-GROUP process
+  //                          noise as a resolution family, so the quadratic
+  //                          term's gradient and Hessian for k_g carry the
+  //                          group's WIDTH as well as its mean loss. It
+  //                          CHANGES the exported G and H of the parmtype-15
+  //                          columns (not the track fit, which does not read
+  //                          `dVs`), so it is opt-in; False reproduces the
+  //                          pre-2026-09-06 gradients exactly.
+  bool exportMaterialNoise_ = false;
 
   // THE CANONICAL 18 HIT CLASSES, the C++ image of
   // `calibration_studies/resolution/hitres_classes.py:class_of`:

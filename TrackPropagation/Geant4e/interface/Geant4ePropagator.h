@@ -122,6 +122,18 @@ public:
                                    // the per-mode transported d(state)/dc_i columns are
                                    // accumulated with the basis evaluated at each step
                                    // midpoint -- replacing the maker-side per-leg chain rule.
+                                   // Per-group PROCESS NOISE, the width counterpart of
+                                   // groupJacOut's mean.  k_g scales the step's MS covariance
+                                   // AND its ionization variance (the `matStepFact` in the M1
+                                   // block), so dQ/dk_g of group g is the sum of THAT GROUP's
+                                   // steps' (errMS + errI), transported exactly as dQ/dQ2 are.
+                                   // sum_g equals dQ + dQ2 to the last bit, by construction.
+                                   // Without it the fit's quadratic term measures a material
+                                   // group's MEAN LOSS only, while the mass CF measures its
+                                   // WIDTH -- two functionals of one parameter, one of them
+                                   // blind.
+                                   std::vector<std::pair<int, Eigen::Matrix<double, 5, 5>>>
+                                       *groupQOut = nullptr,
                                    const sim::FieldModeProvider *fieldModes = nullptr,
                                    std::vector<Eigen::Matrix<double, 5, 1>> *modeJacOut =
                                        nullptr) const;

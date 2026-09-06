@@ -65,6 +65,22 @@ opts.register('exportStepRecords', False, VarParsing.VarParsing.multiplicity.sin
               'Default FALSE since 2026-09-06 -- every production since '
               '2026-09-05 set it so explicitly and the exponents are '
               'validated; set True to re-derive them under a different model')
+opts.register('materialFDGroup', -1, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.int,
+              'one-shot finite-difference closure of one material group: the '
+              "group's mean-loss column (V1) and, with doRes on, its PROCESS "
+              'NOISE block (V3, the parmtype-15 dV this maker registers). -1 = off')
+opts.register('materialFDEps', 1e-3, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'the injected delta k_g of the material FD closure')
+opts.register('exportMaterialNoise', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'register the parmtype-15 MATERIAL-GROUP process noise as a '
+              'resolution family, so the quadratic term differentiates a '
+              "group's WIDTH (its MS covariance and ionization variance, both "
+              'scaled by exp(k_g)) as well as its mean loss. It CHANGES the '
+              'exported gradient and Hessian of the parmtype-15 columns -- not '
+              'the track fit -- so it is off by default')
 opts.register('exportHitResBlocks', True, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'register the parmtype-8/9 HIT-RESOLUTION dV blocks in the '
@@ -435,6 +451,7 @@ process.globalCor = cms.EDProducer(
     exportCfExponents=cms.bool(bool(opts.exportCfExponents)),
     exportCfGroupExponents=cms.bool(bool(opts.exportCfGroupExponents)),
     exportHitResBlocks=cms.bool(bool(opts.exportHitResBlocks)),
+    exportMaterialNoise=cms.bool(bool(opts.exportMaterialNoise)),
 
     useIdealGeometry=cms.bool(bool(opts.useIdealGeometry)),
     bsConstraint=cms.bool(False),
@@ -458,6 +475,8 @@ process.globalCor = cms.EDProducer(
     runFDClosure=cms.bool(False),
     epsilonFDClosure=cms.double(1e-4),
     materialGroupsFile=cms.string(opts.materialGroupsFile),
+    materialFDGroup=cms.int32(int(opts.materialFDGroup)),
+    materialFDEps=cms.double(float(opts.materialFDEps)),
     globalMaterialModel=cms.bool(bool(opts.globalMaterialModel)),
     perStepFieldModes=cms.bool(bool(opts.perStepFieldModes)),
     skipHitlessSurfaces=cms.bool(bool(opts.skipHitlessSurfaces) and bool(opts.globalMaterialModel)),
