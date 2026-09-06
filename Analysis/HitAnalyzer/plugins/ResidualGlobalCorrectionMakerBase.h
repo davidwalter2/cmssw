@@ -383,6 +383,26 @@ protected:
   // double-precision profiling overlaps the smallest genuine modes.
   // nFactor = nRank*nParms is the flat branch dimension.
   unsigned int nRank;
+  // The VARIANCE (log-det) block of the Hessian, shipped SEPARATELY from
+  // `hessfactorv` (see the export doc).  `hesspackedv` is complete on its own;
+  // `hessfactorv` factors only the MEAN block `2 J^T R J`, whose rank is
+  // exactly ndof, and this is what has to be added to it:
+  //
+  //     hess = B^T B + scatter(hessvarpackedv on hessvaridxv)
+  //
+  // The reason is volume.  The variance block is a Gram matrix of the
+  // ncons x ncons objects R^1/2 dV_i R^1/2, so its rank is the NUMBER of
+  // variance parameters and it does not compress: carrying it as extra rows
+  // of B costs nvar*nParms floats (+57 % of a production candidate at family
+  // 15 alone, +429 % with 8-11), while its own packed triangle costs
+  // nvar*(nvar+1)/2 -- a factor ~20 less.
+  //
+  // The presence of `hessvaridxv` IS the flag: a file without it has the
+  // historical semantics (hessfactorv complete), a file with it needs the
+  // addition.  `globalfit/extract.py` does it.
+  unsigned int nHessVar = 0;
+  std::vector<unsigned int> hessvaridxv;   // columns, ascending, into nParms
+  std::vector<float> hessvarpackedv;       // upper triangle, row-major
   unsigned int nFactor;
   // relative eigenvalue mass dropped by the rank truncation,
   // sum(dropped lambda)/sum(kept lambda) -- monitoring quantity
@@ -1105,6 +1125,21 @@ protected:
   //                          can be finite-differenced against the thing it
   //                          claims to be the derivative of.
   bool exportObjective_ = false;
+  //   varianceFDGlobalIdx_ / varianceFDEps_ -- IN-MAKER finite difference of
+  //                          the variance gradient, at FIXED linearization.
+  //                          `>= 0` does that one global index, `-2` does
+  //                          every enabled variance column of families
+  //                          10/11/15 (whose dV blocks are the 5x5 process
+  //                          noise, the only ones whose V block is separately
+  //                          invertible in its own row range).  It perturbs
+  //                          V -> V + s dV_i with r, F and J held fixed and
+  //                          re-does the profile, so it tests the ASSEMBLY --
+  //                          the traces, the projector, the sign, the ln|C|
+  //                          term -- to O(s^2), which the propagator-level FD
+  //                          cannot do because there the reference trajectory
+  //                          moves with the parameter.  Prints `VARFD ...`.
+  int varianceFDGlobalIdx_ = -1;
+  double varianceFDEps_ = 1e-3;
 
   // THE CANONICAL 18 HIT CLASSES, the C++ image of
   // `calibration_studies/resolution/hitres_classes.py:class_of`:

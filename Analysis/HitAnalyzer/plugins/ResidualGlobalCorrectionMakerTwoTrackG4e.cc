@@ -49,6 +49,7 @@
 #include "CondFormats/L1TObjects/interface/L1GtTriggerMenu.h"
 
 #include <iomanip>
+#include <map>
 #include <iostream>
 #include <limits>
 #include <sstream>
@@ -5406,6 +5407,9 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           // EMPTY gradchisqv/gradllv rather than the previous candidate's
           gradchisqv.clear();
           gradllv.clear();
+          hessvaridxv.clear();
+          hessvarpackedv.clear();
+          nHessVar = 0;
         }
         if (dores && exportVarianceGrads_ && !dVs.empty()) {
           std::vector<unsigned int> vcol, vr0, vnb;
@@ -5461,19 +5465,47 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                   (vD[i] * R.block(vr0[i], vr0[i], vnb[i], vnb[i])).trace();
             }
 
-            // expected Hessian: tr(dV_i R dV_j R) = tr(D_i R_ij D_j R_ji)
+            // expected Hessian: tr(dV_i R dV_j R) = tr(D_i R_ij D_j R_ji).
+            // Accumulated BOTH into `hess` (so `hesspackedv` stays complete)
+            // and into its own small dense block over the variance columns,
+            // which is what is shipped alongside `hessfactorv` -- see
+            // `hessvaridxv` in the base class for why.
+            std::vector<unsigned int> varcols(vcol);
+            std::sort(varcols.begin(), varcols.end());
+            varcols.erase(std::unique(varcols.begin(), varcols.end()),
+                          varcols.end());
+            std::unordered_map<unsigned int, unsigned int> varpos;
+            varpos.reserve(varcols.size());
+            for (unsigned int i = 0; i < varcols.size(); ++i) {
+              varpos[varcols[i]] = i;
+            }
+            MatrixXd hessvar = MatrixXd::Zero(varcols.size(), varcols.size());
             for (unsigned int i = 0; i < nv; ++i) {
               const MatrixXd DiRij_base = vD[i];
+              const unsigned int pi = varpos.at(vcol[i]);
               for (unsigned int j = 0; j <= i; ++j) {
                 const MatrixXd T =
                     DiRij_base * R.block(vr0[i], vr0[j], vnb[i], vnb[j]);   // nb_i x nb_j
                 const MatrixXd U =
                     vD[j] * R.block(vr0[j], vr0[i], vnb[j], vnb[i]);        // nb_j x nb_i
                 const double hessres = (T.array() * U.transpose().array()).sum();
+                const unsigned int pj = varpos.at(vcol[j]);
                 hess(vcol[i], vcol[j]) += hessres;
+                hessvar(pi, pj) += hessres;
                 if (i != j) {
                   hess(vcol[j], vcol[i]) += hessres;
+                  hessvar(pj, pi) += hessres;
                 }
+              }
+            }
+            // pack the block, upper triangle row-major, columns ascending
+            nHessVar = varcols.size();
+            hessvaridxv.assign(varcols.begin(), varcols.end());
+            hessvarpackedv.clear();
+            hessvarpackedv.reserve(nHessVar * (nHessVar + 1) / 2);
+            for (unsigned int i = 0; i < nHessVar; ++i) {
+              for (unsigned int j = i; j < nHessVar; ++j) {
+                hessvarpackedv.push_back(float(hessvar(i, j)));
               }
             }
 
@@ -5498,6 +5530,133 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             // `_jacRef`, i.e. what lets the MASS term see them.
             dxdparms(Eigen::placeholders::all, freestateidxs) +=
                 Cinvd.solve(FtVinv*dVRrsparse).transpose();
+          }
+        }
+
+        // ---- IN-MAKER FINITE DIFFERENCE, at FIXED linearization -----------
+        //
+        // The propagator-level FD (perturb `k_g`, re-fit, difference `objval`)
+        // cannot be sharp: the reference trajectory moves with the parameter,
+        // so `V` moves with it through paths the analytic `dV` deliberately
+        // omits, and the Gauss-Newton stopping tolerance leaves a
+        // delta-INDEPENDENT residual that grows as 1/delta.  This one holds
+        // `r`, `F` and `J` fixed and perturbs only the covariance,
+        // `V -> V + s dV_i`, then re-does the profile from scratch:
+        //
+        //   obj(s) = r^T R(s) r + ln|V(s)| + ln|C(s)|,  C(s) = F^T V(s)^-1 F
+        //
+        // so (obj(+s) - obj(-s))/2s must reproduce the exported column to
+        // O(s^2).  It tests the traces, the projector, the sign and the ln|C|
+        // term -- everything except whether `dV` really is dV/dtheta.
+        //
+        // Only families 10/11/15 are done: their dV blocks span the 5x5
+        // process-noise rows, whose V block is exactly the inverse of the
+        // Vinv block there.  A hit block's rows are 2 wide with a
+        // (near-)singular Vinv on the unmeasured strip coordinate, so the
+        // same trick does not apply and the parmtype-8/9 columns rely on the
+        // structural argument instead.
+        if (exportVarianceGrads_ && varianceFDGlobalIdx_ != -1 && !dVs.empty()
+            && nvarcols > 0) {
+          // global index -> its blocks, keyed by row offset (one block per
+          // propagation for a given global index, so the ranges are disjoint)
+          std::map<unsigned int, std::map<unsigned int, MatrixXd>> perGlob;
+          for (unsigned int ires = 0; ires < dVs.size(); ++ires) {
+            const int fam = ires < resfamily_.size() ? resfamily_[ires] : -1;
+            if (!(fam == 10 || fam == 11 || fam == 15)) {
+              continue;
+            }
+            if (!varianceFamilyWanted(fam)) {
+              continue;
+            }
+            const unsigned int gidx = resglobidx[ires];
+            if (varianceFDGlobalIdx_ >= 0 && gidx != unsigned(varianceFDGlobalIdx_)) {
+              continue;
+            }
+            const unsigned int r0 = resblockrng[ires][0];
+            const unsigned int nb = resblockrng[ires][1];
+            MatrixXd Db = MatrixXd::Zero(nb, nb);
+            for (unsigned int a = 0; a < nb; ++a) {
+              for (unsigned int b = 0; b < nb; ++b) {
+                Db(a, b) = dVs[ires].coeff(r0 + a, r0 + b);
+              }
+            }
+            auto &m = perGlob[gidx];
+            auto it = m.find(r0);
+            if (it == m.end()) {
+              m.emplace(r0, std::move(Db));
+            } else {
+              it->second += Db;
+            }
+          }
+          const double eps = varianceFDEps_;
+          for (auto const &g : perGlob) {
+            const unsigned int gidx = g.first;
+            auto itcol = idxmap.find(gidx);
+            if (itcol == idxmap.end()) {
+              continue;
+            }
+            const unsigned int col = itcol->second;
+            std::array<double, 2> objs{{0., 0.}};
+            std::array<double, 2> chis{{0., 0.}};
+            std::array<double, 2> lls{{0., 0.}};
+            bool ok = true;
+            for (int is = 0; is < 2 && ok; ++is) {
+              const double sgn = is == 0 ? eps : -eps;
+              MatrixXd Vinvs = Vinvfull;
+              double dlogdetV = 0.;
+              for (auto const &blk : g.second) {
+                const unsigned int r0 = blk.first;
+                const unsigned int nb = blk.second.rows();
+                const MatrixXd Vinvb = Vinvfull.block(r0, r0, nb, nb);
+                const double dib = Vinvb.determinant();
+                if (!(std::abs(dib) > 0.)) {
+                  ok = false;
+                  break;
+                }
+                const MatrixXd Vb = Vinvb.inverse();
+                const MatrixXd Vbs = Vb + sgn * blk.second;
+                const double d0 = Vb.determinant();
+                const double d1 = Vbs.determinant();
+                if (!(d0 > 0. && d1 > 0.)) {
+                  ok = false;
+                  break;
+                }
+                dlogdetV += std::log(d1) - std::log(d0);
+                Vinvs.block(r0, r0, nb, nb) = Vbs.inverse();
+              }
+              if (!ok) {
+                break;
+              }
+              const SparseMatrix<double> Vinvss = Vinvs.sparseView();
+              const SparseMatrix<double> VinvFs = Vinvss * Fsparse;
+              SimplicialLDLT<SparseMatrix<double>> Cs(SparseMatrix<double>(
+                  Fsparse.transpose() * VinvFs));
+              if (Cs.info() != Eigen::Success) {
+                ok = false;
+                break;
+              }
+              const VectorXd dxs = -Cs.solve(VinvFs.transpose() * rfull);
+              chis[is] = rfull.dot(VectorXd(Vinvss * (rfull + Fsparse * dxs)));
+              // ln|V_0| is common to the two arms and cancels in the
+              // difference, so it is not needed here (and `objlogdetv` is
+              // filled below, not above).
+              lls[is] = dlogdetV + Cs.vectorD().array().abs().log().sum();
+              objs[is] = chis[is] + lls[is];
+            }
+            if (!ok) {
+              continue;
+            }
+            std::cout << "VARFD glob=" << gidx
+                      << " col=" << col
+                      << " eps=" << eps
+                      << " an=" << std::setprecision(12) << grad(col)
+                      << " anchi=" << (col < gradchisqv.size() ? double(gradchisqv[col]) : 0.)
+                      << " anll=" << (col < gradllv.size() ? double(gradllv[col]) : 0.)
+                      << " fd=" << (objs[0] - objs[1]) / (2. * eps)
+                      << " fdchi=" << (chis[0] - chis[1]) / (2. * eps)
+                      << " fdll=" << (lls[0] - lls[1]) / (2. * eps)
+                      << " ev=" << run << ":" << lumi << ":" << event
+                      << std::setprecision(6) << std::endl;
           }
         }
 
@@ -5728,26 +5887,38 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
       // Convention: H = B^T B, B row-major (nRank x nParms), row k =
       // sqrt(lambda_k) * v_k^T.
       if (fillGradsFactored_) {
-        const SelfAdjointEigenSolver<MatrixXd> eshess(hess);
+        MatrixXd hessmean = hess;
+        if (nHessVar > 0 && hessvarpackedv.size()
+                                == std::size_t(nHessVar) * (nHessVar + 1) / 2) {
+          std::size_t ip = 0;
+          for (unsigned int i = 0; i < nHessVar; ++i) {
+            for (unsigned int j = i; j < nHessVar; ++j, ++ip) {
+              const double v = hessvarpackedv[ip];
+              hessmean(hessvaridxv[i], hessvaridxv[j]) -= v;
+              if (i != j) {
+                hessmean(hessvaridxv[j], hessvaridxv[i]) -= v;
+              }
+            }
+          }
+        }
+        const SelfAdjointEigenSolver<MatrixXd> eshess(hessmean);
         const VectorXd& eigvals = eshess.eigenvalues();  // ascending
 
-        // With `exportVarianceGrads` the Hessian is no longer 2 J^T R J
-        // alone: the log-det block  tr(dV_i R dV_j R)  is a Gram matrix over
-        // the variance parameters, whose rank is bounded by the number of
-        // DISTINCT columns that received one and NOT by ndof.  So the count
-        // that keeps the factorization exact is ndof + nvarcols
-        // (rank(A+B) <= rank A + rank B); with the switch off nvarcols is 0
-        // and this is the historical ndof.
+        // WHAT THE FACTORED FORM CANNOT DO.  `B^T B` is exact for the MEAN
+        // Hessian `2 J^T R J`, whose rank is exactly ndof.  The log-det block
+        // `tr(dV_i R dV_j R)` is a Gram matrix of the ncons x ncons objects
+        // `R^1/2 dV_i R^1/2`, so its rank is the NUMBER of variance
+        // parameters: it does not compress, and carrying it as extra rows of
+        // B costs nvar*nParms floats -- measured at +57 % of a production
+        // candidate with family 15 alone and +429 % with 8-11.  Its own
+        // packed triangle costs nvar*(nvar+1)/2, ~20x less.  So `hessfactorv`
+        // factors the MEAN block only, at the historical `nRank = ndof`, and
+        // the variance block rides in `hessvaridxv`/`hessvarpackedv`:
         //
-        // WHAT THE FACTORED FORM CANNOT DO: the variance block is a Gram
-        // matrix of the ncons x ncons objects R^1/2 dV_i R^1/2, so its rank
-        // is essentially the NUMBER OF VARIANCE PARAMETERS -- it does not
-        // compress the way the mean block does (rank ndof << nParms).  There
-        // is no low-rank B for it; the honest options are to carry the extra
-        // nvarcols rows, which is what is done here, or to ship the block
-        // separately.  Carrying the rows keeps `hessfactorv` a complete
-        // description of `hess`, so no offline consumer has to change.
-        const unsigned int nrank = std::min(ndof + nvarcols, nparsfinal);
+        //     hess = B^T B + scatter(hessvarpackedv on hessvaridxv)
+        //
+        // `hesspackedv`, when written, is COMPLETE and needs no addition.
+        const unsigned int nrank = std::min(ndof, nparsfinal);
 
         double keptmass = 0.;
         double droppedmass = 0.;

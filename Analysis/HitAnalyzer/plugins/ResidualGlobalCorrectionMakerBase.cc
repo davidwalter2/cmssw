@@ -235,6 +235,10 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
                            : std::vector<unsigned int>();
   exportObjective_ = iConfig.existsAs<bool>("exportObjective")
                            ? iConfig.getParameter<bool>("exportObjective") : false;
+  varianceFDGlobalIdx_ = iConfig.existsAs<int>("varianceFDGlobalIdx")
+                           ? iConfig.getParameter<int>("varianceFDGlobalIdx") : -1;
+  varianceFDEps_ = iConfig.existsAs<double>("varianceFDEps")
+                           ? iConfig.getParameter<double>("varianceFDEps") : 1e-3;
   keepPixelEdgeHits_ = iConfig.existsAs<bool>("keepPixelEdgeHits")
       ? iConfig.getParameter<bool>("keepPixelEdgeHits") : false;
   pixelMinSizeX_ = iConfig.existsAs<int>("pixelMinSizeX")
@@ -602,6 +606,17 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
       tree->Branch("hessfactorv", hessfactorv.data(), "hessfactorv[nFactor]/F", basketSize);
       tree->Branch("hessdroppedmass", &hessdroppedmass);
       tree->Branch("hessrankgap", &hessrankgap);
+    }
+    // The variance (log-det) block of the Hessian, which `hessfactorv` does
+    // NOT contain.  See the member docs; written only when the log-det term
+    // is on, so its mere presence tells a reader which convention the file
+    // follows.
+    // ONLY on the factored path: `hesspackedv` is already complete, and a
+    // consumer that read both and added them would double-count.
+    if (exportVarianceGrads_ && fillGradsFactored_) {
+      tree->Branch("nHessVar", &nHessVar, basketSize);
+      tree->Branch("hessvaridxv", &hessvaridxv);
+      tree->Branch("hessvarpackedv", &hessvarpackedv);
     }
     
     tree->Branch("run", &run);

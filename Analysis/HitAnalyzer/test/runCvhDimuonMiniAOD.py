@@ -212,6 +212,17 @@ opts.register('exportObjective', False, VarParsing.VarParsing.multiplicity.singl
               'Validation only -- it costs an ncons x ncons LDLT per '
               'candidate -- and exists so the new gradient can be '
               'finite-differenced against what it claims to differentiate')
+opts.register('varianceFDGlobalIdx', -1, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.int,
+              'IN-MAKER finite difference of the variance gradient at FIXED '
+              'linearization: >=0 does that one global index, -2 does every '
+              'enabled variance column of families 10/11/15. Perturbs '
+              'V -> V + s dV_i with r/F/J held fixed and re-does the profile, '
+              'so it tests the assembly (traces, projector, sign, ln|C|) to '
+              'O(s^2). Prints VARFD lines')
+opts.register('varianceFDEps', 1e-3, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'the s of varianceFDGlobalIdx')
 opts.register('exportHitResBlocks', True, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'register the parmtype-8/9 HIT-RESOLUTION dV blocks in the '
@@ -622,6 +633,8 @@ process.trackrefitdimuon = ResidualGlobalCorrectionMakerDiMuonG4e.clone(
     exportVarianceGrads=cms.bool(bool(opts.exportVarianceGrads)),
     varianceGradFamilies=cms.vuint32(*[int(x) for x in opts.varianceGradFamilies]),
     exportObjective=cms.bool(bool(opts.exportObjective)),
+    varianceFDGlobalIdx=cms.int32(int(opts.varianceFDGlobalIdx)),
+    varianceFDEps=cms.double(float(opts.varianceFDEps)),
     produceValueMaps=cms.bool(bool(opts.produceValueMaps)),
     # --- gen (MiniAOD retags)
     doGen=cms.bool(bool(opts.doGen)),

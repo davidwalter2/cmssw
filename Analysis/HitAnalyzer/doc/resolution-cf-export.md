@@ -196,6 +196,131 @@ momentum along the leg, hence subsequent MS. That indirect path is 1.6e-4 of
 the direct scaling and is deliberately NOT in the analytic block — the same
 approximation the parmtype-10/11 families make.
 
+### The two-track VARIANCE (log-det) gradient (2026-09-06, `exportVarianceGrads`)
+
+The two-track maker's exported `gradv` / `hesspackedv` / `hessfactorv` were the
+derivatives of the QUADRATIC form alone,
+
+    chi2(theta) = r^T R r,   r -> r + J theta,
+    grad = 2 J^T R r,   hess = 2 J^T R J,
+
+i.e. every global parameter entered only through the MEAN of the residuals.
+For a parameter that also moves the COVARIANCE that is not the derivative of
+the likelihood, and three families are exactly that:
+
+| parmtype | how it enters V | how it entered the export before |
+|---|---|---|
+| 15 (material group) | `exp(k_g)` scales the group's steps' MS covariance and ionization variance, the SAME factor that scales their mean loss | mean loss only (the `dxi` column of `transportJacobianBxByBzD`, one non-zero row) |
+| 10 / 11 (MS, ionization) | they ARE the covariance | not at all -- they are not columns of this maker's parameter vector |
+| 8 / 9 (hit resolution) | they scale the hit covariance | not at all |
+
+With `exportVarianceGrads=True` the exported objective becomes the MARGINAL
+(REML) one, the same one the single-track maker has always differentiated:
+
+    -2 lnL = r^T R r + ln|V| + ln|C|,
+    R = V^-1 - V^-1 F C^-1 F^T V^-1,     C = F^T V^-1 F,
+
+    dG_i  = -r^T R dV_i R r + tr(dV_i R)
+    dH_ij =  tr(dV_i R dV_j R)                    (EXPECTED / Fisher)
+
+Three properties, all deliberate and all shared with the single-track code:
+
+* **The local track parameters.** `R` already carries the projection, so the
+  fitted state is profiled out and its implicit derivative vanishes by the
+  envelope theorem. The `ln|C|` piece -- the difference between profiling and
+  marginalizing -- is supplied automatically by using `R` and not `V^-1` inside
+  the trace. The vertex / beamspot / pointing / mass-constraint rows have
+  theta-independent weights, register no `dV`, and enter only through `R` and
+  `C`.
+* **The Hessian is the EXPECTED one.** The observed pieces
+  `2 r^T R dV_i R dV_j R r` and the mean-variance cross term
+  `-2 J^T R dV_i R r` are dropped; the single-track maker has had them behind
+  `if (false)` since it was written. For a Gaussian the mean and variance
+  blocks of the Fisher matrix are exactly orthogonal, so the cross term is zero
+  IN EXPECTATION; and the expected form is a Gram matrix,
+  `tr(dV_i R dV_j R) = <R^1/2 dV_i R^1/2, R^1/2 dV_j R^1/2>_F`, hence PSD by
+  construction, as `2 J^T R J` also is. **The exported `hess` is PSD whatever
+  the candidate does** -- which the mean+observed-cross form would not be.
+* **`dxdparms` gains the variance columns**, `dxhat/dtheta_i = C^-1 F^T V^-1
+  dV_i R r`, so `Jpsi_jacMass` and the two `_jacRef` see them too. That is what
+  lets the MASS term and the hit term share one material parameter set.
+
+**What the switch costs in LAYOUT.** Parmtype 15 needs nothing new: the
+material-group globals are already columns of `globalidxv` (one slot per group
+per hit), so `varianceGradFamilies=15` changes the VALUES of the parmtype-15
+entries of `gradv`/`hess` and nothing else -- the file still pools with a
+production that ran without the switch. Parmtypes 8/9/10/11 are per-module and
+are NOT columns of this maker's parameter vector (`npars = nparsAlignment +
+nparsBfield + nparsEloss`), so they are APPENDED; `nParms`, `globalidxv`,
+`gradv`, `hesspackedv`, `hessfactorv`, `jacrefv`, `Muplus_jacRef`,
+`Muminus_jacRef` and `Jpsi_jacMass` all grow with them. Their `Jfinal` columns
+stay exactly zero and only the log-det block writes to them.
+
+**What the FACTORED storage can and cannot represent.** `hessfactorv` stores
+`H = B^T B` with `nRank = min(ndof, nParms)` rows, which is exact for the MEAN
+Hessian `2 J^T R J` because `rank(R) = ndof`. The variance block is NOT of that
+form in any useful sense: it is a Gram matrix of the ncons x ncons objects
+`R^1/2 dV_i R^1/2`, so its rank is essentially the NUMBER OF VARIANCE
+PARAMETERS and it does not compress at all. Carrying it as extra rows of `B`
+costs `nvar x nParms` floats, measured at **+57 %** of a production candidate
+with family 15 alone and **+429 %** with 8-11; its own packed triangle costs
+`nvar (nvar+1)/2`, about **20x** less. So it is shipped separately:
+
+| branch | meaning |
+|---|---|
+| `nHessVar` | number of columns carrying a log-det contribution |
+| `hessvaridxv` | those columns, ascending, indices into this candidate's `nParms` |
+| `hessvarpackedv` | the upper triangle of the `nHessVar x nHessVar` variance block, row-major |
+
+    hess = B^T B + scatter(hessvarpackedv on hessvaridxv)
+
+**`hesspackedv` is COMPLETE and must not have the block added to it** -- which
+is why the three branches are written only on the `fillGradsFactored` path.
+Their PRESENCE is the flag: a file without `hessvaridxv` has the historical
+semantics. `globalfit/extract.py` does the addition, and refuses to build a
+card from a factored file whose `gradllv` is filled but which has no
+`hessvaridxv` -- that combination is an inconsistent `(G, K)` pair and would
+bias the fit rather than merely widen it.
+
+`gradchisqv` and `gradllv`, which this maker has always had branches for and
+never filled, are now filled when the switch is on:
+
+| branch | meaning |
+|---|---|
+| `gradchisqv` | `2 J^T R r - r^T R dV R r` -- the chi2 gradient, mean AND variance parts |
+| `gradllv` | `tr(dV_i R)` -- the log-det (normalisation) gradient alone |
+| `gradv` | their sum, the full `d(-2lnL)/dtheta` |
+
+`nu = gradv - gradchisqv == gradllv` is the trace term the censored-likelihood
+correction in `fit_global_grads.py --censor-cut` wants.
+
+**One caveat that cannot be fixed here.** This maker does not apply
+`exp(corparms)` to the hit covariance (the single-track maker does), so the
+parmtype-8/9 derivatives are evaluated at `k = 0` whatever `corFiles` says.
+Fitting 8/9 from the two-track term and feeding the result back would not close;
+the maker says so on stderr when those families are requested.
+
+**The objective itself** is exported under `exportObjective=True` as
+`objval = objchisq + objlogdetv + objlogdetc` in DOUBLE (`chisqval` is a float
+and a central difference at delta = 1e-4 needs three more digits). `ln|V|` is a
+PSEUDO-determinant -- `Vinv` is rank deficient by construction, one null mode
+per deweighted strip coordinate -- and `objnullv` counts the modes dropped so
+the two arms of a finite difference can be asserted to have dropped the same
+number. It costs a symmetric eigendecomposition of an ncons x ncons matrix per
+candidate and is validation-only.
+
+**Validation** (`calibration_studies/resolution/{fd_variance_260906.sh,
+check_variance_grads_260906.py}`), gun ditrack, 59 candidates:
+
+| gate | measured |
+|---|---|
+| switch OFF, three smokes | every branch BIT-IDENTICAL to the branch head (246 / 157 / 264 branches) |
+| FD, parmtype 15 (`k_init` of one group, delta = 1e-3 and 1e-4) | see `runs/variancegrads260906/check_variance.txt` |
+| FD, parmtype 10 (`CVH_MS_SCALE = exp(+-delta)`, a common log scale on every step's MS) | idem |
+| sum rule `sum_g d/dk_g == d/d(MS+ioni scale)` | idem, gradient and Hessian block |
+| two-track vs single-track, same muon, same parmtype-10 global | idem |
+| Hessian PSD, per candidate and pooled over the (14,15) subset | idem |
+
 ### The per-leg reference energy loss (2026-09-06)
 
 | branch | meaning |
