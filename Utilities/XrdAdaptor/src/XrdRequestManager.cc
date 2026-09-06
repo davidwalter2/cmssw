@@ -122,15 +122,48 @@ static void SendMonitoringInfo(XrdCl::File &file) {
 }
 
 namespace {
+  // A transport query is answered out of the CONNECTION's own state. The one
+  // situation this whole traceroute block exists to describe -- a redirect
+  // chain that ended badly -- is exactly the situation in which some hop of
+  // that chain no longer has a connection to query: XrdCl logs
+  //   "Unable to initiate the connection: [ERROR] Socket error: network is
+  //    unreachable"  /  "Redirect limit has been reached for message kXR_open"
+  // and QueryTransport then fails, leaving the AnyObject empty. AnyObject::Get
+  // sets the pointer to 0 in that case (XrdClAnyObject.hh:78-86), so the
+  // unpatched code returned a NULL unique_ptr and the caller dereferenced it
+  // (`auth_method->empty()`, `*hostname_method`, ...) on the XrdCl JobManager
+  // thread -- i.e. outside any CMSSW module, which is why the framework's
+  // crash report says "Module: non-CMSSW (crashed)" and the visible stack
+  // frames belong to the *paused* worker threads.
+  //
+  // Reproduced 2026-09-06 on submit82 streaming a UL16 MiniAOD chunk through
+  // cms-xrd-global (scratch_segv_260906/xrd1); it is the cause of the SIGSEGVs
+  // of the dymc_8p5M_260906_v2 and jpsimc_20M_260906_v2 condor productions.
+  // The same input read over POSIX ceph never crashes.
+  //
+  // Two guards, both of which the upstream code needs:
+  //   * the PostMaster can be gone during shutdown -> check it;
+  //   * a failed query must yield an EMPTY string, not a null pointer, because
+  //     every call site formats the result unconditionally.
   std::unique_ptr<std::string> getQueryTransport(const XrdCl::URL &url, uint16_t query) {
-    XrdCl::AnyObject result;
-    XrdCl::DefaultEnv::GetPostMaster()->QueryTransport(url, query, result);
-    std::string *tmp;
-    result.Get(tmp);
-    return std::unique_ptr<std::string>(tmp);
+    std::string *tmp = nullptr;
+    if (XrdCl::PostMaster *pm = XrdCl::DefaultEnv::GetPostMaster()) {
+      XrdCl::AnyObject result;
+      if (pm->QueryTransport(url, query, result).IsOK()) {
+        result.Get(tmp);
+      }
+    }
+    return tmp ? std::unique_ptr<std::string>(tmp) : std::make_unique<std::string>();
   }
 
   void tracerouteRedirections(const XrdCl::HostList *hostList) {
+    // XrdCl hands the handler a null host list when the open never got far
+    // enough to collect one; `for (auto const &host : *hostList)` below would
+    // dereference it. Source::determineHostExcludeString, the very next call
+    // at both call sites, already guards this -- this one did not.
+    if (hostList == nullptr) {
+      return;
+    }
     edm::LogInfo("XrdAdaptorLvl2").log([hostList](auto &li) {
       int idx_redirection = 1;
       li << "-------------------------------\nTraceroute:\n";
