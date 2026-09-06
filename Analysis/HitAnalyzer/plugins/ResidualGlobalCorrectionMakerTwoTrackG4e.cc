@@ -469,6 +469,46 @@ private:
   std::vector<float> Muplus_jacRef;
   std::vector<float> Muminus_jacRef;
   std::vector<float> Jpsi_jacMass;
+
+  // ---- THE TWO LEGS' REFERENCE MOMENTUM COVARIANCE ----------------------
+  //
+  // `covrefmom` -- the (q/p, lambda, phi) covariance of BOTH legs at the
+  // reference, the very matrix `Jpsi_sigmamass` is contracted out of -- has
+  // never been exported, so the two second-order corrections the mass
+  // likelihood needs (MASSCFTERM_SPEC section 4b/4c) had to take their inputs
+  // from an MC measurement:
+  //
+  //     A = sigma_rel1^2 + sigma_rel2^2 ,  B = 2 rho sigma_rel1 sigma_rel2
+  //
+  // is the Jensen term's whole content, and `f_ang`, the share of the mass
+  // variance carried by the ANGLES rather than the two curvatures, is the
+  // only thing the closed form `1.5 (sigma_m/m)^2` misses. On data there is
+  // no MC to take them from. This is spec option B ("the full symmetric 6x6")
+  // plus the two pieces that make it self-contained.
+  //
+  // ORDER IS (PLUS, MINUS), NOT the internal leg order: entries 0-2 are the
+  // mu+ (q/p, lambda, phi) and 3-5 the mu-, permuted here by idxplus/idxminus
+  // so that no consumer has to know `muchargearr`.
+  //
+  // `Jpsi_covrefmom` is the UPPER TRIANGLE, row-major: 21 floats, (0,0),
+  // (0,1)...(0,5),(1,1)...(5,5). `Jpsi_jacrefmom` is dm/d(state) in the same
+  // order, so `J C J^T` must reproduce `Jpsi_sigmamass^2` -- exported so the
+  // matrix can be CHECKED rather than trusted.
+  std::vector<float> Jpsi_covrefmom;
+  std::vector<float> Jpsi_jacrefmom;
+  // q/p of each leg at the reference, so sigma_rel = sqrt(C_ll)/|q/p| and the
+  // sign conventions are fixed by the file rather than by a convention.
+  float Jpsi_qoprefplus;
+  float Jpsi_qoprefminus;
+  // Derived, and the numbers the gates quote. sigma_rel is the RELATIVE
+  // momentum resolution of the leg; `Jpsi_rhomom` is the leg-leg correlation
+  // of d ln p (NOT of q/p: the two differ by sign(q+ q-), and it is d ln p
+  // that enters B); `Jpsi_fang` = 1 - (J_kappa C J_kappa^T)/sigma_m^2 with
+  // J_kappa the mass Jacobian restricted to the two q/p components.
+  float Jpsi_sigmarelplus;
+  float Jpsi_sigmarelminus;
+  float Jpsi_rhomom;
+  float Jpsi_fang;
   
   unsigned int Muplus_nhits;
   unsigned int Muplus_nvalid;
@@ -802,6 +842,18 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::beginStream(edm::StreamID streami
     tree->Branch("Jpsi_mass", &Jpsi_mass);
     // Per-event dimuon-mass uncertainty propagated from the CVH covariance.
     tree->Branch("Jpsi_sigmamass", &Jpsi_sigmamass);
+    // The two legs' reference momentum covariance and the mass Jacobian it is
+    // contracted with -- 33 floats, 132 B/candidate, 0.16 % of the slim
+    // record. Always on: without them the Jensen and self-consistent-sigma
+    // corrections have no truth-free inputs on data.
+    tree->Branch("Jpsi_covrefmom", &Jpsi_covrefmom);
+    tree->Branch("Jpsi_jacrefmom", &Jpsi_jacrefmom);
+    tree->Branch("Jpsi_qoprefplus", &Jpsi_qoprefplus);
+    tree->Branch("Jpsi_qoprefminus", &Jpsi_qoprefminus);
+    tree->Branch("Jpsi_sigmarelplus", &Jpsi_sigmarelplus);
+    tree->Branch("Jpsi_sigmarelminus", &Jpsi_sigmarelminus);
+    tree->Branch("Jpsi_rhomom", &Jpsi_rhomom);
+    tree->Branch("Jpsi_fang", &Jpsi_fang);
 
     tree->Branch("Muplus_pt", &Muplus_pt);
     tree->Branch("Muplus_eta", &Muplus_eta);
@@ -4347,6 +4399,55 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
 
             Jpsi_sigmamass = std::sqrt((mjacalt*covrefmom*mjacalt.transpose())[0]);
+
+            // ---- the covariance itself, permuted into (plus, minus) ------
+            {
+              const std::array<unsigned int, 6> perm = {{3 * idxplus, 3 * idxplus + 1, 3 * idxplus + 2,
+                                                         3 * idxminus, 3 * idxminus + 1, 3 * idxminus + 2}};
+              Jpsi_covrefmom.clear();
+              Jpsi_covrefmom.reserve(21);
+              for (unsigned int i = 0; i < 6; ++i) {
+                for (unsigned int j = i; j < 6; ++j) {
+                  Jpsi_covrefmom.push_back(float(covrefmom(perm[i], perm[j])));
+                }
+              }
+              Jpsi_jacrefmom.assign(6, 0.f);
+              for (unsigned int i = 0; i < 6; ++i) {
+                Jpsi_jacrefmom[i] = float(mjacalt(0, perm[i]));
+              }
+
+              // q/p at the reference: state[6] is the charge, segment<3>(3)
+              // the momentum -- the same expression massJacobianAltD uses.
+              const double qopp = refftsarr[idxplus][6] / refftsarr[idxplus].segment<3>(3).norm();
+              const double qopm = refftsarr[idxminus][6] / refftsarr[idxminus].segment<3>(3).norm();
+              Jpsi_qoprefplus = float(qopp);
+              Jpsi_qoprefminus = float(qopm);
+
+              const double cpp = covrefmom(perm[0], perm[0]);
+              const double cmm = covrefmom(perm[3], perm[3]);
+              const double cpm = covrefmom(perm[0], perm[3]);
+              const double srp = (std::abs(qopp) > 0.) ? std::sqrt(std::max(cpp, 0.)) / std::abs(qopp) : 0.;
+              const double srm = (std::abs(qopm) > 0.) ? std::sqrt(std::max(cmm, 0.)) / std::abs(qopm) : 0.;
+              Jpsi_sigmarelplus = float(srp);
+              Jpsi_sigmarelminus = float(srm);
+              // d ln p = -d(q/p)/(q/p), so the momentum correlation carries
+              // sign(q+ q-) relative to the q/p one -- i.e. it flips for an
+              // opposite-sign pair, which is every candidate here. Written
+              // out rather than assumed, so a same-sign control sample is
+              // still right.
+              Jpsi_rhomom = (srp > 0. && srm > 0. && qopp != 0. && qopm != 0.)
+                                ? float(cpm / (qopp * qopm) / (srp * srm))
+                                : 0.f;
+              // The ANGULAR share of the mass variance: everything the two
+              // curvatures do not carry. `1.5 - f_ang` is the Jensen
+              // coefficient the spec asks for.
+              Matrix<double, 1, 6> jkappa = Matrix<double, 1, 6>::Zero();
+              jkappa(0, perm[0]) = mjacalt(0, perm[0]);
+              jkappa(0, perm[3]) = mjacalt(0, perm[3]);
+              const double sm2 = double(Jpsi_sigmamass) * double(Jpsi_sigmamass);
+              const double skap2 = (jkappa * covrefmom * jkappa.transpose())[0];
+              Jpsi_fang = (sm2 > 0.) ? float(1. - skap2 / sm2) : 0.f;
+            }
 
 // std::cout << "covrefmom" << std::endl;
 // std::cout << covrefmom << std::endl;
