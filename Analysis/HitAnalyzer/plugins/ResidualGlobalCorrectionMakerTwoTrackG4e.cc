@@ -119,6 +119,7 @@ public:
                 << "  fail[hitupdate]=" << fitFailHitUpdate_
                 << "  fail[chargeflip]=" << fitFailChargeFlip_
                 << "  fail[nan]=" << fitFailNaN_
+                << "  fail[ndof]=" << fitFailNdof_
                 << "  skipped[samesign]=" << fitSkippedSameSign_
                 << "  clamped[step]=" << fitStepClamped_
                 << "  clampevents[step]=" << stepClampEvents_
@@ -309,6 +310,7 @@ private:
   edm::EDPutTokenT<edm::ValueMap<std::vector<float>>> vmJacRefMuPlus_, vmJacRefMuMinus_, vmJacMass_, vmHessFactor_;
 
   mutable unsigned long long fitFailNaN_ = 0ULL;         // NaN/inf parameter update
+  mutable unsigned long long fitFailNdof_ = 0ULL;        // fit with no degrees of freedom (ndof <= 0)
   mutable unsigned long long fitSkippedSameSign_ = 0ULL; // same-sign pairs skipped pre-fit (not failures)
 
   // Global material model: per-leg per-group dxi columns from the
@@ -4226,25 +4228,80 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           chisqvalold = chisq0val + deltachisq;
           
 // ndof = 5*nhits + nvalid + nvalidalign2d - nstateparms;
-          ndof = 5*nhits + nvalid + nvalidpixel - nstateparms;
-          
+          // COMPUTED SIGNED, THEN CLAMPED.  `ndof` is an unsigned member and
+          // `nstateparms` is 10 + 5*nhits, so this expression is really
+          // nvalid + nvalidpixel - 10 (+ the constraint rows): evaluated in
+          // unsigned arithmetic it UNDERFLOWS to ~4e9 for a pair whose two
+          // legs together carry fewer than ten valid-hit-equivalents, and
+          // that value then reads as "full rank" in the factored-Hessian
+          // block below (`nrank = min(ndof, nparsfinal)`).  Keeping the
+          // arithmetic signed makes the degenerate case visible instead of
+          // wrapping it.  For every candidate with a positive ndof the value
+          // stored is bit-identical to the old expression.
+          long long ndofsigned = 5LL*(long long)nhits + (long long)nvalid
+                                 + (long long)nvalidpixel - (long long)nstateparms;
+
           if (bsConstraint_) {
-            ndof += 3;
+            ndofsigned += 3;
           }
 
           if (doPointingConstraint_) {
             // 2D-transverse pointing adds 1 scalar constraint
-            ++ndof;
+            ++ndofsigned;
           }
 
           if (doVtxConstraint_) {
-            ++ndof;
+            ++ndofsigned;
           }
-          
+
           if (icons == 1) {
-            ++ndof;
+            ++ndofsigned;
           }
-          
+
+          ndof = ndofsigned > 0 ? (unsigned int)ndofsigned : 0u;
+
+          // A FIT WITH NO DEGREES OF FREEDOM IS A FAILED FIT, not a fit with
+          // an empty rank.  The factored-Hessian export takes exactly the top
+          // `nrank = min(ndof, nparsfinal)` eigenmodes of the mean Hessian and
+          // reads `eigvals(nparsfinal - nrank)` to report the truncation gap;
+          // at ndof == 0 that indexes ONE PAST THE END of the length-
+          // nparsfinal eigenvalue vector and aborts inside Eigen
+          // (DenseCoeffsBase::operator()'s `index < size()`), taking the whole
+          // job with it -- a crashed cmsRun output has NO KEYS, so the whole
+          // task is lost, not the one candidate.  That is what killed 37 of
+          // the first 133 finished dymc_8p5M_260905 tasks (28 %) -- i.e.
+          // 0.033 aborts per 1000 Z candidates at ~9850 candidates a chunk,
+          // consistent with the neighbouring bins.  The ndof == 0 bin is
+          // EXACTLY EMPTY across 197 417 candidates of 20 COMPLETED tasks
+          // while ndof == 1 and 2 hold 4 and 5 -- the bin is empty because
+          // landing in it kills the job, not because it is forbidden.  Two
+          // examples, both real: nhits=(8,1) and nhits=(2,4).  The two-track
+          // fit spends ten state parameters on the common vertex, so a
+          // MiniAOD leg whose stored hit list is a handful is enough; the
+          // J/psi ALCARECO tracks (full RECO hits) essentially never are.
+          //
+          // Such a candidate carries no information for the global fit --
+          // rank-0 Hessian, undefined chi2/ndof -- so it is counted and
+          // dropped through the same `valid` path as the other fit failures
+          // rather than being written with a degenerate factorization.
+          if (ndofsigned <= 0) {
+            if (stepPrints_ < stepPrintLimit_) {
+              ++stepPrints_;
+              std::cout << "Abort: fit has no degrees of freedom!"
+                        << " icons = " << icons << " iiter = " << iiter
+                        << " ndof = " << ndofsigned
+                        << " nhits=(" << nhitsarr[0] << "," << nhitsarr[1] << ")"
+                        << " nvalid=(" << nvalidarr[0] << "," << nvalidarr[1] << ")"
+                        << " nvalidpixel=(" << nvalidpixelarr[0] << "," << nvalidpixelarr[1] << ")"
+                        << " seed0(q,pt,eta)=(" << itrack->charge() << "," << itrack->pt() << "," << itrack->eta() << ")"
+                        << " seed1(q,pt,eta)=(" << jtrack->charge() << "," << jtrack->pt() << "," << jtrack->eta() << ")"
+                        << std::endl;
+            }
+            ++fitFailNdof_;
+            valid = false;
+            break;
+          }
+
 // std::cout << "icons = " << icons << " iiter =" << iiter << " dx = " << refftsarr[0].position() - refftsarr[1].position() << std::endl;
           
     // std::cout << "dchisqdparms.head<6>()" << std::endl;
@@ -5932,8 +5989,15 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           }
         }
 
-        const double lambdakeptmin = eigvals(nparsfinal - nrank);
-        hessrankgap = (nrank < nparsfinal && lambdakeptmin > 0.)
+        // DEFENCE IN DEPTH.  `nrank == 0` (ndof == 0, or an empty parameter
+        // list) makes `nparsfinal - nrank` one past the end of `eigvals` and
+        // `nparsfinal - nrank - 1` wrap; the candidate-level gate at the ndof
+        // computation already rejects that fit, so this branch is unreachable
+        // in a healthy job -- but an out-of-range Eigen index aborts the
+        // PROCESS, and a production is not the place to find out that some
+        // other path can reach it. Bit-identical for every nrank > 0.
+        const double lambdakeptmin = nrank > 0 ? eigvals(nparsfinal - nrank) : 0.;
+        hessrankgap = (nrank > 0 && nrank < nparsfinal && lambdakeptmin > 0.)
                           ? std::max(0., eigvals(nparsfinal - nrank - 1)) / lambdakeptmin
                           : 0.;
 
