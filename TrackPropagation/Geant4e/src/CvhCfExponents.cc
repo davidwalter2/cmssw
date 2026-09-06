@@ -375,15 +375,18 @@ namespace cvhcf {
       return std::min(t, kDelTmaxCap);
     }
 
-    void delExponentImpl(const float *rows, int stride, int n, double wstd, const double *tau, int nt,
-                         const double *Sms, double *S) {
-      if (n <= 0)
-        return;
+    // The two halves of the delta family, so that a per-group split can reuse
+    // the block's carve. `acc` may be null, in which case only vd/vms are
+    // formed (the tau loop is the expensive part). Every statement is in the
+    // order the single-pass version had it, so the flat path is unchanged to
+    // the last bit.
+    void delAccumImpl(const float *rows, int stride, int n, double wstd, const double *tau, int nt, double *acc,
+                      double &vd, double &vms) {
       const ShapeTables &tb = T();
-      double vd = 0., vms = 0.;
+      vd = 0.;
+      vms = 0.;
       for (int i = 0; i < n; ++i)
         vms += rows[static_cast<std::size_t>(i) * stride + 5];
-      std::vector<double> acc(nt, 0.);
       for (int i = 0; i < n; ++i) {
         const float *r = rows + static_cast<std::size_t>(i) * stride;
         const double effZ = r[0], effA = r[1], xg = r[2], p = r[3];
@@ -393,6 +396,8 @@ namespace cvhcf {
           continue;
         const double xi = kDelHalfK * (effZ / std::max(effA, 1.)) * xg / std::max(bt * bt, 1e-9) * 1e-3;
         vd += xi * kDelME * std::log(tmx / kDelTcut) / (p * p);
+        if (acc == nullptr)
+          continue;
         const double a0 = wstd * std::sqrt(2. * kDelME) / p;
         const double sc = std::sqrt(kDelTcut), sh = std::sqrt(tmx);
         // the (1 - beta^2 T/Tmax) spin-0 term of the PDG delta spectrum, as a
@@ -403,12 +408,40 @@ namespace cvhcf {
           acc[j] += xi * a * a * (phiTab(tb, a * sc) - phiTab(tb, a * sh)) * spin;
         }
       }
+    }
+
+    void delExponentImpl(const float *rows, int stride, int n, double wstd, const double *tau, int nt,
+                         const double *Sms, double *S) {
+      if (n <= 0)
+        return;
+      std::vector<double> acc(nt, 0.);
+      double vd = 0., vms = 0.;
+      delAccumImpl(rows, stride, n, wstd, tau, nt, acc.data(), vd, vms);
       const double carve = (vms > 0.) ? clipd(vd / vms, 0., 0.5) : 0.;
       for (int j = 0; j < nt; ++j)
         S[j] += acc[j] - carve * Sms[j];
     }
 
   }  // namespace
+
+  double delCarveFactor(const float *rows, int stride, int n) {
+    if (rows == nullptr || n <= 0 || stride < 8)
+      return 0.;
+    double vd = 0., vms = 0.;
+    delAccumImpl(rows, stride, n, 1., tauGrid(), kNTau, nullptr, vd, vms);
+    return (vms > 0.) ? clipd(vd / vms, 0., 0.5) : 0.;
+  }
+
+  void delBlockCarved(
+      const float *rows, int stride, int n, double wstd, const double *Sms, double carve, double *Sdel) {
+    if (rows == nullptr || n <= 0 || stride < 8 || Sdel == nullptr || Sms == nullptr)
+      return;
+    std::vector<double> acc(kNTau, 0.);
+    double vd = 0., vms = 0.;
+    delAccumImpl(rows, stride, n, wstd, tauGrid(), kNTau, acc.data(), vd, vms);
+    for (int j = 0; j < kNTau; ++j)
+      Sdel[j] += acc[j] - carve * Sms[j];
+  }
 
   void msBlock(const float *rows, int stride, int n, double wstd, double *Sms, double *Sdel) {
     if (rows == nullptr || n <= 0 || stride < 8)
@@ -615,11 +648,74 @@ namespace cvhcf {
   // summation order depends on it -- which is exactly what a bit-level
   // comparison sees.
   //==========================================================================
+  namespace {
+
+    // Accumulate `src` into the (group -> exponents) list, creating the entry
+    // on first use. The list is kept ASCENDING in `group` so that the export
+    // order is a property of the candidate and not of the propagation.
+    Exponents &groupSlot(std::vector<GroupExponents> &v, int g) {
+      auto it = std::lower_bound(
+          v.begin(), v.end(), g, [](const GroupExponents &a, int b) { return a.group < b; });
+      if (it != v.end() && it->group == g)
+        return it->S;
+      GroupExponents e;
+      e.group = g;
+      return v.insert(it, e)->S;
+    }
+
+    void addInto(Exponents &dst, const Exponents &src) {
+      for (int j = 0; j < kNTau; ++j) {
+        dst.ms[j] += src.ms[j];
+        dst.del[j] += src.del[j];
+        dst.ioRe[j] += src.ioRe[j];
+        dst.ioIm[j] += src.ioIm[j];
+        dst.radRe[j] += src.radRe[j];
+        dst.radIm[j] += src.radIm[j];
+      }
+    }
+
+    // The distinct material groups of `rows`, ascending. `col < 0` (rows that
+    // carry no group) collapses to the single group -1, which is also what a
+    // job with no global material model produces.
+    void rowGroups(const float *rows, int stride, int n, int col, std::vector<int> &gs) {
+      gs.clear();
+      if (col < 0 || col >= stride) {
+        gs.push_back(-1);
+        return;
+      }
+      for (int i = 0; i < n; ++i)
+        gs.push_back(static_cast<int>(rows[static_cast<std::size_t>(i) * stride + col]));
+      std::sort(gs.begin(), gs.end());
+      gs.erase(std::unique(gs.begin(), gs.end()), gs.end());
+    }
+
+    // Copy the rows of `rows` belonging to group `g` into `dst` (contiguous).
+    // With `col < 0` every row belongs to the single group -1.
+    int selectGroup(const float *rows, int stride, int n, int col, int g, std::vector<float> &dst) {
+      dst.clear();
+      if (col < 0 || col >= stride) {
+        dst.assign(rows, rows + static_cast<std::size_t>(n) * stride);
+        return n;
+      }
+      int m = 0;
+      for (int i = 0; i < n; ++i) {
+        const float *r = rows + static_cast<std::size_t>(i) * stride;
+        if (static_cast<int>(r[col]) != g)
+          continue;
+        dst.insert(dst.end(), r, r + stride);
+        ++m;
+      }
+      return m;
+    }
+
+  }  // namespace
+
   void trackExponents(const TrackInput &in, TrackResult &out) {
     out.ok = true;
     out.vgauss = 0.;
     out.nblockms = out.nblockioni = out.npooled = 0;
     out.S.clear();
+    out.groups.clear();
     if (!(in.sigma > 0.) || in.nres <= 0) {
       out.ok = false;
       return;
@@ -634,6 +730,10 @@ namespace cvhcf {
     std::vector<float> blk;   // the block's step rows, contiguous
     std::vector<float> qs;    // the block's [scale, nsteps] pairs
     std::vector<float> rblk, rspec;
+    // per-group scratch (untouched unless `in.wantGroups`)
+    std::vector<int> gsteps;
+    std::vector<float> gblk, grblk, grspec;
+    Exponents gtmp;
 
     for (int fam = 10; fam <= 11; ++fam) {
       const StepRows &rows = (fam == 10) ? in.ms : in.ioni;
@@ -682,6 +782,36 @@ namespace cvhcf {
             continue;
           const double wstd = std::sqrt(vpool / sq2) / in.sigma;
           msBlock(blk.data(), rows.stride, ns, wstd, out.S.ms.data(), in.wantDelta ? out.S.del.data() : nullptr);
+
+          if (in.wantGroups) {
+            rowGroups(blk.data(), rows.stride, ns, in.ms.groupCol, gsteps);
+            if (gsteps.size() == 1) {
+              // The overwhelmingly common case: one block, one material.
+              // Recomputing would be pure waste AND would lose the bitwise
+              // equality of `sum_g` with the flat exponent, so run the same
+              // primitives once into a scratch and add the SAME doubles to
+              // both. (The flat path above is untouched: this is a second
+              // evaluation of the identical arguments, hence identical.)
+              gtmp.clear();
+              msBlock(blk.data(), rows.stride, ns, wstd, gtmp.ms.data(),
+                      (in.wantDelta && in.wantGroupDelta) ? gtmp.del.data() : nullptr);
+              addInto(groupSlot(out.groups, gsteps[0]), gtmp);
+            } else {
+              // The carve is a RATIO over the WHOLE block (see delCarveFactor).
+              const double carve =
+                  (in.wantDelta && in.wantGroupDelta) ? delCarveFactor(blk.data(), rows.stride, ns) : 0.;
+              for (int g : gsteps) {
+                const int mg = selectGroup(blk.data(), rows.stride, ns, in.ms.groupCol, g, gblk);
+                if (mg <= 0)
+                  continue;
+                gtmp.clear();
+                msBlock(gblk.data(), rows.stride, mg, wstd, gtmp.ms.data(), nullptr);
+                if (in.wantDelta && in.wantGroupDelta)
+                  delBlockCarved(gblk.data(), rows.stride, mg, wstd, gtmp.ms.data(), carve, gtmp.del.data());
+                addInto(groupSlot(out.groups, g), gtmp);
+              }
+            }
+          }
         } else {
           ++out.nblockioni;
           qs.clear();
@@ -696,6 +826,24 @@ namespace cvhcf {
             continue;
           const double wstd = in.ioniSign * (std::sqrt(vpool / sq2) / in.sigma);
           ioniBlock(blk.data(), rows.stride, ns, wstd, out.S.ioRe.data(), out.S.ioIm.data());
+
+          if (in.wantGroups) {
+            rowGroups(blk.data(), rows.stride, ns, in.ioni.groupCol, gsteps);
+            if (gsteps.size() == 1) {
+              gtmp.clear();
+              ioniBlock(blk.data(), rows.stride, ns, wstd, gtmp.ioRe.data(), gtmp.ioIm.data());
+              addInto(groupSlot(out.groups, gsteps[0]), gtmp);
+            } else {
+              for (int g : gsteps) {
+                const int mg = selectGroup(blk.data(), rows.stride, ns, in.ioni.groupCol, g, gblk);
+                if (mg <= 0)
+                  continue;
+                gtmp.clear();
+                ioniBlock(gblk.data(), rows.stride, mg, wstd, gtmp.ioRe.data(), gtmp.ioIm.data());
+                addInto(groupSlot(out.groups, g), gtmp);
+              }
+            }
+          }
 
           // The radiative channel of the SAME block: same weight, same sign.
           // The join is on the global index VALUE and never on the row
@@ -712,9 +860,41 @@ namespace cvhcf {
               const float *sp = in.radspec + static_cast<std::size_t>(i) * 2 * in.radnv;
               rspec.insert(rspec.end(), sp, sp + 2 * in.radnv);
             }
-            if (!rblk.empty())
-              radBlock(rblk.data(), in.rad.stride, static_cast<int>(rblk.size() / in.rad.stride), rspec.data(),
-                       in.radvgrid, in.radnv, wstd, out.S.radRe.data(), out.S.radIm.data());
+            if (!rblk.empty()) {
+              const int nr = static_cast<int>(rblk.size() / in.rad.stride);
+              radBlock(rblk.data(), in.rad.stride, nr, rspec.data(), in.radvgrid, in.radnv, wstd,
+                       out.S.radRe.data(), out.S.radIm.data());
+              if (in.wantGroups) {
+                rowGroups(rblk.data(), in.rad.stride, nr, in.rad.groupCol, gsteps);
+                if (gsteps.size() == 1) {
+                  gtmp.clear();
+                  radBlock(rblk.data(), in.rad.stride, nr, rspec.data(), in.radvgrid, in.radnv, wstd,
+                           gtmp.radRe.data(), gtmp.radIm.data());
+                  addInto(groupSlot(out.groups, gsteps[0]), gtmp);
+                } else {
+                  // The spectra ride along with their rows, so the subset has
+                  // to be taken on BOTH arrays with one index walk.
+                  for (int g : gsteps) {
+                    grblk.clear();
+                    grspec.clear();
+                    for (int i = 0; i < nr; ++i) {
+                      const float *r = rblk.data() + static_cast<std::size_t>(i) * in.rad.stride;
+                      if (in.rad.groupCol >= 0 && static_cast<int>(r[in.rad.groupCol]) != g)
+                        continue;
+                      grblk.insert(grblk.end(), r, r + in.rad.stride);
+                      const float *sp = rspec.data() + static_cast<std::size_t>(i) * 2 * in.radnv;
+                      grspec.insert(grspec.end(), sp, sp + 2 * in.radnv);
+                    }
+                    if (grblk.empty())
+                      continue;
+                    gtmp.clear();
+                    radBlock(grblk.data(), in.rad.stride, static_cast<int>(grblk.size() / in.rad.stride),
+                             grspec.data(), in.radvgrid, in.radnv, wstd, gtmp.radRe.data(), gtmp.radIm.data());
+                    addInto(groupSlot(out.groups, g), gtmp);
+                  }
+                }
+              }
+            }
           }
         }
       }

@@ -1257,12 +1257,22 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
       rs.dedxRad = rs.dedxBrem + rs.dedxPair;
       rs.cs = rs.etotGeV / (pGeV * pGeV * pGeV);
       fillRadiativeSpectrum(trk, rs);
+      rs.stepGroup = stepGroup;
       radStepLog_.push_back(rs);
     }
 
     const double ionifact = std::exp(dioni) * matStepFact;
 
+    // The Urban record this call may append is THIS step's, so its material
+    // group is the `stepGroup` classified in the M1 block above.
+    // `computeErrorIoni` pushes at most one row and only when
+    // `fluct->lastRecordValid()`, so tagging the new back() -- rather than
+    // passing the group down through the call -- is both exact and local.
+    const std::size_t nIoniLogBefore = ioniStepLog_.size();
     errMSIout(0, 0) = ionifact * computeErrorIoni(g4eTrajState.GetG4Track(), pforced);
+    if (ioniStepLog_.size() > nIoniLogBefore) {
+      ioniStepLog_.back().stepGroup = stepGroup;
+    }
 
     // CGF block: collect this step's transport and, if it produced one, its
     // Urban record. The record's index into cgfStepJac is what the backward

@@ -588,6 +588,7 @@ ResidualGlobalCorrectionMakerTwoTrackG4e::ResidualGlobalCorrectionMakerTwoTrackG
   // functional, not the single-track q/p one: different standardization,
   // different ionization sign. They must not share a branch name with it.
   cfprefix_ = "cfmass";
+  cfGroupDelta_ = false;
   doVtxConstraint_ = iConfig.getParameter<bool>("doVtxConstraint");
   doMassConstraint_ = iConfig.getParameter<bool>("doMassConstraint");
   massConstraint_ = iConfig.getParameter<double>("massConstraint");
@@ -2623,12 +2624,15 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                   ioniurbanv.push_back(us.rec.scaling);
                   ioniurbanv.push_back(us.cs);
                   // regime 2/3 (CVH_IONI_EXACTDELTA): two extra columns AFTER
-                  // cs, so every existing column index is unchanged and the
-                  // stride is 11 exactly when the switch is off.
+                  // cs, so every existing column index is unchanged. The
+                  // stride is `ioniurbanstride` (12, or 14 with the switch on).
                   if (G4UniversalFluctuationForExtrapolator::exactDeltaEnabled()) {
                     ioniurbanv.push_back(us.rec.beta2);
                     ioniurbanv.push_back(us.rec.etot);
                   }
+                  // material group of the step, ALWAYS last (see
+                  // UrbanIoniStep::stepGroup)
+                  ioniurbanv.push_back(us.stepGroup);
                 }
 
                 // Ionization-block scale of this leg, [sc, nstep]. THIS MAKER
@@ -2657,6 +2661,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                   radstepv.push_back(rs.dedxBrem);
                   radstepv.push_back(rs.dedxPair);
                   radstepv.push_back(rs.cs);
+                  radstepv.push_back(rs.stepGroup);   // column 11, appended 2026-09-06
                   for (int iv = 0; iv < RADSTEP_NV; ++iv) {
                     radstepspecv.push_back(rs.dNdvBrem[iv]);
                   }
@@ -4250,6 +4255,14 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             cfok = false;
             cfnblock = 0;
             cfnpooled = 0;
+            cfgrpv.clear();
+            cfgrpmsv.clear();
+            cfgrpdelv.clear();
+            cfgrpiorev.clear();
+            cfgrpioimv.clear();
+            cfgrpradrev.clear();
+            cfgrpradimv.clear();
+            cfgrpclosure = 0.f;
             if (dores && !dVs.empty()) {
               VectorXd afull = VectorXd::Zero(nstateparms);
               afull.head<6>() = mjacalt.transpose();
@@ -4306,12 +4319,22 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                              ioniurbanidx.empty() ? 0 : int(ioniurbanv.size() / ioniurbanidx.size())};
                 cfin.qsc = {ioniqscaleidx.data(), ioniqscalev.data(), int(ioniqscaleidx.size()), 2};
                 cfin.rad = {radstepidx.data(), radstepv.data(), int(radstepidx.size()), RADSTEP_STRIDE};
+                // material-group column of each record; see the single-track
+                // maker for why these are set explicitly
+                cfin.ms.groupCol = cfin.ms.stride >= 10 ? 9 : -1;
+                cfin.ioni.groupCol = cfin.ioni.stride - 1;
+                cfin.rad.groupCol = RADSTEP_STRIDE - 1;
                 cfin.radspec = radstepspecv.data();
                 cfin.radvgrid = radvgrid.data();
                 cfin.radnv = int(radvgrid.size());
                 cfin.sigma = Jpsi_sigmamass;
                 cfin.ioniSign = -1.;
                 cfin.wantDelta = true;
+                cfin.wantGroups = exportCfGroupExponents_;
+                // The mass functional's reference model has no S_del
+                // (`cf_mass_likelihood.build_pairs_tt`), so the flat delta
+                // family is exported for comparison but is not split.
+                cfin.wantGroupDelta = false;
                 cvhcf::TrackResult cfres;
                 cvhcf::trackExponents(cfin, cfres);
                 cfok = cfres.ok;
@@ -4334,6 +4357,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                 storecf(cfres.S.ioIm, cfioimv);
                 storecf(cfres.S.radRe, cfradrev);
                 storecf(cfres.S.radIm, cfradimv);
+                storeCfGroups(cfres);
               }
             }
 

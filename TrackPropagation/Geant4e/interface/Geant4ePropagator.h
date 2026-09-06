@@ -142,6 +142,20 @@ public:
   struct UrbanIoniStep {
     G4UniversalFluctuationForExtrapolator::UrbanFluctRecord rec;
     double cs = 0.;
+    // material-group id of the step (MaterialGroupModel::classify; -1 when no
+    // global material model is active), the SAME value `MoliereMsStep::
+    // stepGroup` carries for the same step.
+    //
+    // It is here so that the ionization channel of the per-group CF export can
+    // be split EXACTLY.  The Urban log is an order-preserving SUBSEQUENCE of
+    // the Moliere one -- `SampleFluctuations` returns without a record when
+    // `meanLoss = length * dedx < minLoss` -- so before this field the offline
+    // reader had to recover the correspondence by taking the `n_ioni` Moliere
+    // rows of largest areal density (`matres/groups.py:pair_ioni_rows`).  That
+    // heuristic is accurate (the dropped rows carry at most 3.9e-4 of a
+    // block's areal density, measured over 2.03M blocks) but it is a guess,
+    // and carrying the group costs 4 bytes.
+    int stepGroup = -1;
   };
   void setIoniStepLogging(bool on) { ioniStepLogging_ = on; }
   const std::vector<UrbanIoniStep> &ioniStepLog() const { return ioniStepLog_; }
@@ -309,6 +323,12 @@ public:
     // tabulated separately and summed here, so no shape is assumed.
     double dNdvBrem[kNRadV] = {0.};
     double dNdvPair[kNRadV] = {0.};
+    // material-group id of the step, as in MoliereMsStep::stepGroup. The
+    // radiative log is pushed under the SAME guard as the Moliere one, so the
+    // two are 1:1 within a block and the group could be inherited by position
+    // -- but only as long as that guard stays shared. Carrying it is 4 bytes
+    // and removes the coupling.
+    int stepGroup = -1;
   };
   const std::vector<RadiativeStep> &radStepLog() const { return radStepLog_; }
   // the shared v grid (same for every step)

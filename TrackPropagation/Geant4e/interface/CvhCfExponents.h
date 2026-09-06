@@ -70,6 +70,7 @@
 #include <array>
 #include <cstddef>
 #include <string>
+#include <vector>
 
 namespace cvhcf {
 
@@ -113,6 +114,12 @@ namespace cvhcf {
     const float *v = nullptr;
     int n = 0;       // rows
     int stride = 0;  // floats per row
+    // Column holding the step's MATERIAL GROUP (the parmtype-15 index of the
+    // global material model), or -1 when the rows carry none. `msmoliv` has
+    // it at column 9; `ioniurbanv` and `radstepv` carry it as their LAST
+    // column (appended 2026-09-06, so every older index is unchanged).
+    // Only read when `TrackInput::wantGroups`.
+    int groupCol = -1;
   };
 
   // Everything one track (or one two-track candidate) needs.
@@ -150,6 +157,29 @@ namespace cvhcf {
     double ioniSign = 1.;
 
     bool wantDelta = true;  // the discrete delta-ray recoil family
+
+    // SPLIT THE EXPONENTS BY MATERIAL GROUP as well as accumulating the flat
+    // ones.  This is what lets the offline fit float the AMOUNT of material
+    // per group instead of four per-family k knobs: every step-level exponent
+    // is linear in the step's material amount at fixed composition, so
+    //
+    //     S_f(tau; k) = S_f^fixed(tau) + sum_g A(k_g) S_{f,g}(tau)
+    //
+    // is exact with the fit's influence weights held fixed (NOTES 2026-09-05
+    // (II) section 1).  Off by default: ~22 live groups per candidate
+    // multiply the 1.4 kB flat export by ~20.
+    bool wantGroups = false;
+    // Include the delta-recoil family in the per-group split.  The q/p
+    // functional's model uses `S_del`; the mass functional's reference
+    // (`cf_mass_likelihood.build_pairs_tt`) does not, so the two-track maker
+    // leaves it out of the per-group arrays and saves a sixth of them.
+    bool wantGroupDelta = false;
+  };
+
+  // One material group's share of a track's exponents.
+  struct GroupExponents {
+    int group = -1;
+    Exponents S;
   };
 
   struct TrackResult {
@@ -161,6 +191,11 @@ namespace cvhcf {
     double vgauss = 0.;  // sum of v_b over the hit families (8, 9)
     int nblockms = 0, nblockioni = 0, npooled = 0;
     Exponents S;
+    // The per-group split of `S`, ascending in `group`; empty unless
+    // `TrackInput::wantGroups`.  `sum_g groups[i].S == S` to float64
+    // round-off -- they are the same per-step sums associated differently,
+    // NOT two models -- which is the validation gate the makers report.
+    std::vector<GroupExponents> groups;
   };
 
   // THE ENTRY POINT. Pools by global parameter index exactly as
@@ -193,6 +228,19 @@ namespace cvhcf {
 
   // One pooled ionization block at an ALREADY SIGNED standardized weight.
   void ioniBlock(const float *rows, int stride, int n, double wstdSigned, double *Sre, double *Sim);
+
+  // THE BLOCK'S DELTA-RECOIL CARVE FACTOR, `clip(v_delta/v_moliere, 0, 0.5)`.
+  // `msBlock` computes and applies its own; a per-group split has to reuse
+  // the WHOLE block's, because the carve is a RATIO: per-group ratios would
+  // not sum back to the block's exponent, whereas
+  //   S_del,g = delta(steps_g) - carve(steps_ALL) * S_ms,g
+  // does, exactly.
+  double delCarveFactor(const float *rows, int stride, int n);
+
+  // The delta-recoil family at an externally supplied carve factor. `Sms`
+  // must be the exponent of the SAME rows (the group's own, not the block's).
+  void delBlockCarved(
+      const float *rows, int stride, int n, double wstd, const double *Sms, double carve, double *Sdel);
 
   // The radiative channel of the same block: `rows` are its `radstepv`
   // records, `spec` its `radstepspecv` rows (2*nv floats each), `vgrid` the

@@ -3,6 +3,7 @@
 #include <memory>
 
 #include "ResidualGlobalCorrectionMakerBase.h"
+#include "TrackPropagation/Geant4e/interface/G4UniversalFluctuationForExtrapolator.hh"
 
 // user include files
 #include "FWCore/Framework/interface/Frameworkfwd.h"
@@ -209,6 +210,11 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
                            ? iConfig.getParameter<bool>("exportStepRecords") : true;
   exportCfExponents_ = iConfig.existsAs<bool>("exportCfExponents")
                            ? iConfig.getParameter<bool>("exportCfExponents") : true;
+  // THE PER-GROUP SPLIT.  +26 kB/candidate on top of the 1.4 kB flat export,
+  // so it is opt-in: only the productions that will feed the joint
+  // material + field fit need it.
+  exportCfGroupExponents_ = iConfig.existsAs<bool>("exportCfGroupExponents")
+                           ? iConfig.getParameter<bool>("exportCfGroupExponents") : false;
   keepPixelEdgeHits_ = iConfig.existsAs<bool>("keepPixelEdgeHits")
       ? iConfig.getParameter<bool>("keepPixelEdgeHits") : false;
   pixelMinSizeX_ = iConfig.existsAs<int>("pixelMinSizeX")
@@ -487,6 +493,10 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
       tree->Branch("radvgrid", &radvgrid);
       tree->Branch("radstepstride", &radstepstride);
       tree->Branch("radstepnv", &radstepnv);
+      // `ioniurbanv`'s stride depends on a run-time switch, so it is written
+      // out rather than inferred. Set once, here, like radvgrid.
+      ioniurbanstride = G4UniversalFluctuationForExtrapolator::exactDeltaEnabled() ? 14 : 12;
+      tree->Branch("ioniurbanstride", &ioniurbanstride);
       // Filled ONCE, here, and never cleared: the grid is a compile-time
       // constant of the propagator, so every entry writes the same 48 floats
       // and ROOT compresses them away. Doing it here rather than at the drain
@@ -523,6 +533,18 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
         tree->Branch((cfprefix_ + "_ok").c_str(), &cfok);
         tree->Branch((cfprefix_ + "_nblock").c_str(), &cfnblock);
         tree->Branch((cfprefix_ + "_npooled").c_str(), &cfnpooled);
+        if (exportCfGroupExponents_) {
+          tree->Branch((cfprefix_ + "_grp").c_str(), &cfgrpv);
+          tree->Branch((cfprefix_ + "_grp_ms").c_str(), &cfgrpmsv, basketSize);
+          tree->Branch((cfprefix_ + "_grp_ioni_re").c_str(), &cfgrpiorev, basketSize);
+          tree->Branch((cfprefix_ + "_grp_ioni_im").c_str(), &cfgrpioimv, basketSize);
+          tree->Branch((cfprefix_ + "_grp_rad_re").c_str(), &cfgrpradrev, basketSize);
+          tree->Branch((cfprefix_ + "_grp_rad_im").c_str(), &cfgrpradimv, basketSize);
+          if (cfGroupDelta_) {
+            tree->Branch((cfprefix_ + "_grp_del").c_str(), &cfgrpdelv, basketSize);
+          }
+          tree->Branch((cfprefix_ + "_grp_closure").c_str(), &cfgrpclosure);
+        }
       }
     }
 
@@ -1843,6 +1865,79 @@ Matrix<double, 7, 1> ResidualGlobalCorrectionMakerBase::localToGlobal(const Matr
 }
 
 // ------------ method fills 'descriptions' with the allowed parameters for the module ------------
+
+// ---------------------------------------------------------------------------
+// THE PER-MATERIAL-GROUP CF ARRAYS.
+//
+// Sparse over the groups the candidate touched, row-major in (group, tau),
+// ascending in group -- see the cfgrp* declarations in the header. The
+// closure figure is `max_j |sum_g S_g - S|` over the exported families,
+// normalized by `max_j |S|` of the largest family, and is float64 round-off
+// by construction: the two are the same per-step sums associated
+// differently. Exporting it makes a file auditable at 4 bytes.
+// ---------------------------------------------------------------------------
+void ResidualGlobalCorrectionMakerBase::storeCfGroups(const cvhcf::TrackResult &res) {
+  cfgrpv.clear();
+  cfgrpmsv.clear();
+  cfgrpdelv.clear();
+  cfgrpiorev.clear();
+  cfgrpioimv.clear();
+  cfgrpradrev.clear();
+  cfgrpradimv.clear();
+  cfgrpclosure = 0.f;
+  if (!exportCfGroupExponents_) {
+    return;
+  }
+  const std::size_t ng = res.groups.size();
+  cfgrpv.reserve(ng);
+  const std::size_t nf = ng * cvhcf::kNTau;
+  cfgrpmsv.reserve(nf);
+  cfgrpiorev.reserve(nf);
+  cfgrpioimv.reserve(nf);
+  cfgrpradrev.reserve(nf);
+  cfgrpradimv.reserve(nf);
+  if (cfGroupDelta_) {
+    cfgrpdelv.reserve(nf);
+  }
+  // sum_g, in double, for the closure figure
+  std::array<double, cvhcf::kNTau> sms{}, sdel{}, siore{}, sioim{}, sradre{}, sradim{};
+  for (auto const &g : res.groups) {
+    cfgrpv.push_back(static_cast<short>(g.group));
+    for (int j = 0; j < cvhcf::kNTau; ++j) {
+      cfgrpmsv.push_back(float(g.S.ms[j]));
+      cfgrpiorev.push_back(float(g.S.ioRe[j]));
+      cfgrpioimv.push_back(float(g.S.ioIm[j]));
+      cfgrpradrev.push_back(float(g.S.radRe[j]));
+      cfgrpradimv.push_back(float(g.S.radIm[j]));
+      sms[j] += g.S.ms[j];
+      siore[j] += g.S.ioRe[j];
+      sioim[j] += g.S.ioIm[j];
+      sradre[j] += g.S.radRe[j];
+      sradim[j] += g.S.radIm[j];
+      if (cfGroupDelta_) {
+        cfgrpdelv.push_back(float(g.S.del[j]));
+        sdel[j] += g.S.del[j];
+      }
+    }
+  }
+  double dmax = 0., smax = 0.;
+  auto cmp = [&](const std::array<double, cvhcf::kNTau> &a, const std::array<double, cvhcf::kNTau> &b) {
+    for (int j = 0; j < cvhcf::kNTau; ++j) {
+      dmax = std::max(dmax, std::abs(a[j] - b[j]));
+      smax = std::max(smax, std::abs(b[j]));
+    }
+  };
+  cmp(sms, res.S.ms);
+  cmp(siore, res.S.ioRe);
+  cmp(sioim, res.S.ioIm);
+  cmp(sradre, res.S.radRe);
+  cmp(sradim, res.S.radIm);
+  if (cfGroupDelta_) {
+    cmp(sdel, res.S.del);
+  }
+  cfgrpclosure = (smax > 0.) ? float(dmax / smax) : 0.f;
+}
+
 void ResidualGlobalCorrectionMakerBase::fillDescriptions(edm::ConfigurationDescriptions &descriptions)
 {
   //The following says we do not know what parameters are allowed so do no validation

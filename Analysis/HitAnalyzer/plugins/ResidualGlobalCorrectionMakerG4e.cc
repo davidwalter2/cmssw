@@ -3047,6 +3047,10 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                 ioniurbanv.push_back(us.rec.beta2);
                 ioniurbanv.push_back(us.rec.etot);
               }
+              // material group of the step, ALWAYS last so that neither the
+              // base nor the exact-delta column indices move (see
+              // UrbanIoniStep::stepGroup)
+              ioniurbanv.push_back(us.stepGroup);
             }
 
             // The scale the CGF substitution applied to THIS leg's ionization
@@ -3074,6 +3078,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               radstepv.push_back(rs.dedxBrem);
               radstepv.push_back(rs.dedxPair);
               radstepv.push_back(rs.cs);
+              radstepv.push_back(rs.stepGroup);   // column 11, appended 2026-09-06
               for (int iv = 0; iv < RADSTEP_NV; ++iv) {
                 radstepspecv.push_back(rs.dNdvBrem[iv]);
               }
@@ -4552,6 +4557,14 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                      ioniurbanidx.empty() ? 0 : int(ioniurbanv.size() / ioniurbanidx.size())};
         cfin.qsc = {ioniqscaleidx.data(), ioniqscalev.data(), int(ioniqscaleidx.size()), 2};
         cfin.rad = {radstepidx.data(), radstepv.data(), int(radstepidx.size()), RADSTEP_STRIDE};
+        // The material-group column of each record: `msmoliv` has carried it
+        // at column 9 since the global material model landed; `ioniurbanv`
+        // and `radstepv` carry it as their LAST column (2026-09-06). Set
+        // explicitly rather than inferred so that a stride change cannot
+        // silently relabel a group as a physics quantity.
+        cfin.ms.groupCol = cfin.ms.stride >= 10 ? 9 : -1;
+        cfin.ioni.groupCol = cfin.ioni.stride - 1;
+        cfin.rad.groupCol = RADSTEP_STRIDE - 1;
         cfin.radspec = radstepspecv.data();
         cfin.radvgrid = radvgrid.data();
         cfin.radnv = int(radvgrid.size());
@@ -4565,6 +4578,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         // `Geant4ePropagator` puts into the in-fit CGF block's `gs`.
         cfin.ioniSign = refParms[0] >= 0.f ? 1. : -1.;
         cfin.wantDelta = true;
+        cfin.wantGroups = exportCfGroupExponents_;
+        cfin.wantGroupDelta = true;   // the q/p functional's model uses S_del
         cvhcf::TrackResult cfres;
         cvhcf::trackExponents(cfin, cfres);
         cfok = cfres.ok;
@@ -4582,6 +4597,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         storecf(cfres.S.ioIm, cfioimv);
         storecf(cfres.S.radRe, cfradrev);
         storecf(cfres.S.radIm, cfradimv);
+        storeCfGroups(cfres);
       }
     }
 

@@ -805,11 +805,15 @@ protected:
   // leg's parmtype-11 global index (the q/p block, since this is a q/p noise
   // channel and its offline weight comes from the ionization block).
   //
-  // `radstepv`: RADSTEP_STRIDE = 11 floats per step, in exactly the order
+  // `radstepv`: RADSTEP_STRIDE = 12 floats per step, in exactly the order
   // G4ePropagationExport.cc writes its `radv` branch, so cf_brems_exact.py's
   // R_* column constants, step_spectrum() and rad_exponent() apply verbatim:
   //     [effZ, effA, xg(g/cm2), etot(GeV), p(GeV), d/X0, step(cm),
-  //      dedxRad, dedxBrem, dedxPair (all GeV/cm), cs(GeV^-2)]
+  //      dedxRad, dedxBrem, dedxPair (all GeV/cm), cs(GeV^-2), stepGroup]
+  // Column 11 (`stepGroup`) was APPENDED on 2026-09-06 for the per-group CF
+  // export; every existing column index is unchanged, and files written
+  // before that carry stride 11 and no group column. Read the stride from
+  // `radstepstride`, never assume it.
   // `radstepspecv`: 2*RADSTEP_NV = 96 floats per step, dN/dv SHAPE for
   // bremsstrahlung (48) then pair production (48) on the shared v grid.
   // These are shapes only; each must be renormalized offline to its own
@@ -818,7 +822,7 @@ protected:
   // (it is constant, so it compresses to nothing) so no reader has to
   // hard-code it. `radstepstride`/`radstepnv` are the two strides as scalar
   // branches for the same reason.
-  static constexpr int RADSTEP_STRIDE = 11;
+  static constexpr int RADSTEP_STRIDE = 12;
   static constexpr int RADSTEP_NV = Geant4ePropagator::kNRadV;
   std::vector<unsigned int> radstepidx;
   std::vector<float> radstepv;
@@ -826,6 +830,13 @@ protected:
   std::vector<float> radvgrid;
   int radstepstride = RADSTEP_STRIDE;
   int radstepnv = RADSTEP_NV;
+
+  // `ioniurbanv`'s stride is not a compile-time constant -- it is 12, or 14
+  // with CVH_IONI_EXACTDELTA on -- so it is written as its own scalar branch
+  // rather than left to be inferred from `size(v)/size(idx)`. (Before
+  // 2026-09-06 it was 11 / 13; the material-group column was appended after
+  // the exact-delta columns, so every existing column index is unchanged.)
+  int ioniurbanstride = 0;
 
   // Phase B analogue for multiple scattering: per Geant4 step, raw
   // material/kinematic data for the offline Moliere compound-Poisson tail
@@ -904,6 +915,48 @@ protected:
   bool cfok = false;
   int cfnblock = 0;   // MS + ionization blocks entering the exponents
   int cfnpooled = 0;  // of those, how many pooled more than one leg
+
+  // ---- THE PER-MATERIAL-GROUP SPLIT OF THE SAME EXPONENTS ---------------
+  //
+  // Every step-level exponent is LINEAR in the step's material amount at
+  // fixed composition, so with the fit's influence weights held fixed
+  //
+  //     S_f(tau; k) = S_f^fixed(tau) + sum_g A(k_g) S_{f,g}(tau),
+  //     A(k) = exp(k)  (the propagator's own `matStepFact` convention)
+  //
+  // is exact and `k = 0` reproduces the flat exponents above. That is what
+  // replaces the four per-family `k_hit/k_ms/k_ioni/k_rad` knobs with the
+  // parmtype-15 material-group amounts the hit chi2 already floats (NOTES
+  // 2026-09-05 (II)).
+  //
+  // Layout, sparse over the groups the candidate actually touched (~22 of 42
+  // on a J/psi gun candidate): `cf*_grp` is the ascending group id, and each
+  // family array is `n_grp * kNTau` floats, ROW-MAJOR in (group, tau). The
+  // per-candidate group count is `cf*_grp.size()`, so no pointer branch is
+  // needed inside an entry. The group ids are parmtype-15 indices of the
+  // material-group file named in the runtree.
+  //
+  // Cost: ~22 groups x 5 families x 64 x float32 = 27 kB/candidate against
+  // 1.4 kB flat, hence the switch. A rank-16 PCA of the tau axis would cost
+  // 6.8 kB at a relative error of 4e-7 (ms) to 1e-3 (rad); this version
+  // exports the RAW rows so that the basis can be chosen from data.
+  std::vector<short> cfgrpv;      // ascending material-group id
+  std::vector<float> cfgrpmsv;    // S_ms per group
+  std::vector<float> cfgrpdelv;   // S_del per group (single-track only)
+  std::vector<float> cfgrpiorev;  // Re S_ioni per group
+  std::vector<float> cfgrpioimv;  // Im S_ioni per group
+  std::vector<float> cfgrpradrev; // Re S_rad per group
+  std::vector<float> cfgrpradimv; // Im S_rad per group
+  // max_j |sum_g S_{f,g}(tau_j) - S_f(tau_j)| over the exported families,
+  // relative to max_j |S_f|. It is float64 round-off (1e-14 or below) by
+  // construction; exporting it means a file can be AUDITED rather than
+  // trusted, at 4 bytes.
+  float cfgrpclosure = 0.f;
+
+  // Clear + fill the cfgrp* branches from one `cvhcf` result, and set
+  // `cfgrpclosure`. Shared so that the single-track and two-track makers
+  // cannot lay the arrays out differently.
+  void storeCfGroups(const cvhcf::TrackResult &res);
   // Runtree: the tau grid and the model provenance, written once per global
   // parameter (constant, so ROOT compresses them away) rather than per event.
   std::vector<float> cftau;
@@ -917,6 +970,14 @@ protected:
   //                          to re-derive them with a different model.
   bool exportCfExponents_ = true;
   bool exportStepRecords_ = true;
+  //   exportCfGroupExponents_ -- additionally split those exponents by
+  //                          material group (see cfgrp*). +26 kB/candidate,
+  //                          so it is opt-in and off by default.
+  bool exportCfGroupExponents_ = false;
+  // Does this maker's functional use the delta-recoil family? The q/p one
+  // does; the mass one's offline reference (`build_pairs_tt`) does not, so
+  // the two-track maker does not pay for a sixth per-group array.
+  bool cfGroupDelta_ = true;
 
 
   TH2D *hetaphi = nullptr;
