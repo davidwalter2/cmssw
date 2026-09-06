@@ -869,6 +869,30 @@ protected:
   // parmtype-8/9 block its own per-hit class instead of summing the hit
   // families into a single Gaussian.
   std::vector<int> reshitidx;
+  // HIT CLASS of each resolution entry: -1 for a material block, else the
+  // index into the canonical 18-class list `hitResClassIndex` implements
+  // (`calibration_studies/resolution/hitres_classes.py:CLASSES`).  Filled by
+  // the TWO-TRACK maker, whose tree carries no per-hit variables at all; the
+  // single-track tree leaves it empty because it exports `hitDetId`,
+  // `hitUProj`, `clusterSizeX` and `clusterChargeBin` per hit plus
+  // `reshitidx`, which is strictly more information.
+  std::vector<short> reshitcls;
+  // Sum of v_b over the HIT families (parmtype 8/9).  A SEPARATE scalar
+  // deliberately: `resinfcov` keeps its meaning of "the material share", so
+  //     cfmass_vgf = (sigma_m^2 - resinfcov)/sigma_m^2
+  // still means the TOTAL Gaussian share (hits + beamspot + pointing) and
+  // every cache built before the hit blocks existed stays valid.  The
+  // self-consistent-sigma correction's `a_i = (1 + f_hit) sigma_i/m_i` uses
+  // exactly that total, so changing it would have been a silent physics
+  // change (MASSCFTERM_SPEC section 3, option D).
+  float resinfcovhit = 0.f;
+  // Per-hit-class Gaussian variance shares of the candidate: `cf*_hitcls` is
+  // the ascending class index and `cf*_hitv` the summed v_b of that class
+  // DIVIDED by the functional's sigma^2, i.e. directly the `v_{c,i}` of
+  //     v_i(eps) = v_other,i + sum_c H(eps_c) v_{c,i}
+  // and `v_other = vgf - sum_c v_c` is formed offline.
+  std::vector<short> cfhitclsv;
+  std::vector<float> cfhitvv;
   std::vector<float> resinfv;
   std::vector<float> resinfvarv;
   float resinfcov = 0.;
@@ -969,7 +993,7 @@ protected:
   //                          with the exponents validated it is only needed
   //                          to re-derive them with a different model.
   bool exportCfExponents_ = true;
-  bool exportStepRecords_ = true;
+  bool exportStepRecords_ = false;
   //   exportCfGroupExponents_ -- additionally split those exponents by
   //                          material group (see cfgrp*). +26 kB/candidate,
   //                          so it is opt-in and off by default.
@@ -978,6 +1002,28 @@ protected:
   // does; the mass one's offline reference (`build_pairs_tt`) does not, so
   // the two-track maker does not pay for a sixth per-group array.
   bool cfGroupDelta_ = true;
+  //   exportHitResBlocks_ -- register the parmtype-8/9 HIT-RESOLUTION dV
+  //                          blocks. The single-track maker has always done
+  //                          it; the two-track maker did not, which is why
+  //                          the per-hit-class resolution parameters have
+  //                          never been fitted (NOTES 2026-09-05 (II) 8c).
+  //                          It is EXPORT ONLY -- the two-track `dVs` feed
+  //                          nothing but the influence export -- so it
+  //                          cannot move the fit.
+  bool exportHitResBlocks_ = true;
+
+  // THE CANONICAL 18 HIT CLASSES, the C++ image of
+  // `calibration_studies/resolution/hitres_classes.py:class_of`:
+  //   0-3   pix_x_q0..q3    (pixel local x, by template charge bin)
+  //   4-7   pix_y_q0..q3    (pixel local y)
+  //   8-17  str_N1_lo, str_N1_hi, ... str_N5_lo, str_N5_hi
+  //                         (strips, by cluster width N clipped to 1..5 and
+  //                          uProj below/above 0.25)
+  // The ORDER is part of the file format: a relabelling would silently
+  // rename every hit of every file, so it is fixed here and in the python
+  // by the same enumeration and must not be reordered.
+  static constexpr int kNHitResClasses = 18;
+  static int hitResClassIndex(int subdet, int sizeX, float uProj, int qBin, bool isY);
 
 
   TH2D *hetaphi = nullptr;

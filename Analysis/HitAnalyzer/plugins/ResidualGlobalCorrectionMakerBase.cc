@@ -203,11 +203,17 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   // from -- 430 kB and, offline, 2.2 s per candidate.  With the in-maker
   // exponents (`exportCfExponents`, cvhcf) validated against the offline
   // reference it is needed only to re-derive them under a DIFFERENT model, so
-  // production runs with it off.  Default TRUE, so nothing that exists today
-  // changes until a driver says otherwise.  existsAs-guarded: legacy cfis are
-  // untouched.
+  // production runs with it off.
+  //
+  // DEFAULT FLIPPED TO FALSE on 2026-09-06.  Every production since
+  // 2026-09-05 has set it explicitly to False (`config_jpsimc20M.sh`,
+  // `config_dymc8p5M.sh`), the exponents it feeds are validated against the
+  // offline reference, and leaving the default at True meant that any new
+  // driver silently wrote 72 % of a two-track tree in records nothing reads.
+  // The flag STAYS: `exportStepRecords=True` reproduces the old output
+  // exactly, and is what a model change is re-derived from.
   exportStepRecords_ = iConfig.existsAs<bool>("exportStepRecords")
-                           ? iConfig.getParameter<bool>("exportStepRecords") : true;
+                           ? iConfig.getParameter<bool>("exportStepRecords") : false;
   exportCfExponents_ = iConfig.existsAs<bool>("exportCfExponents")
                            ? iConfig.getParameter<bool>("exportCfExponents") : true;
   // THE PER-GROUP SPLIT.  +26 kB/candidate on top of the 1.4 kB flat export,
@@ -215,6 +221,8 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   // material + field fit need it.
   exportCfGroupExponents_ = iConfig.existsAs<bool>("exportCfGroupExponents")
                            ? iConfig.getParameter<bool>("exportCfGroupExponents") : false;
+  exportHitResBlocks_ = iConfig.existsAs<bool>("exportHitResBlocks")
+                           ? iConfig.getParameter<bool>("exportHitResBlocks") : true;
   keepPixelEdgeHits_ = iConfig.existsAs<bool>("keepPixelEdgeHits")
       ? iConfig.getParameter<bool>("keepPixelEdgeHits") : false;
   pixelMinSizeX_ = iConfig.existsAs<int>("pixelMinSizeX")
@@ -518,6 +526,8 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
       tree->Branch("reshitidx", &reshitidx);
       tree->Branch("resinfvarv", &resinfvarv);
       tree->Branch("resinfcov", &resinfcov);
+      tree->Branch("reshitcls", &reshitcls);
+      tree->Branch("resinfcovhit", &resinfcovhit);
 
       // THE IN-MAKER RESOLUTION-CF EXPONENTS.  Six families of 64 floats on
       // `cftau` (written into the runtree), plus the Gaussian share and the
@@ -545,6 +555,8 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
           }
           tree->Branch((cfprefix_ + "_grp_closure").c_str(), &cfgrpclosure);
         }
+        tree->Branch((cfprefix_ + "_hitcls").c_str(), &cfhitclsv);
+        tree->Branch((cfprefix_ + "_hitv").c_str(), &cfhitvv);
       }
     }
 
@@ -1876,6 +1888,26 @@ Matrix<double, 7, 1> ResidualGlobalCorrectionMakerBase::localToGlobal(const Matr
 // by construction: the two are the same per-step sums associated
 // differently. Exporting it makes a file auditable at 4 bytes.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// THE CANONICAL HIT CLASS.  The C++ image of
+// `calibration_studies/resolution/hitres_classes.py:class_of`, kept in the
+// same enumeration order because the index -- not the name -- is what a file
+// stores.  Strips split on the cluster width N (clipped to 1..5) and on the
+// CPE's own uProj at 0.25; pixels on the template charge bin, separately for
+// the local-x and local-y blocks.  Those are the splits the pull study found
+// to move (NOTES_HITRES sections 3 and 10): the strip core runs +12 % to
+// -13 % across uProj, the pixel core 0.52 to 1.17 across the charge bin.
+// ---------------------------------------------------------------------------
+int ResidualGlobalCorrectionMakerBase::hitResClassIndex(int subdet, int sizeX, float uProj, int qBin, bool isY) {
+  if (subdet <= 2) {  // PixelBarrel = 1, PixelEndcap = 2
+    const int q = std::min(std::max(qBin, 0), 3);
+    return (isY ? 4 : 0) + q;
+  }
+  const int n = std::min(std::max(sizeX, 1), 5);
+  return 8 + 2 * (n - 1) + (uProj < 0.25f ? 0 : 1);
+}
+
 void ResidualGlobalCorrectionMakerBase::storeCfGroups(const cvhcf::TrackResult &res) {
   cfgrpv.clear();
   cfgrpmsv.clear();

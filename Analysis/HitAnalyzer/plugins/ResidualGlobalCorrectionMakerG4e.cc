@@ -2070,7 +2070,11 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       resinfv.clear();
       resinfvarv.clear();
       reshitidx.clear();
+      reshitcls.clear();
+      cfhitclsv.clear();
+      cfhitvv.clear();
       resinfcov = 0.;
+      resinfcovhit = 0.f;
       resinfbv.clear();
       resblockrng.clear();
       resglobidx.clear();
@@ -4511,6 +4515,25 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         // the parmtype-8/9 blocks can only be matched to hits by guessing the
         // ordering, which breaks the moment a propagation fails.
         reshitidx.push_back(resvalidhit_[ires]);
+        // The hit's CLASS, from the per-hit variables this maker already
+        // exports (`hitres_classes.class_of`, index into the canonical
+        // 18-entry list). It is redundant here -- an offline reader can form
+        // it from `reshitidx` + hitDetId/clusterSizeX/hitUProj/
+        // clusterChargeBin -- but writing it means the two makers' trees
+        // carry the SAME quantity under the same name, and the two-track one
+        // has no per-hit variables to form it from.
+        {
+          const int fam = ires < resfamily_.size() ? resfamily_[ires] : -1;
+          const int ih = resvalidhit_[ires];
+          int cls = -1;
+          if ((fam == 8 || fam == 9) && ih >= 0 && std::size_t(ih) < hitDetId.size() &&
+              std::size_t(ih) < clusterSizeX.size() && std::size_t(ih) < hitUProj.size() &&
+              std::size_t(ih) < clusterChargeBin.size()) {
+            cls = hitResClassIndex(int((hitDetId[ih] >> 25) & 0x7), clusterSizeX[ih], hitUProj[ih],
+                                   clusterChargeBin[ih], fam == 9);
+          }
+          reshitcls.push_back(static_cast<short>(cls));
+        }
         for (unsigned int j = 0; j < 5; ++j) {
           reseigv.push_back(j < nb ? std::max(eigB.eigenvalues()(nb - 1 - j), 0.) : 0.f);
         }
@@ -4519,6 +4542,15 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         const double vb = wqop.segment(r0, nb).transpose() * dVb * wqop.segment(r0, nb);
         resinfvarv.push_back(vb);
         resinfcov += vb;
+        // The hit share on its own, so the two trees expose the same
+        // decomposition. Unlike the two-track maker, `resinfcov` HERE has
+        // always included the hit blocks, and that is left alone.
+        {
+          const int fam = ires < resfamily_.size() ? resfamily_[ires] : -1;
+          if (fam == 8 || fam == 9) {
+            resinfcovhit += float(vb);
+          }
+        }
         for (unsigned int j = 0; j < 5; ++j) {
           resinfv.push_back(j < nb ? wqop(r0 + j) : 0.f);
         }
@@ -4598,6 +4630,30 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         storecf(cfres.S.radRe, cfradrev);
         storecf(cfres.S.radIm, cfradimv);
         storeCfGroups(cfres);
+        // Per-hit-class Gaussian shares of the q/p variance, ascending in
+        // class. Here `vgauss` (and hence `cfqop_vgf`) IS the sum over the
+        // parmtype-8/9 blocks, so `sum_c cfqop_hitv == cfqop_vgf` exactly.
+        {
+          std::array<double, kNHitResClasses> vcls{};
+          bool anycls = false;
+          for (std::size_t i = 0; i < reshitcls.size() && i < resinfvarv.size(); ++i) {
+            const int c = reshitcls[i];
+            if (c < 0 || c >= kNHitResClasses) {
+              continue;
+            }
+            vcls[c] += resinfvarv[i];
+            anycls = true;
+          }
+          if (anycls && c00 > 0.) {
+            for (int c = 0; c < kNHitResClasses; ++c) {
+              if (vcls[c] == 0.) {
+                continue;
+              }
+              cfhitclsv.push_back(static_cast<short>(c));
+              cfhitvv.push_back(float(vcls[c] / c00));
+            }
+          }
+        }
       }
     }
 

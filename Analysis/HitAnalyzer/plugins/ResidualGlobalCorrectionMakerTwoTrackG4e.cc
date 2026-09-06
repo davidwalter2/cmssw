@@ -32,6 +32,10 @@
 #include "DataFormats/Candidate/interface/VertexCompositeCandidate.h"
 #include "DataFormats/RecoCandidate/interface/RecoChargedCandidate.h"
 #include "Geometry/CommonTopologies/interface/PixelTopology.h"
+#include "RecoLocalTracker/SiStripRecHitConverter/interface/StripCPE.h"
+#include "RecoLocalTracker/Records/interface/TkStripCPERecord.h"
+#include "RecoLocalTracker/ClusterParameterEstimator/interface/StripClusterParameterEstimator.h"
+#include "Geometry/TrackerGeometryBuilder/interface/StripGeomDetUnit.h"
 
 #include "Math/Vector4Dfwd.h"
 
@@ -572,6 +576,10 @@ private:
   edm::ESGetToken<Propagator, TrackingComponentsRecord> g4ePropToken_;
   edm::ESGetToken<TransientTrackBuilder, TransientTrackRecord> transTrackBuilderToken_;
   edm::ESGetToken<L1GtTriggerMenu, L1GtTriggerMenuRcd> l1MenuToken_;
+  // The StripCPEfromTrackAngle instance the cloner uses, queried only for its
+  // AlgoParam so the hit-resolution blocks can be labelled with the CPE's own
+  // uProj -- the strip class variable (`hitres_classes.class_of`).
+  edm::ESGetToken<StripClusterParameterEstimator, TkStripCPERecord> stripCPEToken_;
 
 };
 
@@ -582,13 +590,19 @@ ResidualGlobalCorrectionMakerTwoTrackG4e::ResidualGlobalCorrectionMakerTwoTrackG
       ttrhToken_(esConsumes(edm::ESInputTag("", "WithAngleAndTemplate"))),
       g4ePropToken_(esConsumes(edm::ESInputTag("", "Geant4ePropagator"))),
       transTrackBuilderToken_(esConsumes(edm::ESInputTag("", "TransientTrackBuilder"))),
-      l1MenuToken_(esConsumes())
+      l1MenuToken_(esConsumes()),
+      stripCPEToken_(esConsumes(edm::ESInputTag("", "StripCPEfromTrackAngle")))
 {
   // The resolution-CF exponents this maker exports are the CANDIDATE-MASS
   // functional, not the single-track q/p one: different standardization,
   // different ionization sign. They must not share a branch name with it.
   cfprefix_ = "cfmass";
   cfGroupDelta_ = false;
+  // Which |pdgId| counts as "the resonance" for the pre-FSR gen mass. The Z
+  // is 23, prompt charmonium 443/100443, bottomonium 553/100553/200553.
+  genResonancePdgIds_ = iConfig.existsAs<std::vector<int>>("genResonancePdgIds")
+      ? iConfig.getParameter<std::vector<int>>("genResonancePdgIds")
+      : std::vector<int>{23, 443, 100443, 553, 100553, 200553};
   doVtxConstraint_ = iConfig.getParameter<bool>("doVtxConstraint");
   doMassConstraint_ = iConfig.getParameter<bool>("doMassConstraint");
   massConstraint_ = iConfig.getParameter<double>("massConstraint");
@@ -1236,9 +1250,16 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
   // each iteration of the unconstrained (icons==0) pass; the converged
   // iteration's content feeds the mass-projected influence export.
   const bool dores = doRes_;
+  // The CPE's own uProj is the strip hit-class variable; the handle is taken
+  // once per event, as in the single-track maker.
+  const StripCPE *stripCPEForExport =
+      doRes_ ? dynamic_cast<const StripCPE *>(iSetup.getHandle(stripCPEToken_).product()) : nullptr;
+
   std::vector<SparseMatrix<double>> dVs;
   std::vector<std::array<unsigned int, 2>> resblockrng;
   std::vector<unsigned int> resglobidx;
+  // hit class per registered block, -1 for material (see reshitcls)
+  std::vector<int> rescls_;
 // FullPivLU<MatrixXd> Cinvd;
 // ColPivHouseholderQR<MatrixXd> Cinvd;
   
@@ -2230,6 +2251,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             resblockrng.clear();
             resglobidx.clear();
             resfamily_.clear();
+            resvalidhit_.clear();
+            rescls_.clear();
             ioniurbanidx.clear();
             ioniurbanv.clear();
             ioniqscaleidx.clear();
@@ -2959,6 +2982,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                     resglobidx.push_back(dQpart == &dQMS ? msglobalidx : ioniglobalidx);
                     // family (parmtype) of the entry, for the cvhcf pooling
                     resfamily_.push_back(dQpart == &dQMS ? 10 : 11);
+                    resvalidhit_.push_back(-1);   // material block, not a hit
+                    rescls_.push_back(-1);
                   }
                 }
                 irow += 5;
@@ -3012,6 +3037,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                     resglobidx.push_back(dQpart == &dQMS ? msglobalidx : ioniglobalidx);
                     // family (parmtype) of the entry, for the cvhcf pooling
                     resfamily_.push_back(dQpart == &dQMS ? 10 : 11);
+                    resvalidhit_.push_back(-1);   // material block, not a hit
+                    rescls_.push_back(-1);
                   }
                 }
                 irow += 5;
@@ -3429,6 +3456,106 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                               2, nlocalparms) =
                       Fhit.middleCols(localparmidx, nlocalparms);
                   Vinvfull.block<2, 2>(irow, irow) = Vinv;
+
+                  // ---- HIT-RESOLUTION BLOCKS (parmtype 8/9) --------------
+                  //
+                  // The single-track maker has always registered these; this
+                  // maker registered only the material ones, which is why the
+                  // per-hit-class resolution parameters have never been
+                  // FITTED -- the mass functional had no hit blocks to weigh
+                  // (NOTES 2026-09-05 (II) 8c).
+                  //
+                  // `dVs` in THIS maker feeds nothing but the influence
+                  // export, so registering a block cannot move the fit; and
+                  // the parmtype-8/9 corrections are deliberately NOT applied
+                  // to the covariance here (the single-track maker scales
+                  // `iV` by exp(corparms)) -- that WOULD be a fit change, and
+                  // this export is a derivative evaluated at the covariance
+                  // the fit actually used.
+                  //
+                  // dV is the derivative of the MEASUREMENT-frame covariance
+                  // w.r.t. the log-resolution parameter, split between the
+                  // local-x and local-y families so the two sum to the full
+                  // covariance -- the same decomposition the single-track
+                  // maker makes, read here off `Vinv` because the rows are
+                  // already in the measurement frame (local x/y on pixels,
+                  // local phi on wedges, local x on rectangular strips).
+                  if (dores && exportHitResBlocks_ && icons == 0) {
+                    const bool pix2d = ispixel && !hit1d;
+                    Matrix2d hitcov = Matrix2d::Zero();
+                    bool hitcovok = false;
+                    if (pix2d) {
+                      const double det = Vinv(0, 0) * Vinv(1, 1) - Vinv(0, 1) * Vinv(1, 0);
+                      if (std::abs(det) > 0.) {
+                        hitcov = Vinv.inverse();
+                        hitcovok = true;
+                      }
+                    } else if (Vinv(0, 0) > 0.) {
+                      hitcov(0, 0) = 1. / Vinv(0, 0);
+                      hitcovok = true;
+                    }
+                    if (hitcovok) {
+                      const DetId hitdetid = preciseHit->geographicalId();
+                      const unsigned int nb = pix2d ? 2u : 1u;
+                      // the class variables, exactly `hitres_classes.class_of`
+                      int clsSizeX = 1;
+                      int clsQBin = -99;
+                      float clsUProj = -99.f;
+                      const TrackerSingleRecHit *clstkhit =
+                          dynamic_cast<const TrackerSingleRecHit *>(&*preciseHit);
+                      if (clstkhit != nullptr) {
+                        if (ispixel) {
+                          if (clstkhit->cluster_pixel().isNonnull()) {
+                            clsSizeX = clstkhit->cluster_pixel()->sizeX();
+                          }
+                          const SiPixelRecHit *pxh = dynamic_cast<const SiPixelRecHit *>(clstkhit);
+                          if (pxh != nullptr) {
+                            clsQBin = pxh->qBin();
+                          }
+                        } else if (clstkhit->cluster_strip().isNonnull()) {
+                          clsSizeX = clstkhit->cluster_strip()->amplitudes().size();
+                          const StripGeomDetUnit *stripdu =
+                              dynamic_cast<const StripGeomDetUnit *>(clstkhit->det());
+                          if (stripCPEForExport != nullptr && stripdu != nullptr) {
+                            clsUProj = stripCPEForExport->getAlgoParam(*stripdu, locparm).afullProjection;
+                          }
+                        }
+                      }
+                      const int subdet = hitdetid.subdetId();
+
+                      // local x / phi
+                      {
+                        std::vector<Triplet<double>> coeffs;
+                        coeffs.emplace_back(irow, irow, hitcov(0, 0));
+                        if (pix2d) {
+                          coeffs.emplace_back(irow, irow + 1, 0.5 * hitcov(0, 1));
+                          coeffs.emplace_back(irow + 1, irow, 0.5 * hitcov(0, 1));
+                        }
+                        SparseMatrix<double> &dVx = dVs.emplace_back(ncons, ncons);
+                        dVx.setFromTriplets(coeffs.begin(), coeffs.end());
+                        resblockrng.push_back({{irow, nb}});
+                        resglobidx.push_back(detidparms.at(std::make_pair(8, hitdetid)));
+                        resfamily_.push_back(8);
+                        resvalidhit_.push_back(int(id));
+                        rescls_.push_back(hitResClassIndex(subdet, clsSizeX, clsUProj, clsQBin, false));
+                      }
+                      // local y (pixels only)
+                      if (pix2d) {
+                        std::vector<Triplet<double>> coeffs;
+                        coeffs.emplace_back(irow, irow + 1, 0.5 * hitcov(0, 1));
+                        coeffs.emplace_back(irow + 1, irow, 0.5 * hitcov(0, 1));
+                        coeffs.emplace_back(irow + 1, irow + 1, hitcov(1, 1));
+                        SparseMatrix<double> &dVy = dVs.emplace_back(ncons, ncons);
+                        dVy.setFromTriplets(coeffs.begin(), coeffs.end());
+                        resblockrng.push_back({{irow, 2u}});
+                        resglobidx.push_back(detidparms.at(std::make_pair(9, hitdetid)));
+                        resfamily_.push_back(9);
+                        resvalidhit_.push_back(int(id));
+                        rescls_.push_back(hitResClassIndex(subdet, clsSizeX, clsUProj, clsQBin, true));
+                      }
+                    }
+                  }
+
                   irow += 2;
                   
                   for (unsigned int idim=0; idim<nlocalalignment; ++idim) {
@@ -4242,6 +4369,11 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             resinfv.clear();
             resinfvarv.clear();
             resinfcov = 0.;
+            resinfcovhit = 0.f;
+            reshitidx.clear();
+            reshitcls.clear();
+            cfhitclsv.clear();
+            cfhitvv.clear();
             reseigidx.clear();
             reseigv.clear();
             resinfbv.clear();
@@ -4281,12 +4413,53 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                                         eigv.eigenvectors().transpose();
                 const VectorXd ub = sqrtdV * wmass.segment(r0, nb);
                 reseigidx.push_back(resglobidx[ires]);
+                reshitidx.push_back(ires < resvalidhit_.size() ? resvalidhit_[ires] : -1);
+                reshitcls.push_back(static_cast<short>(ires < rescls_.size() ? rescls_[ires] : -1));
                 for (unsigned int j = 0; j < 5; ++j) {
                   resinfv.push_back(j < nb ? ub(j) : 0.f);
                 }
                 const double vb = ub.squaredNorm();
                 resinfvarv.push_back(vb);
-                resinfcov += vb;
+                // MATERIAL and HIT shares are accumulated SEPARATELY.
+                // `resinfcov` keeps its historical meaning -- the material
+                // share alone -- so `cfmass_vgf = (sigma_m^2 - resinfcov)/
+                // sigma_m^2` still means the TOTAL Gaussian share (hits +
+                // beamspot + pointing), which is what the
+                // self-consistent-sigma correction's
+                // `a_i = (1 + f_hit) sigma_i/m_i` needs and what every cache
+                // built before the hit blocks existed assumes. Folding the
+                // hit blocks into `resinfcov` would have silently changed
+                // both (MASSCFTERM_SPEC section 3, option D).
+                const int fam = ires < resfamily_.size() ? resfamily_[ires] : -1;
+                if (fam == 8 || fam == 9) {
+                  resinfcovhit += float(vb);
+                } else {
+                  resinfcov += vb;
+                }
+              }
+
+              // Per-hit-class Gaussian shares, ascending in class index.
+              {
+                const double sm2c = double(Jpsi_sigmamass) * double(Jpsi_sigmamass);
+                std::array<double, kNHitResClasses> vcls{};
+                bool anycls = false;
+                for (std::size_t ires = 0; ires < reshitcls.size(); ++ires) {
+                  const int c = reshitcls[ires];
+                  if (c < 0 || c >= kNHitResClasses) {
+                    continue;
+                  }
+                  vcls[c] += resinfvarv[ires];
+                  anycls = true;
+                }
+                if (anycls && sm2c > 0.) {
+                  for (int c = 0; c < kNHitResClasses; ++c) {
+                    if (vcls[c] == 0.) {
+                      continue;
+                    }
+                    cfhitclsv.push_back(static_cast<short>(c));
+                    cfhitvv.push_back(float(vcls[c] / sm2c));
+                  }
+                }
               }
 
               // ---- THE RESOLUTION-CF EXPONENTS, for the MASS functional ---
