@@ -489,6 +489,7 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
       tree->Branch("objchisq", &objchisq);
       tree->Branch("objlogdetv", &objlogdetv);
       tree->Branch("objlogdetc", &objlogdetc);
+      tree->Branch("objnullv", &objnullv);
     }
     if (doRes_ && (fillGrads_ || fillGradsFactored_)) {
       // THE RAW PER-STEP EXPORT.  Everything in this block is what the

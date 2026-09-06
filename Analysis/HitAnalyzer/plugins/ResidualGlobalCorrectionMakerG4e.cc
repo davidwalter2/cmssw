@@ -5049,8 +5049,24 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     // trees' finite-difference checks are the same check.
     if (exportObjective_) {
       objchisq = rfull.dot(Rr);
-      const LDLT<MatrixXd> ldltV(Vinvfull);
-      objlogdetv = -ldltV.vectorD().array().abs().log().sum();
+      // ln|V| = -ln|Vinv| as a PSEUDO-determinant: Vinv is rank deficient by
+      // construction (the deweighted strip coordinates carry exactly zero
+      // weight).  The null space is structural, so it cancels in a finite
+      // difference; `objnullv` records its size so that can be asserted.
+      const SelfAdjointEigenSolver<MatrixXd> esV(Vinvfull, EigenvaluesOnly);
+      const double lmaxV = esV.eigenvalues().maxCoeff();
+      const double cutV = 1e-12 * std::max(lmaxV, 0.);
+      double lsum = 0.;
+      objnullv = 0;
+      for (int k = 0; k < esV.eigenvalues().size(); ++k) {
+        const double ev = esV.eigenvalues()(k);
+        if (ev > cutV) {
+          lsum += std::log(ev);
+        } else {
+          ++objnullv;
+        }
+      }
+      objlogdetv = -lsum;
       objlogdetc = Cinvd.vectorD().array().abs().log().sum();
       objval = objchisq + objlogdetv + objlogdetc;
     }

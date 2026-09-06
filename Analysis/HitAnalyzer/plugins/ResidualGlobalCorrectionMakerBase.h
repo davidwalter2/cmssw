@@ -751,6 +751,10 @@ protected:
   double objchisq = 0.;
   double objlogdetv = 0.;
   double objlogdetc = 0.;
+  // number of exactly-null modes of Vinv dropped from ln|V| (structural:
+  // one per deweighted strip coordinate).  Must match between the two
+  // arms of a finite difference.
+  int objnullv = 0;
   // REFERENCE ENERGY LOSS of the track, and the worst single propagation
   // step's fractional loss. See the two-track maker's `Mu*_dEref` /
   // `Mu*_maxfracloss` for what they are for: a `dE_ref/p < 0.01` quality
