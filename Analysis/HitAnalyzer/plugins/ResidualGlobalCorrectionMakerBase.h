@@ -742,6 +742,13 @@ protected:
   unsigned int chargeHypFlipped = 0;
   
   float chisqval;
+  // REFERENCE ENERGY LOSS of the track, and the worst single propagation
+  // step's fractional loss. See the two-track maker's `Mu*_dEref` /
+  // `Mu*_maxfracloss` for what they are for: a `dE_ref/p < 0.01` quality
+  // requirement on the quadratic term's material information, imposable
+  // WITHOUT the 430 kB/candidate step records. Two floats.
+  float dEref = 0.f;
+  float maxfracloss = 0.f;
   unsigned int ndof;
 
   float genweight;

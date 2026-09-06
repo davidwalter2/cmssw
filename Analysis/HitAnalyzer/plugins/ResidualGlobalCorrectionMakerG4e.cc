@@ -1823,7 +1823,14 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     std::vector<double> cgfCacheQ, cgfCacheSig;
     std::vector<cvhcgf::Result> cgfCacheRes;
 
+    // per-iteration accumulators for the reference energy loss; the CONVERGED
+    // iteration's values are the ones exported (reset at the top of each)
+    double dErefIter = 0.;
+    double maxFracLossIter = 0.;
+
     for (unsigned int iiter=0; iiter<niters; ++iiter) {
+      dErefIter = 0.;
+      maxFracLossIter = 0.;
       // Linearization snapshot taken BEFORE the reference/layer-state update
       // below applies dxfull, so a failed sufficient-decrease test can restore
       // it and redo the iteration with a halved step.
@@ -2416,6 +2423,25 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         }
         
         updtsos = std::get<1>(propresult);
+
+        // Reference energy loss of this propagation, and the running maximum
+        // of its fractional size. Taken from the propagator's input/output
+        // STATES rather than from any dE/dx model call, so it stays correct
+        // whatever scales the loss (CVH_DEDX_SCALE, the material model's k_g,
+        // the per-module dxi), and formed before any local state update, so
+        // only the propagation contributes. Same construction as the
+        // two-track maker's `dErefarr`.
+        {
+          const double m2 = trackmass * trackmass;
+          const double pIn = propInputState.segment<3>(3).norm();
+          const double eIn = std::sqrt(pIn * pIn + m2);
+          const double eOut = std::sqrt(updtsos.segment<3>(3).squaredNorm() + m2);
+          dErefIter += eIn - eOut;
+          if (pIn > 0.) {
+            maxFracLossIter = std::max(maxFracLossIter, (eIn - eOut) / pIn);
+          }
+        }
+
         const Matrix<double, 5, 5> Qcurv = std::get<2>(propresult);
         // record the (possibly just-computed) block weight and score table
         if (g4prop != nullptr && g4prop->cgfBlockValid()) {
@@ -4198,6 +4224,10 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         
       
       niter = iiter + 1;
+      // the CONVERGED iteration's reference energy loss is the exported one,
+      // for the same reason `niter` is written here
+      dEref = float(dErefIter);
+      maxfracloss = float(maxFracLossIter);
 
       // Per-iteration trajectory record (pushed before the convergence
       // break so the break-triggering iteration is included).

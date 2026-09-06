@@ -570,6 +570,20 @@ private:
   // the quantity the coherent dE/dx re-centring moves.
   float Muplus_dEref;
   float Muminus_dEref;
+  // THE WORST SINGLE PROPAGATION STEP OF THE LEG, as a fraction of its
+  // momentum: max over surface-to-surface propagations of (E_in - E_out)/p_in.
+  //
+  // It is a QUALITY variable for the quadratic (hit-chi2) term's material
+  // information, not a physics observable. The 2026-09-06 investigation of
+  // the -37 % `tec_services` pull found that the mean-loss bias grows with the
+  // step's fractional loss and is universal across groups above
+  // dE/p ~ 0.1, while below 0.01 the pulls close (max/rms 0.96/0.19): thick
+  // steps crossed by curlers with pT < 1 GeV carry 83 % of that group's
+  // information and essentially all of its bias. With this and `_dEref` the
+  // offline accumulation can impose a `dE_ref/p < 0.01` requirement WITHOUT
+  // the step records, which is the whole point (they are 430 kB/candidate).
+  float Muplus_maxfracloss;
+  float Muminus_maxfracloss;
 
   // Per-muon pixel pathology-class counts of the hits USED in the fit
   // (16 combination bins, bit0=edgeX bit1=edgeY bit2=sizeX1 bit3=sizeY1;
@@ -1043,6 +1057,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::beginStream(edm::StreamID streami
     // trajectory (GeV), icons==0, last iteration. See member declaration.
     tree->Branch("Muplus_dEref", &Muplus_dEref);
     tree->Branch("Muminus_dEref", &Muminus_dEref);
+    tree->Branch("Muplus_maxfracloss", &Muplus_maxfracloss);
+    tree->Branch("Muminus_maxfracloss", &Muminus_maxfracloss);
 
     tree->Branch("Muplus_pixClass", &Muplus_pixClass);
     tree->Branch("Muminus_pixClass", &Muminus_pixClass);
@@ -1853,6 +1869,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
       // energy loss (GeV). Reset per leg at the top of each iteration's hit
       // loop, so after the loop it holds the last (converged) iteration.
       std::array<double, 2> dErefarr = {{ 0., 0. }};
+      std::array<double, 2> maxFracLossArr = {{ 0., 0. }};
       
       const std::array<bool, 2> highpurityarr = {{ itrack->quality(reco::TrackBase::highPurity),
                                                   jtrack->quality(reco::TrackBase::highPurity) }};
@@ -2441,6 +2458,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             // which re-enters here), so the value surviving the loop belongs
             // to the converged reference trajectory.
             dErefarr[id] = 0.;
+            maxFracLossArr[id] = 0.;
 
 
             if (bsConstraint_) {
@@ -2681,9 +2699,13 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               // only the propagation (not the fit) contributes.
               {
                 const double m2 = trackMass[id] * trackMass[id];
-                const double eIn = std::sqrt(propInputState.segment<3>(3).squaredNorm() + m2);
+                const double pIn = propInputState.segment<3>(3).norm();
+                const double eIn = std::sqrt(pIn * pIn + m2);
                 const double eOut = std::sqrt(updtsos.segment<3>(3).squaredNorm() + m2);
                 dErefarr[id] += eIn - eOut;
+                if (pIn > 0.) {
+                  maxFracLossArr[id] = std::max(maxFracLossArr[id], (eIn - eOut) / pIn);
+                }
               }
 
               const Matrix<double, 5, 5> Qcurv = std::get<2>(propresult);
@@ -4720,6 +4742,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           if (icons == 0) {
             Muplus_dEref = dErefarr[idxplus];
             Muminus_dEref = dErefarr[idxminus];
+            Muplus_maxfracloss = maxFracLossArr[idxplus];
+            Muminus_maxfracloss = maxFracLossArr[idxminus];
           }
 
           Muplus_pixClass.assign(pixclassarr[idxplus].begin(), pixclassarr[idxplus].end());

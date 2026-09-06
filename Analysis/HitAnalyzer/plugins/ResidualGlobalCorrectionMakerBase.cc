@@ -598,6 +598,8 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
     tree->Branch("chargeHypFlipped", &chargeHypFlipped);
     
     tree->Branch("chisqval", &chisqval);
+    tree->Branch("dEref", &dEref);
+    tree->Branch("maxfracloss", &maxfracloss);
     tree->Branch("ndof", &ndof);
 
     tree->Branch("genweight", &genweight);
