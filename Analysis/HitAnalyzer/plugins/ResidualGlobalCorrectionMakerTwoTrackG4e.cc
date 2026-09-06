@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <Eigen/Sparse>
+#include <Eigen/Cholesky>
 
 // required for Transient Tracks
 #include "TrackingTools/TransientTrack/interface/TransientTrack.h"
@@ -692,6 +693,44 @@ ResidualGlobalCorrectionMakerTwoTrackG4e::ResidualGlobalCorrectionMakerTwoTrackG
       : std::vector<int>{23, 443, 100443, 553, 100553, 200553};
   doVtxConstraint_ = iConfig.getParameter<bool>("doVtxConstraint");
   doMassConstraint_ = iConfig.getParameter<bool>("doMassConstraint");
+  // Say out loud what the log-det term is doing, and to which families: it
+  // changes the meaning of `gradv`/`hesspackedv`/`hessfactorv` and, for the
+  // per-module families, the LAYOUT of `globalidxv`.
+  if (exportVarianceGrads_) {
+    std::string fams;
+    if (varianceGradFamilies_.empty()) {
+      fams = "8,9,10,11,15 (default)";
+    } else {
+      for (unsigned int f : varianceGradFamilies_) {
+        fams += (fams.empty() ? "" : ",") + std::to_string(f);
+      }
+    }
+    const bool wantHit = varianceFamilyWanted(8) || varianceFamilyWanted(9);
+    const bool wantMat = varianceFamilyWanted(10) || varianceFamilyWanted(11);
+    std::cout << "ResidualGlobalCorrectionMakerTwoTrackG4e: exportVarianceGrads ON, "
+              << "families " << fams << ".  gradv/hess now differentiate the "
+              << "COVARIANCE as well as the mean; the Hessian is the EXPECTED "
+              << "(Fisher) one, so the mean-variance cross term is zero by "
+              << "construction." << std::endl;
+    if (wantHit || wantMat) {
+      std::cout << "  NOTE: families 8/9/10/11 are per-module and are NOT columns "
+                << "of this maker's parameter vector, so globalidxv/gradv/"
+                << "hesspackedv/hessfactorv/jacrefv/Jpsi_jacMass GROW.  Use "
+                << "varianceGradFamilies=15 to keep the layout poolable with a "
+                << "production that ran without the switch." << std::endl;
+    }
+    if (wantHit) {
+      std::cout << "  NOTE: this maker does not apply exp(corparms) to the hit "
+                << "covariance (the single-track one does), so the parmtype-8/9 "
+                << "derivatives are evaluated at k = 0 whatever corFiles says."
+                << std::endl;
+    }
+    if (varianceFamilyWanted(15) && !exportMaterialNoise_) {
+      std::cout << "  WARNING: family 15 requested but exportMaterialNoise=False, "
+                << "so no parmtype-15 dV block is registered and k_g keeps its "
+                << "mean-loss-only derivative." << std::endl;
+    }
+  }
   massConstraint_ = iConfig.getParameter<double>("massConstraint");
   massConstraintWidth_ = iConfig.getParameter<double>("massConstraintWidth");
   // Per-daughter Geant4 particle-name base. Channel cfis specify this
@@ -1363,6 +1402,10 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
   std::vector<SparseMatrix<double>> dVs;
   std::vector<std::array<unsigned int, 2>> resblockrng;
   std::vector<unsigned int> resglobidx;
+  // number of DISTINCT final columns that received a log-det contribution on
+  // the exported pass; bounds the rank the variance block adds to `hess`
+  // (rank(A+B) <= rank A + rank B), which is what the factored storage needs.
+  unsigned int nvarcols = 0;
   // hit class per registered block, -1 for material (see reshitcls)
   std::vector<int> rescls_;
 // FullPivLU<MatrixXd> Cinvd;
@@ -2877,6 +2920,57 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                 dQI = Hm*dQIcurv*Hm.transpose();
               }
 
+              // ---- PARMTYPE-15: THE MATERIAL GROUP'S OWN PROCESS NOISE ----
+              //
+              // `k_g` scales the step's MEAN loss AND, coherently, its MS
+              // covariance and ionization variance (`matStepFact` in the
+              // propagator's M1 block).  Only the mean was ever
+              // differentiated: the parmtype-15 column of
+              // `transportJacobianBxByBzD` is the `dxi` column, whose one
+              // non-zero row is `dqopdxi`.  Registering the group's own
+              // dV here is the two-track counterpart of the single-track
+              // maker's block (`ResidualGlobalCorrectionMakerG4e.cc`
+              // "PARMTYPE-15" comment); together with the log-det assembly
+              // further down it gives `k_g` its WIDTH term.
+              //
+              // `sum_g dQ_g == dQMS + dQI` exactly (the propagator sums the
+              // same per-step `errMS + errI` into `groupQs_`, transported at
+              // the same point and by the same Jacobian), so these blocks
+              // are a RE-PARTITION of the parmtype-10/11 noise, not an
+              // addition to it -- which is why `resinfcovgrp` is kept apart
+              // from `resinfcov` below.
+              const auto registerMatGroupNoise = [&](unsigned int r0) {
+                if (!(dores && exportMaterialNoise_ && globalMaterialModel_)) {
+                  return;
+                }
+                for (auto const &gq : groupQs_) {
+                  if (gq.first < 0 || unsigned(gq.first) >= nMatGroups) {
+                    continue;
+                  }
+                  Matrix<double, 5, 5> dQG = gq.second;
+                  if (dolocalupdate) {
+                    dQG = Hm * gq.second * Hm.transpose();
+                  }
+                  if (!(dQG.cwiseAbs().maxCoeff() > 0.)) {
+                    continue;
+                  }
+                  std::vector<Triplet<double>> coeffs;
+                  coeffs.reserve(25);
+                  for (unsigned int ir = 0; ir < 5; ++ir) {
+                    for (unsigned int ic = 0; ic < 5; ++ic) {
+                      coeffs.emplace_back(r0 + ir, r0 + ic, dQG(ir, ic));
+                    }
+                  }
+                  SparseMatrix<double> &dV = dVs.emplace_back(ncons, ncons);
+                  dV.setFromTriplets(coeffs.begin(), coeffs.end());
+                  resblockrng.push_back({{r0, 5}});
+                  resglobidx.push_back(matGroupGlobalIdx_[gq.first]);
+                  resfamily_.push_back(15);          // global material group
+                  resvalidhit_.push_back(-1);
+                  rescls_.push_back(-1);
+                }
+              };
+
               // Guarded inversion of the process noise: a (near-)zero-length
               // leg -- a displaced V0 vertex sitting on the first-hit layer --
               // has Q ~ 0, and a plain inverse poisons the solve with inf
@@ -3080,7 +3174,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                 Jfull.block(irow, parmidx, 5, nlocalparms) =
                     Fprop.middleCols(localparmidx, nlocalparms);
                 Vinvfull.block<5, 5>(irow, irow) = Qinv;
-                if (dores && icons == 0) {
+                if (dores && (icons == 0 || exportVarianceGrads_)) {
                   for (auto const *dQpart : {&dQMS, &dQI}) {
                     std::vector<Triplet<double>> coeffs;
                     for (unsigned int ir = 0; ir < 5; ++ir) {
@@ -3097,6 +3191,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                     resvalidhit_.push_back(-1);   // material block, not a hit
                     rescls_.push_back(-1);
                   }
+                  registerMatGroupNoise(irow);
                 }
                 irow += 5;
               }
@@ -3135,7 +3230,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                 Jfull.block(irow, parmidx, 5, nlocalparms) =
                     Fprop.middleCols(localparmidx, nlocalparms);
                 Vinvfull.block<5, 5>(irow, irow) = Qinv;
-                if (dores && icons == 0) {
+                if (dores && (icons == 0 || exportVarianceGrads_)) {
                   for (auto const *dQpart : {&dQMS, &dQI}) {
                     std::vector<Triplet<double>> coeffs;
                     for (unsigned int ir = 0; ir < 5; ++ir) {
@@ -3152,6 +3247,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                     resvalidhit_.push_back(-1);   // material block, not a hit
                     rescls_.push_back(-1);
                   }
+                  registerMatGroupNoise(irow);
                 }
                 irow += 5;
 
@@ -3592,7 +3688,12 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                   // maker makes, read here off `Vinv` because the rows are
                   // already in the measurement frame (local x/y on pixels,
                   // local phi on wedges, local x on rectangular strips).
-                  if (dores && exportHitResBlocks_ && icons == 0) {
+                  // `icons == 0` is the influence export's pass; with the
+                  // log-det term on, the exported grad/hess come from the
+                  // LAST pass (icons == 1 under doMassConstraint), so the
+                  // blocks have to exist there too or the term would be
+                  // silently dropped.
+                  if (dores && exportHitResBlocks_ && (icons == 0 || exportVarianceGrads_)) {
                     const bool pix2d = ispixel && !hit1d;
                     Matrix2d hitcov = Matrix2d::Zero();
                     bool hitcovok = false;
@@ -4595,6 +4696,14 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                 const int fam = ires < resfamily_.size() ? resfamily_[ires] : -1;
                 if (fam == 8 || fam == 9) {
                   resinfcovhit += float(vb);
+                } else if (fam == 15) {
+                  // The parmtype-15 blocks are a RE-PARTITION of the
+                  // parmtype-10/11 noise (`sum_g dQ_g == dQMS + dQI`), not an
+                  // addition to it, so they must NOT enter `resinfcov`: that
+                  // would double-count the material share and, here, silently
+                  // move `cfmass_vgf = (sigma_m^2 - resinfcov)/sigma_m^2`.
+                  // Same split as the single-track maker.
+                  resinfcovgrp += float(vb);
                 } else {
                   resinfcov += vb;
                 }
@@ -5163,6 +5272,36 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           }
         }
 
+        // ---- VARIANCE-ONLY COLUMNS (exportVarianceGrads) ------------------
+        //
+        // A parmtype-8/9/10/11 parameter enters this maker's -2lnL ONLY
+        // through the covariance: unlike the single-track maker, the
+        // two-track parameter vector is alignment + field + eloss/material
+        // and carries no resolution slots (`npars = nparsAlignment +
+        // nparsBfield + nparsEloss`).  So those families need columns
+        // APPENDED here; their `Jfinal` columns stay exactly zero and only
+        // the log-det block below writes to them.
+        //
+        // Parmtype 15 needs NOTHING appended -- `matGroupGlobalIdx_[g]` is
+        // already a column of `globalidxv`, one slot per group per hit --
+        // which is why `varianceGradFamilies = {15}` preserves the layout
+        // and can be pooled with a production that ran without the switch.
+        const std::size_t nparsmean = globalidxvfinal.size();
+        if (dores && exportVarianceGrads_) {
+          for (unsigned int ires = 0; ires < resglobidx.size(); ++ires) {
+            const int fam = ires < resfamily_.size() ? resfamily_[ires] : -1;
+            if (!varianceFamilyWanted(fam)) {
+              continue;
+            }
+            const unsigned int idx = resglobidx[ires];
+            if (!idxmap.count(idx)) {
+              idxmap[idx] = globalidxvfinal.size();
+              globalidxvfinal.push_back(idx);
+            }
+          }
+        }
+        (void)nparsmean;
+
         const unsigned int nparsfinal = globalidxvfinal.size();
 
         // Sparse GBL reduction (mirrors single-track maker 2536-2651).
@@ -5199,6 +5338,201 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
         dxdparms = MatrixXd::Zero(nparsfinal, nstateparms);
         dxdparms(Eigen::placeholders::all, freestateidxs) =
             -Cinvd.solve(VinvF.transpose()*Jsparse).transpose();
+
+        // ================= THE VARIANCE (log-det) TERM =====================
+        //
+        // Up to here the exported gradient/Hessian are those of the QUADRATIC
+        // form alone, `chi2(theta) = r^T R r` with `r -> r + J theta`, i.e.
+        // every parameter enters only through the MEAN of the residuals.  For
+        // a parameter that also moves the COVARIANCE -- parmtype 15 (a
+        // material group scales its steps' MS covariance and ionization
+        // variance by the same `exp(k_g)` that scales their mean loss), and
+        // parmtypes 8/9/10/11 (which move nothing else) -- that is not the
+        // derivative of the likelihood.
+        //
+        // The objective is the MARGINAL (REML) one, exactly as in the
+        // single-track maker (`ResidualGlobalCorrectionMakerG4e.cc`, the
+        // `gradll` loop):
+        //
+        //     -2 lnL(theta) = r^T R r + ln|V| + ln|C|,
+        //         R = V^-1 - V^-1 F C^-1 F^T V^-1,   C = F^T V^-1 F,
+        //
+        // whose derivatives use  dR/dtheta = -R (dV/dtheta) R  and
+        // d(ln|V| + ln|C|)/dtheta = tr(R dV/dtheta):
+        //
+        //     dG_i   = -r^T R dV_i R r  +  tr(dV_i R)
+        //     dH_ij  =  tr(dV_i R dV_j R)                       (EXPECTED)
+        //
+        // Three properties of this, all deliberate and all shared with the
+        // single-track code:
+        //
+        //  * THE LOCAL TRACK PARAMETERS.  `R` already carries the projection
+        //    -V^-1 F C^-1 F^T V^-1, so the fitted state is profiled out and
+        //    its implicit derivative vanishes by the envelope theorem; the
+        //    `ln|C|` piece -- the difference between profiling and
+        //    marginalizing -- is supplied automatically by using `R` rather
+        //    than `V^-1` inside the trace.  The vertex / beamspot / pointing
+        //    / mass constraint rows have theta-independent weights, so they
+        //    register no `dV` and enter only through `R` and `C`.
+        //
+        //  * THE HESSIAN IS THE EXPECTED (FISHER) ONE.  The observed pieces
+        //    `2 r^T R dV_i R dV_j R r` and the mean-variance cross term
+        //    `-2 J^T R dV_i R r` are DROPPED -- the single-track maker has
+        //    them behind `if (false)` for the same reason.  For a Gaussian
+        //    the mean and variance blocks of the Fisher matrix are exactly
+        //    orthogonal, so the cross term is zero IN EXPECTATION and keeping
+        //    the observed one only adds noise; and the expected form is a
+        //    Gram matrix, `tr(dV_i R dV_j R) = <R^1/2 dV_i R^1/2,
+        //    R^1/2 dV_j R^1/2>_F`, hence positive semi-definite by
+        //    construction, which `2 J^T R J` also is.  The exported `hess` is
+        //    therefore PSD whatever the candidate does.
+        //
+        //  * WHAT dV IS EVALUATED AT.  `dV_i` is the derivative at the point
+        //    the FIT USED.  For parmtypes 10/11/15 that is the covariance the
+        //    propagator actually built (`k_g` included).  For parmtypes 8/9
+        //    this maker does not apply `exp(corparms)` to the hit covariance
+        //    at all (the single-track maker does), so those derivatives are
+        //    at theta = 0 regardless of any `corFiles` -- see the doc.
+        //
+        // The blocks are evaluated in their own row range rather than as full
+        // ncons x ncons sparse products: every `dV_i` is supported on
+        // `resblockrng[i]`, so `tr(dV_i R) = tr(D_i R_ii)` and
+        // `tr(dV_i R dV_j R) = tr(D_i R_ij D_j R_ji)` with `D` the small
+        // dense block.  Identical algebra, ~5 x 5 matrices instead of
+        // 400 x 400 sparse ones.
+        nvarcols = 0;
+        if (dores && exportVarianceGrads_) {
+          // per candidate, so a candidate with no registered block writes an
+          // EMPTY gradchisqv/gradllv rather than the previous candidate's
+          gradchisqv.clear();
+          gradllv.clear();
+        }
+        if (dores && exportVarianceGrads_ && !dVs.empty()) {
+          std::vector<unsigned int> vcol, vr0, vnb;
+          std::vector<MatrixXd> vD;
+          vcol.reserve(dVs.size());
+          vr0.reserve(dVs.size());
+          vnb.reserve(dVs.size());
+          vD.reserve(dVs.size());
+          for (unsigned int ires = 0; ires < dVs.size(); ++ires) {
+            const int fam = ires < resfamily_.size() ? resfamily_[ires] : -1;
+            if (!varianceFamilyWanted(fam)) {
+              continue;
+            }
+            const unsigned int r0 = resblockrng[ires][0];
+            const unsigned int nb = resblockrng[ires][1];
+            MatrixXd Db(nb, nb);
+            for (unsigned int a = 0; a < nb; ++a) {
+              for (unsigned int b = 0; b < nb; ++b) {
+                Db(a, b) = dVs[ires].coeff(r0 + a, r0 + b);
+              }
+            }
+            if (!(Db.cwiseAbs().maxCoeff() > 0.)) {
+              continue;
+            }
+            vcol.push_back(idxmap.at(resglobidx[ires]));
+            vr0.push_back(r0);
+            vnb.push_back(nb);
+            vD.emplace_back(std::move(Db));
+          }
+
+          const unsigned int nv = vcol.size();
+          if (nv > 0) {
+            {
+              std::vector<unsigned int> uniq(vcol);
+              std::sort(uniq.begin(), uniq.end());
+              uniq.erase(std::unique(uniq.begin(), uniq.end()), uniq.end());
+              nvarcols = uniq.size();
+            }
+
+            VectorXd gradll = VectorXd::Zero(nparsfinal);
+            // dVRr(:, p) = sum over the blocks of parameter p of dV_i R r.
+            // Dense ncons x nparsfinal, but only the blocks' own rows are
+            // ever written.
+            MatrixXd dVRr = MatrixXd::Zero(ncons, nparsfinal);
+
+            std::vector<VectorXd> vDRr(nv);
+            for (unsigned int i = 0; i < nv; ++i) {
+              const auto Rri = Rr.segment(vr0[i], vnb[i]);
+              vDRr[i] = vD[i] * Rri;
+              dVRr.block(vr0[i], vcol[i], vnb[i], 1) += vDRr[i];
+              // log-det gradient: tr(dV_i R)
+              gradll(vcol[i]) +=
+                  (vD[i] * R.block(vr0[i], vr0[i], vnb[i], vnb[i])).trace();
+            }
+
+            // expected Hessian: tr(dV_i R dV_j R) = tr(D_i R_ij D_j R_ji)
+            for (unsigned int i = 0; i < nv; ++i) {
+              const MatrixXd DiRij_base = vD[i];
+              for (unsigned int j = 0; j <= i; ++j) {
+                const MatrixXd T =
+                    DiRij_base * R.block(vr0[i], vr0[j], vnb[i], vnb[j]);   // nb_i x nb_j
+                const MatrixXd U =
+                    vD[j] * R.block(vr0[j], vr0[i], vnb[j], vnb[i]);        // nb_j x nb_i
+                const double hessres = (T.array() * U.transpose().array()).sum();
+                hess(vcol[i], vcol[j]) += hessres;
+                if (i != j) {
+                  hess(vcol[j], vcol[i]) += hessres;
+                }
+              }
+            }
+
+            // chi2 part of the variance gradient: -r^T R dV_i R r
+            const SparseMatrix<double> dVRrsparse = dVRr.sparseView();
+            grad += -dVRrsparse.transpose()*Rr;
+
+            gradchisqv.clear();
+            gradchisqv.resize(nparsfinal, 0.);
+            Map<VectorXf>(gradchisqv.data(), nparsfinal) = grad.cast<float>();
+
+            gradllv.clear();
+            gradllv.resize(nparsfinal, 0.);
+            Map<VectorXf>(gradllv.data(), nparsfinal) = gradll.cast<float>();
+
+            grad += gradll;
+
+            // The fitted state moves with a variance parameter too:
+            //   dxhat/dtheta_i = C^-1 F^T V^-1 dV_i R r
+            // (same expression the single-track maker adds).  This is what
+            // puts the variance families into `Jpsi_jacMass` and the two
+            // `_jacRef`, i.e. what lets the MASS term see them.
+            dxdparms(Eigen::placeholders::all, freestateidxs) +=
+                Cinvd.solve(FtVinv*dVRrsparse).transpose();
+          }
+        }
+
+        // The marginal objective itself, for finite-differencing the above.
+        if (exportObjective_) {
+          objchisq = rfull.dot(Rr);
+          // ln|V| = -ln|Vinv|.  Vinv is block diagonal and positive definite
+          // (the deweighted strip coordinate carries a tiny but non-zero
+          // weight), so an LDLT is enough.
+          // ln|V| = -ln|Vinv|, but Vinv is RANK DEFICIENT by construction:
+          // the deweighted second coordinate of every 1-D strip hit carries
+          // exactly zero weight, so a plain determinant is 0 and its log is
+          // -inf.  What is wanted -- and what cancels in a finite difference,
+          // because the null space is structural and delta-independent -- is
+          // the PSEUDO-determinant over the non-null modes.  `objnullv`
+          // records how many were dropped so a FD can assert that the two
+          // arms dropped the same number.
+          const SelfAdjointEigenSolver<MatrixXd> esV(Vinvfull, EigenvaluesOnly);
+          const double lmaxV = esV.eigenvalues().maxCoeff();
+          const double cutV = 1e-12 * std::max(lmaxV, 0.);
+          double lsum = 0.;
+          objnullv = 0;
+          for (int k = 0; k < esV.eigenvalues().size(); ++k) {
+            const double ev = esV.eigenvalues()(k);
+            if (ev > cutV) {
+              lsum += std::log(ev);
+            } else {
+              ++objnullv;
+            }
+          }
+          objlogdetv = -lsum;
+          objlogdetc = Cinvd.vectorD().array().abs().log().sum();
+          objval = objchisq + objlogdetv + objlogdetc;
+        }
+        // ===================================================================
 
         if (icons == 0) {
           const unsigned int idxplus = muchargearr[0] > 0 ? 0 : 1;
@@ -5397,7 +5731,23 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
         const SelfAdjointEigenSolver<MatrixXd> eshess(hess);
         const VectorXd& eigvals = eshess.eigenvalues();  // ascending
 
-        const unsigned int nrank = std::min(ndof, nparsfinal);
+        // With `exportVarianceGrads` the Hessian is no longer 2 J^T R J
+        // alone: the log-det block  tr(dV_i R dV_j R)  is a Gram matrix over
+        // the variance parameters, whose rank is bounded by the number of
+        // DISTINCT columns that received one and NOT by ndof.  So the count
+        // that keeps the factorization exact is ndof + nvarcols
+        // (rank(A+B) <= rank A + rank B); with the switch off nvarcols is 0
+        // and this is the historical ndof.
+        //
+        // WHAT THE FACTORED FORM CANNOT DO: the variance block is a Gram
+        // matrix of the ncons x ncons objects R^1/2 dV_i R^1/2, so its rank
+        // is essentially the NUMBER OF VARIANCE PARAMETERS -- it does not
+        // compress the way the mean block does (rank ndof << nParms).  There
+        // is no low-rank B for it; the honest options are to carry the extra
+        // nvarcols rows, which is what is done here, or to ship the block
+        // separately.  Carrying the rows keeps `hessfactorv` a complete
+        // description of `hess`, so no offline consumer has to change.
+        const unsigned int nrank = std::min(ndof + nvarcols, nparsfinal);
 
         double keptmass = 0.;
         double droppedmass = 0.;
