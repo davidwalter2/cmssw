@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <array>
 #include <Eigen/Sparse>
+#include <Eigen/Cholesky>
 
 #include <iomanip>
 #include <limits>
@@ -5043,6 +5044,17 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 // dxdparms += (M*dVRrsparse).transpose();
 // }
     
+    // The marginal objective the log-det gradient differentiates, in double.
+    // Same definition and same code as the two-track maker's, so the two
+    // trees' finite-difference checks are the same check.
+    if (exportObjective_) {
+      objchisq = rfull.dot(Rr);
+      const LDLT<MatrixXd> ldltV(Vinvfull);
+      objlogdetv = -ldltV.vectorD().array().abs().log().sum();
+      objlogdetc = Cinvd.vectorD().array().abs().log().sum();
+      objval = objchisq + objlogdetv + objlogdetc;
+    }
+
     gradchisqv.clear();
     gradchisqv.resize(nparsfinal, 0.);
 

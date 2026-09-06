@@ -188,6 +188,30 @@ opts.register('exportMaterialNoise', False, VarParsing.VarParsing.multiplicity.s
               'scaled by exp(k_g)) as well as its mean loss. It CHANGES the '
               'exported gradient and Hessian of the parmtype-15 columns -- not '
               'the track fit -- so it is off by default')
+opts.register('exportVarianceGrads', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'add the VARIANCE (log-det) part of the profiled -2lnL to the '
+              'exported global gradient and Hessian: '
+              '-r^T V^-1 dV V^-1 r + tr(V^-1 dV) and the expected curvature '
+              'tr(dV R dV R). Without it a parameter that moves the '
+              'covariance (parmtype 15 through exp(k_g), and 8/9/10/11 '
+              'entirely) enters the quadratic hit-chi2 term only through the '
+              'MEAN. Two-track maker only (the single-track one always had '
+              'it); OFF reproduces the pre-2026-09-06 gradients bit for bit')
+opts.register('varianceGradFamilies', [], VarParsing.VarParsing.multiplicity.list,
+              VarParsing.VarParsing.varType.int,
+              'which parmtypes exportVarianceGrads covers; empty = '
+              '{8,9,10,11,15}. 15 alone is the LAYOUT-PRESERVING subset (the '
+              'material-group globals are already columns of globalidxv), so '
+              'its output can be pooled with a production that ran without '
+              'the switch; 8/9/10/11 append per-module columns')
+opts.register('exportObjective', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'write objval/objchisq/objlogdetv/objlogdetc, the marginal '
+              'objective r^T R r + ln|V| + ln|C| in double precision. '
+              'Validation only -- it costs an ncons x ncons LDLT per '
+              'candidate -- and exists so the new gradient can be '
+              'finite-differenced against what it claims to differentiate')
 opts.register('exportHitResBlocks', True, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'register the parmtype-8/9 HIT-RESOLUTION dV blocks in the '
@@ -595,6 +619,9 @@ process.trackrefitdimuon = ResidualGlobalCorrectionMakerDiMuonG4e.clone(
     exportCfGroupExponents=cms.bool(bool(opts.exportCfGroupExponents)),
     exportHitResBlocks=cms.bool(bool(opts.exportHitResBlocks)),
     exportMaterialNoise=cms.bool(bool(opts.exportMaterialNoise)),
+    exportVarianceGrads=cms.bool(bool(opts.exportVarianceGrads)),
+    varianceGradFamilies=cms.vuint32(*[int(x) for x in opts.varianceGradFamilies]),
+    exportObjective=cms.bool(bool(opts.exportObjective)),
     produceValueMaps=cms.bool(bool(opts.produceValueMaps)),
     # --- gen (MiniAOD retags)
     doGen=cms.bool(bool(opts.doGen)),

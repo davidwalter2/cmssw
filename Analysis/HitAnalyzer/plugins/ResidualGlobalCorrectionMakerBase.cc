@@ -225,6 +225,16 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
                            ? iConfig.getParameter<bool>("exportHitResBlocks") : true;
   exportMaterialNoise_ = iConfig.existsAs<bool>("exportMaterialNoise")
                            ? iConfig.getParameter<bool>("exportMaterialNoise") : false;
+  // THE VARIANCE (log-det) TERM of the two-track maker's exported gradient
+  // and Hessian.  See the member docs; off reproduces the pre-2026-09-06
+  // gradients bit for bit.
+  exportVarianceGrads_ = iConfig.existsAs<bool>("exportVarianceGrads")
+                           ? iConfig.getParameter<bool>("exportVarianceGrads") : false;
+  varianceGradFamilies_ = iConfig.existsAs<std::vector<unsigned int>>("varianceGradFamilies")
+                           ? iConfig.getParameter<std::vector<unsigned int>>("varianceGradFamilies")
+                           : std::vector<unsigned int>();
+  exportObjective_ = iConfig.existsAs<bool>("exportObjective")
+                           ? iConfig.getParameter<bool>("exportObjective") : false;
   keepPixelEdgeHits_ = iConfig.existsAs<bool>("keepPixelEdgeHits")
       ? iConfig.getParameter<bool>("keepPixelEdgeHits") : false;
   pixelMinSizeX_ = iConfig.existsAs<int>("pixelMinSizeX")
@@ -471,6 +481,14 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
     if (fillJac_ || fillGrads_ || fillGradsFactored_) {
       tree->Branch("gradchisqv", &gradchisqv);
       tree->Branch("gradllv", &gradllv);
+    }
+    // The objective the log-det gradient is the derivative OF, in double.
+    // Debug/validation only (an ncons x ncons LDLT per candidate).
+    if (exportObjective_) {
+      tree->Branch("objval", &objval);
+      tree->Branch("objchisq", &objchisq);
+      tree->Branch("objlogdetv", &objlogdetv);
+      tree->Branch("objlogdetc", &objlogdetc);
     }
     if (doRes_ && (fillGrads_ || fillGradsFactored_)) {
       // THE RAW PER-STEP EXPORT.  Everything in this block is what the

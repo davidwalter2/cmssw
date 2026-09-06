@@ -742,6 +742,15 @@ protected:
   unsigned int chargeHypFlipped = 0;
   
   float chisqval;
+  // The MARGINAL objective  r^T R r + ln|V| + ln|C|  in double precision,
+  // written only under `exportObjective_`.  `chisqval` is the first term
+  // alone and is a float, which is 3-4 digits short of what a
+  // finite-difference of the log-det gradient needs.
+  double objval = 0.;
+  // its three pieces, for diagnosing which one a FD mismatch is in
+  double objchisq = 0.;
+  double objlogdetv = 0.;
+  double objlogdetc = 0.;
   // REFERENCE ENERGY LOSS of the track, and the worst single propagation
   // step's fractional loss. See the two-track maker's `Mu*_dEref` /
   // `Mu*_maxfracloss` for what they are for: a `dE_ref/p < 0.01` quality
@@ -1035,6 +1044,63 @@ protected:
   //                          `dVs`), so it is opt-in; False reproduces the
   //                          pre-2026-09-06 gradients exactly.
   bool exportMaterialNoise_ = false;
+
+  //   exportVarianceGrads_ -- add the VARIANCE (log-det) part of the profiled
+  //                          -2lnL to the exported global gradient and
+  //                          Hessian of the TWO-TRACK maker.  The single-track
+  //                          maker has always had this (`gradll`); the
+  //                          two-track one had no log-det machinery at all,
+  //                          so its `k_g` (and every parmtype-8..11 family)
+  //                          entered the quadratic hit-chi2 term only through
+  //                          the MEAN loss.  Opt-in, and OFF reproduces the
+  //                          pre-2026-09-06 gradients bit for bit.
+  //
+  //                          The objective differentiated is the REML/marginal
+  //                          one, the same one the single-track maker uses:
+  //                              -2lnL = r^T R r + ln|V| + ln|C|,
+  //                              R = V^-1 - V^-1 F C^-1 F^T V^-1,
+  //                              C = F^T V^-1 F,
+  //                          so the local track parameters are integrated out
+  //                          rather than merely profiled, and the implicit
+  //                          derivative through the fitted state vanishes by
+  //                          the envelope theorem.
+  bool exportVarianceGrads_ = false;
+  //   varianceGradFamilies_ -- which parmtypes get the log-det treatment.
+  //                          EMPTY means {8, 9, 10, 11, 15}.  {15} is the
+  //                          LAYOUT-PRESERVING subset: the material-group
+  //                          global indices are already columns of
+  //                          `globalidxv` (one slot per group per hit), so
+  //                          enabling only 15 adds no parameter and the
+  //                          output can still be pooled with a production
+  //                          that ran without the switch.  Families 8-11 are
+  //                          per-module and are NOT columns of the two-track
+  //                          parameter vector, so enabling them APPENDS
+  //                          columns (and grows `jacrefv` / `Jpsi_jacMass` /
+  //                          `hessfactorv` with them).
+  std::vector<unsigned int> varianceGradFamilies_;
+  // Is `fam` (a parmtype) one of the families whose log-det derivative is
+  // exported?  Empty `varianceGradFamilies_` means the full default set.
+  bool varianceFamilyWanted(int fam) const {
+    if (!exportVarianceGrads_ || fam < 0) {
+      return false;
+    }
+    if (varianceGradFamilies_.empty()) {
+      return fam == 8 || fam == 9 || fam == 10 || fam == 11 || fam == 15;
+    }
+    for (unsigned int f : varianceGradFamilies_) {
+      if (int(f) == fam) {
+        return true;
+      }
+    }
+    return false;
+  }
+  //   exportObjective_ -- write `objval`, the value of the marginal objective
+  //                          above in DOUBLE precision.  Debug/validation
+  //                          only: it costs an ncons x ncons LDLT per
+  //                          candidate and exists so that the new gradient
+  //                          can be finite-differenced against the thing it
+  //                          claims to be the derivative of.
+  bool exportObjective_ = false;
 
   // THE CANONICAL 18 HIT CLASSES, the C++ image of
   // `calibration_studies/resolution/hitres_classes.py:class_of`:
