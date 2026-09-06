@@ -451,6 +451,35 @@ private:
   float Jpsigen_eta;
   float Jpsigen_phi;
   float Jpsigen_mass;
+  // ---- THE PRE-FSR RESONANCE ------------------------------------------
+  //
+  // `Jpsigen_mass` above is the POST-FSR pair: two status-1 muons matched in
+  // dR < 0.1, i.e. what the tracker sees. The Z channel's FSR kernel is the
+  // ratio of the two, so it needs the PRE-FSR mass as well, and today that
+  // costs a separate FWLite pass over the MiniAOD (`zchannel/dump_gen_fsr.py`)
+  // whose selection has to be kept in step with this one by hand.
+  //
+  // In the DY UL16 sample (powheg-MiNNLO + pythia8 + photos) NO muon carries
+  // `fromHardProcessBeforeFSR`; what is there is the hard-process Z at
+  // status 22 (first copy) and 62 (last copy), whose masses agree in
+  // 4000/4000 events, and -- only in the 59 % of events that radiated -- the
+  // pre-Photos muon pair at status 746. `m(mumu, 746) == m(Z, 62)` to an RMS
+  // of 4e-6 GeV, so the status-62 resonance IS the pre-FSR mass and it exists
+  // in every event (`zchannel/README.md`).
+  //
+  //   Jpsigenpre_mass    the |pdgId| in `genResonancePdgIds_` entry at
+  //                      status 62, falling back to 22; -99 if absent (a
+  //                      J/psi from a B decay has neither).
+  //   Jpsigenpre_status  which copy was used, so a file says so itself.
+  //   Jpsigenpre_masslep the status-746 lepton pair, the independent
+  //                      cross-check; -99 when the event did not radiate.
+  //   Jpsigen_massdressed the matched bare pair with every prompt status-1
+  //                      photon within dR < 0.1 of either muon added back.
+  float Jpsigenpre_mass;
+  float Jpsigenpre_masslep;
+  float Jpsigen_massdressed;
+  int Jpsigenpre_status;
+  std::vector<int> genResonancePdgIds_;
   
   float Muplusgen_pt;
   float Muplusgen_eta;
@@ -955,6 +984,10 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::beginStream(edm::StreamID streami
     tree->Branch("Jpsigen_eta", &Jpsigen_eta);
     tree->Branch("Jpsigen_phi", &Jpsigen_phi);
     tree->Branch("Jpsigen_mass", &Jpsigen_mass);
+    tree->Branch("Jpsigenpre_mass", &Jpsigenpre_mass);
+    tree->Branch("Jpsigenpre_masslep", &Jpsigenpre_masslep);
+    tree->Branch("Jpsigenpre_status", &Jpsigenpre_status);
+    tree->Branch("Jpsigen_massdressed", &Jpsigen_massdressed);
 
     tree->Branch("Muplusgen_pt", &Muplusgen_pt);
     tree->Branch("Muplusgen_eta", &Muplusgen_eta);
@@ -4752,19 +4785,55 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           
           const reco::Candidate *muplusgen = nullptr;
           const reco::Candidate *muminusgen = nullptr;
-          
+
+          // pre-FSR resonance + the photons the dressed mass needs, gathered
+          // in the same pass as the muon match (see the Jpsigenpre_ member
+          // docs). The container is an edm::View<reco::Candidate>, which does
+          // NOT expose GenStatusFlags, so `isPrompt` is asked for through a
+          // dynamic_cast and simply not required when the cast fails.
+          const reco::Candidate *resgen = nullptr;
+          int resstatus = -1;
+          std::vector<const reco::Candidate *> pre746;
+          std::vector<const reco::Candidate *> fsrphot;
+
           Muplusgen_dr = -99.;
           Muminusgen_dr = -99.;
+          Jpsigenpre_mass = -99.;
+          Jpsigenpre_masslep = -99.;
+          Jpsigenpre_status = -1;
+          Jpsigen_massdressed = -99.;
 
           if (doGen_) {
             double drminplus = 0.1;
             double drminminus = 0.1;
 
             for (auto const &genpart : *genPartCollection) {
-              if (genpart.status() != 1) {
+              const int apid = std::abs(genpart.pdgId());
+              const int st = genpart.status();
+              // the hard-process resonance: last copy (62) wins over first
+              // copy (22); their masses agree to 4e-6 GeV where both exist
+              if ((st == 62 || st == 22) &&
+                  std::find(genResonancePdgIds_.begin(), genResonancePdgIds_.end(), apid) !=
+                      genResonancePdgIds_.end()) {
+                if (resgen == nullptr || (st == 62 && resstatus != 62)) {
+                  resgen = &genpart;
+                  resstatus = st;
+                }
+              }
+              // the pre-Photos lepton copies, present only in radiating events
+              if (st == 746 && apid == 13) {
+                pre746.push_back(&genpart);
+              }
+              if (st == 1 && apid == 22) {
+                const reco::GenParticle *gp = dynamic_cast<const reco::GenParticle *>(&genpart);
+                if (gp == nullptr || gp->statusFlags().isPrompt()) {
+                  fsrphot.push_back(&genpart);
+                }
+              }
+              if (st != 1) {
                 continue;
               }
-              if (std::abs(genpart.pdgId()) != 13) {
+              if (apid != 13) {
                 continue;
               }
 
@@ -4789,6 +4858,17 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
             if (muminusgen != nullptr) {
               Muminusgen_dr = drminminus;
+            }
+
+            if (resgen != nullptr) {
+              Jpsigenpre_mass = resgen->mass();
+              Jpsigenpre_status = resstatus;
+            }
+            if (pre746.size() == 2) {
+              Jpsigenpre_masslep =
+                  (ROOT::Math::PtEtaPhiMVector(pre746[0]->pt(), pre746[0]->eta(), pre746[0]->phi(), trackMass[0]) +
+                   ROOT::Math::PtEtaPhiMVector(pre746[1]->pt(), pre746[1]->eta(), pre746[1]->phi(), trackMass[1]))
+                      .mass();
             }
 
           }
@@ -4823,7 +4903,21 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             Jpsigen_eta = jpsigen.eta();
             Jpsigen_phi = jpsigen.phi();
             Jpsigen_mass = jpsigen.mass();
-            
+
+            // DRESSED: the bare pair plus every prompt final-state photon
+            // within dR < 0.1 of EITHER muon -- the same cone and the same
+            // photon collection `zchannel/dump_gen_fsr.py` uses, so the two
+            // definitions cannot drift.
+            {
+              ROOT::Math::PtEtaPhiMVector dressed = jpsigen;
+              for (auto const *ph : fsrphot) {
+                if (deltaR(*ph, *muplusgen) < 0.1 || deltaR(*ph, *muminusgen) < 0.1) {
+                  dressed += ROOT::Math::PtEtaPhiMVector(ph->pt(), ph->eta(), ph->phi(), 0.);
+                }
+              }
+              Jpsigen_massdressed = dressed.mass();
+            }
+
             Jpsigen_x = muplusgen->vx();
             Jpsigen_y = muplusgen->vy();
             Jpsigen_z = muplusgen->vz();
