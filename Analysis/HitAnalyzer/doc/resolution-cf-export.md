@@ -174,10 +174,13 @@ would double-count the material share and break the offline coverage cut
 parmtype-10 + parmtype-11 part of `resinfcov` per candidate — measured on 120
 gun tracks: ratio 1 to **3.6e-7**, the float32 storage floor.
 
-**Only the SINGLE-TRACK maker has this.** The two-track maker has no `gradll`
-and no log-det machinery at all — its `dVs` feed the influence export and
-nothing else — so the equivalent there is a new implementation, not a port, and
-is not done.
+**As of the next section the two-track maker has it too** (`exportVarianceGrads`).
+It needed a new implementation rather than a port: that maker had no `gradll`
+and no log-det machinery at all, its `dVs` fed the influence export and nothing
+else, and the parmtype-8..11 families are not even columns of its parameter
+vector. On the two-track side `exportMaterialNoise` alone only REGISTERS the
+blocks (they feed `resinfcovgrp` and the influence export); it takes
+`exportVarianceGrads` as well to put them in the gradient.
 
 **Validation** (`materialFDGroup=<g> materialFDEps=<eps>`, which injects
 `k_g -> k_g + eps` and re-propagates):
@@ -309,17 +312,24 @@ the two arms of a finite difference can be asserted to have dropped the same
 number. It costs a symmetric eigendecomposition of an ncons x ncons matrix per
 candidate and is validation-only.
 
-**Validation** (`calibration_studies/resolution/{fd_variance_260906.sh,
-check_variance_grads_260906.py}`), gun ditrack, 59 candidates:
+**Validation** (`calibration_studies/resolution/check_variance_grads_260906.py`
+and the four shell drivers next to it; full report in
+`runs/variancegrads260906/check_variance.txt`), gun ditrack, 59 candidates:
 
 | gate | measured |
 |---|---|
-| switch OFF, three smokes | every branch BIT-IDENTICAL to the branch head (246 / 157 / 264 branches) |
-| FD, parmtype 15 (`k_init` of one group, delta = 1e-3 and 1e-4) | see `runs/variancegrads260906/check_variance.txt` |
-| FD, parmtype 10 (`CVH_MS_SCALE = exp(+-delta)`, a common log scale on every step's MS) | idem |
-| sum rule `sum_g d/dk_g == d/d(MS+ioni scale)` | idem, gradient and Hessian block |
-| two-track vs single-track, same muon, same parmtype-10 global | idem |
-| Hessian PSD, per candidate and pooled over the (14,15) subset | idem |
+| switch OFF, three smokes | every branch BIT-IDENTICAL to the branch head, 246 / 157 / 264 branches |
+| **FD at FIXED linearization** (`varianceFDGlobalIdx=-2`, 1382 columns x 19 candidates) | median `\|fd - an\|` / per-candidate scale = **1.3e-6** at eps = 1e-3, and it GROWS as 1/eps (1.1e-5 at 1e-4, 9.8e-5 at 1e-5) -- so the residual is the numerical floor of re-doing the profile, NOT a modelling gap |
+| ... and its structure | for parmtype 15, `an_chisq - fd_chisq` equals the MEAN-loss gradient to a median of **3.6e-7** (float32 storage of `gradv`); for parmtypes 10/11 it is **2.2e-7**, i.e. zero, as it must be since their `J` columns vanish |
+| FD at the PROPAGATOR level, parmtype 15 (`k_init` of one group) | best **6.0e-4** on the log-det part of the summed column, **1.8e-2** on the chi2 part. It does not improve monotonically with delta: an FD across a RE-FIT has truncation (prop delta) fighting the reference movement and the Gauss-Newton stopping tolerance (prop 1/delta) |
+| FD at the PROPAGATOR level, parmtype 10 (`CVH_MS_SCALE = exp(+-delta)`) | **4.0e-2** log-det, **7.1e-3** chi2 |
+| sum rule `sum_g d/dk_g == d/d(MS+ioni scale)` | gradient **1.1e-6** max relative, log-det part **3.7e-8**, Hessian block **3.1e-8** -- the float32 floor |
+| two-track vs single-track, same muons, same parmtype-10 globals | 1477 shared indices: sum ratio **0.999992**, correlation **1.000000**, median `\|tt - st\|` **5.4e-7**, p99 1.7e-4, max 6.0e-3 on a value of 0.39. `tr(dV_i R)` is a LOCAL quantity, so the pair fit's common vertex moves it only where the vertex is close |
+| Hessian PSD | per candidate min/max eigenvalue **-5.4e-8**, IDENTICAL to the mean-only baseline (a pre-existing floor of the double-precision profiling); pooled over the 92 (14,15) parameters, min/max = **-9.1e-19** |
+| factored reconstruction `B^T B + scatter(hessvar)` vs `hesspackedv` | float32-exact on 23/24; the one failure (6.3e-3) is a 1-hit-leg candidate and is IDENTICAL in the baseline -- a pre-existing property of the `nRank = ndof` count, not of this change |
+| CPU | **none measurable**: 65.0 s (off) / 64.1 s (family 15) / 63.6 s (all families) user over the same 60 events. The assembly runs once per candidate at the converged iteration, on ~5x5 blocks |
+| bytes, production layout | **+7.0 %** with family 15, **+105 %** with 8-11 as well |
+| information | the parmtype-15 Fisher information on the J/psi gun goes from **4.07 to 166.3** (41x), and `Jpsi_jacMass`'s parmtype-15 entries move by a median factor **2.28** (the parmtype-14 ones by exactly zero) |
 
 ### The per-leg reference energy loss (2026-09-06)
 
