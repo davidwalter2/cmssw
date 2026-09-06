@@ -180,6 +180,23 @@ opts.register('exportStepRecords', False, VarParsing.VarParsing.multiplicity.sin
               'exponent extractor that the in-maker cfmass_* export replaces. '
               'Default False here (the maker cfi defaults it True when the '
               'parameter is absent -- it is always passed explicitly).')
+opts.register('exportHitResBlocks', True, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'register the parmtype-8/9 HIT-RESOLUTION dV blocks in the '
+              'influence export (reseigidx/resinfvarv/reshitcls + the '
+              'cf*_hitcls/cf*_hitv per-class shares). The single-track maker '
+              'has always done it; the two-track one did not, which is why the '
+              'per-hit-class resolution parameters have never been fitted. '
+              'Export only -- it cannot move the fit. Set False to reproduce a '
+              'pre-2026-09-06 two-track tree')
+opts.register('exportCfGroupExponents', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'additionally split the CF exponents by parmtype-15 MATERIAL '
+              'GROUP (cf*_grp, cf*_grp_ms, ...). This is what lets the fit '
+              'float the material amount per group instead of four per-family '
+              'k knobs. ~27 kB/candidate against 1.4 kB for the flat '
+              'exponents, so it is off unless the output feeds the joint '
+              'material+field fit')
 opts.register('exportCfExponents', True, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'compute the resolution-CF exponents in the maker and write '
@@ -567,6 +584,8 @@ process.trackrefitdimuon = ResidualGlobalCorrectionMakerDiMuonG4e.clone(
     doRes=cms.bool(bool(opts.doRes)),
     exportStepRecords=cms.bool(bool(opts.exportStepRecords)),
     exportCfExponents=cms.bool(bool(opts.exportCfExponents)),
+    exportCfGroupExponents=cms.bool(bool(opts.exportCfGroupExponents)),
+    exportHitResBlocks=cms.bool(bool(opts.exportHitResBlocks)),
     produceValueMaps=cms.bool(bool(opts.produceValueMaps)),
     # --- gen (MiniAOD retags)
     doGen=cms.bool(bool(opts.doGen)),

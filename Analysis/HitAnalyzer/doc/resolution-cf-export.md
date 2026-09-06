@@ -36,6 +36,160 @@ plus, once, in the **runtree**:
 | `cftau`   | the 64 tau values the exponents are sampled at |
 | `cfmodel` | the switch configuration and shape-table id that produced them |
 
+### The per-material-group split (2026-09-06, `exportCfGroupExponents`)
+
+Every step-level exponent is **linear in the step's material amount at fixed
+composition** — Moliere's `chi_c^2` and `Omega_0` carry the step length, the
+Urban `a_1, a_2, a_3` carry it, the radiative mean number of emissions carries
+it, and `xi` of the delta channel carries it — so with the fit's influence
+weights held fixed
+
+    S_f(tau; k) = S_f^fixed(tau) + sum_g A(k_g) S_{f,g}(tau),   A(k) = exp(k)
+
+is exact, and `k = 0` reproduces the flat exponents above. `k_g` is the
+parmtype-15 material-group amount the propagator already applies to every step
+(`matStepFact`) and the hit chi2 already floats. That is what replaces the four
+unphysical `k_hit / k_ms / k_ioni / k_rad` knobs.
+
+| branch (single track) | branch (two track) | type | meaning |
+|---|---|---|---|
+| `cfqop_grp`         | `cfmass_grp`         | n int16 | material-group ids, ASCENDING |
+| `cfqop_grp_ms`      | `cfmass_grp_ms`      | n*64 float | `S_ms` of each group, row-major (group, tau) |
+| `cfqop_grp_ioni_re` | `cfmass_grp_ioni_re` | n*64 float | |
+| `cfqop_grp_ioni_im` | `cfmass_grp_ioni_im` | n*64 float | |
+| `cfqop_grp_rad_re`  | `cfmass_grp_rad_re`  | n*64 float | |
+| `cfqop_grp_rad_im`  | `cfmass_grp_rad_im`  | n*64 float | |
+| `cfqop_grp_del`     | *(absent)*           | n*64 float | the q/p functional's model uses `S_del`; the mass functional's reference (`build_pairs_tt`) does not |
+| `cfqop_grp_closure` | `cfmass_grp_closure` | float | `max_j |sum_g S_g - S|` over the exported families, normalized by `max_j |S|` |
+
+The per-candidate group count is the length of `cf*_grp`; there is no pointer
+branch, because an entry knows its own length. The group ids index the
+material-group file the runtree names.
+
+`cf*_grp_closure` is exported so a file can be AUDITED rather than trusted. It
+is float64 round-off by construction — the flat and per-group paths are the
+same per-step sums associated differently, and a block whose steps all belong
+to one group (the common case) runs the primitives ONCE and adds the same
+doubles to both, so `sum_g` is bitwise equal there.
+
+The DELTA-RECOIL family needs one care: its carve factor
+`clip(v_delta/v_moliere, 0, 0.5)` is a RATIO over the whole block, so the split
+is
+
+    S_del,g = delta_exponent(steps_g) - carve(steps_ALL) * S_ms,g
+
+which sums back exactly; a per-group carve would not.
+
+**Cost**: ~22 live groups of 42 on a J/psi-gun candidate, 5 families, 64 points,
+float32 = **~27 kB/candidate** against 1.4 kB flat. Hence
+`exportCfGroupExponents`, default **False**. The raw rows are written on
+purpose: a rank-16 PCA of the tau axis costs 6.8 kB at a relative error of
+4.2e-7 (ms) to 1.2e-3 (rad), but the basis should be fitted to the data rather
+than guessed, and this is the export that lets that happen.
+
+**The group is now on every step record.** `msmoliv` has carried it at column 9
+since the global material model landed; since 2026-09-06 `ioniurbanv` and
+`radstepv` carry it as their LAST column, so the offline
+`groups.pair_ioni_rows` heuristic (take the `n_ioni` Moliere rows of largest
+areal density) is no longer needed. Strides changed accordingly:
+
+| array | before | after |
+|---|---|---|
+| `ioniurbanv` | 11, or 13 with `CVH_IONI_EXACTDELTA` | **12 / 14**, new scalar branch `ioniurbanstride` |
+| `radstepv` | 11 (`radstepstride`) | **12** |
+
+Every existing column index is unchanged. **A reader that hard-codes 11/13 will
+mis-parse a new file** — read `ioniurbanstride` / `radstepstride`.
+
+### The hit-class blocks and their Gaussian shares (2026-09-06)
+
+| branch | type | meaning |
+|---|---|---|
+| `reshitcls` | n_res int16 | hit CLASS of each resolution entry, −1 for material |
+| `resinfcovhit` | float | `sum_b v_b` over the HIT families (parmtype 8/9) alone |
+| `cfqop_hitcls` / `cfmass_hitcls` | int16 | classes present, ascending |
+| `cfqop_hitv` / `cfmass_hitv` | float | `v_c / sigma^2` of that class |
+
+The 18 classes are the C++ image of
+`calibration_studies/resolution/hitres_classes.py:class_of`, in the SAME index
+order (0–3 `pix_x_q0..3`, 4–7 `pix_y_q0..3`, 8–17 `str_N1_lo` … `str_N5_hi`).
+The index, not the name, is what a file stores, so the order is part of the
+format and must not be reordered.
+
+They feed the hit half of the same construction,
+
+    v_i(eps) = v_other,i + sum_c H(eps_c) v_{c,i},   Re S += -0.5 v_i tau^2
+
+with `v_other = vgf - sum_c v_c` formed offline.
+
+**`cfmass_vgf` and `resinfcov` do NOT change.** The two-track maker now
+registers parmtype-8/9 blocks (`exportHitResBlocks`, default True) — it never
+did, which is why the per-hit-class parameters could not be fitted at all — but
+their variances go into the NEW `resinfcovhit`, not into `resinfcov`. That is
+deliberate: `cfmass_vgf = (sigma_m^2 - resinfcov)/sigma_m^2` must keep meaning
+the TOTAL Gaussian share (hits + beamspot + pointing), because that is what the
+self-consistent-sigma correction's `a_i = (1 + f_hit) sigma_i/m_i` uses and what
+every cache built before the hit blocks existed assumes. Folding them in would
+have been a silent physics change.
+
+The two-track `dVs` feed nothing but the influence export, so registering a
+block cannot move the fit; and the parmtype-8/9 corrections are deliberately
+NOT applied to the two-track hit covariance (the single-track maker scales `iV`
+by `exp(corparms)`), because that WOULD move it.
+
+In the single-track tree `resinfcov` has always included the hit blocks and
+still does; `resinfcovhit` is the same sum on its own, and `sum_c cfqop_hitv`
+equals `cfqop_vgf` exactly.
+
+### The two legs' reference momentum covariance (2026-09-06)
+
+| branch | type | meaning |
+|---|---|---|
+| `Jpsi_covrefmom` | 21 float | UPPER TRIANGLE, row-major, of the symmetric 6x6 covariance of `(q/p, lambda, phi)` for mu+ (0–2) then mu− (3–5) |
+| `Jpsi_jacrefmom` | 6 float | `dm/d(state)` in the same order |
+| `Jpsi_qoprefplus` / `Jpsi_qoprefminus` | float | `q/p` at the reference |
+| `Jpsi_sigmarelplus` / `Jpsi_sigmarelminus` | float | `sqrt(C_ll)/|q/p_l|` |
+| `Jpsi_rhomom` | float | leg–leg correlation of `d ln p` (NOT of `q/p`: they differ by `sign(q+ q−)`) |
+| `Jpsi_fang` | float | `1 - (J_kappa C J_kappa^T)/sigma_m^2`, the ANGULAR share of the mass variance |
+
+33 floats, 132 B/candidate, 0.16 % of the slim record, always on. The order is
+(plus, minus) rather than the internal leg order, so no consumer has to know
+`muchargearr`, and `J C J^T` reproduces `Jpsi_sigmamass^2` — exported precisely
+so the matrix can be checked rather than trusted.
+
+This is what makes the second-order corrections of
+`resolution/oddmoment/MASSCFTERM_SPEC.md` truth-free on DATA. The Jensen term
+needs `A = sigma_rel1^2 + sigma_rel2^2` and `B = 2 rho sigma_rel1 sigma_rel2`,
+and the closed form `1.5 (sigma_m/m)^2` misses exactly `f_ang`; until now all
+three had to be taken from an MC measurement (rho = 0, f_ang = 0.11, the closed
+form 4.6 % high).
+
+### The pre-FSR gen mass (2026-09-06)
+
+| branch | meaning |
+|---|---|
+| `Jpsigenpre_mass` | mass of the hard-process resonance: `|pdgId|` in `genResonancePdgIds` at status 62 (last copy), falling back to 22 (first copy); −99 if absent |
+| `Jpsigenpre_status` | which copy was used |
+| `Jpsigenpre_masslep` | the status-746 (pre-Photos) lepton pair, the independent cross-check; −99 when the event did not radiate |
+| `Jpsigen_massdressed` | the matched bare pair plus every prompt status-1 photon within dR < 0.1 of either muon |
+
+`Jpsigen_mass` is and stays the POST-FSR pair. In the DY UL16 sample no muon
+carries `fromHardProcessBeforeFSR`; what exists is the Z at status 22/62 (masses
+identical in 4000/4000 events) and, in the 59 % of events that radiated, the
+status-746 pair, with `m(mumu, 746) == m(Z, 62)` to an RMS of 4e-6 GeV. So the
+status-62 resonance IS the pre-FSR mass and it exists in every event
+(`calibration_studies/zchannel/README.md`). With these branches
+`zfsr_kernel.py` runs off the production's own pairs cache and inherits the
+analysis selection exactly, instead of a separate FWLite pass whose selection
+has to be kept in step by hand.
+
+`genResonancePdgIds` defaults to `{23, 443, 100443, 553, 100553, 200553}`. A
+J/psi from a B decay has no status-22/62 copy, so `Jpsigenpre_mass` is −99 there
+— that is information, not a failure. The gen container is an
+`edm::View<reco::Candidate>`, which does not expose `GenStatusFlags`, so the
+photons' `isPrompt` is asked for through a `dynamic_cast` and simply not
+required when the cast fails.
+
 `cfqop_*` and `cfmass_*` are **different functionals of the same blocks** — they
 differ in the standardization sigma (`sqrt(refCov(0,0))` against
 `Jpsi_sigmamass`) and in the sign the ionization and radiative weights carry
@@ -113,13 +267,21 @@ cmsRun runCvhResClosure.py  ... exportStepRecords=False
 cmsRun runCvhJpsiGenMC.py   ... exportStepRecords=False
 ```
 
-`exportStepRecords` (default **True**) governs the RAW per-step export that the
-exponents are built from:
+`exportStepRecords` (default **False** since 2026-09-06; it was True) governs
+the RAW per-step export that the exponents are built from:
 
 * dropped when False: `ioniurbanidx`/`ioniurbanv`, `msmoliidx`/`msmoliv`,
   `radstepidx`/`radstepv`/`radstepspecv`, `reseigv`, `resinfv`, `resinfbv`;
-* **kept regardless**: `reseigidx`, `reshitidx`, `resinfvarv`, `resinfcov`,
-  `ioniqscaleidx`/`ioniqscalev`, `radvgrid`, `radstepstride`, `radstepnv`.
+* **kept regardless**: `reseigidx`, `reshitidx`, `reshitcls`, `resinfvarv`,
+  `resinfcov`, `resinfcovhit`, `ioniqscaleidx`/`ioniqscalev`, `radvgrid`,
+  `radstepstride`, `radstepnv`, `ioniurbanstride`, and every `cf*` branch.
+
+The default flipped because every production since 2026-09-05 set it to False
+explicitly (`production/config_jpsimc20M.sh`, `config_dymc8p5M.sh`) and the
+exponents it feeds are validated against the offline reference, so leaving the
+default at True meant a new driver silently wrote 72 % of a two-track tree in
+records nothing reads. `exportStepRecords=True` still reproduces the old output
+(modulo the two appended group columns above).
 
 The keep list is what a reader still needs and what costs nothing: `resinfvarv`
 + `reseigidx` + `reshitidx` are the per-block variance shares and their hit
