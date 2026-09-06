@@ -64,11 +64,7 @@
 
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo....
 
-#ifdef G4MULTITHREADED
-G4Mutex G4EnergyLossForExtrapolatorForCVH::extrMutex = G4MUTEX_INITIALIZER;
-#endif
-
-G4TablesForExtrapolatorForCVH* G4EnergyLossForExtrapolatorForCVH::tables = nullptr;
+std::atomic<G4TablesForExtrapolatorForCVH*> G4EnergyLossForExtrapolatorForCVH::tables{nullptr};
 
 G4EnergyLossForExtrapolatorForCVH::G4EnergyLossForExtrapolatorForCVH(G4int verb)
     : maxEnergyTransfer(DBL_MAX), verbose(verb) {
@@ -79,10 +75,12 @@ G4EnergyLossForExtrapolatorForCVH::G4EnergyLossForExtrapolatorForCVH(G4int verb)
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo....
 
 G4EnergyLossForExtrapolatorForCVH::~G4EnergyLossForExtrapolatorForCVH() {
-  if (isMaster) {
-    delete tables;
-    tables = nullptr;
-  }
+  // Deliberately NOT deleting the shared tables. `isMaster` belongs to whichever
+  // thread's eLoss process won the build race; destroying the tables from it is
+  // not ordered against the other threads' instances, which still hold the
+  // pointer, and a survivor would silently rebuild and become a second
+  // "master". Leaked at exit, exactly as ~G4UniversalFluctuationForExtrapolator
+  // already does.
 }
 
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo....
@@ -267,7 +265,7 @@ G4double G4EnergyLossForExtrapolatorForCVH::radDedxDelta(G4double ekin,
   if (!hadronRad) {
     return 0.0;
   }
-  const G4PhysicsTable* t = tables->GetHadronRadiativeTable(part);
+  const G4PhysicsTable* t = tables.load(std::memory_order_acquire)->GetHadronRadiativeTable(part);
   if (t == nullptr) {
     return 0.0;
   }
@@ -462,7 +460,7 @@ G4double G4EnergyLossForExtrapolatorForCVH::AverageScatteringAngle(G4double kinE
 
 void G4EnergyLossForExtrapolatorForCVH::Initialisation() {
   if (verbose > 0) {
-    G4cout << "### G4EnergyLossForExtrapolatorForCVH::Initialisation" << tables << G4endl;
+    G4cout << "### G4EnergyLossForExtrapolatorForCVH::Initialisation" << tables.load(std::memory_order_acquire) << G4endl;
   }
   electron = G4Electron::Electron();
   positron = G4Positron::Positron();
@@ -484,11 +482,12 @@ void G4EnergyLossForExtrapolatorForCVH::Initialisation() {
   rdValue = 0.0;
 
   // initialisation for the 1st run
-  if (nullptr == tables) {
-#ifdef G4MULTITHREADED
-    G4MUTEXLOCK(&extrMutex);
-    if (nullptr == tables) {
-#endif
+  if (nullptr == tables.load(std::memory_order_acquire)) {
+    // SHARED with G4UniversalFluctuationForExtrapolator's build: the two table
+    // objects are distinct but their Initialisation() writes the same
+    // process-wide Geant4 EM statics. See cvhExtrapolatorTablesMutex().
+    std::lock_guard<std::mutex> lk(cvhExtrapolatorTablesMutex());
+    if (nullptr == tables.load(std::memory_order_relaxed)) {
       isMaster = true;
       // ReferenceIonizationOnly drops the RADIATIVE (brems + pair) mean from the
       // reference dE/dx table. Diagnostic for the mean-vs-mode energy-loss
@@ -505,8 +504,8 @@ void G4EnergyLossForExtrapolatorForCVH::Initialisation() {
         G4cout << "### G4EnergyLossForExtrapolatorForCVH: ReferenceIonizationOnly set -- "
                << "radiative mean EXCLUDED from the dE/dx table" << G4endl;
       }
-      tables = new G4TablesForExtrapolatorForCVH(verbose, nbins, emin, emax, _ionOnly);
-      tables->Initialisation();
+      auto* built = new G4TablesForExtrapolatorForCVH(verbose, nbins, emin, emax, _ionOnly);
+      built->Initialisation();
       if (cvhcgf::referenceIsChargeAware()) {
         // leading G4endl: the tables are built LAZILY, on the first
         // ComputeDEDX, so without it this banner lands in the middle of
@@ -531,21 +530,15 @@ void G4EnergyLossForExtrapolatorForCVH::Initialisation() {
         G4cout << "### G4EnergyLossForExtrapolator::BuildTables for " << nmat << " materials Nbins= " << nbins
                << " Emin(MeV)= " << emin << "  Emax(MeV)= " << emax << G4endl;
       }
-#ifdef G4MULTITHREADED
+      // publish LAST: a reader that sees non-null sees a complete object
+      tables.store(built, std::memory_order_release);
     }
-    G4MUTEXUNLOCK(&extrMutex);
-#endif
   }
 
   // initialisation for the next run
   if (isMaster && G4Material::GetNumberOfMaterials() != nmat) {
-#ifdef G4MULTITHREADED
-    G4MUTEXLOCK(&extrMutex);
-#endif
-    tables->Initialisation();
-#ifdef G4MULTITHREADED
-    G4MUTEXUNLOCK(&extrMutex);
-#endif
+    std::lock_guard<std::mutex> lk(cvhExtrapolatorTablesMutex());
+    tables.load(std::memory_order_acquire)->Initialisation();
   }
   nmat = G4Material::GetNumberOfMaterials();
 

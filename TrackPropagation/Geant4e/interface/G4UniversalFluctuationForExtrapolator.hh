@@ -47,6 +47,7 @@
 #ifndef G4UniversalFluctuationForExtrapolator_h
 #define G4UniversalFluctuationForExtrapolator_h 1
 
+#include <atomic>
 #include "G4VEmFluctuationModel.hh"
 #include "TrackPropagation/Geant4e/interface/CGFQoPBlock.h"
 #include "G4ParticleDefinition.hh"
@@ -247,10 +248,11 @@ protected:
   // multi-thread CVH refits do not allocate ~tens of MB of duplicate
   // material × particle dE/dx tables per stream. Mirrors the existing
   // static pattern in G4EnergyLossForExtrapolatorForCVH::tables.
-  static G4TablesForExtrapolatorForCVH* tables;
-#ifdef G4MULTITHREADED
-  static G4Mutex extrMutex;
-#endif
+  // ATOMIC + published under cvhExtrapolatorTablesMutex(), which is now the
+  // SAME mutex G4EnergyLossForExtrapolatorForCVH's build takes. The two builds
+  // run the same Initialisation() body and write the same process-wide Geant4
+  // EM statics; two per-class mutexes did not serialise them against each other.
+  static std::atomic<G4TablesForExtrapolatorForCVH*> tables;
 
   const G4PhysicsTable* table = nullptr;
   G4double massratio = 1.;

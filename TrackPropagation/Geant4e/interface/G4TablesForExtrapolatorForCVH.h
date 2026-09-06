@@ -43,6 +43,7 @@
 #define TrackPropagation_G4TablesForExtrapolatorForCVH_h 1
 
 #include <map>
+#include <mutex>
 #include "globals.hh"
 #include "G4PhysicsTable.hh"
 #include "G4DataVector.hh"
@@ -86,6 +87,28 @@ enum ExtTableType {
   fRangeAntiProton,
   fInvRangeAntiProton
 };
+
+// ONE mutex for BOTH shared table builds, and for the lazy per-species
+// radiative table below.
+//
+// There are two process-wide G4TablesForExtrapolatorForCVH objects behind two
+// distinct static pointers -- the REFERENCE one (G4EnergyLossForExtrapolatorForCVH,
+// iononly configurable) and the IONIZATION-ONLY one
+// (G4UniversalFluctuationForExtrapolator) -- and before 2026-09-06 each was
+// guarded by its OWN G4Mutex. Two different mutexes do not serialise the two
+// builds against each other, and both run the SAME Initialisation() body, which
+// constructs and Initialise()s Geant4 EM models that write PROCESS-WIDE,
+// NON-CONST Geant4 statics: G4eBremsstrahlungRelModel's `gElementData`
+// (a std::vector that is grown) and `gLPMFuncs`, G4MuBremsstrahlungModel's
+// `fDN[93]`, and the G4ElementDataRegistry singleton. With numberOfThreads > 1
+// the two builds start on the first events of two different streams and can
+// therefore overlap. Nothing forces them to crash -- which is the point: a
+// half-built element-data table is a SILENT wrong dE/dx for the whole job.
+//
+// The window is job startup only (both pointers are latched on first use and
+// the tables are read-only afterwards), so a single global mutex costs nothing
+// measurable.
+std::mutex& cvhExtrapolatorTablesMutex();
 
 class G4TablesForExtrapolatorForCVH {
 public:

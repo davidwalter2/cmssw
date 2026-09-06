@@ -47,6 +47,8 @@
 
 #include <cstdlib>
 #include "TrackPropagation/Geant4e/interface/G4TablesForExtrapolatorForCVH.h"
+
+#include <atomic>
 #include "G4PhysicalConstants.hh"
 #include "G4SystemOfUnits.hh"
 #include "G4LossTableManager.hh"
@@ -229,13 +231,20 @@ const G4PhysicsTable* G4TablesForExtrapolatorForCVH::GetPhysicsTable(ExtTableTyp
 
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo....
 
+std::mutex& cvhExtrapolatorTablesMutex() {
+  static std::mutex m;
+  return m;
+}
+
 void G4TablesForExtrapolatorForCVH::Initialisation() {
 
   // see the twin dump in ProcessActivationWatcher: same singleton, different job
   {
-    static bool dumped = false;
-    if (!dumped && cvhcgf::switches().dumpEmParameters) {
-      dumped = true;
+    // atomic exchange: Initialisation() is reachable from both table-build
+    // paths, so two threads could otherwise both pass the test and interleave
+    // their StreamInfo output.
+    static std::atomic<bool> dumped{false};
+    if (cvhcgf::switches().dumpEmParameters && !dumped.exchange(true)) {
       G4cout << "### CVH_EMPARAMS_BEGIN tag=MODEL" << G4endl;
       G4EmParameters::Instance()->StreamInfo(G4cout);
       G4cout << "### CVH_EMPARAMS_END" << G4endl;
@@ -500,6 +509,15 @@ const G4PhysicsTable* G4TablesForExtrapolatorForCVH::GetHadronRadiativeTable(con
   if (std::abs(part->GetPDGEncoding()) == 13 || part->GetPDGMass() <= 0.) {
     return nullptr;
   }
+  // `dedxHadRad` is mutated HERE, i.e. during event processing, on a
+  // PROCESS-SHARED object, and the miss path constructs and Initialise()s two
+  // more Geant4 EM models. Unlocked, that is a std::map data race plus a second
+  // concurrent entry into the same Geant4 element-data statics the build path
+  // touches. It is inert for the Z/J-psi productions -- the |PDG| == 13 test
+  // above returns before the map is reached -- but the multi-species tests do
+  // reach it. Same mutex as the build: the map has one entry per species, so it
+  // is contended only on the first steps of each new species.
+  std::lock_guard<std::mutex> lk(cvhExtrapolatorTablesMutex());
   auto it = dedxHadRad.find(part);
   if (it != dedxHadRad.end()) {
     return it->second;

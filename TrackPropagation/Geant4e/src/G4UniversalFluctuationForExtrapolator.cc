@@ -68,37 +68,31 @@
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
 
 // Process-wide shared dE/dx / range / inv-range tables. Built once on the
-// first ctor call (under extrMutex in MT builds); subsequent instances --
-// including the per-stream Geant4ePropagator clones in the CVH refit --
+// first ctor call, under the SHARED cvhExtrapolatorTablesMutex(); subsequent
+// instances -- including the per-stream Geant4ePropagator clones in the CVH refit --
 // reuse the same pointer. Tables are read-only after construction. Leaked
 // at process exit to keep ownership trivial.
-G4TablesForExtrapolatorForCVH* G4UniversalFluctuationForExtrapolator::tables = nullptr;
-#ifdef G4MULTITHREADED
-G4Mutex G4UniversalFluctuationForExtrapolator::extrMutex = G4MUTEX_INITIALIZER;
-#endif
+std::atomic<G4TablesForExtrapolatorForCVH*> G4UniversalFluctuationForExtrapolator::tables{nullptr};
 
 G4UniversalFluctuationForExtrapolator::G4UniversalFluctuationForExtrapolator(const G4String& nam)
     : G4VEmFluctuationModel(nam), minLoss(10. * CLHEP::eV) {
   rndmarray = new G4double[sizearray];
 
-  if (nullptr == tables) {
-#ifdef G4MULTITHREADED
-    G4MUTEXLOCK(&extrMutex);
-    if (nullptr == tables) {
-#endif
+  if (nullptr == tables.load(std::memory_order_acquire)) {
+    std::lock_guard<std::mutex> lk(cvhExtrapolatorTablesMutex());
+    if (nullptr == tables.load(std::memory_order_relaxed)) {
       // Grid from G4TablesForExtrapolatorForCVH, not restated here (it used to
       // be 70 bins to 10 TeV against the reference's 80 to 100 TeV).
       // `iononly = true` stays: this instance supplies the IONIZATION mean
       // loss, and the radiative fluctuation is a separate channel.
-      tables = new G4TablesForExtrapolatorForCVH(0,
-                                                G4TablesForExtrapolatorForCVH::kNbins,
-                                                G4TablesForExtrapolatorForCVH::kEminMeV * CLHEP::MeV,
-                                                G4TablesForExtrapolatorForCVH::kEmaxMeV * CLHEP::MeV,
-                                                true);
-#ifdef G4MULTITHREADED
+      auto* built = new G4TablesForExtrapolatorForCVH(0,
+                                                     G4TablesForExtrapolatorForCVH::kNbins,
+                                                     G4TablesForExtrapolatorForCVH::kEminMeV * CLHEP::MeV,
+                                                     G4TablesForExtrapolatorForCVH::kEmaxMeV * CLHEP::MeV,
+                                                     true);
+      // publish LAST
+      tables.store(built, std::memory_order_release);
     }
-    G4MUTEXUNLOCK(&extrMutex);
-#endif
   }
 }
 
@@ -1114,20 +1108,20 @@ void G4UniversalFluctuationForExtrapolator::SetParticleAndCharge(const G4Particl
     // electron and positron already have their OWN tables, built from their
     // own particle -- charge-awareness was never foreign to this class, the
     // muon and hadron branches were the omission.
-    table = tables->GetPhysicsTable(fDedxElectron);
+    table = tables.load(std::memory_order_acquire)->GetPhysicsTable(fDedxElectron);
     massratio = 1.;
     charge2ratio = 1.;
   } else if (part == G4Positron::Positron()) {
-    table = tables->GetPhysicsTable(fDedxPositron);
+    table = tables.load(std::memory_order_acquire)->GetPhysicsTable(fDedxPositron);
     massratio = 1.;
     charge2ratio = 1.;
   } else if (part == G4MuonPlus::MuonPlus() || part == G4MuonMinus::MuonMinus()) {
-    table = tables->GetPhysicsTable(negative ? fDedxMuonMinus : fDedxMuon);
+    table = tables.load(std::memory_order_acquire)->GetPhysicsTable(negative ? fDedxMuonMinus : fDedxMuon);
     massratio = 1.;
     charge2ratio = 1.;
   } else {
     // scaled energy loss from proton tables
-    table = tables->GetPhysicsTable(negative ? fDedxAntiProton : fDedxProton);
+    table = tables.load(std::memory_order_acquire)->GetPhysicsTable(negative ? fDedxAntiProton : fDedxProton);
     massratio = proton_mass_c2 / particleMass;
     charge2ratio = part->GetPDGCharge() * part->GetPDGCharge();
     usesScaledProtonTable = true;

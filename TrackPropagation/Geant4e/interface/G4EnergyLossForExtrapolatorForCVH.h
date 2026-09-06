@@ -49,6 +49,7 @@
 #ifndef TrackPropagation_G4EnergyLossForExtrapolatorForCVH_h
 #define TrackPropagation_G4EnergyLossForExtrapolatorForCVH_h 1
 
+#include <atomic>
 #include <vector>
 #include <CLHEP/Units/PhysicalConstants.h>
 
@@ -190,10 +191,12 @@ private:
   // the table-lookup hint `index`.
   G4double speciesRangeDefect(G4double ekin, const G4ParticleDefinition* part, const G4Material* mat);
 
-#ifdef G4MULTITHREADED
-  static G4Mutex extrMutex;
-#endif
-  static G4TablesForExtrapolatorForCVH* tables;
+  // ATOMIC, and published with a release store under cvhExtrapolatorTablesMutex()
+  // (see the note on that mutex in G4TablesForExtrapolatorForCVH.h). The
+  // unsynchronised outer read of the double-checked lock was formally a data
+  // race; on x86-64 it happened to be benign because the store publishes an
+  // already-complete object, but nothing in the language guaranteed that.
+  static std::atomic<G4TablesForExtrapolatorForCVH*> tables;
 
   const G4ParticleDefinition* currentParticle = nullptr;
   const G4ParticleDefinition* electron = nullptr;
@@ -251,7 +254,7 @@ private:
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo....
 
 inline const G4PhysicsTable* G4EnergyLossForExtrapolatorForCVH::GetPhysicsTable(ExtTableType type) const {
-  return tables->GetPhysicsTable(type);
+  return tables.load(std::memory_order_acquire)->GetPhysicsTable(type);
 }
 
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo....
