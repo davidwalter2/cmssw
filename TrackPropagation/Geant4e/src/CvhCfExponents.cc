@@ -552,7 +552,14 @@ namespace cvhcf {
   }
 
   void ioniBlock(const float *rows, int stride, int n, double wstdSigned, double *Sre, double *Sim) {
-    if (rows == nullptr || n <= 0 || (stride != 11 && stride != 13))
+    // 11 = the historical record, 13 = with the exact-delta beta^2/E columns,
+    // 12 / 14 = the same two with the material-group column appended
+    // (2026-09-06). Anything else is not an `ioniurbanv` row and is refused
+    // rather than mis-parsed -- but note the guard SILENTLY returns, so a
+    // stride that is not on this list zeroes the ionization exponent of every
+    // candidate. That is exactly what the group column did before this line
+    // was widened; keep the list in step with the writer.
+    if (rows == nullptr || n <= 0 || stride < 11 || stride > 14)
       return;
     std::vector<cvhcgf::IoniStep> st;
     buildIoniSteps(rows, stride, n, wstdSigned, st);
