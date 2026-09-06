@@ -788,35 +788,48 @@ namespace cvhcf {
           if (!(sq2 > 0.))
             continue;
           const double wstd = std::sqrt(vpool / sq2) / in.sigma;
-          msBlock(blk.data(), rows.stride, ns, wstd, out.S.ms.data(), in.wantDelta ? out.S.del.data() : nullptr);
 
-          if (in.wantGroups) {
-            rowGroups(blk.data(), rows.stride, ns, in.ms.groupCol, gsteps);
-            if (gsteps.size() == 1) {
-              // The overwhelmingly common case: one block, one material.
-              // Recomputing would be pure waste AND would lose the bitwise
-              // equality of `sum_g` with the flat exponent, so run the same
-              // primitives once into a scratch and add the SAME doubles to
-              // both. (The flat path above is untouched: this is a second
-              // evaluation of the identical arguments, hence identical.)
-              gtmp.clear();
-              msBlock(blk.data(), rows.stride, ns, wstd, gtmp.ms.data(),
-                      (in.wantDelta && in.wantGroupDelta) ? gtmp.del.data() : nullptr);
-              addInto(groupSlot(out.groups, gsteps[0]), gtmp);
-            } else {
-              // The carve is a RATIO over the WHOLE block (see delCarveFactor).
-              const double carve =
-                  (in.wantDelta && in.wantGroupDelta) ? delCarveFactor(blk.data(), rows.stride, ns) : 0.;
-              for (int g : gsteps) {
-                const int mg = selectGroup(blk.data(), rows.stride, ns, in.ms.groupCol, g, gblk);
-                if (mg <= 0)
-                  continue;
-                gtmp.clear();
-                msBlock(gblk.data(), rows.stride, mg, wstd, gtmp.ms.data(), nullptr);
+          rowGroups(blk.data(), rows.stride, ns, in.wantGroups ? in.ms.groupCol : -1, gsteps);
+          if (!in.wantGroups || gsteps.size() == 1) {
+            // ONE EVALUATION, TWO DESTINATIONS.  Whether or not the groups are
+            // wanted, a block whose steps are all one material (the common
+            // case: a block is one propagation surface) is computed exactly
+            // once.  Adding the same double to the flat accumulator and to the
+            // group slot is bitwise what the flat-only path did -- `a += x` is
+            // `a += x` -- so `sum_g` equals the flat exponent to the LAST BIT
+            // here, and the per-group export costs nothing but the copy.
+            gtmp.clear();
+            msBlock(blk.data(), rows.stride, ns, wstd, gtmp.ms.data(), in.wantDelta ? gtmp.del.data() : nullptr);
+            for (int j = 0; j < kNTau; ++j) {
+              out.S.ms[j] += gtmp.ms[j];
+              if (in.wantDelta)
+                out.S.del[j] += gtmp.del[j];
+            }
+            if (in.wantGroups) {
+              Exponents &gs = groupSlot(out.groups, gsteps[0]);
+              for (int j = 0; j < kNTau; ++j) {
+                gs.ms[j] += gtmp.ms[j];
                 if (in.wantDelta && in.wantGroupDelta)
-                  delBlockCarved(gblk.data(), rows.stride, mg, wstd, gtmp.ms.data(), carve, gtmp.del.data());
-                addInto(groupSlot(out.groups, g), gtmp);
+                  gs.del[j] += gtmp.del[j];
               }
+            }
+          } else {
+            // A block that straddles two materials: the flat exponent is
+            // formed over ALL its rows, exactly as before, and the split is a
+            // second pass.  The carve is a RATIO over the WHOLE block (see
+            // delCarveFactor), so it is computed once and reused.
+            msBlock(blk.data(), rows.stride, ns, wstd, out.S.ms.data(), in.wantDelta ? out.S.del.data() : nullptr);
+            const double carve =
+                (in.wantDelta && in.wantGroupDelta) ? delCarveFactor(blk.data(), rows.stride, ns) : 0.;
+            for (int g : gsteps) {
+              const int mg = selectGroup(blk.data(), rows.stride, ns, in.ms.groupCol, g, gblk);
+              if (mg <= 0)
+                continue;
+              gtmp.clear();
+              msBlock(gblk.data(), rows.stride, mg, wstd, gtmp.ms.data(), nullptr);
+              if (in.wantDelta && in.wantGroupDelta)
+                delBlockCarved(gblk.data(), rows.stride, mg, wstd, gtmp.ms.data(), carve, gtmp.del.data());
+              addInto(groupSlot(out.groups, g), gtmp);
             }
           }
         } else {
@@ -832,23 +845,31 @@ namespace cvhcf {
           if (!(sq2 > 0.))
             continue;
           const double wstd = in.ioniSign * (std::sqrt(vpool / sq2) / in.sigma);
-          ioniBlock(blk.data(), rows.stride, ns, wstd, out.S.ioRe.data(), out.S.ioIm.data());
 
-          if (in.wantGroups) {
-            rowGroups(blk.data(), rows.stride, ns, in.ioni.groupCol, gsteps);
-            if (gsteps.size() == 1) {
-              gtmp.clear();
-              ioniBlock(blk.data(), rows.stride, ns, wstd, gtmp.ioRe.data(), gtmp.ioIm.data());
-              addInto(groupSlot(out.groups, gsteps[0]), gtmp);
-            } else {
-              for (int g : gsteps) {
-                const int mg = selectGroup(blk.data(), rows.stride, ns, in.ioni.groupCol, g, gblk);
-                if (mg <= 0)
-                  continue;
-                gtmp.clear();
-                ioniBlock(gblk.data(), rows.stride, mg, wstd, gtmp.ioRe.data(), gtmp.ioIm.data());
-                addInto(groupSlot(out.groups, g), gtmp);
+          rowGroups(blk.data(), rows.stride, ns, in.wantGroups ? in.ioni.groupCol : -1, gsteps);
+          if (!in.wantGroups || gsteps.size() == 1) {
+            gtmp.clear();
+            ioniBlock(blk.data(), rows.stride, ns, wstd, gtmp.ioRe.data(), gtmp.ioIm.data());
+            for (int j = 0; j < kNTau; ++j) {
+              out.S.ioRe[j] += gtmp.ioRe[j];
+              out.S.ioIm[j] += gtmp.ioIm[j];
+            }
+            if (in.wantGroups) {
+              Exponents &gs = groupSlot(out.groups, gsteps[0]);
+              for (int j = 0; j < kNTau; ++j) {
+                gs.ioRe[j] += gtmp.ioRe[j];
+                gs.ioIm[j] += gtmp.ioIm[j];
               }
+            }
+          } else {
+            ioniBlock(blk.data(), rows.stride, ns, wstd, out.S.ioRe.data(), out.S.ioIm.data());
+            for (int g : gsteps) {
+              const int mg = selectGroup(blk.data(), rows.stride, ns, in.ioni.groupCol, g, gblk);
+              if (mg <= 0)
+                continue;
+              gtmp.clear();
+              ioniBlock(gblk.data(), rows.stride, mg, wstd, gtmp.ioRe.data(), gtmp.ioIm.data());
+              addInto(groupSlot(out.groups, g), gtmp);
             }
           }
 
@@ -869,16 +890,29 @@ namespace cvhcf {
             }
             if (!rblk.empty()) {
               const int nr = static_cast<int>(rblk.size() / in.rad.stride);
-              radBlock(rblk.data(), in.rad.stride, nr, rspec.data(), in.radvgrid, in.radnv, wstd,
-                       out.S.radRe.data(), out.S.radIm.data());
-              if (in.wantGroups) {
-                rowGroups(rblk.data(), in.rad.stride, nr, in.rad.groupCol, gsteps);
-                if (gsteps.size() == 1) {
-                  gtmp.clear();
-                  radBlock(rblk.data(), in.rad.stride, nr, rspec.data(), in.radvgrid, in.radnv, wstd,
-                           gtmp.radRe.data(), gtmp.radIm.data());
-                  addInto(groupSlot(out.groups, gsteps[0]), gtmp);
-                } else {
+              // The radiative channel is two thirds of the whole CF cost
+              // (`nsteps x nv x ntau` trigonometry), so the one-evaluation
+              // path matters most here.
+              rowGroups(rblk.data(), in.rad.stride, nr, in.wantGroups ? in.rad.groupCol : -1, gsteps);
+              if (!in.wantGroups || gsteps.size() == 1) {
+                gtmp.clear();
+                radBlock(rblk.data(), in.rad.stride, nr, rspec.data(), in.radvgrid, in.radnv, wstd,
+                         gtmp.radRe.data(), gtmp.radIm.data());
+                for (int j = 0; j < kNTau; ++j) {
+                  out.S.radRe[j] += gtmp.radRe[j];
+                  out.S.radIm[j] += gtmp.radIm[j];
+                }
+                if (in.wantGroups) {
+                  Exponents &gs = groupSlot(out.groups, gsteps[0]);
+                  for (int j = 0; j < kNTau; ++j) {
+                    gs.radRe[j] += gtmp.radRe[j];
+                    gs.radIm[j] += gtmp.radIm[j];
+                  }
+                }
+              } else {
+                radBlock(rblk.data(), in.rad.stride, nr, rspec.data(), in.radvgrid, in.radnv, wstd,
+                         out.S.radRe.data(), out.S.radIm.data());
+                {
                   // The spectra ride along with their rows, so the subset has
                   // to be taken on BOTH arrays with one index walk.
                   for (int g : gsteps) {
