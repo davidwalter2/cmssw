@@ -231,6 +231,8 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
                            ? iConfig.getParameter<bool>("perHitCfGroups") : true;
   perHitRefComponents_ = iConfig.existsAs<bool>("perHitRefComponents")
                            ? iConfig.getParameter<bool>("perHitRefComponents") : true;
+  perHitInfluenceBlocks_ = iConfig.existsAs<bool>("perHitInfluenceBlocks")
+                           ? iConfig.getParameter<bool>("perHitInfluenceBlocks") : true;
   perHitShareMin_ = iConfig.existsAs<double>("perHitShareMin")
                            ? iConfig.getParameter<double>("perHitShareMin") : 0.;
   exportMaterialNoise_ = iConfig.existsAs<bool>("exportMaterialNoise")
@@ -621,6 +623,7 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
         tree->Branch("phrespiv", &phrespiv);
         tree->Branch("phresinflat", &phresinflat);
         tree->Branch("phresvarv", &phresvarv, basketSize);
+        tree->Branch("phresbv", &phresbv, basketSize);
         tree->Branch("phcf_ms", &phcfmsv, basketSize);
         tree->Branch("phcf_del", &phcfdelv, basketSize);
         tree->Branch("phcf_ioni_re", &phcfiorev, basketSize);

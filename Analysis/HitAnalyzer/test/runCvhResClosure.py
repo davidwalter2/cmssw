@@ -149,6 +149,11 @@ opts.register('perHitRefComponents', True, VarParsing.VarParsing.multiplicity.si
               VarParsing.VarParsing.varType.bool,
               'append the 5 truth-referenced (refParms - genParms) components '
               'to the per-hit residual arrays; MC only')
+opts.register('perHitInfluenceBlocks', True, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'also write phresbv, the per-(block, component) influence '
+              'vectors (~23 kB/track); needed only for the cross-cumulant '
+              'sizing of the composite likelihood')
 opts.register('perHitShareMin', 0.0, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.float,
               "zero a block's share of a component below this FRACTION of the "
@@ -509,6 +514,7 @@ process.globalCor = cms.EDProducer(
     perHitCfGroups=cms.bool(bool(opts.perHitCfGroups)),
     perHitShareMin=cms.double(float(opts.perHitShareMin)),
     perHitRefComponents=cms.bool(bool(opts.perHitRefComponents)),
+    perHitInfluenceBlocks=cms.bool(bool(opts.perHitInfluenceBlocks)),
     exportHitResBlocks=cms.bool(bool(opts.exportHitResBlocks)),
     exportMaterialNoise=cms.bool(bool(opts.exportMaterialNoise)),
     exportVarianceGrads=cms.bool(bool(opts.exportVarianceGrads)),

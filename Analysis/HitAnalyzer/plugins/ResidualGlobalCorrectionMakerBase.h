@@ -1095,6 +1095,11 @@ protected:
   // weight can be signed offline exactly as in the maker.  `sum_b |v|` over
   // the non-parmtype-15 blocks is 1 for every k.
   std::vector<float> phresvarv;
+  // [nres * ntot * 5] BLOCK MAJOR then component then dof:
+  // `A_b = W_b^T dV_b^{1/2}`, dof-padded to 5.  `|A_b[k]|^2` is
+  // `|phresvarv|`, so this is redundant for the likelihood; it exists for the
+  // fourth CROSS cumulant between components, which needs `A_b[j] . A_b[k]`.
+  std::vector<float> phresbv;
   // The per-component CF exponents, same six families and same `cftau` grid
   // as the `cf*` block, laid out [d * kNTau].
   std::vector<float> phcfmsv, phcfdelv, phcfiorev, phcfioimv, phcfradrev, phcfradimv;
@@ -1151,6 +1156,11 @@ protected:
   //                          carries both terms in one convention.  MC only;
   //                          silently 0 components without a gen match.
   bool perHitRefComponents_ = true;
+  //   perHitInfluenceBlocks_ -- also write `phresbv`, the per-(block,
+  //                          component) influence VECTORS. ~23 kB/track, and
+  //                          the only consumer is the cross-cumulant sizing
+  //                          of the composite-likelihood approximation.
+  bool perHitInfluenceBlocks_ = true;
   //   perHitShareMin_    -- zero a block's share of a component when it is
   //                          below this FRACTION of that component's unit
   //                          variance, so `cvhcf` skips it.  A controlled

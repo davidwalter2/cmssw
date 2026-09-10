@@ -4658,6 +4658,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     phrespiv.clear();
     phresinflat.clear();
     phresvarv.clear();
+    phresbv.clear();
     phcfmsv.clear();
     phcfdelv.clear();
     phcfiorev.clear();
@@ -5240,6 +5241,30 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                 }
               }
               const int fam = ires < resfamily_.size() ? resfamily_[ires] : -1;
+              // THE PER-COMPONENT INFLUENCE VECTORS `A_b = W_b^T dV_b^{1/2}`
+              // (ntot x nb, dof-padded to 5), the exact analogue of the q/p
+              // export's `resinfbv`.  `|A_b[k]|^2` is the variance share
+              // below, so this adds nothing to the likelihood -- what it adds
+              // is `A_b[j] . A_b[k]`, and with it the FOURTH CROSS CUMULANT
+              // between components, which is the size of what the
+              // product-of-marginals likelihood drops.  For a multiple-
+              // scattering block the two projected angles are iso-Gaussian
+              // plus a common radial tail, so
+              //   kappa(z_j,z_j,z_k,z_k) ~ (A_j.A_k)^2 + |A_j|^2|A_k|^2/2
+              // against a diagonal 3/2 |A_j|^4, and neither term is available
+              // from the variance shares alone.
+              MatrixXd sqrtdVb;
+              if (perHitInfluenceBlocks_) {
+                SelfAdjointEigenSolver<MatrixXd> esv(dVb);
+                // dV of a pixel's parmtype-8 block is INDEFINITE (zero on the
+                // yy diagonal, the xy correlation off it), so the negative
+                // eigenvalue is clamped exactly as the `resinfbv` export
+                // already does. |Vxy| is small, hence the 1e-7 closure of
+                // `sum_b B_b B_b^T` against `refCov`.
+                sqrtdVb = esv.eigenvectors()*
+                          esv.eigenvalues().cwiseMax(0.).cwiseSqrt().asDiagonal()*
+                          esv.eigenvectors().transpose();
+              }
               // THE BLOCK'S NOISE DIRECTION, and with it the SIGN of its
               // weight.  The ionization (and radiative) CF is not even in
               // its weight -- an energy loss goes one way -- so each
@@ -5287,6 +5312,12 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                 shares[kk][ires] = float(v);
                 signs[kk][ires] = sg;
                 phresvarv[static_cast<std::size_t>(kk)*nres + ires] = float(sg*v);
+                if (perHitInfluenceBlocks_) {
+                  const VectorXd ab = sqrtdVb*wk;
+                  for (unsigned int j = 0; j < 5; ++j) {
+                    phresbv.push_back(j < nb ? float(ab(j)) : 0.f);
+                  }
+                }
                 if (fam != 15) {
                   vsum[kk] += v;
                 }
