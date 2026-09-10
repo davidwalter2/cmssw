@@ -133,6 +133,26 @@ opts.register('exportCfGroupExponents', False, VarParsing.VarParsing.multiplicit
               'k knobs. ~27 kB/candidate against 1.4 kB for the flat '
               'exponents, so it is off unless the output feeds the joint '
               'material+field fit')
+opts.register('exportPerHitResidual', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'export the PER-HIT (complement) residual vector and its '
+              'per-component CF exponents (phres*, phcf_*). This is the DATA '
+              'version of the hit-residual likelihood -- the part of the '
+              'constraint residual the fit has not absorbed, d = n_meas - 5 '
+              'whitened components in hit order. Off by default')
+opts.register('perHitCfGroups', True, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'split the per-component CF exponents by material group as well '
+              '(needed to float the material amounts); only read when '
+              'exportPerHitResidual is True')
+opts.register('perHitRefComponents', True, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'append the 5 truth-referenced (refParms - genParms) components '
+              'to the per-hit residual arrays; MC only')
+opts.register('perHitShareMin', 0.0, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              "zero a block's share of a component below this FRACTION of the "
+              "component's unit variance so cvhcf skips it. 0 = exact")
 opts.register('exportCfExponents', True, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'compute the resolution-CF exponents in the maker and write them '
@@ -485,6 +505,10 @@ process.globalCor = cms.EDProducer(
     exportStepRecords=cms.bool(bool(opts.exportStepRecords)),
     exportCfExponents=cms.bool(bool(opts.exportCfExponents)),
     exportCfGroupExponents=cms.bool(bool(opts.exportCfGroupExponents)),
+    exportPerHitResidual=cms.bool(bool(opts.exportPerHitResidual)),
+    perHitCfGroups=cms.bool(bool(opts.perHitCfGroups)),
+    perHitShareMin=cms.double(float(opts.perHitShareMin)),
+    perHitRefComponents=cms.bool(bool(opts.perHitRefComponents)),
     exportHitResBlocks=cms.bool(bool(opts.exportHitResBlocks)),
     exportMaterialNoise=cms.bool(bool(opts.exportMaterialNoise)),
     exportVarianceGrads=cms.bool(bool(opts.exportVarianceGrads)),

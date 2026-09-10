@@ -4641,6 +4641,10 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     phresnfree = 0;
     phreschi2 = 0.f;
     phresvchk = 0.f;
+    phresrankgap = 0.f;
+    phresgchk = 0.f;
+    phresqrank = 0;
+    phresnref = 0;
     phresok = false;
     phcfnok = 0;
     phcfms = 0.f;
@@ -4934,90 +4938,197 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
         if (nm > 5 && nstatefree > 0 && rfull.size() == Eigen::Index(ncons)) {
           const int nfree = static_cast<int>(nstatefree);
-          // V on the measurement rows.  It is block diagonal per hit (a hit's
-          // 1 or 2 rows are independent of every other constraint), so the
-          // inverse of the extracted Vinv block is exact and cheap.
-          MatrixXd Vmmi(nm, nm);
-          for (int i = 0; i < nm; ++i) {
-            for (int j = 0; j < nm; ++j) {
-              Vmmi(i, j) = Vinvfull(mrow[i], mrow[j]);
-            }
-          }
-          const MatrixXd Vmm = Vmmi.inverse();
 
-          MatrixXd Fm(nm, nfree);
-          for (int i = 0; i < nm; ++i) {
-            for (int j = 0; j < nfree; ++j) {
-              Fm(i, j) = Ffull(mrow[i], freestateidxs[j]);
-            }
-          }
-
-          // Y = C F_m^T; G = V_mm - F_m C F_m^T; rho_m = r_m - F_m C F^T V^-1 r.
-          const MatrixXd Y = Cinvd.solve(Fm.transpose());
-          const MatrixXd G = Vmm - Fm*Y;
-          const VectorXd FtVinvr = VinvF.transpose()*rfull;
-          VectorXd rm(nm);
-          for (int i = 0; i < nm; ++i) {
-            rm(i) = rfull(mrow[i]);
-          }
-          const VectorXd rhom = rm - Y.transpose()*FtVinvr;
-
-          // (2) LDL^T of G in hit order; a null pivot means that row's
-          //     post-fit residual is already determined by the inner ones, so
-          //     it contributes no component and (in exact arithmetic) no
-          //     cross-covariance either, which is why skipping it is right
-          //     and not an approximation.
-          MatrixXd A = G;
-          VectorXd xi = rhom;
-          MatrixXd L = MatrixXd::Identity(nm, nm);
-          std::vector<double> piv(nm, 0.);
-          std::vector<int> keep;
-          keep.reserve(nm);
-          const double dscale = G.diagonal().maxCoeff();
-          const double ptol = 1e-10*std::max(dscale, std::numeric_limits<double>::min());
-          for (int k = 0; k < nm; ++k) {
-            const double dk = A(k, k);
-            if (!(dk > ptol)) {
-              continue;
-            }
-            piv[k] = dk;
-            for (int i = k + 1; i < nm; ++i) {
-              L(i, k) = A(i, k)/dk;
-            }
-            for (int i = k + 1; i < nm; ++i) {
-              for (int j = k + 1; j < nm; ++j) {
-                A(i, j) -= dk*L(i, k)*L(j, k);
+          // (2) THE WHITENING.
+          //
+          // The obvious route -- assemble `G = V_mm - F_m C F_m^T` and
+          // factorize it -- does not work, and it is worth saying why,
+          // because it looks like it should.  `G` is a Schur complement: its
+          // five null directions are a DIFFERENCE of two nearly equal
+          // numbers, and the solve they come from (`C = (F^T V^-1 F)^-1`) is
+          // badly conditioned, a thin layer giving its kink block very small
+          // process noise.  MEASURED on a 200-track smoke: the null
+          // eigenvalues of the assembled `G` come out at ~1e-9 of the
+          // diagonal instead of 1e-16, `max_k |(Psi^T G Psi)_kk - 1|` reaches
+          // 1e9, and the LAST whitened component of a track -- the one that
+          // closes the d-dimensional space -- misses `sum_b v^(k)_b = 1` by
+          // up to a factor of 19.  One step of iterative refinement made it
+          // worse, not better.
+          //
+          // So the construction is done in the STANDARDIZED space with
+          // ORTHOGONAL operations only.  With `Fw = V^-1/2 F`,
+          //     R = V^-1/2 (I - P) V^-1/2 ,   P = Fw (Fw^T Fw)^-1 Fw^T
+          //                                     = Q1 Q1^T
+          // is an identity, so the projector is a QR of `Fw` and never an
+          // inverse:
+          //   * `s = (I - Q1 Q1^T) V^-1/2 r` is the standardized post-fit
+          //     residual and `chi2 = |s|^2 = r^T R r`;
+          //   * `Gs = I - Q1_m Q1_m^T` is its covariance on the measurement
+          //     rows, and its null eigenvalues now sit at 1e-16 of the unit
+          //     diagonal because `Q1_m Q1_m^T` is a submatrix of an
+          //     orthogonal projector and not a cancelling product of solves.
+          // `V` is block diagonal over exactly the blocks `resblockrng`
+          // enumerates (5 process-noise rows per propagation, 1 or 2 per
+          // valid hit), so `V^-1/2` is a per-block symmetric square root of
+          // `Vinvfull` and costs nothing.
+          std::vector<std::array<unsigned int, 2>> vblk;
+          {
+            std::vector<char> cov(ncons, 0);
+            for (unsigned int ires = 0; ires < resfamily_.size(); ++ires) {
+              const int fam = resfamily_[ires];
+              if (fam != 8 && fam != 10) {
+                continue;
+              }
+              const unsigned int r0 = resblockrng[ires][0];
+              const unsigned int nb = resblockrng[ires][1];
+              vblk.push_back({{r0, nb}});
+              for (unsigned int j = 0; j < nb; ++j) {
+                cov[r0 + j] = 1;
               }
             }
-            for (int i = k + 1; i < nm; ++i) {
-              xi(i) -= L(i, k)*xi(k);
+            // whatever the resolution families do not cover (the beamspot
+            // constraint rows) becomes its own contiguous block.
+            unsigned int i = 0;
+            while (i < unsigned(ncons)) {
+              if (cov[i]) {
+                ++i;
+                continue;
+              }
+              unsigned int j = i;
+              while (j < unsigned(ncons) && !cov[j]) {
+                ++j;
+              }
+              vblk.push_back({{i, j - i}});
+              i = j;
             }
-            keep.push_back(k);
+          }
+          MatrixXd Vih = MatrixXd::Zero(ncons, ncons);
+          for (auto const &b : vblk) {
+            const unsigned int r0 = b[0];
+            const unsigned int nb = b[1];
+            const MatrixXd Vib = Vinvfull.block(r0, r0, nb, nb);
+            SelfAdjointEigenSolver<MatrixXd> esb(0.5*(Vib + Vib.transpose()));
+            Vih.block(r0, r0, nb, nb) =
+                esb.eigenvectors()*esb.eigenvalues().cwiseMax(0.).cwiseSqrt().asDiagonal()*
+                esb.eigenvectors().transpose();
+          }
+
+          MatrixXd Ffree(ncons, nfree);
+          for (int i = 0; i < int(ncons); ++i) {
+            for (int j = 0; j < nfree; ++j) {
+              Ffree(i, j) = Ffull(i, freestateidxs[j]);
+            }
+          }
+          const MatrixXd Fw = Vih*Ffree;
+          const VectorXd sfull = Vih*rfull;
+          ColPivHouseholderQR<MatrixXd> qrFw(Fw);
+          qrFw.setThreshold(1e-12);
+          const int qrank = int(qrFw.rank());
+          phresqrank = qrank;
+          const MatrixXd Q1 = qrFw.householderQ()*MatrixXd::Identity(ncons, qrank);
+          const VectorXd qts = Q1.transpose()*sfull;
+          const VectorXd sstd = sfull - Q1*qts;
+
+          MatrixXd Q1m(nm, qrank);
+          VectorXd sm(nm);
+          for (int i = 0; i < nm; ++i) {
+            Q1m.row(i) = Q1.row(mrow[i]);
+            sm(i) = sstd(mrow[i]);
+          }
+          MatrixXd G = -(Q1m*Q1m.transpose());
+          G.diagonal().array() += 1.;
+
+          // (3) hit-order factorization of `Gs`, rank imposed at
+          //     `dexp = ncons - rank(Fw)`.  `S = U sqrt(Lambda)` truncated to
+          //     `dexp`, then modified Gram-Schmidt (with one
+          //     re-orthogonalization pass) on the ROWS of `S` in
+          //     measurement-row order: row k contributes a component iff it
+          //     is not already in the span of the inner rows, which is a test
+          //     on a NORM.  What comes out is the LDL^T's own triangular
+          //     whitener, `z_k = (s_k - sum_{j<k} c_kj z_j)/|e_k|`, computed
+          //     stably.  `phres_rankgap` is lambda_dexp/lambda_(dexp+1), so
+          //     the rank decision is auditable rather than trusted.
+          int dexp = int(ncons) - qrank;
+          if (dexp > nm) {
+            dexp = nm;
+          }
+          std::vector<double> piv(nm, 0.);
+          std::vector<int> keep;
+          MatrixXd Psi;
+          VectorXd zvec;
+          if (dexp > 0) {
+            SelfAdjointEigenSolver<MatrixXd> esG(G);
+            const VectorXd ev = esG.eigenvalues();  // ascending
+            MatrixXd S(nm, dexp);
+            for (int c = 0; c < dexp; ++c) {
+              const int idx = nm - 1 - c;
+              S.col(c) = esG.eigenvectors().col(idx)*std::sqrt(std::max(ev(idx), 0.));
+            }
+            phresrankgap = (dexp < nm && ev(nm - dexp) > 0.)
+                               ? float(ev(nm - dexp)/std::max(std::abs(ev(nm - dexp - 1)), 1e-300))
+                               : 0.f;
+
+            MatrixXd Qm = MatrixXd::Zero(dexp, dexp);
+            MatrixXd T = MatrixXd::Zero(dexp, nm);
+            int nkeep = 0;
+            const double gtol = 1e-12;
+            for (int k = 0; k < nm && nkeep < dexp; ++k) {
+              VectorXd e = S.row(k).transpose();
+              VectorXd trow = VectorXd::Zero(nm);
+              trow(k) = 1.;
+              const double s0 = e.squaredNorm();
+              for (int pass = 0; pass < 2; ++pass) {
+                for (int j = 0; j < nkeep; ++j) {
+                  const double c = Qm.row(j).dot(e);
+                  e -= c*Qm.row(j).transpose();
+                  trow -= c*T.row(j).transpose();
+                }
+              }
+              const double n2 = e.squaredNorm();
+              if (!(n2 > gtol*std::max(s0, 1e-300))) {
+                continue;
+              }
+              const double nn = std::sqrt(n2);
+              Qm.row(nkeep) = e.transpose()/nn;
+              T.row(nkeep) = trow.transpose()/nn;
+              piv[k] = n2;
+              keep.push_back(k);
+              ++nkeep;
+            }
+            if (nkeep > 0) {
+              Psi = T.topRows(nkeep).transpose();
+              zvec = T.topRows(nkeep)*sm;
+              // the whitener's own closure, against the SAME `Gs` it was
+              // built from: this separates a defect in the factorization from
+              // a defect in the influence `W`, which additionally goes
+              // through `V^-1/2` and `Q1`.
+              const MatrixXd PGP = Psi.transpose()*G*Psi;
+              double gc = 0.;
+              for (int kk = 0; kk < nkeep; ++kk) {
+                gc = std::max(gc, std::abs(PGP(kk, kk) - 1.));
+              }
+              phresgchk = float(gc);
+            }
           }
           const int nd = static_cast<int>(keep.size());
           phresd = nd;
 
           if (nd > 0) {
-            // (3) the whitener Psi (z = Psi^T rho_m) and the per-component
-            //     influence W (ncons x d) with z_k = W[:,k]^T n.  W is the
-            //     exact analogue of `wqop = W5.col(0)` above, so everything
-            //     downstream -- the variance shares, the signed ionization
-            //     weight -- is the same formula at a different functional.
-            const MatrixXd Linv = L.triangularView<Eigen::UnitLower>().solve(
-                MatrixXd::Identity(nm, nm));
-            MatrixXd Psi(nm, nd);
-            for (int kk = 0; kk < nd; ++kk) {
-              Psi.col(kk) = Linv.row(keep[kk]).transpose()/std::sqrt(piv[keep[kk]]);
-            }
-            MatrixXd W = -(VinvF*(Y*Psi));
+            // (4) the per-component influence.  `z_k = Wstd[:,k]^T (V^-1/2 n)`
+            //     with `Wstd = E_m Psi - Q1 Q1_m^T Psi`, so in the noise's own
+            //     units `W = V^-1/2 Wstd`, and
+            //     `sum_b W_b^T dV_b W_b = |Wstd_k|^2 = 1` by construction of
+            //     the whitener -- now entirely out of an orthogonal projector.
+            MatrixXd Wstd = -(Q1*(Q1m.transpose()*Psi));
             for (int i = 0; i < nm; ++i) {
-              W.row(mrow[i]) += Psi.row(i);
+              Wstd.row(mrow[i]) += Psi.row(i);
             }
+            const MatrixXd W = Vih*Wstd;
 
             double chi2z = 0.;
             for (int kk = 0; kk < nd; ++kk) {
               const int k = keep[kk];
-              const double zk = xi(k)/std::sqrt(piv[k]);
+              const double zk = zvec(kk);
               chi2z += zk*zk;
               phresz.push_back(float(zk));
               phresrow.push_back(static_cast<short>(k));
@@ -5028,20 +5139,91 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               phresinflat.push_back(float(G(k, k)/piv[k]));
             }
             phreschi2 = float(chi2z);
+            // the STANDARDIZED post-fit residual before whitening, in
+            // measurement-row order: dimensionless, and what a
+            // density-vs-model plot wants.
             phresraw.reserve(nm);
             for (int i = 0; i < nm; ++i) {
-              phresraw.push_back(float(rhom(i)));
+              phresraw.push_back(float(sm(i)));
             }
+
+            // (3b) THE TRUTH-REFERENCED COMPONENTS, appended to the same
+            //      arrays.  `r = refParms - genParms` whitened by the lower
+            //      Cholesky factor of `refCov` is exactly the prototype of
+            //      `calibration_studies/resolution/hitlik`, and its influence
+            //      is `W5 L^-T` -- the SAME `W5` the q/p export above already
+            //      built.  Carrying it here rather than in a second
+            //      production means the two terms are read out of one file
+            //      with one convention, which is what the complementarity
+            //      test (`F^T R = 0` -> the two are uncorrelated, so their
+            //      information must add) and the joint fit need.
+            //
+            //      Component 0 of this set IS the established q/p functional:
+            //      column 0 of `L^-T` is `e_0/sigma_qp`, so its per-block
+            //      weight `sqrt(v^(0)_b/sq2)` equals the `cfqop_*` weight
+            //      `sqrt(v_b/sq2)/sigma` term by term.  That makes the
+            //      agreement of `phcf_*` component `d` with `cfqop_*` a
+            //      closure test of the whole per-component route, and it is
+            //      why nothing here is a second implementation of the model.
+            //
+            //      On DATA there is no `genParms`, `nref` is 0, and only the
+            //      per-hit components survive -- which is the point of the
+            //      whole exercise.
+            MatrixXd Wall = W;
+            VectorXd zall(nd);
+            for (int kk = 0; kk < nd; ++kk) {
+              zall(kk) = zvec(kk);
+            }
+            int nref = 0;
+            if (perHitRefComponents_ && genpart != nullptr) {
+              Matrix<double, 5, 5> Cref;
+              for (unsigned int a = 0; a < 5; ++a) {
+                for (unsigned int b = 0; b < 5; ++b) {
+                  Cref(a, b) = double(refCov[5*std::min(a, b) + std::max(a, b)]);
+                }
+              }
+              const LLT<Matrix<double, 5, 5>> llt(Cref);
+              if (llt.info() == Eigen::Success) {
+                const Matrix<double, 5, 5> Lref = llt.matrixL();
+                Matrix<double, 5, 1> rres;
+                for (unsigned int a = 0; a < 5; ++a) {
+                  rres(a) = double(refParms[a]) - double(genParms[a]);
+                }
+                const Matrix<double, 5, 1> zref = Lref.triangularView<Eigen::Lower>().solve(rres);
+                // W5 L^-T : the whitened influence, column j of which is the
+                // influence of the noise on `zref(j)`.
+                const Matrix<double, 5, 5> LinvT =
+                    Lref.transpose().triangularView<Eigen::Upper>().solve(
+                        Matrix<double, 5, 5>::Identity());
+                const MatrixXd Wref = W5*LinvT;
+                nref = 5;
+                Wall.conservativeResize(ncons, nd + nref);
+                Wall.rightCols(nref) = Wref;
+                zall.conservativeResize(nd + nref);
+                for (int j = 0; j < nref; ++j) {
+                  zall(nd + j) = zref(j);
+                  phresz.push_back(float(zref(j)));
+                  phresrow.push_back(static_cast<short>(-1 - j));
+                  phreshit.push_back(-1);
+                  phresdim.push_back(-1);
+                  phrescls.push_back(-1);
+                  phrespiv.push_back(1.f);
+                  phresinflat.push_back(float(Cref(j, j)/std::max(Lref(j, j)*Lref(j, j), 1e-300)));
+                }
+              }
+            }
+            phresnref = nref;
+            const int ntot = nd + nref;
 
             // (4) the per-(block, component) variance shares, signed by the
             //     qop-row influence.  `sum_b v^(k)_b == 1` over the
             //     non-parmtype-15 blocks (15 is a RE-PARTITION of 10/11, not
             //     an addition to it) -- the export's own closure test.
             const std::size_t nres = dVs.size();
-            std::vector<std::vector<float>> shares(nd, std::vector<float>(nres, 0.f));
-            std::vector<std::vector<float>> signs(nd, std::vector<float>(nres, 1.f));
-            std::vector<double> vsum(nd, 0.);
-            phresvarv.assign(static_cast<std::size_t>(nd)*nres, 0.f);
+            std::vector<std::vector<float>> shares(ntot, std::vector<float>(nres, 0.f));
+            std::vector<std::vector<float>> signs(ntot, std::vector<float>(nres, 1.f));
+            std::vector<double> vsum(ntot, 0.);
+            phresvarv.assign(static_cast<std::size_t>(ntot)*nres, 0.f);
             for (std::size_t ires = 0; ires < nres; ++ires) {
               const unsigned int r0 = resblockrng[ires][0];
               const unsigned int nb = resblockrng[ires][1];
@@ -5056,13 +5238,50 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                 }
               }
               const int fam = ires < resfamily_.size() ? resfamily_[ires] : -1;
-              for (int kk = 0; kk < nd; ++kk) {
-                const VectorXd wk = W.block(r0, kk, nb, 1);
+              // THE BLOCK'S NOISE DIRECTION, and with it the SIGN of its
+              // weight.  The ionization (and radiative) CF is not even in
+              // its weight -- an energy loss goes one way -- so each
+              // component needs its own sign.  `dQI` is rank one: in the
+              // curvilinear frame it is `e_0 e_0^T sigma^2`, and the
+              // local-frame rotation `Hm` turns that into `u u^T sigma^2`
+              // with `u = Hm e_0` spread over all five rows, so the signed
+              // coefficient is `W_b . u` and NOT `W[r0, k]`.  `u` is oriented
+              // by its qop component, and the product carries one further
+              // MINUS because the process-noise constraint row is built as
+              // (propagated - state) rather than the other way round.
+              //
+              // None of that is asserted: reference component 0 IS the q/p
+              // functional (see (3b)), so requiring it to reproduce the
+              // validated `cfqop_ioni_im` / `cfqop_rad_im` fixes the
+              // convention, and the three candidate conventions are
+              // distinguished by their worst-track relative difference --
+              // `W[r0,k]` with no minus: 2.0 (i.e. the opposite sign, every
+              // track); `W[r0,k]` with the minus: 5.3e-2; `W_b . u` with the
+              // minus: 1.2e-7, which is the float32 storage of the
+              // reference.  The real families (`ms`, `del`, `ioni_re`,
+              // `rad_re`) agree at 1.2e-7 under all three, as they must --
+              // they are even.
+              VectorXd udir = VectorXd::Zero(nb);
+              if (fam == 11 && nb > 0) {
+                SelfAdjointEigenSolver<MatrixXd> esb(dVb);
+                int imax = 0;
+                for (int q = 1; q < int(nb); ++q) {
+                  if (std::abs(esb.eigenvalues()(q)) > std::abs(esb.eigenvalues()(imax))) {
+                    imax = q;
+                  }
+                }
+                udir = esb.eigenvectors().col(imax);
+                if (udir(0) < 0.) {
+                  udir = -udir;
+                }
+              }
+              for (int kk = 0; kk < ntot; ++kk) {
+                const VectorXd wk = Wall.block(r0, kk, nb, 1);
                 double v = wk.transpose()*dVb*wk;
                 if (!(v > 0.)) {
                   v = 0.;
                 }
-                const float sg = (W(r0, kk) < 0.) ? -1.f : 1.f;
+                const float sg = (fam == 11 && wk.dot(udir) > 0.) ? -1.f : 1.f;
                 shares[kk][ires] = float(v);
                 signs[kk][ires] = sg;
                 phresvarv[static_cast<std::size_t>(kk)*nres + ires] = float(sg*v);
@@ -5072,7 +5291,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               }
             }
             double vchk = 0.;
-            for (int kk = 0; kk < nd; ++kk) {
+            for (int kk = 0; kk < ntot; ++kk) {
               vchk = std::max(vchk, std::abs(vsum[kk] - 1.));
             }
             phresvchk = float(vchk);
@@ -5086,7 +5305,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             const auto tcf0 = std::chrono::steady_clock::now();
             const int nresi = int(std::min(resglobidx.size(), resfamily_.size()));
             double grpclos = 0.;
-            for (int kk = 0; kk < nd; ++kk) {
+            for (int kk = 0; kk < ntot; ++kk) {
               cvhcf::TrackInput ci = cfin;
               ci.sigma = 1.;
               ci.ioniSign = refParms[0] >= 0.f ? 1. : -1.;
@@ -5179,7 +5398,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             phcfgrpclosure = float(grpclos);
             phcfms = float(std::chrono::duration<double, std::milli>(
                                std::chrono::steady_clock::now() - tcf0).count());
-            phresok = (nd == nm - 5) && (phcfnok == nd);
+            phresok = (nd == dexp) && (nd == nm - 5) && (qrank == nfree) && (phcfnok == ntot);
           }
         }
       }

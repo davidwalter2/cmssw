@@ -1054,6 +1054,24 @@ protected:
   int phresnfree = 0;     // nstatefree, so `d == n_meas - 5` can be audited
   float phreschi2 = 0.f;  // sum_k z_k^2   (GATE 1: == chisqval)
   float phresvchk = 0.f;  // max_k |sum_b v^(k)_b - 1|   (GATE 2)
+  // lambda_dexp / lambda_(dexp+1) of G, descending: the separation the
+  // IMPOSED rank `dexp = ncons - nstatefree` rests on.  Large = the rank
+  // decision is unambiguous; near 1 = it is not, and the row should be cut.
+  float phresrankgap = 0.f;
+  // max_k |(Psi^T G Psi)_kk - 1|: the whitener against the SAME G it was
+  // built from.  Small here with `phres_vchk` large means the factorization
+  // is right and the influence W is not, and vice versa.
+  float phresgchk = 0.f;
+  // rank(Fw) from the column-pivoted QR; equals `nstatefree` on a healthy
+  // fit, and `d = ncons - phres_qrank` by construction.
+  int phresqrank = 0;
+  // number of TRUTH-REFERENCED components appended after the `phres_d`
+  // per-hit ones (5 on gen-matched MC, 0 on data).  Every per-component array
+  // -- `phresz`, `phresvarv`, the `phcf_*` exponents, the hit-class shares --
+  // has `phres_d + phres_nref` entries, the last `nref` of which are the
+  // Cholesky-whitened `refParms - genParms`; their `phreshit`/`phresdim`/
+  // `phrescls` are -1 and their `phresrow` is -1-j.
+  int phresnref = 0;
   bool phresok = false;
   // [d] the whitened complement residual, the quantity the likelihood eats
   std::vector<float> phresz;
@@ -1120,6 +1138,12 @@ protected:
   //                          on: without it the material amounts cannot be
   //                          floated, which is the whole point.
   bool perHitCfGroups_ = true;
+  //   perHitRefComponents_ -- append the 5 truth-referenced reference-state
+  //                          components (`refParms - genParms` whitened by
+  //                          `refCov`) to the same arrays, so one file
+  //                          carries both terms in one convention.  MC only;
+  //                          silently 0 components without a gen match.
+  bool perHitRefComponents_ = true;
   //   perHitShareMin_    -- zero a block's share of a component when it is
   //                          below this FRACTION of that component's unit
   //                          variance, so `cvhcf` skips it.  A controlled
