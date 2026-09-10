@@ -1029,6 +1029,69 @@ protected:
   // `cfgrpclosure`. Shared so that the single-track and two-track makers
   // cannot lay the arrays out differently.
   void storeCfGroups(const cvhcf::TrackResult &res);
+
+  // ======================================================================
+  // THE PER-HIT (COMPLEMENT) RESIDUAL EXPORT -- the DATA version of the
+  // hit-residual CF likelihood.  See `exportPerHitResidual_`.
+  //
+  // The truth-referenced prototype (`calibration_studies/resolution/hitlik`)
+  // whitens `refParms - genParms` and needs MC.  What exists on data is the
+  // part of the constraint residual the fit has NOT absorbed:
+  //
+  //     rho = V R r ,   R = V^-1 - V^-1 F C F^T V^-1 ,   Cov(rho) = V R V
+  //
+  // of rank `d = ncons - nstatefree = n_meas - 5`.  Restricted to the
+  // MEASUREMENT rows it loses nothing (the kink rows of `rho` are a
+  // deterministic function of them, and the Mahalanobis form is invariant
+  // under a bijection of the support), so the export is built on the
+  // `n_meas = nvalid + nvalidpixel` measurement rows in HIT ORDER, whitened
+  // by the LDL^T of `G = V_mm - F_m C F_m^T` with the `n_meas - d` null
+  // pivots skipped.  Then `Cov(z) = I_d` and `sum_k z_k^2 = r^T R r`, the
+  // fit's own chi2 -- both are exported as gates.
+  // ======================================================================
+  int phresd = 0;         // d, the number of whitened components kept
+  int phresnmeas = 0;     // n_meas = nvalid + nvalidpixel
+  int phresnfree = 0;     // nstatefree, so `d == n_meas - 5` can be audited
+  float phreschi2 = 0.f;  // sum_k z_k^2   (GATE 1: == chisqval)
+  float phresvchk = 0.f;  // max_k |sum_b v^(k)_b - 1|   (GATE 2)
+  bool phresok = false;
+  // [d] the whitened complement residual, the quantity the likelihood eats
+  std::vector<float> phresz;
+  // [n_meas] the post-fit residual itself, in hit order (pre-whitening)
+  std::vector<float> phresraw;
+  // [d], all parallel: which measurement row led component k, that row's
+  // valid-hit index, its local coordinate (0 = first, 1 = the pixel's
+  // second) and its hit-resolution class (the `reshitcls` code).
+  std::vector<short> phresrow;
+  std::vector<short> phreshit;
+  std::vector<short> phresdim;
+  std::vector<short> phrescls;
+  // [d] the LDL pivot and the conditioning `G_kk / pivot_k`.  A cut on the
+  // latter is a cut on the FIT'S COVARIANCE, not on the residual, so it
+  // cannot bias the distribution being measured.
+  std::vector<float> phrespiv;
+  std::vector<float> phresinflat;
+  // [d * nres], COMPONENT MAJOR (`k*nres + b`): the block's variance share of
+  // component k, `v^(k)_b = W[b-rows, k]^T dV_b W[b-rows, k]`, carrying the
+  // SIGN of `W[r0, k]` (the qop-row influence) so the ionization/radiative
+  // weight can be signed offline exactly as in the maker.  `sum_b |v|` over
+  // the non-parmtype-15 blocks is 1 for every k.
+  std::vector<float> phresvarv;
+  // The per-component CF exponents, same six families and same `cftau` grid
+  // as the `cf*` block, laid out [d * kNTau].
+  std::vector<float> phcfmsv, phcfdelv, phcfiorev, phcfioimv, phcfradrev, phcfradimv;
+  std::vector<float> phcfvgf;  // [d] the parmtype-8/9 (Gaussian) share
+  // The per-(component, material group) split: `phcfgrpcomp` and `phcfgrpv`
+  // are the (k, group) key of each slot, the arrays are [nslot * kNTau].
+  std::vector<short> phcfgrpcomp, phcfgrpv;
+  std::vector<float> phcfgrpmsv, phcfgrpdelv, phcfgrpiorev, phcfgrpioimv, phcfgrpradrev, phcfgrpradimv;
+  float phcfgrpclosure = 0.f;
+  // Per-(component, hit class) Gaussian variance shares; `sum_c` over a
+  // component is that component's `phcfvgf`.
+  std::vector<short> phcfhitcomp, phcfhitcls;
+  std::vector<float> phcfhitv;
+  int phcfnok = 0;      // components whose cvhcf call returned ok
+  float phcfms = 0.f;   // wall-clock ms spent in the d cvhcf calls
   // Runtree: the tau grid and the model provenance, written once per global
   // parameter (constant, so ROOT compresses them away) rather than per event.
   std::vector<float> cftau;
@@ -1046,6 +1109,24 @@ protected:
   //                          material group (see cfgrp*). +26 kB/candidate,
   //                          so it is opt-in and off by default.
   bool exportCfGroupExponents_ = false;
+  //   exportPerHitResidual_ -- build and write the per-hit (complement)
+  //                          residual block above.  OFF by default: it is a
+  //                          new export, it costs `d` extra `cvhcf`
+  //                          evaluations per track, and every existing
+  //                          configuration must be untouched by it.
+  bool exportPerHitResidual_ = false;
+  //   perHitCfGroups_    -- also split the per-component exponents by
+  //                          material group.  On by default WHEN the block is
+  //                          on: without it the material amounts cannot be
+  //                          floated, which is the whole point.
+  bool perHitCfGroups_ = true;
+  //   perHitShareMin_    -- zero a block's share of a component when it is
+  //                          below this FRACTION of that component's unit
+  //                          variance, so `cvhcf` skips it.  A controlled
+  //                          approximation (the model variance moves by at
+  //                          most the dropped share), 0 = keep everything,
+  //                          which is the default and what the gates run at.
+  double perHitShareMin_ = 0.;
   // Does this maker's functional use the delta-recoil family? The q/p one
   // does; the mass one's offline reference (`build_pairs_tt`) does not, so
   // the two-track maker does not pay for a sixth per-group array.

@@ -753,10 +753,14 @@ namespace cvhcf {
 
       for (unsigned int g : gs) {
         double vpool = 0.;
+        double vsig = 0.;
         int nent = 0;
         for (int i = 0; i < in.nres; ++i)
           if (in.resfamily[i] == fam && in.resglobidx[i] == g) {
             vpool += in.resvarv[i];
+            // variance-weighted sign of the block's influence; +1 everywhere
+            // when the caller supplies none, so `vsig == vpool > 0`.
+            vsig += (in.ressgn != nullptr ? double(in.ressgn[i]) : 1.) * in.resvarv[i];
             ++nent;
           }
         if (!(vpool > 0.))
@@ -844,7 +848,8 @@ namespace cvhcf {
               ioniSq2(blk.data(), rows.stride, ns, qs.empty() ? nullptr : qs.data(), static_cast<int>(qs.size() / 2));
           if (!(sq2 > 0.))
             continue;
-          const double wstd = in.ioniSign * (std::sqrt(vpool / sq2) / in.sigma);
+          const double sgnblk = (vsig < 0.) ? -1. : 1.;
+          const double wstd = in.ioniSign * sgnblk * (std::sqrt(vpool / sq2) / in.sigma);
 
           rowGroups(blk.data(), rows.stride, ns, in.wantGroups ? in.ioni.groupCol : -1, gsteps);
           if (!in.wantGroups || gsteps.size() == 1) {

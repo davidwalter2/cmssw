@@ -156,6 +156,24 @@ namespace cvhcf {
     //                    (cf_mass_likelihood.IONI_SGN).
     double ioniSign = 1.;
 
+    // OPTIONAL PER-BLOCK SIGN, parallel to `resvarv` (length `nres`).
+    //
+    // `ioniSign` is ONE number because the q/p (and the candidate-mass)
+    // functional's influence has the same sign on every ionization block. A
+    // general linear functional of the same fit does not: one whitened
+    // component of the PER-HIT (complement) residual vector has its own
+    // signed influence coefficient `W[r0, k]` on each block's qop row, and
+    // the ionization CF is not even in its weight (an energy loss can only go
+    // one way), so the sign has to travel with the block.
+    //
+    // When set, a pooled block's weight is
+    //     ioniSign * sign(sum_i s_i v_i) * sqrt(vpool/sq2) / sigma
+    // over the entries `i` sharing the block's global index -- the
+    // variance-weighted sign, which for the (common) single-entry block is
+    // just `s_i`. NULL reproduces the scalar behaviour bit for bit (all
+    // `s_i = +1`, so the sum is `vpool > 0`).
+    const float *ressgn = nullptr;
+
     bool wantDelta = true;  // the discrete delta-ray recoil family
 
     // SPLIT THE EXPONENTS BY MATERIAL GROUP as well as accumulating the flat

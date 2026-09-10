@@ -19,6 +19,7 @@
 
 #include <iomanip>
 #include <limits>
+#include <chrono>
 #include <iostream>
 
 #include "TRandom.h"
@@ -1133,19 +1134,36 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               ? std::sqrt((g->vertex() - *genXyz0).mag2()) : -99.;
 
           auto const& vtx = g->vertex();
-          auto const& myBeamSpot = bsH->position(vtx.z());
-          
-          //q/|p|
-          genParms[0] = g->charge()/g->p();
-          //lambda
-          genParms[1] = M_PI_2 - g->momentum().theta();
-          //phi
-          genParms[2] = g->phi();
-          //dxy
-          genParms[3] = (-(vtx.x() - myBeamSpot.x()) * g->py() + (vtx.y() - myBeamSpot.y()) * g->px()) / g->pt();
-          //dsz
-          genParms[4] = (vtx.z() - myBeamSpot.z()) * g->pt() / g->p() -
-            ((vtx.x() - myBeamSpot.x()) * g->px() + (vtx.y() - myBeamSpot.y()) * g->py()) / g->pt() * g->pz() / g->p();
+
+          // GEN REFERENCE PARAMETERS IN THE FIT'S OWN CONVENTION.
+          //
+          // They used to be hand-coded in the reco::TrackBase perigee
+          // convention, which agrees with `refParms` on (q/p, lambda, phi,
+          // d0) and NOT on the fifth:
+          //   * `refParms[4]` is `cart2pca(...)[4]`, the ABSOLUTE z of the
+          //     point of closest approach to the beamline, whereas the old
+          //     line computed `dsz` -- and computed it wrongly, because
+          //     `BeamSpot::position(z)` returns `Point(x(z), y(z), z)`, so
+          //     the `vtx.z() - myBeamSpot.z()` term was IDENTICALLY ZERO and
+          //     `genParms[4]` was the transverse remainder alone (~1e-4 cm
+          //     against a z0 of centimetres).  Measured on 2000 mu-gun
+          //     tracks: `Var((refParms[4]-genParms[4])/sigma) = 4.0e6` with a
+          //     median pull of +375, against ~1.0 for the other four
+          //     (NOTES 2026-09-09).
+          //   * `genParms[3]` was `dxy`, which IS `cart2pca`'s `d0` for a
+          //     beamline along z-hat -- no change in value, but now it is the
+          //     same formula rather than two that happen to agree.
+          // Calling `cart2pca` on the gen state makes gen and fitted
+          // DEFINITIONALLY identical, which is what a residual needs.
+          {
+            Matrix<double, 7, 1> genstate;
+            genstate << vtx.x(), vtx.y(), vtx.z(), g->px(), g->py(), g->pz(),
+                double(g->charge());
+            const Matrix<double, 5, 1> genpca = cart2pca(genstate, *bsH);
+            for (unsigned int i = 0; i < 5; ++i) {
+              genParms[i] = float(genpca[i]);
+            }
+          }
         }
         else {
           continue;
@@ -4300,6 +4318,20 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       refParms[3] = statepcaRef[3] + dxref[3];
       refParms[4] = statepcaRef[4] + dxref[4];
 
+      // PHI IS AN ANGLE AND THE RESIDUAL IS NOT.  `genParms[2]` comes out of
+      // `cart2pca` in (-pi, pi]; `refParms[2] = phi + dxref[2]` is the fitted
+      // value and is NOT wrapped, so a track sitting on the branch cut has
+      // `refParms[2] - genParms[2] = +-2pi`, i.e. ~4e4 sigma. Measured 8
+      // tracks in 20 000 (0.04 %), enough to make `Var(z_phi) = 2.9e4`
+      // (NOTES 2026-09-09).  Put the gen value on the same branch as the
+      // fitted one HERE, once, rather than leaving every reader to remember.
+      if (genpart != nullptr) {
+        const double dphi = double(refParms[2]) - double(genParms[2]);
+        if (std::abs(dphi) > M_PI) {
+          genParms[2] = float(double(genParms[2]) + 2. * M_PI * std::round(dphi / (2. * M_PI)));
+        }
+      }
+
       refParmsMomD[0] = qbpupd;
       refParmsMomD[1] = lamupd;
       refParmsMomD[2] = phiupd;
@@ -4600,6 +4632,47 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     // per resolution entry (leg). Small dense blocks (<= 5x5); descending,
     // zero-padded to 5 floats. Offline validation: sum over the legs of a
     // parameter of sum(lambda) reproduces its gradllv entry.
+    // The per-hit (complement) residual branches are reset for EVERY row,
+    // not only inside the block that fills them: a track that never reaches
+    // the export (a failed fit, a gen-frozen pass) must write empty arrays
+    // rather than the previous track's.
+    phresd = 0;
+    phresnmeas = 0;
+    phresnfree = 0;
+    phreschi2 = 0.f;
+    phresvchk = 0.f;
+    phresok = false;
+    phcfnok = 0;
+    phcfms = 0.f;
+    phcfgrpclosure = 0.f;
+    phresz.clear();
+    phresraw.clear();
+    phresrow.clear();
+    phreshit.clear();
+    phresdim.clear();
+    phrescls.clear();
+    phrespiv.clear();
+    phresinflat.clear();
+    phresvarv.clear();
+    phcfmsv.clear();
+    phcfdelv.clear();
+    phcfiorev.clear();
+    phcfioimv.clear();
+    phcfradrev.clear();
+    phcfradimv.clear();
+    phcfvgf.clear();
+    phcfgrpcomp.clear();
+    phcfgrpv.clear();
+    phcfgrpmsv.clear();
+    phcfgrpdelv.clear();
+    phcfgrpiorev.clear();
+    phcfgrpioimv.clear();
+    phcfgrpradrev.clear();
+    phcfgrpradimv.clear();
+    phcfhitcomp.clear();
+    phcfhitcls.clear();
+    phcfhitv.clear();
+
     if (dores && fillTrackTree_ && (fillGrads_ || fillGradsFactored_)) {
       // Influence of the noise on the 5 reference parameters:
       // W5 = Vinv F C E5 (one solve with 5 RHS + one sparse matmul); zero
@@ -4706,8 +4779,12 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       // The inputs are the EXPORT ARRAYS, not the propagator's logs, so the
       // pooling is identical to `cf_track_resolution.extract`'s join by
       // construction and cannot drift from it.
-      if (exportCfExponents_) {
-        cvhcf::TrackInput cfin;
+      cvhcf::TrackInput cfin;
+      // sigma from the FLOAT the tree carries, so the in-maker weight is
+      // exactly the one a reader of the same file would have recovered.
+      // Hoisted out of the fill block below because both consumers need it.
+      const double c00 = refCov[0];
+      if (exportCfExponents_ || exportPerHitResidual_) {
         cfin.resglobidx = resglobidx.data();
         cfin.resfamily = resfamily_.data();
         cfin.resvarv = resinfvarv.data();
@@ -4729,9 +4806,6 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         cfin.radspec = radstepspecv.data();
         cfin.radvgrid = radvgrid.data();
         cfin.radnv = int(radvgrid.size());
-        // sigma from the FLOAT the tree carries, so the in-maker weight is
-        // exactly the one a reader of the same file would have recovered.
-        const double c00 = refCov[0];
         cfin.sigma = c00 > 0. ? std::sqrt(c00) : 0.;
         // THE CHARGE. `ioniurbanv`'s cs = E/p^3 is positive for every track
         // and the physical map is d(q/p) = q cs dE, so the ionization (and
@@ -4741,6 +4815,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         cfin.wantDelta = true;
         cfin.wantGroups = exportCfGroupExponents_;
         cfin.wantGroupDelta = true;   // the q/p functional's model uses S_del
+      }
+      if (exportCfExponents_) {
         cvhcf::TrackResult cfres;
         cvhcf::trackExponents(cfin, cfres);
         cfok = cfres.ok;
@@ -4781,6 +4857,329 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               cfhitclsv.push_back(static_cast<short>(c));
               cfhitvv.push_back(float(vcls[c] / c00));
             }
+          }
+        }
+      }
+
+      // ---- THE PER-HIT (COMPLEMENT) RESIDUAL VECTOR ----------------------
+      //
+      // The q/p functional above, and the whole truth-referenced prototype it
+      // feeds, need `genParms`.  On DATA there is none, and what is left is
+      // the part of the constraint residual the fit has NOT absorbed:
+      //
+      //     rho = V R r = r + F dxfree ,  Cov(rho) = V R V = V - F C F^T
+      //
+      // of rank `d = ncons - nstatefree`, which for this fit
+      // (`ncons = 5 nhits + nvalid + nvalidpixel`, `nstateparms = 5(nhits+1)`)
+      // is exactly `n_meas - 5`.  The kink rows of `rho` are a deterministic
+      // function of the measurement rows, and the Mahalanobis form of a
+      // Gaussian is invariant under a bijective map of its support, so
+      // restricting to the MEASUREMENT rows loses nothing: with
+      // `G = V_mm - F_m C F_m^T` (rank d) and any `Cw Cw^T = G`,
+      // `z = Cw^+ rho_m` has `Cov(z) = I_d` and `sum_k z_k^2 = r^T R r`,
+      // the fit's own chi2.  Both identities are exported as gates
+      // (`phres_d`, `phres_chi2`, `phres_vchk`).
+      //
+      // THE BASIS is the LDL^T of `G` in MEASUREMENT-ROW ORDER, i.e. hit
+      // order inner to outer (and, within a pixel, the first local
+      // coordinate then the second), with the `n_meas - d = 5` null pivots
+      // skipped.  Component k is then that row's post-fit residual
+      // CONDITIONED ON the inner rows' -- local to a hit, which is what a
+      // term whose parameters are per-hit-class needs.  It is deliberately
+      // NOT the Kalman filter innovation sequence: that is a different
+      // orthonormal basis of the same d-space (it conditions on the RAW
+      // inner measurements and drops the FIRST five components rather than
+      // the last five), it needs a sequential filter pass that nothing here
+      // has, and the product-of-marginals likelihood the offline term forms
+      // is basis dependent, so the choice is stated and its cross-dependence
+      // measured rather than assumed away.
+      if (exportPerHitResidual_) {
+        // (1) the measurement rows in hit order, from the parmtype-8 blocks,
+        //     with the hit index, the local coordinate and the hit class.
+        std::vector<unsigned int> mrow;
+        std::vector<short> mhit, mdim, mcls;
+        mrow.reserve(nvalid + nvalidpixel);
+        for (unsigned int ires = 0; ires < resfamily_.size(); ++ires) {
+          if (resfamily_[ires] != 8) {
+            continue;
+          }
+          const unsigned int r0 = resblockrng[ires][0];
+          const unsigned int nb = resblockrng[ires][1];
+          for (unsigned int j = 0; j < nb; ++j) {
+            mrow.push_back(r0 + j);
+            mhit.push_back(static_cast<short>(resvalidhit_[ires]));
+            mdim.push_back(static_cast<short>(j));
+            mcls.push_back(-1);
+          }
+        }
+        // the class of the SECOND pixel coordinate lives on the parmtype-9
+        // entry of the same hit, so the join is on (hit, coordinate).
+        for (unsigned int ires = 0; ires < resfamily_.size(); ++ires) {
+          const int fam = resfamily_[ires];
+          if (fam != 8 && fam != 9) {
+            continue;
+          }
+          const short want = (fam == 8) ? 0 : 1;
+          const int ih = resvalidhit_[ires];
+          const short cls = ires < reshitcls.size() ? reshitcls[ires] : short(-1);
+          for (std::size_t i = 0; i < mrow.size(); ++i) {
+            if (mhit[i] == ih && mdim[i] == want) {
+              mcls[i] = cls;
+            }
+          }
+        }
+        const int nm = static_cast<int>(mrow.size());
+        phresnmeas = nm;
+        phresnfree = static_cast<int>(nstatefree);
+
+        if (nm > 5 && nstatefree > 0 && rfull.size() == Eigen::Index(ncons)) {
+          const int nfree = static_cast<int>(nstatefree);
+          // V on the measurement rows.  It is block diagonal per hit (a hit's
+          // 1 or 2 rows are independent of every other constraint), so the
+          // inverse of the extracted Vinv block is exact and cheap.
+          MatrixXd Vmmi(nm, nm);
+          for (int i = 0; i < nm; ++i) {
+            for (int j = 0; j < nm; ++j) {
+              Vmmi(i, j) = Vinvfull(mrow[i], mrow[j]);
+            }
+          }
+          const MatrixXd Vmm = Vmmi.inverse();
+
+          MatrixXd Fm(nm, nfree);
+          for (int i = 0; i < nm; ++i) {
+            for (int j = 0; j < nfree; ++j) {
+              Fm(i, j) = Ffull(mrow[i], freestateidxs[j]);
+            }
+          }
+
+          // Y = C F_m^T; G = V_mm - F_m C F_m^T; rho_m = r_m - F_m C F^T V^-1 r.
+          const MatrixXd Y = Cinvd.solve(Fm.transpose());
+          const MatrixXd G = Vmm - Fm*Y;
+          const VectorXd FtVinvr = VinvF.transpose()*rfull;
+          VectorXd rm(nm);
+          for (int i = 0; i < nm; ++i) {
+            rm(i) = rfull(mrow[i]);
+          }
+          const VectorXd rhom = rm - Y.transpose()*FtVinvr;
+
+          // (2) LDL^T of G in hit order; a null pivot means that row's
+          //     post-fit residual is already determined by the inner ones, so
+          //     it contributes no component and (in exact arithmetic) no
+          //     cross-covariance either, which is why skipping it is right
+          //     and not an approximation.
+          MatrixXd A = G;
+          VectorXd xi = rhom;
+          MatrixXd L = MatrixXd::Identity(nm, nm);
+          std::vector<double> piv(nm, 0.);
+          std::vector<int> keep;
+          keep.reserve(nm);
+          const double dscale = G.diagonal().maxCoeff();
+          const double ptol = 1e-10*std::max(dscale, std::numeric_limits<double>::min());
+          for (int k = 0; k < nm; ++k) {
+            const double dk = A(k, k);
+            if (!(dk > ptol)) {
+              continue;
+            }
+            piv[k] = dk;
+            for (int i = k + 1; i < nm; ++i) {
+              L(i, k) = A(i, k)/dk;
+            }
+            for (int i = k + 1; i < nm; ++i) {
+              for (int j = k + 1; j < nm; ++j) {
+                A(i, j) -= dk*L(i, k)*L(j, k);
+              }
+            }
+            for (int i = k + 1; i < nm; ++i) {
+              xi(i) -= L(i, k)*xi(k);
+            }
+            keep.push_back(k);
+          }
+          const int nd = static_cast<int>(keep.size());
+          phresd = nd;
+
+          if (nd > 0) {
+            // (3) the whitener Psi (z = Psi^T rho_m) and the per-component
+            //     influence W (ncons x d) with z_k = W[:,k]^T n.  W is the
+            //     exact analogue of `wqop = W5.col(0)` above, so everything
+            //     downstream -- the variance shares, the signed ionization
+            //     weight -- is the same formula at a different functional.
+            const MatrixXd Linv = L.triangularView<Eigen::UnitLower>().solve(
+                MatrixXd::Identity(nm, nm));
+            MatrixXd Psi(nm, nd);
+            for (int kk = 0; kk < nd; ++kk) {
+              Psi.col(kk) = Linv.row(keep[kk]).transpose()/std::sqrt(piv[keep[kk]]);
+            }
+            MatrixXd W = -(VinvF*(Y*Psi));
+            for (int i = 0; i < nm; ++i) {
+              W.row(mrow[i]) += Psi.row(i);
+            }
+
+            double chi2z = 0.;
+            for (int kk = 0; kk < nd; ++kk) {
+              const int k = keep[kk];
+              const double zk = xi(k)/std::sqrt(piv[k]);
+              chi2z += zk*zk;
+              phresz.push_back(float(zk));
+              phresrow.push_back(static_cast<short>(k));
+              phreshit.push_back(mhit[k]);
+              phresdim.push_back(mdim[k]);
+              phrescls.push_back(mcls[k]);
+              phrespiv.push_back(float(piv[k]));
+              phresinflat.push_back(float(G(k, k)/piv[k]));
+            }
+            phreschi2 = float(chi2z);
+            phresraw.reserve(nm);
+            for (int i = 0; i < nm; ++i) {
+              phresraw.push_back(float(rhom(i)));
+            }
+
+            // (4) the per-(block, component) variance shares, signed by the
+            //     qop-row influence.  `sum_b v^(k)_b == 1` over the
+            //     non-parmtype-15 blocks (15 is a RE-PARTITION of 10/11, not
+            //     an addition to it) -- the export's own closure test.
+            const std::size_t nres = dVs.size();
+            std::vector<std::vector<float>> shares(nd, std::vector<float>(nres, 0.f));
+            std::vector<std::vector<float>> signs(nd, std::vector<float>(nres, 1.f));
+            std::vector<double> vsum(nd, 0.);
+            phresvarv.assign(static_cast<std::size_t>(nd)*nres, 0.f);
+            for (std::size_t ires = 0; ires < nres; ++ires) {
+              const unsigned int r0 = resblockrng[ires][0];
+              const unsigned int nb = resblockrng[ires][1];
+              MatrixXd dVb = MatrixXd::Zero(nb, nb);
+              for (int c = 0; c < dVs[ires].outerSize(); ++c) {
+                for (SparseMatrix<double>::InnerIterator it(dVs[ires], c); it; ++it) {
+                  const int rr = int(it.row()) - int(r0);
+                  const int cc = int(it.col()) - int(r0);
+                  if (rr >= 0 && rr < int(nb) && cc >= 0 && cc < int(nb)) {
+                    dVb(rr, cc) = it.value();
+                  }
+                }
+              }
+              const int fam = ires < resfamily_.size() ? resfamily_[ires] : -1;
+              for (int kk = 0; kk < nd; ++kk) {
+                const VectorXd wk = W.block(r0, kk, nb, 1);
+                double v = wk.transpose()*dVb*wk;
+                if (!(v > 0.)) {
+                  v = 0.;
+                }
+                const float sg = (W(r0, kk) < 0.) ? -1.f : 1.f;
+                shares[kk][ires] = float(v);
+                signs[kk][ires] = sg;
+                phresvarv[static_cast<std::size_t>(kk)*nres + ires] = float(sg*v);
+                if (fam != 15) {
+                  vsum[kk] += v;
+                }
+              }
+            }
+            double vchk = 0.;
+            for (int kk = 0; kk < nd; ++kk) {
+              vchk = std::max(vchk, std::abs(vsum[kk] - 1.));
+            }
+            phresvchk = float(vchk);
+
+            // (5) the CF exponents, one `cvhcf` pass per component.  The
+            //     standardization is 1 (z already has unit variance), so the
+            //     block weight is `sqrt(v^(k)_b / sq2)` -- exactly what
+            //     `extract_res5.py` evaluates offline.  `phcf_msec` is the
+            //     wall clock of this loop, to be read against the ~2 s the
+            //     fit itself costs.
+            const auto tcf0 = std::chrono::steady_clock::now();
+            const int nresi = int(std::min(resglobidx.size(), resfamily_.size()));
+            double grpclos = 0.;
+            for (int kk = 0; kk < nd; ++kk) {
+              cvhcf::TrackInput ci = cfin;
+              ci.sigma = 1.;
+              ci.ioniSign = refParms[0] >= 0.f ? 1. : -1.;
+              if (perHitShareMin_ > 0.) {
+                for (auto &x : shares[kk]) {
+                  if (double(x) < perHitShareMin_) {
+                    x = 0.f;
+                  }
+                }
+              }
+              ci.resvarv = shares[kk].data();
+              ci.ressgn = signs[kk].data();
+              ci.nres = nresi;
+              ci.wantDelta = true;
+              ci.wantGroups = perHitCfGroups_;
+              ci.wantGroupDelta = true;
+              cvhcf::TrackResult cr;
+              cvhcf::trackExponents(ci, cr);
+              if (cr.ok) {
+                ++phcfnok;
+              }
+              for (int j = 0; j < cvhcf::kNTau; ++j) {
+                phcfmsv.push_back(float(cr.S.ms[j]));
+                phcfdelv.push_back(float(cr.S.del[j]));
+                phcfiorev.push_back(float(cr.S.ioRe[j]));
+                phcfioimv.push_back(float(cr.S.ioIm[j]));
+                phcfradrev.push_back(float(cr.S.radRe[j]));
+                phcfradimv.push_back(float(cr.S.radIm[j]));
+              }
+              phcfvgf.push_back(float(cr.vgauss));
+              if (perHitCfGroups_) {
+                std::array<double, cvhcf::kNTau> sms{}, sdel{}, sre{}, sim{}, srre{}, srim{};
+                for (auto const &gg : cr.groups) {
+                  phcfgrpcomp.push_back(static_cast<short>(kk));
+                  phcfgrpv.push_back(static_cast<short>(gg.group));
+                  for (int j = 0; j < cvhcf::kNTau; ++j) {
+                    phcfgrpmsv.push_back(float(gg.S.ms[j]));
+                    phcfgrpdelv.push_back(float(gg.S.del[j]));
+                    phcfgrpiorev.push_back(float(gg.S.ioRe[j]));
+                    phcfgrpioimv.push_back(float(gg.S.ioIm[j]));
+                    phcfgrpradrev.push_back(float(gg.S.radRe[j]));
+                    phcfgrpradimv.push_back(float(gg.S.radIm[j]));
+                    sms[j] += gg.S.ms[j];
+                    sdel[j] += gg.S.del[j];
+                    sre[j] += gg.S.ioRe[j];
+                    sim[j] += gg.S.ioIm[j];
+                    srre[j] += gg.S.radRe[j];
+                    srim[j] += gg.S.radIm[j];
+                  }
+                }
+                double dmax = 0., smax = 0.;
+                auto cmp = [&](const std::array<double, cvhcf::kNTau> &a,
+                               const std::array<double, cvhcf::kNTau> &b) {
+                  for (int j = 0; j < cvhcf::kNTau; ++j) {
+                    dmax = std::max(dmax, std::abs(a[j] - b[j]));
+                    smax = std::max(smax, std::abs(b[j]));
+                  }
+                };
+                cmp(sms, cr.S.ms);
+                cmp(sdel, cr.S.del);
+                cmp(sre, cr.S.ioRe);
+                cmp(sim, cr.S.ioIm);
+                cmp(srre, cr.S.radRe);
+                cmp(srim, cr.S.radIm);
+                if (smax > 0.) {
+                  grpclos = std::max(grpclos, dmax/smax);
+                }
+              }
+              // the component's Gaussian variance by hit class; sums to
+              // `phcf_vgf` of the same component by construction.
+              {
+                std::array<double, kNHitResClasses> vcls{};
+                for (std::size_t i = 0; i < reshitcls.size() && i < shares[kk].size(); ++i) {
+                  const int c = reshitcls[i];
+                  if (c < 0 || c >= kNHitResClasses) {
+                    continue;
+                  }
+                  vcls[c] += shares[kk][i];
+                }
+                for (int c = 0; c < kNHitResClasses; ++c) {
+                  if (vcls[c] == 0.) {
+                    continue;
+                  }
+                  phcfhitcomp.push_back(static_cast<short>(kk));
+                  phcfhitcls.push_back(static_cast<short>(c));
+                  phcfhitv.push_back(float(vcls[c]));
+                }
+              }
+            }
+            phcfgrpclosure = float(grpclos);
+            phcfms = float(std::chrono::duration<double, std::milli>(
+                               std::chrono::steady_clock::now() - tcf0).count());
+            phresok = (nd == nm - 5) && (phcfnok == nd);
           }
         }
       }

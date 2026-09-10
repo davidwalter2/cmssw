@@ -223,6 +223,14 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
                            ? iConfig.getParameter<bool>("exportCfGroupExponents") : false;
   exportHitResBlocks_ = iConfig.existsAs<bool>("exportHitResBlocks")
                            ? iConfig.getParameter<bool>("exportHitResBlocks") : true;
+  // THE PER-HIT (COMPLEMENT) RESIDUAL BLOCK.  New export, off by default so
+  // that no existing configuration changes its output by a byte.
+  exportPerHitResidual_ = iConfig.existsAs<bool>("exportPerHitResidual")
+                           ? iConfig.getParameter<bool>("exportPerHitResidual") : false;
+  perHitCfGroups_ = iConfig.existsAs<bool>("perHitCfGroups")
+                           ? iConfig.getParameter<bool>("perHitCfGroups") : true;
+  perHitShareMin_ = iConfig.existsAs<double>("perHitShareMin")
+                           ? iConfig.getParameter<double>("perHitShareMin") : 0.;
   exportMaterialNoise_ = iConfig.existsAs<bool>("exportMaterialNoise")
                            ? iConfig.getParameter<bool>("exportMaterialNoise") : false;
   // THE VARIANCE (log-det) TERM of the two-track maker's exported gradient
@@ -583,6 +591,53 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
         }
         tree->Branch((cfprefix_ + "_hitcls").c_str(), &cfhitclsv);
         tree->Branch((cfprefix_ + "_hitv").c_str(), &cfhitvv);
+      }
+
+      // THE PER-HIT (COMPLEMENT) RESIDUAL BLOCK.  See the member docs in the
+      // header for what each array is; the layout notes that matter to a
+      // reader are: `phresvarv` is COMPONENT MAJOR (`k*nres + b`) and signed,
+      // the `phcf*` exponents are [d * kNTau] on the same `cftau` grid as the
+      // `cf*` ones, and the per-group slots carry their (component, group)
+      // key in `phcfgrpcomp` / `phcfgrpv`.
+      if (exportPerHitResidual_) {
+        tree->Branch("phres_d", &phresd);
+        tree->Branch("phres_nmeas", &phresnmeas);
+        tree->Branch("phres_nfree", &phresnfree);
+        tree->Branch("phres_chi2", &phreschi2);
+        tree->Branch("phres_vchk", &phresvchk);
+        tree->Branch("phres_ok", &phresok);
+        tree->Branch("phresz", &phresz);
+        tree->Branch("phresraw", &phresraw);
+        tree->Branch("phresrow", &phresrow);
+        tree->Branch("phreshit", &phreshit);
+        tree->Branch("phresdim", &phresdim);
+        tree->Branch("phrescls", &phrescls);
+        tree->Branch("phrespiv", &phrespiv);
+        tree->Branch("phresinflat", &phresinflat);
+        tree->Branch("phresvarv", &phresvarv, basketSize);
+        tree->Branch("phcf_ms", &phcfmsv, basketSize);
+        tree->Branch("phcf_del", &phcfdelv, basketSize);
+        tree->Branch("phcf_ioni_re", &phcfiorev, basketSize);
+        tree->Branch("phcf_ioni_im", &phcfioimv, basketSize);
+        tree->Branch("phcf_rad_re", &phcfradrev, basketSize);
+        tree->Branch("phcf_rad_im", &phcfradimv, basketSize);
+        tree->Branch("phcf_vgf", &phcfvgf);
+        tree->Branch("phcf_nok", &phcfnok);
+        tree->Branch("phcf_msec", &phcfms);
+        if (perHitCfGroups_) {
+          tree->Branch("phcf_grpcomp", &phcfgrpcomp);
+          tree->Branch("phcf_grp", &phcfgrpv);
+          tree->Branch("phcf_grp_ms", &phcfgrpmsv, basketSize);
+          tree->Branch("phcf_grp_del", &phcfgrpdelv, basketSize);
+          tree->Branch("phcf_grp_ioni_re", &phcfgrpiorev, basketSize);
+          tree->Branch("phcf_grp_ioni_im", &phcfgrpioimv, basketSize);
+          tree->Branch("phcf_grp_rad_re", &phcfgrpradrev, basketSize);
+          tree->Branch("phcf_grp_rad_im", &phcfgrpradimv, basketSize);
+          tree->Branch("phcf_grp_closure", &phcfgrpclosure);
+        }
+        tree->Branch("phcf_hitcomp", &phcfhitcomp);
+        tree->Branch("phcf_hitcls", &phcfhitcls);
+        tree->Branch("phcf_hitv", &phcfhitv);
       }
     }
 
@@ -1023,13 +1078,13 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       // under a different switch configuration must not be silently mixed with
       // one exported under this. Constant across entries, so ROOT compresses
       // them to nothing -- the same argument `radvgrid` already rides on.
-      if (exportCfExponents_) {
+      if (exportCfExponents_ || exportPerHitResidual_) {
         runtree->Branch("cftau", &cftau);
         runtree->Branch("cfmodel", &cfmodel);
       }
     }
     
-    if (fillRunTree_ && exportCfExponents_) {
+    if (fillRunTree_ && (exportCfExponents_ || exportPerHitResidual_)) {
       // (re)armed HERE and not only at branch creation, so a second beginRun
       // does not write an empty grid.
       cftau.assign(cvhcf::tauGrid(), cvhcf::tauGrid() + cvhcf::kNTau);
