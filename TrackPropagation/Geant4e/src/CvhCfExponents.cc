@@ -660,6 +660,52 @@ namespace cvhcf {
     // Accumulate `src` into the (group -> exponents) list, creating the entry
     // on first use. The list is kept ASCENDING in `group` so that the export
     // order is a property of the candidate and not of the propagation.
+    GroupExponents &groupEntry(std::vector<GroupExponents> &v, int g) {
+      auto it = std::lower_bound(
+          v.begin(), v.end(), g, [](const GroupExponents &a, int b) { return a.group < b; });
+      if (it != v.end() && it->group == g)
+        return *it;
+      GroupExponents e;
+      e.group = g;
+      return *v.insert(it, e);
+    }
+
+    // Per-STEP ionization variance contribution, with the per-leg CGF scale
+    // applied, so that a material group's share of `ioniSq2` is a plain sum
+    // over its own steps.  Same association, left to right, as `ioniSq2`.
+    void ioniStepVar(
+        const float *rows, int stride, int n, const float *qsc, int nqsc, std::vector<double> &w2) {
+      w2.assign(static_cast<std::size_t>(std::max(n, 0)), 0.);
+      if (rows == nullptr || n <= 0)
+        return;
+      for (int i = 0; i < n; ++i) {
+        const float *r = rows + static_cast<std::size_t>(i) * stride;
+        const double gq = static_cast<double>(r[10]) * 1e-3;
+        w2[i] = static_cast<double>(r[1]) * gq * gq;
+      }
+      if (qsc == nullptr || nqsc <= 0)
+        return;
+      long long tot = 0;
+      for (int i = 0; i < nqsc; ++i)
+        tot += static_cast<long long>(qsc[2 * i + 1]);
+      if (tot != static_cast<long long>(n)) {
+        double msc = 0.;
+        for (int i = 0; i < nqsc; ++i)
+          msc += qsc[2 * i];
+        const double f = msc / nqsc;
+        for (double &x : w2)
+          x *= f;
+        return;
+      }
+      int off = 0;
+      for (int i = 0; i < nqsc; ++i) {
+        const int ns = static_cast<int>(qsc[2 * i + 1]);
+        for (int k = 0; k < ns; ++k)
+          w2[off + k] *= static_cast<double>(qsc[2 * i]);
+        off += ns;
+      }
+    }
+
     Exponents &groupSlot(std::vector<GroupExponents> &v, int g) {
       auto it = std::lower_bound(
           v.begin(), v.end(), g, [](const GroupExponents &a, int b) { return a.group < b; });
@@ -792,6 +838,8 @@ namespace cvhcf {
           if (!(sq2 > 0.))
             continue;
           const double wstd = std::sqrt(vpool / sq2) / in.sigma;
+          // the block's share of the STANDARDIZED variance under the fit's Q
+          const double vqblk = vpool / (in.sigma * in.sigma);
 
           rowGroups(blk.data(), rows.stride, ns, in.wantGroups ? in.ms.groupCol : -1, gsteps);
           if (!in.wantGroups || gsteps.size() == 1) {
@@ -810,11 +858,12 @@ namespace cvhcf {
                 out.S.del[j] += gtmp.del[j];
             }
             if (in.wantGroups) {
-              Exponents &gs = groupSlot(out.groups, gsteps[0]);
+              GroupExponents &ge = groupEntry(out.groups, gsteps[0]);
+              ge.vqms += vqblk;
               for (int j = 0; j < kNTau; ++j) {
-                gs.ms[j] += gtmp.ms[j];
+                ge.S.ms[j] += gtmp.ms[j];
                 if (in.wantDelta && in.wantGroupDelta)
-                  gs.del[j] += gtmp.del[j];
+                  ge.S.del[j] += gtmp.del[j];
               }
             }
           } else {
@@ -833,7 +882,14 @@ namespace cvhcf {
               msBlock(gblk.data(), rows.stride, mg, wstd, gtmp.ms.data(), nullptr);
               if (in.wantDelta && in.wantGroupDelta)
                 delBlockCarved(gblk.data(), rows.stride, mg, wstd, gtmp.ms.data(), carve, gtmp.del.data());
-              addInto(groupSlot(out.groups, g), gtmp);
+              // the group's share of the block's fit-Q variance is its share
+              // of `sq2`, which for multiple scattering is the `thp2` column.
+              double sq2g = 0.;
+              for (int i = 0; i < mg; ++i)
+                sq2g += gblk[static_cast<std::size_t>(i) * rows.stride + 5];
+              GroupExponents &ge = groupEntry(out.groups, g);
+              ge.vqms += vqblk * (sq2g / sq2);
+              addInto(ge.S, gtmp);
             }
           }
         } else {
@@ -850,6 +906,7 @@ namespace cvhcf {
             continue;
           const double sgnblk = (vsig < 0.) ? -1. : 1.;
           const double wstd = in.ioniSign * sgnblk * (std::sqrt(vpool / sq2) / in.sigma);
+          const double vqblk = vpool / (in.sigma * in.sigma);
 
           rowGroups(blk.data(), rows.stride, ns, in.wantGroups ? in.ioni.groupCol : -1, gsteps);
           if (!in.wantGroups || gsteps.size() == 1) {
@@ -860,21 +917,39 @@ namespace cvhcf {
               out.S.ioIm[j] += gtmp.ioIm[j];
             }
             if (in.wantGroups) {
-              Exponents &gs = groupSlot(out.groups, gsteps[0]);
+              GroupExponents &ge = groupEntry(out.groups, gsteps[0]);
+              ge.vqio += vqblk;
               for (int j = 0; j < kNTau; ++j) {
-                gs.ioRe[j] += gtmp.ioRe[j];
-                gs.ioIm[j] += gtmp.ioIm[j];
+                ge.S.ioRe[j] += gtmp.ioRe[j];
+                ge.S.ioIm[j] += gtmp.ioIm[j];
               }
             }
           } else {
             ioniBlock(blk.data(), rows.stride, ns, wstd, out.S.ioRe.data(), out.S.ioIm.data());
+            // per-step variance, so a group's share of `sq2` is a plain sum
+            std::vector<double> w2all;
+            ioniStepVar(blk.data(), rows.stride, ns, qs.empty() ? nullptr : qs.data(),
+                        static_cast<int>(qs.size() / 2), w2all);
+            double w2tot = 0.;
+            for (double x : w2all)
+              w2tot += x;
             for (int g : gsteps) {
               const int mg = selectGroup(blk.data(), rows.stride, ns, in.ioni.groupCol, g, gblk);
               if (mg <= 0)
                 continue;
               gtmp.clear();
               ioniBlock(gblk.data(), rows.stride, mg, wstd, gtmp.ioRe.data(), gtmp.ioIm.data());
-              addInto(groupSlot(out.groups, g), gtmp);
+              double w2g = 0.;
+              if (in.ioni.groupCol >= 0) {
+                for (int i = 0; i < ns; ++i) {
+                  if (static_cast<int>(blk[static_cast<std::size_t>(i) * rows.stride +
+                                           in.ioni.groupCol]) == g)
+                    w2g += w2all[i];
+                }
+              }
+              GroupExponents &ge = groupEntry(out.groups, g);
+              ge.vqio += (w2tot > 0.) ? vqblk * (w2g / w2tot) : 0.;
+              addInto(ge.S, gtmp);
             }
           }
 

@@ -1103,6 +1103,13 @@ protected:
   // are the (k, group) key of each slot, the arrays are [nslot * kNTau].
   std::vector<short> phcfgrpcomp, phcfgrpv;
   std::vector<float> phcfgrpmsv, phcfgrpdelv, phcfgrpiorev, phcfgrpioimv, phcfgrpradrev, phcfgrpradimv;
+  // per slot: the group's share of the component's variance under the FIT'S
+  // OWN Q (Rossi `thp2` for MS, `ioniSq2` for ionization, nothing radiative
+  // or delta -- the fit's Q has neither).  This is what the Gaussian hit-chi2
+  // assumes, and it is NOT recoverable from the exponents, which carry the
+  // model's full Moliere second moment (14 % larger).  Closure:
+  // `sum_slots(vqms + vqio) + phcf_vgf == 1` for every component.
+  std::vector<float> phcfgrpvqms, phcfgrpvqio;
   float phcfgrpclosure = 0.f;
   // Per-(component, hit class) Gaussian variance shares; `sum_c` over a
   // component is that component's `phcfvgf`.

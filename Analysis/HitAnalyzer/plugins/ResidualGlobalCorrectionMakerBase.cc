@@ -639,6 +639,8 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
           tree->Branch("phcf_grp_ioni_im", &phcfgrpioimv, basketSize);
           tree->Branch("phcf_grp_rad_re", &phcfgrpradrev, basketSize);
           tree->Branch("phcf_grp_rad_im", &phcfgrpradimv, basketSize);
+          tree->Branch("phcf_grp_vqms", &phcfgrpvqms);
+          tree->Branch("phcf_grp_vqio", &phcfgrpvqio);
           tree->Branch("phcf_grp_closure", &phcfgrpclosure);
         }
         tree->Branch("phcf_hitcomp", &phcfhitcomp);

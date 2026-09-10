@@ -4673,6 +4673,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     phcfgrpioimv.clear();
     phcfgrpradrev.clear();
     phcfgrpradimv.clear();
+    phcfgrpvqms.clear();
+    phcfgrpvqio.clear();
     phcfhitcomp.clear();
     phcfhitcls.clear();
     phcfhitv.clear();
@@ -5341,6 +5343,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                 for (auto const &gg : cr.groups) {
                   phcfgrpcomp.push_back(static_cast<short>(kk));
                   phcfgrpv.push_back(static_cast<short>(gg.group));
+                  phcfgrpvqms.push_back(float(gg.vqms));
+                  phcfgrpvqio.push_back(float(gg.vqio));
                   for (int j = 0; j < cvhcf::kNTau; ++j) {
                     phcfgrpmsv.push_back(float(gg.S.ms[j]));
                     phcfgrpdelv.push_back(float(gg.S.del[j]));

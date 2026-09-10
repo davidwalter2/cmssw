@@ -198,6 +198,17 @@ namespace cvhcf {
   struct GroupExponents {
     int group = -1;
     Exponents S;
+    // THE FIT'S OWN Q VARIANCE for this group, in units of `sigma^2` -- i.e.
+    // the group's share of the standardized functional's variance under the
+    // MODEL THE FIT USED (Rossi's `thp2` for multiple scattering, `ioniSq2`
+    // for ionization, and nothing for the radiative or delta channels,
+    // because the fit's `Q` has neither).  It is what the Gaussian chi2 the
+    // whole exercise is measured against actually assumes, and it cannot be
+    // recovered from the exponents: those carry the MODEL's (full Moliere)
+    // second moment, which is 14 % larger.  `sum_g (vqms + vqio) + vgauss/
+    // sigma^2 == 1` by construction, which is the closure a reader checks.
+    double vqms = 0.;
+    double vqio = 0.;
   };
 
   struct TrackResult {
