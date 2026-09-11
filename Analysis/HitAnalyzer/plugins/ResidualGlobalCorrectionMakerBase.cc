@@ -591,10 +591,74 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
           if (cfGroupDelta_) {
             tree->Branch((cfprefix_ + "_grp_del").c_str(), &cfgrpdelv, basketSize);
           }
+          tree->Branch((cfprefix_ + "_grp_vqms").c_str(), &cfgrpvqmsv);
+          tree->Branch((cfprefix_ + "_grp_vqio").c_str(), &cfgrpvqiov);
           tree->Branch((cfprefix_ + "_grp_closure").c_str(), &cfgrpclosure);
         }
         tree->Branch((cfprefix_ + "_hitcls").c_str(), &cfhitclsv);
         tree->Branch((cfprefix_ + "_hitv").c_str(), &cfhitvv);
+      }
+
+      // THE VERTEX-CONSTRAINT RESIDUAL of the two-track fit. Same structure
+      // as the mass block above, evaluated at the VERTEX weights: one scalar
+      // residual `Jpsi_vtxres` with its own sigma, the per-block influence
+      // and variance shares aligned with `reseigidx`, and the CF exponents.
+      // The functional's mean is zero by construction, so the term needs no
+      // kernel -- it is the mass term with a delta kernel at zero.
+      if (exportVtxResidual_) {
+        tree->Branch("Jpsi_vtxres", &Jpsi_vtxres);
+        tree->Branch("Jpsi_vtxsig", &Jpsi_vtxsig);
+        tree->Branch("Jpsi_vtxz", &Jpsi_vtxz);
+        tree->Branch("Jpsi_vtxb6", &Jpsi_vtxb6);
+        tree->Branch("Jpsi_vtxdchi2", &Jpsi_vtxdchi2);
+        tree->Branch("Jpsi_vtxvchk", &Jpsi_vtxvchk);
+        tree->Branch("Jpsi_vtxvgf", &Jpsi_vtxvgf);
+        tree->Branch("Jpsi_vtxbfree", &Jpsi_vtxbfree);
+        tree->Branch("Jpsi_vtxfirstplus", &Jpsi_vtxfirstplus);
+        tree->Branch("Jpsi_vtxvhit", &Jpsi_vtxvhit);
+        tree->Branch("Jpsi_vtxvms", &Jpsi_vtxvms);
+        tree->Branch("Jpsi_vtxvioni", &Jpsi_vtxvioni);
+        tree->Branch("Jpsi_massvms", &Jpsi_massvms);
+        tree->Branch("Jpsi_massvioni", &Jpsi_massvioni);
+        tree->Branch("Jpsi_vtxfree", &Jpsi_vtxfree);
+        tree->Branch("Jpsi_vtxok", &Jpsi_vtxok);
+        tree->Branch("Jpsi_vtxsgnchk", &Jpsi_vtxsgnchk);
+        tree->Branch("vtxvarv", &vtxvarv);
+        tree->Branch("vtxsgnv", &vtxsgnv);
+        // The two functionals' per-block influence vectors
+        // `a_b = dV_b^{1/2} w_b` (5 floats/block, dof-padded), which is what
+        // the FOURTH CROSS CUMULANT between the vertex and the mass residual
+        // needs and which the variance shares alone cannot give. ~2 kB each,
+        // so they ride along with the vertex block rather than waiting for
+        // the 430 kB raw-record mode.
+        if (!exportStepRecords_) {
+          tree->Branch("resinfv", &resinfv, basketSize);
+        }
+        tree->Branch("resinfvtxv", &resinfvtxv, basketSize);
+        if (exportCfExponents_) {
+          tree->Branch("cfvtx_ms", &cfvtxmsv);
+          tree->Branch("cfvtx_del", &cfvtxdelv);
+          tree->Branch("cfvtx_ioni_re", &cfvtxiorev);
+          tree->Branch("cfvtx_ioni_im", &cfvtxioimv);
+          tree->Branch("cfvtx_rad_re", &cfvtxradrev);
+          tree->Branch("cfvtx_rad_im", &cfvtxradimv);
+          tree->Branch("cfvtx_hitcls", &vtxhitclsv);
+          tree->Branch("cfvtx_hitv", &vtxhitvv);
+          if (exportCfGroupExponents_) {
+            tree->Branch("cfvtx_grp", &cfvtxgrpv);
+            tree->Branch("cfvtx_grp_ms", &cfvtxgrpmsv, basketSize);
+            tree->Branch("cfvtx_grp_ioni_re", &cfvtxgrpiorev, basketSize);
+            tree->Branch("cfvtx_grp_ioni_im", &cfvtxgrpioimv, basketSize);
+            tree->Branch("cfvtx_grp_rad_re", &cfvtxgrpradrev, basketSize);
+            tree->Branch("cfvtx_grp_rad_im", &cfvtxgrpradimv, basketSize);
+            tree->Branch("cfvtx_grp_vqms", &cfvtxgrpvqmsv);
+            tree->Branch("cfvtx_grp_vqio", &cfvtxgrpvqiov);
+            tree->Branch("cfvtx_grp_closure", &cfvtxgrpclosure);
+          }
+        }
+        if (fillJac_) {
+          tree->Branch("Jpsi_jacVtx", &Jpsi_jacVtx);
+        }
       }
 
       // THE PER-HIT (COMPLEMENT) RESIDUAL BLOCK.  See the member docs in the
@@ -2014,45 +2078,95 @@ int ResidualGlobalCorrectionMakerBase::hitResClassIndex(int subdet, int sizeX, f
 }
 
 void ResidualGlobalCorrectionMakerBase::storeCfGroups(const cvhcf::TrackResult &res) {
-  cfgrpv.clear();
-  cfgrpmsv.clear();
-  cfgrpdelv.clear();
-  cfgrpiorev.clear();
-  cfgrpioimv.clear();
-  cfgrpradrev.clear();
-  cfgrpradimv.clear();
-  cfgrpclosure = 0.f;
   if (!exportCfGroupExponents_) {
+    cfgrpvqmsv.clear();
+    cfgrpvqiov.clear();
+    cfgrpv.clear();
+    cfgrpmsv.clear();
+    cfgrpdelv.clear();
+    cfgrpiorev.clear();
+    cfgrpioimv.clear();
+    cfgrpradrev.clear();
+    cfgrpradimv.clear();
+    cfgrpclosure = 0.f;
     return;
   }
+  storeCfGroupsTo(res,
+                  cfgrpv,
+                  cfgrpmsv,
+                  cfgrpdelv,
+                  cfgrpiorev,
+                  cfgrpioimv,
+                  cfgrpradrev,
+                  cfgrpradimv,
+                  cfgrpclosure,
+                  cfGroupDelta_,
+                  &cfgrpvqmsv,
+                  &cfgrpvqiov);
+}
+
+void ResidualGlobalCorrectionMakerBase::storeCfGroupsTo(const cvhcf::TrackResult &res,
+                                                        std::vector<short> &grpv,
+                                                        std::vector<float> &msv,
+                                                        std::vector<float> &delv,
+                                                        std::vector<float> &iorev,
+                                                        std::vector<float> &ioimv,
+                                                        std::vector<float> &radrev,
+                                                        std::vector<float> &radimv,
+                                                        float &closure,
+                                                        bool wantDelta,
+                                                        std::vector<float> *vqms,
+                                                        std::vector<float> *vqio) {
+  grpv.clear();
+  msv.clear();
+  delv.clear();
+  iorev.clear();
+  ioimv.clear();
+  radrev.clear();
+  radimv.clear();
+  closure = 0.f;
   const std::size_t ng = res.groups.size();
-  cfgrpv.reserve(ng);
+  grpv.reserve(ng);
+  if (vqms) {
+    vqms->clear();
+    vqms->reserve(ng);
+  }
+  if (vqio) {
+    vqio->clear();
+    vqio->reserve(ng);
+  }
   const std::size_t nf = ng * cvhcf::kNTau;
-  cfgrpmsv.reserve(nf);
-  cfgrpiorev.reserve(nf);
-  cfgrpioimv.reserve(nf);
-  cfgrpradrev.reserve(nf);
-  cfgrpradimv.reserve(nf);
-  if (cfGroupDelta_) {
-    cfgrpdelv.reserve(nf);
+  msv.reserve(nf);
+  iorev.reserve(nf);
+  ioimv.reserve(nf);
+  radrev.reserve(nf);
+  radimv.reserve(nf);
+  if (wantDelta) {
+    delv.reserve(nf);
   }
   // sum_g, in double, for the closure figure
   std::array<double, cvhcf::kNTau> sms{}, sdel{}, siore{}, sioim{}, sradre{}, sradim{};
   for (auto const &g : res.groups) {
-    cfgrpv.push_back(static_cast<short>(g.group));
+    grpv.push_back(static_cast<short>(g.group));
+    if (vqms) {
+      vqms->push_back(float(g.vqms));
+    }
+    if (vqio) {
+      vqio->push_back(float(g.vqio));
+    }
     for (int j = 0; j < cvhcf::kNTau; ++j) {
-      cfgrpmsv.push_back(float(g.S.ms[j]));
-      cfgrpiorev.push_back(float(g.S.ioRe[j]));
-      cfgrpioimv.push_back(float(g.S.ioIm[j]));
-      cfgrpradrev.push_back(float(g.S.radRe[j]));
-      cfgrpradimv.push_back(float(g.S.radIm[j]));
+      msv.push_back(float(g.S.ms[j]));
+      iorev.push_back(float(g.S.ioRe[j]));
+      ioimv.push_back(float(g.S.ioIm[j]));
+      radrev.push_back(float(g.S.radRe[j]));
+      radimv.push_back(float(g.S.radIm[j]));
       sms[j] += g.S.ms[j];
       siore[j] += g.S.ioRe[j];
       sioim[j] += g.S.ioIm[j];
       sradre[j] += g.S.radRe[j];
       sradim[j] += g.S.radIm[j];
-      if (cfGroupDelta_) {
-        cfgrpdelv.push_back(float(g.S.del[j]));
+      if (wantDelta) {
+        delv.push_back(float(g.S.del[j]));
         sdel[j] += g.S.del[j];
       }
     }
@@ -2069,10 +2183,10 @@ void ResidualGlobalCorrectionMakerBase::storeCfGroups(const cvhcf::TrackResult &
   cmp(sioim, res.S.ioIm);
   cmp(sradre, res.S.radRe);
   cmp(sradim, res.S.radIm);
-  if (cfGroupDelta_) {
+  if (wantDelta) {
     cmp(sdel, res.S.del);
   }
-  cfgrpclosure = (smax > 0.) ? float(dmax / smax) : 0.f;
+  closure = (smax > 0.) ? float(dmax / smax) : 0.f;
 }
 
 void ResidualGlobalCorrectionMakerBase::fillDescriptions(edm::ConfigurationDescriptions &descriptions)

@@ -475,6 +475,12 @@ protected:
   // ionization one to pool them the way the offline `extract()` does, and the
   // valid-hit index only separates hits from material.
   std::vector<int> resfamily_;
+  // TWO-TRACK ONLY: index of the first resolution block belonging to leg 1,
+  // so a block's LEG (and with it its charge) is `ires >= resLegStart_[1]`.
+  // The vertex functional's ionization sign is charge-signed per block --
+  // the two legs have opposite charges, which the mass functional's single
+  // `ioniSign = -1` hides.
+  std::array<std::size_t, 2> resLegStart_ = {{0, 0}};
 
   // Multipliers on the assigned hit covariance (1.0 = the CPE value as-is).
   double hitCovScalePixel_ = 1.0;
@@ -1013,6 +1019,13 @@ protected:
   // 6.8 kB at a relative error of 4e-7 (ms) to 1e-3 (rad); this version
   // exports the RAW rows so that the basis can be chosen from data.
   std::vector<short> cfgrpv;      // ascending material-group id
+  // THE FIT'S OWN Q variance of each group, in units of the functional's
+  // sigma^2 (Rossi's `thp2` for MS, `ioniSq2` for ionization, nothing for the
+  // radiative and delta channels the fit's Q does not have). It is what the
+  // Gaussian chi2 the whole exercise is measured against actually assumes,
+  // and it cannot be recovered from the exponents -- those carry the MODEL's
+  // full Moliere second moment, 14 % larger. `sum_g (vqms+vqio) + vgf == 1`.
+  std::vector<float> cfgrpvqmsv, cfgrpvqiov;
   std::vector<float> cfgrpmsv;    // S_ms per group
   std::vector<float> cfgrpdelv;   // S_del per group (single-track only)
   std::vector<float> cfgrpiorev;  // Re S_ioni per group
@@ -1029,6 +1042,86 @@ protected:
   // `cfgrpclosure`. Shared so that the single-track and two-track makers
   // cannot lay the arrays out differently.
   void storeCfGroups(const cvhcf::TrackResult &res);
+  // The same, into caller-supplied arrays, so a SECOND functional of the same
+  // candidate (the vertex one) gets an identical layout for free.
+  void storeCfGroupsTo(const cvhcf::TrackResult &res,
+                       std::vector<short> &grpv,
+                       std::vector<float> &msv,
+                       std::vector<float> &delv,
+                       std::vector<float> &iorev,
+                       std::vector<float> &ioimv,
+                       std::vector<float> &radrev,
+                       std::vector<float> &radimv,
+                       float &closure,
+                       bool wantDelta,
+                       std::vector<float> *vqms = nullptr,
+                       std::vector<float> *vqio = nullptr);
+
+  // ======================================================================
+  // THE VERTEX-CONSTRAINT RESIDUAL of the TWO-TRACK fit (`exportVtxResidual_`)
+  //
+  // State index 6 of the 10-dim vertex-PCA block is the SIGNED track-track
+  // PCA distance
+  //      theta_6 = n_hat . (x_b - x_a),   n_hat = (p_a x p_b).normalized()
+  // (`twoTrackCart2pca`).  Two free helices have 10 vertex parameters, two
+  // through a common point have 9, so a common-vertex constraint removes
+  // exactly ONE degree of freedom and leaves ONE residual per candidate: the
+  // DCA the unconstrained fit finds.  On ideal geometry both muons come from
+  // one gen point, so its mean is ZERO BY CONSTRUCTION -- no kernel, no
+  // theory, no PDG input.  It is the mass term with a delta kernel at zero.
+  //
+  //   index 6 FREE (`doVtxConstraint == False`, what every production uses):
+  //      sigma_v^2 = C_66,  w_v = Vinv F C e_6,  r_v = statepcaupd[6]
+  //   index 6 FROZEN:
+  //      sigma_v^2 = 1/(h_66 - h_6f C h_6f^T),  b_6 = -(Vinv F_6).r,
+  //      r_v = sigma_v^2 b_6,  w_v = sigma_v^2 (Vinv F_6 - Vinv F C h_6f^T)
+  // Both satisfy `sum_b |dV_b^{1/2} w_v,b|^2 == sigma_v^2` exactly (= the
+  // gate `vtxvchk`).
+  bool exportVtxResidual_ = false;
+  bool vtxConstraintZeroSeed_ = true;
+  float Jpsi_vtxres = 0.f;    // r_v, cm, signed like `Jpsi_d` (leg a = mu+)
+  float Jpsi_vtxsig = 0.f;    // sigma_v, cm
+  float Jpsi_vtxz = 0.f;      // the pull r_v/sigma_v
+  float Jpsi_vtxb6 = 0.f;     // -(Vinv F_6).r at convergence (0 when 6 free)
+  float Jpsi_vtxdchi2 = 0.f;  // z_v^2 = chi2(constrained) - chi2(unconstrained)
+  float Jpsi_vtxvchk = 0.f;   // |sum_b v_b / sigma_v^2 - 1|, fam != 15
+  float Jpsi_vtxvgf = 0.f;    // the GAUSSIAN (hit) share of sigma_v^2
+  // max over the FREE indices of |g_i| sqrt(C_ii), i.e. the largest remaining
+  // Newton step in units of that parameter's own error -- dimensionless, and
+  // directly comparable with |z_v| (which is |b_6| sigma_v).
+  float Jpsi_vtxbfree = 0.f;
+  // Was leg 0 the POSITIVE muon?  theta_6 is invariant under swapping the two
+  // legs (n_hat and x_b - x_a both flip), so the RAW theta_6 is already
+  // well defined and is what `Jpsi_vtxres` carries -- unlike `Jpsi_d`, which
+  // multiplies it by the charge of leg 0 (see the note in the maker).
+  bool Jpsi_vtxfirstplus = false;
+  // The variance shares of sigma_v^2 by FAMILY: hits (parmtype 8/9), multiple
+  // scattering (10) and ionization (11).  They sum to 1 (the fit's Q has no
+  // radiative or delta channel, which is why the CF is wider than 1).
+  float Jpsi_vtxvhit = 0.f, Jpsi_vtxvms = 0.f, Jpsi_vtxvioni = 0.f;
+  // the same split for the MASS functional, for the side-by-side composition
+  float Jpsi_massvms = 0.f, Jpsi_massvioni = 0.f;
+  bool Jpsi_vtxfree = false;  // was index 6 a free parameter?
+  bool Jpsi_vtxok = false;
+  // The convention gate: the general per-block ionization sign rule applied
+  // to the MASS influence must return -1 on every ionization block (the
+  // validated `cfmass` convention).  This is the fraction that does.
+  float Jpsi_vtxsgnchk = 0.f;
+  std::vector<float> resinfvtxv;  // a_{b,v} = dV_b^{1/2} w_v,b, 5/block padded
+  std::vector<float> vtxvarv;     // v_b / sigma_v^2, aligned with reseigidx
+  std::vector<float> vtxsgnv;     // the per-block ionization sign
+  std::vector<short> vtxhitclsv;  // per-hit-class Gaussian shares of sigma_v^2
+  std::vector<float> vtxhitvv;
+  std::vector<float> cfvtxmsv, cfvtxdelv, cfvtxiorev, cfvtxioimv, cfvtxradrev, cfvtxradimv;
+  std::vector<short> cfvtxgrpv;
+  std::vector<float> cfvtxgrpmsv, cfvtxgrpdelv, cfvtxgrpiorev, cfvtxgrpioimv, cfvtxgrpradrev,
+      cfvtxgrpradimv;
+  std::vector<float> cfvtxgrpvqmsv, cfvtxgrpvqiov;
+  float cfvtxgrpclosure = 0.f;
+  // d theta_6^unconstrained / d(global params), aligned with `globalidxv`
+  // exactly as `Jpsi_jacMass` is: the D row a DATA fit needs for the mean
+  // (alignment / field) part of this term.
+  std::vector<float> Jpsi_jacVtx;
 
   // ======================================================================
   // THE PER-HIT (COMPLEMENT) RESIDUAL EXPORT -- the DATA version of the

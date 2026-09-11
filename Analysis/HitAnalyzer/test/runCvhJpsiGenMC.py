@@ -104,6 +104,17 @@ opts.register('doTrigger', True, VarParsing.VarParsing.multiplicity.singleton,
 opts.register('doVtxConstraint', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'apply the common-vertex constraint in the two-track fit')
+opts.register('vtxConstraintZeroSeed', True, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              're-express the seed with d = 0 before freezing state index 6, '
+              'so that doVtxConstraint really means "one vertex" and not '
+              '"d = d_seed" (the historical behaviour is False)')
+opts.register('exportVtxResidual', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'export the VERTEX-CONSTRAINT RESIDUAL (the track-track PCA '
+              'distance of the two-track fit, state index 6) as a CF '
+              'resolution term: Jpsi_vtxres/vtxsig/vtxz, the per-block '
+              'influence resinfvtxv and the cfvtx_* exponents')
 opts.register('doSimHits', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'read tracker PSimHits (input must retain them)')
@@ -594,6 +605,8 @@ process.globalCor = cms.EDProducer(
     injectLorentzTan=cms.double(float(opts.injectLorentzTan)),
     injectLorentzWclean=cms.double(float(opts.injectLorentzWclean)),
     doVtxConstraint=cms.bool(bool(opts.doVtxConstraint)),
+    vtxConstraintZeroSeed=cms.bool(bool(opts.vtxConstraintZeroSeed)),
+    exportVtxResidual=cms.bool(bool(opts.exportVtxResidual)),
     doMassConstraint=cms.bool(bool(opts.doMassConstraint)),
     massConstraint=cms.double(3.0969),
     massConstraintWidth=cms.double(1e-5),

@@ -286,6 +286,14 @@ opts.register('doVtxConstraint', False, VarParsing.VarParsing.multiplicity.singl
               VarParsing.VarParsing.varType.bool,
               'apply the common-vertex constraint in the two-track fit '
               '(default False = plain two-track fit, PCA)')
+opts.register('vtxConstraintZeroSeed', True, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              're-express the seed with d = 0 before freezing state index 6, '
+              'so that doVtxConstraint really means "one vertex"')
+opts.register('exportVtxResidual', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'export the VERTEX-CONSTRAINT RESIDUAL (state index 6, the '
+              'track-track PCA distance) as a CF resolution term')
 opts.register('doMassConstraint', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'apply the dimuon mass constraint (adds a second nicons pass)')
@@ -649,6 +657,8 @@ process.trackrefitdimuon = ResidualGlobalCorrectionMakerDiMuonG4e.clone(
     # --- the fit
     useIdealGeometry=cms.bool(bool(opts.useIdealGeometry)),
     doVtxConstraint=cms.bool(bool(opts.doVtxConstraint)),
+    vtxConstraintZeroSeed=cms.bool(bool(opts.vtxConstraintZeroSeed)),
+    exportVtxResidual=cms.bool(bool(opts.exportVtxResidual)),
     doMassConstraint=cms.bool(bool(opts.doMassConstraint)),
     massConstraint=cms.double(float(opts.massConstraint)),
     massConstraintWidth=cms.double(float(opts.massConstraintWidth)),

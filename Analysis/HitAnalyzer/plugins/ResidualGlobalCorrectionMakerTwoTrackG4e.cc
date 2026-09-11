@@ -696,6 +696,19 @@ ResidualGlobalCorrectionMakerTwoTrackG4e::ResidualGlobalCorrectionMakerTwoTrackG
       : std::vector<int>{23, 443, 100443, 553, 100553, 200553};
   doVtxConstraint_ = iConfig.getParameter<bool>("doVtxConstraint");
   doMassConstraint_ = iConfig.getParameter<bool>("doMassConstraint");
+  // THE VERTEX-CONSTRAINT RESIDUAL, off by default so that no existing
+  // configuration changes its output by a byte.
+  exportVtxResidual_ = iConfig.existsAs<bool>("exportVtxResidual")
+                           ? iConfig.getParameter<bool>("exportVtxResidual") : false;
+  // Zero the seed's track-track PCA distance when the common-vertex
+  // constraint is on.  WITHOUT this, `doVtxConstraint_` freezes index 6 at
+  // the SEED's DCA (the midPropagated/perigee reference points are each
+  // track's own PCA to the midpoint and do NOT coincide), i.e. it constrains
+  // `d = d_seed` instead of `d = 0` -- not a common-vertex constraint at all.
+  // Default TRUE: the path is dormant (every production runs
+  // `doVtxConstraint=False`), so nothing that exists changes.
+  vtxConstraintZeroSeed_ = iConfig.existsAs<bool>("vtxConstraintZeroSeed")
+                           ? iConfig.getParameter<bool>("vtxConstraintZeroSeed") : true;
   // Say out loud what the log-det term is doing, and to which families: it
   // changes the meaning of `gradv`/`hesspackedv`/`hessfactorv` and, for the
   // per-module families, the LAYOUT of `globalidxv`.
@@ -1390,6 +1403,13 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
   MatrixXd covfull;
   Matrix<double, 6, 6> covrefmom;
+  // THE VERTEX FUNCTIONAL's influence row `w_v` (ncons) and its variance,
+  // carried from the doRes block (where Vinv/F/C are still alive) to the
+  // `Jpsi_jacVtx` emitter, which runs after the global-index remap. Members
+  // for the same reason `covrefmom` is one: the two live in sibling scopes.
+  Eigen::VectorXd wvtxinf;
+  const bool vtxDebug_ = (getenv("CVH_VTX_DEBUG") != nullptr);
+  int nVtxDebug_ = 0;
 
   // doRes port (per-candidate mass-CF export): the material process-noise
   // derivative blocks dV_b (MS and ionization parts of Q), their row
@@ -2333,6 +2353,20 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           }
         }
         
+        // THE COMMON-VERTEX CONSTRAINT FREEZES INDEX 6 AT ITS SEED VALUE, so
+        // the seed must have d = 0 for the constraint to mean "one vertex".
+        // The seeds above are each track's own PCA to the midpoint of the two
+        // perigees (or the two perigees themselves), whose separation along
+        // `n_hat` is the seed DCA -- O(10-100 um) for a J/psi, not zero.
+        // Re-expressing the seed with d = 0 moves each reference point by
+        // d_seed/2 along `n_hat` and changes nothing else (`twoTrackPca2cart`
+        // is the exact inverse of `twoTrackCart2pca` at fixed momenta).
+        if (doVtxConstraint_ && vtxConstraintZeroSeed_) {
+          Matrix<double, 10, 1> statepcaseed = twoTrackCart2pca(refftsarr[0], refftsarr[1]);
+          statepcaseed[6] = 0.;
+          refftsarr = twoTrackPca2cart(statepcaseed);
+        }
+
         std::array<std::vector<Matrix<double, 7, 1>>, 2> layerStatesarr;
         for (unsigned int id = 0; id < 2; ++id) {
           auto const &hits = hitsarr[id];
@@ -2484,6 +2518,12 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
     // FreeTrajectoryState refFts = outparts[id]->currentState().freeTrajectoryState();
 // FreeTrajectoryState &refFts = refftsarr[id];
             
+            // First resolution block belonging to THIS leg. The vertex
+            // functional's ionization sign carries the leg's CHARGE (the two
+            // legs have opposite ones, unlike the mass functional whose sign
+            // is -1 for both), so each block has to know which leg it is on.
+            resLegStart_[id] = resblockrng.size();
+
             Matrix<double, 7, 1> &refFts = refftsarr[id];
             auto &hits = hitsarr[id];
 
@@ -4861,6 +4901,329 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                 storecf(cfres.S.radIm, cfradimv);
                 storeCfGroups(cfres);
               }
+
+              // ================= THE VERTEX-CONSTRAINT RESIDUAL ===========
+              //
+              // State index 6 is the SIGNED track-track PCA distance
+              //     theta_6 = n_hat . (x_b - x_a),  n_hat = (p_a x p_b)^
+              // (`twoTrackCart2pca`). Two free helices have 10 vertex
+              // parameters, two through a common point have 9: a common-
+              // vertex constraint removes exactly ONE dof and leaves exactly
+              // ONE residual per candidate, the DCA the unconstrained fit
+              // finds. Both muons come from one gen point, so on ideal
+              // geometry its mean is ZERO BY CONSTRUCTION -- this is the
+              // mass term with a delta kernel at zero: no kernel, no theory,
+              // no PDG input, a pure resolution term.
+              //
+              // Two regimes, and BOTH are implemented because the gate is to
+              // run the same events in each and compare:
+              //   * index 6 FREE (`doVtxConstraint == False`, what every
+              //     production uses): the fit reports the DCA, so
+              //       sigma_v^2 = C_66,  w_v = Vinv F C e_6,  r_v = theta_6
+              //   * index 6 FROZEN: b is zero on every free index at
+              //     convergence and nonzero only on index 6, and with
+              //     F_6 = Ffull.col(6), h_f6 = F_f^T Vinv F_6, Cs = C h_f6,
+              //       sigma_v^2 = 1/(h_66 - h_f6^T Cs)
+              //       b_6 = -(Vinv F_6).r          (minus the half-gradient)
+              //       r_v = theta_6^frozen + sigma_v^2 b_6   (one Newton step)
+              //       w_v = sigma_v^2 (Vinv F_6 - Vinv F Cs)
+              // In both, `sum_b |dV_b^{1/2} w_v,b|^2 == sigma_v^2` exactly
+              // (one line: w_v^T V w_v), which is the closure gate
+              // `Jpsi_vtxvchk`.
+              if (exportVtxResidual_) {
+                const VectorXd F6 = Ffull.col(6);
+                const VectorXd VinvF6 = Vinvsparse * F6;
+                // THE POST-STEP RESIDUAL.  `rfull` is the residual at the
+                // LINEARISATION point, and in a GBL-type fit the reference
+                // trajectory is built BY PROPAGATING, so every process-noise
+                // row of `rfull` is identically zero there.  The vertex state
+                // enters ONLY through the ihit == 0 propagation rows, so
+                // `F_6^T Vinv rfull` is exactly 0 on every candidate --
+                // measured, not assumed: `|F6| = 0.707` and `h_66 = 1e7` while
+                // `g6 = 0` bit for bit.  The gradient that matters is the one
+                // at the CONSTRAINED OPTIMUM, i.e. at
+                //     rho = rfull + F_f dxfree
+                // which is the same vector the exported `Rr` is built from.
+                // There the free-index gradient IS zero (gate (a)) and the
+                // index-6 one is not.
+                const VectorXd rho = rfull + Fsparse * dxfree;
+                const double g6 = VinvF6.dot(rho);   // the half-gradient
+                // convergence gate: the half-gradient on the FREE indices
+                // The convergence gate, DIMENSIONLESS: |g_i| sqrt(C_ii) is
+                // the remaining Newton step of free parameter i in units of
+                // its own error, directly comparable with |z_v| = |b_6|
+                // sigma_v. The raw half-gradient is in 1/(cm, rad, GeV^-1)
+                // units and says nothing on its own.
+                // THE CONVERGENCE GATE, DIMENSIONLESS.  `rfull` is the
+                // residual at the LAST linearisation point and `dxfree` the
+                // step taken from it, so the honest convergence figure is the
+                // remaining step in units of each parameter's own error,
+                // max_i |dxfree_i| / sqrt(C_ii).  (The raw half-gradient is in
+                // 1/(cm, rad, GeV^-1) units and says nothing on its own; and
+                // it is NOT zero at the export point, by construction -- it is
+                // what generated `dxfree`.)  `r_v` below is built from the
+                // SAME pair (reference + one step), so the two regimes are
+                // compared at the same linearisation point.
+                const VectorXd gfree = VinvF.transpose() * rho;
+                double bfree = 0.;
+                for (unsigned int i = 0; i < nstatefree; ++i) {
+                  const Eigen::Index is = freestateidxs[i];
+                  const double ci = std::sqrt(std::max(covstate(is, is), 0.));
+                  bfree = std::max(bfree, std::abs(gfree(i)) * ci);
+                }
+                Jpsi_vtxbfree = float(bfree);
+                Jpsi_vtxb6 = float(-g6);
+                Jpsi_vtxfree = !doVtxConstraint_;
+
+                // NO CHARGE RE-SIGN HERE, deliberately. theta_6 is
+                // INVARIANT under swapping the two legs (`twoTrackCart2pca`
+                // flips both `n_hat` and `x_b - x_a`), so the raw theta_6 is
+                // already a well-defined signed DCA. `Jpsi_d` multiplies it
+                // by the charge of leg 0 -- which, on an invariant quantity,
+                // does not "define the sign wrt charge" but randomizes it
+                // whenever the leg ordering is not charge-ordered. The CF
+                // exponents below are built from `w_v` in the RAW convention,
+                // so re-signing the residual and not the weights would put
+                // the Landau skew on the wrong side. `Jpsi_vtxfirstplus` is
+                // exported so the `Jpsi_d` convention can still be formed.
+                Jpsi_vtxfirstplus = firstplus;
+                double sig2 = 0.;
+                VectorXd wv;
+                if (Jpsi_vtxfree) {
+                  VectorXd afree6 = VectorXd::Zero(nstatefree);
+                  for (unsigned int i = 0; i < nstatefree; ++i) {
+                    if (freestateidxs[i] == 6) {
+                      afree6(i) = 1.;
+                    }
+                  }
+                  wv = VinvF * Cinvd.solve(afree6);
+                  sig2 = covstate(6, 6);
+                  Jpsi_vtxres = float(statepcaupd[6]);
+                } else {
+                  const VectorXd hf6 = VinvF.transpose() * F6;
+                  const VectorXd Cs = Cinvd.solve(hf6);
+                  const double denom = F6.dot(VinvF6) - hf6.dot(Cs);
+                  sig2 = denom > 0. ? 1. / denom : 0.;
+                  wv = sig2 * (VinvF6 - VinvF * Cs);
+                  Jpsi_vtxres = float(statepcaupd[6] - sig2 * g6);
+                }
+                wvtxinf = wv;
+                Jpsi_vtxsig = float(std::sqrt(std::max(sig2, 0.)));
+                Jpsi_vtxz = Jpsi_vtxsig > 0.f ? Jpsi_vtxres / Jpsi_vtxsig : 0.f;
+                Jpsi_vtxdchi2 = Jpsi_vtxz * Jpsi_vtxz;
+                if (vtxDebug_ && nVtxDebug_ < 5) {
+                  ++nVtxDebug_;
+                  std::cout << "[vtxdbg] free=" << (!doVtxConstraint_)
+                            << " |F6|=" << F6.norm()
+                            << " |VinvF6|=" << VinvF6.norm()
+                            << " |r|=" << rfull.norm() << " |rho|=" << rho.norm()
+                            << " g6=" << g6
+                            << " h66=" << F6.dot(VinvF6)
+                            << " bfree=" << Jpsi_vtxbfree
+                            << " |g6|sig=" << std::abs(g6) * std::sqrt(std::max(sig2, 0.))
+                            << " theta6=" << statepcaupd[6]
+                            << " dx6=" << dxfull[6]
+                            << " ncons=" << ncons << " nsf=" << nstatefree
+                            << std::endl;
+                }
+
+                // ---- the per-block influence, variance shares and signs ---
+                //
+                // THE IONIZATION SIGN. The ionization CF is not even in its
+                // weight (an energy loss goes one way), so a functional whose
+                // influence changes sign from block to block needs the sign
+                // to travel with the block -- `cvhcf::TrackInput::ressgn`.
+                // `dQI` is rank one: in the curvilinear frame it is
+                // `e_0 e_0^T sigma^2` and the local rotation spreads it over
+                // all five rows, so the signed coefficient is `w_b . u` with
+                // `u` the leading eigenvector oriented by its qop component,
+                // and NOT `w[r0]` (perhit gate 5). The leg CHARGE multiplies
+                // it: the two legs have opposite charges, which is exactly
+                // what the MASS functional's single `ioniSign = -1` hides.
+                // NOT ASSERTED: `Jpsi_vtxsgnchk` applies the identical rule
+                // to the MASS influence `wmass`, where the answer must be -1
+                // on every ionization block.
+                const unsigned int nb_all = dVs.size();
+                resinfvtxv.clear();
+                resinfvtxv.reserve(5 * nb_all);
+                vtxvarv.clear();
+                vtxvarv.reserve(nb_all);
+                vtxsgnv.clear();
+                vtxsgnv.reserve(nb_all);
+                std::vector<float> vabs(nb_all, 0.f);
+                double vsum = 0., vmat = 0., vhit = 0., vms = 0., vioni = 0.;
+                double mms = 0., mioni = 0.;
+                double nioni = 0., nionimass = 0.;
+                for (unsigned int ires = 0; ires < nb_all; ++ires) {
+                  const unsigned int r0 = resblockrng[ires][0];
+                  const unsigned int nb = resblockrng[ires][1];
+                  const MatrixXd dVb = MatrixXd(dVs[ires]).block(r0, r0, nb, nb);
+                  SelfAdjointEigenSolver<MatrixXd> eigv(dVb);
+                  const MatrixXd sqrtdV = eigv.eigenvectors() *
+                                          eigv.eigenvalues().cwiseMax(0.).cwiseSqrt().asDiagonal() *
+                                          eigv.eigenvectors().transpose();
+                  const VectorXd wb = wv.segment(r0, nb);
+                  const VectorXd ab = sqrtdV * wb;
+                  for (unsigned int j = 0; j < 5; ++j) {
+                    resinfvtxv.push_back(j < nb ? float(ab(j)) : 0.f);
+                  }
+                  const double vb = ab.squaredNorm();
+                  vabs[ires] = float(vb);
+                  const int fam = ires < resfamily_.size() ? resfamily_[ires] : -1;
+                  if (fam != 15) {
+                    vsum += vb;
+                  }
+                  if (fam == 10 || fam == 11) {
+                    vmat += vb;
+                    (fam == 10 ? vms : vioni) += vb;
+                    (fam == 10 ? mms : mioni) += double(resinfvarv[ires]);
+                  } else if (fam == 8 || fam == 9) {
+                    vhit += vb;
+                  }
+                  float sg = 1.f;
+                  if (fam == 11 && nb > 0) {
+                    int imax = 0;
+                    for (int q = 1; q < int(nb); ++q) {
+                      if (std::abs(eigv.eigenvalues()(q)) > std::abs(eigv.eigenvalues()(imax))) {
+                        imax = q;
+                      }
+                    }
+                    VectorXd udir = eigv.eigenvectors().col(imax);
+                    if (udir(0) < 0.) {
+                      udir = -udir;
+                    }
+                    const unsigned int leg = (ires >= resLegStart_[1]) ? 1u : 0u;
+                    const double qleg = refftsarr[leg][6] >= 0. ? 1. : -1.;
+                    sg = float(qleg * (wb.dot(udir) > 0. ? -1. : 1.));
+                    // The same rule on the MASS influence, whose answer is
+                    // known to be -1.  VARIANCE-WEIGHTED, because `cvhcf`
+                    // pools blocks by global index and takes
+                    // `sign(sum_i s_i v_i)`: a block carrying no variance
+                    // cannot flip a pooled sign, and its own `w_b . u` is a
+                    // ratio of two small numbers.
+                    const VectorXd wmb = wmass.segment(r0, nb);
+                    const double vm = double(resinfvarv[ires]);
+                    nioni += vm;
+                    if (qleg * (wmb.dot(udir) > 0. ? -1. : 1.) < 0.) {
+                      nionimass += vm;
+                    }
+                  }
+                  vtxsgnv.push_back(sg);
+                }
+                for (unsigned int ires = 0; ires < nb_all; ++ires) {
+                  vtxvarv.push_back(sig2 > 0. ? float(vabs[ires] / sig2) : 0.f);
+                }
+                Jpsi_vtxvchk = sig2 > 0. ? float(std::abs(vsum / sig2 - 1.)) : 0.f;
+                Jpsi_vtxvgf = sig2 > 0. ? float((sig2 - vmat) / sig2) : 0.f;
+                Jpsi_vtxvhit = sig2 > 0. ? float(vhit / sig2) : 0.f;
+                Jpsi_vtxvms = sig2 > 0. ? float(vms / sig2) : 0.f;
+                Jpsi_vtxvioni = sig2 > 0. ? float(vioni / sig2) : 0.f;
+                const double sm2v = double(Jpsi_sigmamass) * double(Jpsi_sigmamass);
+                Jpsi_massvms = sm2v > 0. ? float(mms / sm2v) : 0.f;
+                Jpsi_massvioni = sm2v > 0. ? float(mioni / sm2v) : 0.f;
+                Jpsi_vtxsgnchk = nioni > 0. ? float(nionimass / nioni) : 0.f;
+
+                // per-hit-class Gaussian shares of sigma_v^2
+                vtxhitclsv.clear();
+                vtxhitvv.clear();
+                {
+                  std::array<double, kNHitResClasses> vcls{};
+                  bool anycls = false;
+                  for (std::size_t ires = 0; ires < reshitcls.size() && ires < nb_all; ++ires) {
+                    const int c = reshitcls[ires];
+                    if (c < 0 || c >= kNHitResClasses) {
+                      continue;
+                    }
+                    vcls[c] += vabs[ires];
+                    anycls = true;
+                  }
+                  if (anycls && sig2 > 0.) {
+                    for (int c = 0; c < kNHitResClasses; ++c) {
+                      if (vcls[c] == 0.) {
+                        continue;
+                      }
+                      vtxhitclsv.push_back(static_cast<short>(c));
+                      vtxhitvv.push_back(float(vcls[c] / sig2));
+                    }
+                  }
+                }
+
+                // ---- the CF exponents AT THE VERTEX WEIGHTS ---------------
+                // Same blocks, same step records, third functional: the
+                // standardization is sigma_v and the ionization sign travels
+                // per block, so `ioniSign` is 1 and `ressgn` carries
+                // everything.
+                cfvtxmsv.clear();
+                cfvtxdelv.clear();
+                cfvtxiorev.clear();
+                cfvtxioimv.clear();
+                cfvtxradrev.clear();
+                cfvtxradimv.clear();
+                cfvtxgrpv.clear();
+                cfvtxgrpmsv.clear();
+                cfvtxgrpdelv.clear();
+                cfvtxgrpiorev.clear();
+                cfvtxgrpioimv.clear();
+                cfvtxgrpradrev.clear();
+                cfvtxgrpradimv.clear();
+                cfvtxgrpvqmsv.clear();
+                cfvtxgrpvqiov.clear();
+                cfvtxgrpclosure = 0.f;
+                Jpsi_vtxok = false;
+                if (exportCfExponents_ && Jpsi_vtxsig > 0.f) {
+                  cvhcf::TrackInput cfinv;
+                  cfinv.resglobidx = resglobidx.data();
+                  cfinv.resfamily = resfamily_.data();
+                  cfinv.resvarv = vabs.data();
+                  cfinv.nres = int(std::min({resglobidx.size(), resfamily_.size(), vabs.size()}));
+                  cfinv.ressgn = vtxsgnv.data();
+                  cfinv.ms = {msmoliidx.data(), msmoliv.data(), int(msmoliidx.size()),
+                              msmoliidx.empty() ? 0 : int(msmoliv.size() / msmoliidx.size())};
+                  cfinv.ioni = {ioniurbanidx.data(), ioniurbanv.data(), int(ioniurbanidx.size()),
+                                ioniurbanidx.empty() ? 0 : int(ioniurbanv.size() / ioniurbanidx.size())};
+                  cfinv.qsc = {ioniqscaleidx.data(), ioniqscalev.data(), int(ioniqscaleidx.size()), 2};
+                  cfinv.rad = {radstepidx.data(), radstepv.data(), int(radstepidx.size()), RADSTEP_STRIDE};
+                  cfinv.ms.groupCol = cfinv.ms.stride >= 10 ? 9 : -1;
+                  cfinv.ioni.groupCol = cfinv.ioni.stride - 1;
+                  cfinv.rad.groupCol = RADSTEP_STRIDE - 1;
+                  cfinv.radspec = radstepspecv.data();
+                  cfinv.radvgrid = radvgrid.data();
+                  cfinv.radnv = int(radvgrid.size());
+                  cfinv.sigma = Jpsi_vtxsig;
+                  cfinv.ioniSign = 1.;
+                  cfinv.wantDelta = true;
+                  cfinv.wantGroups = exportCfGroupExponents_;
+                  cfinv.wantGroupDelta = false;
+                  cvhcf::TrackResult cfresv;
+                  cvhcf::trackExponents(cfinv, cfresv);
+                  Jpsi_vtxok = cfresv.ok;
+                  auto storecfv = [](const std::array<double, cvhcf::kNTau> &a, std::vector<float> &v) {
+                    v.resize(cvhcf::kNTau);
+                    for (int j = 0; j < cvhcf::kNTau; ++j)
+                      v[j] = float(a[j]);
+                  };
+                  storecfv(cfresv.S.ms, cfvtxmsv);
+                  storecfv(cfresv.S.del, cfvtxdelv);
+                  storecfv(cfresv.S.ioRe, cfvtxiorev);
+                  storecfv(cfresv.S.ioIm, cfvtxioimv);
+                  storecfv(cfresv.S.radRe, cfvtxradrev);
+                  storecfv(cfresv.S.radIm, cfvtxradimv);
+                  if (exportCfGroupExponents_) {
+                    storeCfGroupsTo(cfresv,
+                                    cfvtxgrpv,
+                                    cfvtxgrpmsv,
+                                    cfvtxgrpdelv,
+                                    cfvtxgrpiorev,
+                                    cfvtxgrpioimv,
+                                    cfvtxgrpradrev,
+                                    cfvtxgrpradimv,
+                                    cfvtxgrpclosure,
+                                    false,
+                                    &cfvtxgrpvqmsv,
+                                    &cfvtxgrpvqiov);
+                  }
+                }
+              }
             }
 
           }
@@ -5768,6 +6131,28 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
           Jpsi_jacMass.resize(nparsfinal);
           Map<Matrix<float, 1, Dynamic, RowMajor>>(Jpsi_jacMass.data(), 1, nparsfinal) = (mjacalt*dxdparms.leftCols<6>().transpose()).cast<float>();
+
+          // `Jpsi_jacVtx` = d theta_6^unconstrained / d(global params),
+          // aligned with `globalidxv` exactly as `Jpsi_jacMass` is. It is the
+          // D row a DATA fit needs for the MEAN (alignment / field) part of
+          // the vertex term -- cheap, one row.
+          //   index 6 free  : it is simply `dxdparms.col(6)`.
+          //   index 6 frozen: that column is zero by construction, and the
+          //     unconstrained response is `-w_v^T J`, which reduces to
+          //     `dxdparms.col(6)` in the free case (same algebra), so the two
+          //     branches agree where they overlap.
+          if (exportVtxResidual_) {
+            Jpsi_jacVtx.resize(nparsfinal);
+            if (Jpsi_vtxfree) {
+              Map<Matrix<float, 1, Dynamic, RowMajor>>(Jpsi_jacVtx.data(), 1, nparsfinal) =
+                  dxdparms.col(6).transpose().cast<float>();
+            } else if (wvtxinf.size() == Jfinal.rows()) {
+              Map<Matrix<float, 1, Dynamic, RowMajor>>(Jpsi_jacVtx.data(), 1, nparsfinal) =
+                  (-(wvtxinf.transpose() * Jfinal)).cast<float>();
+            } else {
+              std::fill(Jpsi_jacVtx.begin(), Jpsi_jacVtx.end(), 0.f);
+            }
+          }
 
 
           if (false) {
