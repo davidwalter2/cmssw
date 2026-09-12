@@ -288,13 +288,15 @@ opts.register('doVtxConstraint', True, VarParsing.VarParsing.multiplicity.single
               'and the fitted mass is the vertex-constrained one. Jpsi_mass_unc '
               'carries the unconstrained mass, so either can be formed offline. '
               'False leaves index 6 free (a plain two-track fit through the PCA)')
-opts.register('minLegHits', 0, VarParsing.VarParsing.multiplicity.singleton,
+opts.register('minLegHits', 8, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.int,
-              'minimum valid hits on the WEAKER leg. 0 = off (the default): '
-              'it is not part of the ndof requirement, but every candidate '
-              'with a non-finite exported mass resolution in dy_vtxon has a '
-              'leg of one or two hits while its PAIR total is 13-23, so a '
-              'pair-sum cut cannot see them and this can.')
+              'minimum valid hits on the WEAKER leg. Default 8, 0 = off: a '
+              'thin leg is BACKGROUND -- by gen truth on DY, 82-93 % of what '
+              'this removes is a duplicate or unmatched pairing '
+              '(0.885 +- 0.026) at 0.9983 +- 0.0004 signal efficiency -- and '
+              'every candidate with a non-finite exported mass resolution in '
+              'dy_vtxon has a leg of one or two hits while its PAIR total is '
+              '13-23, so a pair-sum cut cannot see them and this can.')
 opts.register('minNdof', 1, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.int,
               'minimum degrees of freedom of the two-track fit, required '

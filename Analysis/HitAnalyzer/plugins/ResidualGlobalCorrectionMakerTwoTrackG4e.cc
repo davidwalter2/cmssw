@@ -351,21 +351,28 @@ private:
   //                (pixel hits counted once, not twice). Default -1 = auto =
   //                10 with the vertex constraint on, 11 with it off. 0
   //                disables.
-  //   minLegHits   minimum valid hits on the WEAKER leg. Default 0 = off,
-  //                because it is not part of the requirement above -- but it
-  //                is what the pathologies actually have in common. Measured
-  //                on the 10 654 candidates of `dy_vtxon`: every one of the
-  //                five with a non-finite `Jpsi_sigmamass` has a leg of one
-  //                or two valid hits -- (2,11), (1,15), (21,2), (14,1),
-  //                (14,1) -- while their PAIR totals, 13 to 23 hits, sail
-  //                through any pair-level cut. A pair sum cannot see a
-  //                one-hit leg; this can.
+  //   minLegHits   minimum valid hits on the WEAKER leg. Default 8, because
+  //                a thin leg is background: by gen truth on DY, 82-93 % of
+  //                the candidates a weaker leg below 8 removes are `dup` or
+  //                `unmatched` (0.885 +- 0.026), for a signal efficiency of
+  //                0.9983 +- 0.0004 -- and every candidate with a non-finite
+  //                mass-resolution export has one. Measured on the 10 654
+  //                candidates of `dy_vtxon`: every one of the five with a
+  //                non-finite `Jpsi_sigmamass` has a leg of one or two valid
+  //                hits -- (2,11), (1,15), (21,2), (14,1), (14,1) -- while
+  //                their PAIR totals, 13 to 23 hits, sail through any
+  //                pair-level cut. A pair sum cannot see a one-hit leg; this
+  //                can. 0 disables. (The COMPANION cut on the vertex
+  //                residual, |z_v| < 5, is deliberately NOT made here: it is
+  //                a downstream selection, `resolution/selection.py`, so the
+  //                tail stays in the trees and the terms that cut on it can
+  //                normalise over the window they cut to.)
   //
   // Both are pre-fit, so a skipped pair costs nothing and every candidate that
   // survives is bit-identical to what the previous build wrote.
   int minNdof_ = 1;
   int minPairHits_ = -1;
-  int minLegHits_ = 0;
+  int minLegHits_ = 8;
 
   // Global material model: per-leg per-group dxi columns from the
   // propagator (reused buffer; see doc/global-material-model-plan.md).
@@ -798,7 +805,7 @@ ResidualGlobalCorrectionMakerTwoTrackG4e::ResidualGlobalCorrectionMakerTwoTrackG
     minPairHits_ = doVtxConstraint_ ? 10 : 11;
   }
   minLegHits_ = iConfig.existsAs<int>("minLegHits")
-                    ? iConfig.getParameter<int>("minLegHits") : 0;
+                    ? iConfig.getParameter<int>("minLegHits") : 8;
   // THE VERTEX-CONSTRAINT RESIDUAL, off by default so that no existing
   // configuration changes its output by a byte.
   exportVtxResidual_ = iConfig.existsAs<bool>("exportVtxResidual")

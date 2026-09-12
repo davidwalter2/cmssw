@@ -47,8 +47,11 @@ globalCorUpsilon = cms.EDProducer(
     # (off). 0 disables either.
     minNdof = cms.int32(1),
     minPairHits = cms.int32(-1),
-    # minimum valid hits on the WEAKER leg; 0 = off (see the .cc).
-    minLegHits = cms.int32(0),
+    # minimum valid hits on the WEAKER leg; 0 = off (see the .cc). Default 8:
+    # a thin leg is background (82-93 % of what it removes is `dup`/`unmatched`
+    # by gen truth, at 0.9983 signal efficiency) and it is what every
+    # non-finite mass-resolution export has in common.
+    minLegHits = cms.int32(8),
     doMassConstraint = cms.bool(False),
     massConstraint = cms.double(9.46030),         # Upsilon(1S), GeV
     massConstraintWidth = cms.double(5.402e-5),   # Gamma_Upsilon(1S), GeV
