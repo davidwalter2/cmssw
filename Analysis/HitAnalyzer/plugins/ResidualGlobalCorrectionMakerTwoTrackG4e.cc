@@ -121,6 +121,9 @@ public:
                 << "  fail[nan]=" << fitFailNaN_
                 << "  fail[ndof]=" << fitFailNdof_
                 << "  skipped[samesign]=" << fitSkippedSameSign_
+                << "  skipped[ndof<" << minNdof_ << "]=" << fitSkippedNdof_
+                << "  skipped[hits<" << minPairHits_ << "]=" << fitSkippedHits_
+                << "  skipped[leghits<" << minLegHits_ << "]=" << fitSkippedLegHits_
                 << "  clamped[step]=" << fitStepClamped_
                 << "  clampevents[step]=" << stepClampEvents_
                 << "  backtracked[step]=" << fitStepBacktracked_
@@ -312,6 +315,57 @@ private:
   mutable unsigned long long fitFailNaN_ = 0ULL;         // NaN/inf parameter update
   mutable unsigned long long fitFailNdof_ = 0ULL;        // fit with no degrees of freedom (ndof <= 0)
   mutable unsigned long long fitSkippedSameSign_ = 0ULL; // same-sign pairs skipped pre-fit (not failures)
+  mutable unsigned long long fitSkippedNdof_ = 0ULL;     // pre-fit ndof < minNdof_ (not failures)
+  mutable unsigned long long fitSkippedHits_ = 0ULL;     // pre-fit valid-hit count < minPairHits_
+  mutable unsigned long long fitSkippedLegHits_ = 0ULL;  // pre-fit weaker leg below minLegHits_
+
+  // ---- THE MINIMUM-SIZE REQUIREMENT ON A PAIR --------------------------
+  //
+  // The two-track fit spends TEN state parameters on the common vertex, so its
+  // degrees of freedom are
+  //
+  //     ndof = nvalid + nvalidpixel - 10 + (3 bs) + (1 pointing)
+  //            + (1 vertex constraint) + (1 mass constraint)
+  //
+  // -- one measurement coordinate per strip hit, two per pixel hit. With the
+  // vertex constraint on and nothing else that is `n_meas - 9`, so a pair
+  // needs MORE THAN NINE measurement coordinates to have any degrees of
+  // freedom at all (more than ten with the constraint off). At ndof == 0 the
+  // system is exactly determined: chi2 is identically zero, chi2/ndof is 0/0,
+  // and the factored-Hessian export indexes one past the end of the
+  // eigenvalue vector and aborts the PROCESS -- which is what killed 28 % of
+  // the first dymc_8p5M_260905 tasks before the signed-ndof gate below.
+  //
+  // Those pairs carry no information for the global fit and their vertex
+  // residual is meaningless (at ndof == 1 the DCA is determined by the data
+  // with one constraint left over, so its pull is not a resolution
+  // measurement either). They are cut here, BEFORE the fit, on both readings
+  // of "hits":
+  //
+  //   minNdof      minimum of the expression above evaluated for the
+  //                unconstrained-mass pass. Default 1, i.e. n_meas >= 10 with
+  //                the vertex constraint on and >= 11 with it off, exactly
+  //                the requirement above. 0 restores the legacy behaviour
+  //                (only the ndof <= 0 abort).
+  //   minPairHits  minimum number of VALID HITS summed over the two legs
+  //                (pixel hits counted once, not twice). Default -1 = auto =
+  //                10 with the vertex constraint on, 11 with it off. 0
+  //                disables.
+  //   minLegHits   minimum valid hits on the WEAKER leg. Default 0 = off,
+  //                because it is not part of the requirement above -- but it
+  //                is what the pathologies actually have in common. Measured
+  //                on the 10 654 candidates of `dy_vtxon`: every one of the
+  //                five with a non-finite `Jpsi_sigmamass` has a leg of one
+  //                or two valid hits -- (2,11), (1,15), (21,2), (14,1),
+  //                (14,1) -- while their PAIR totals, 13 to 23 hits, sail
+  //                through any pair-level cut. A pair sum cannot see a
+  //                one-hit leg; this can.
+  //
+  // Both are pre-fit, so a skipped pair costs nothing and every candidate that
+  // survives is bit-identical to what the previous build wrote.
+  int minNdof_ = 1;
+  int minPairHits_ = -1;
+  int minLegHits_ = 0;
 
   // Global material model: per-leg per-group dxi columns from the
   // propagator (reused buffer; see doc/global-material-model-plan.md).
@@ -499,7 +553,48 @@ private:
 
   float Muplusgen_dr;
   float Muminusgen_dr;
-  
+
+  // ---- GEN PROVENANCE OF THE TWO LEGS ----------------------------------
+  //
+  // `Mu*gen_dr` says only that SOME status-1 gen muon of the right charge sits
+  // within dR < 0.1 of the leg. It does NOT say the candidate is a real
+  // resonance decay: two reco tracks of the SAME muon, or a real muon paired
+  // with a track from a heavy-flavour decay, both leave two "matched" legs.
+  // Separating signal from combinatorial background needs the IDENTITY and the
+  // ANCESTRY of the matched particle, which is what these carry. All are
+  // filled only under doGen_, with the sentinels below otherwise.
+  //
+  //   Mu*gen_pdgId       pdgId of the matched status-1 gen particle (0 = none)
+  //   Mu*gen_idx         its index in the gen collection (-1 = none). Two
+  //                      candidates of one event sharing an index are two
+  //                      reconstructions of ONE muon -- the combinatorial
+  //                      background the inclusive vertex tail is made of.
+  //   Mu*gen_motherPdgId pdgId of the first ancestor that is not itself a
+  //                      muon copy: 23 for a Z daughter, 443/553 for a
+  //                      quarkonium, a hadron id for a heavy-flavour decay
+  //                      (0 = none found)
+  //   Mu*gen_motherIdx   that ancestor's index (-1 = none)
+  //   Mu*gen_isPrompt    GenStatusFlags::isPrompt(), asked through a
+  //   Mu*gen_fromHardProcess  dynamic_cast (the collection is an
+  //                      edm::View<reco::Candidate>, which does not expose the
+  //                      flags) and left false when the cast fails
+  //   Jpsigen_sameDecay  both legs matched, to DIFFERENT gen particles, whose
+  //                      first non-muon ancestor is the SAME particle -- the
+  //                      candidate is the two daughters of one decay
+  int Muplusgen_pdgId;
+  int Muminusgen_pdgId;
+  int Muplusgen_idx;
+  int Muminusgen_idx;
+  int Muplusgen_motherPdgId;
+  int Muminusgen_motherPdgId;
+  int Muplusgen_motherIdx;
+  int Muminusgen_motherIdx;
+  bool Muplusgen_isPrompt;
+  bool Muminusgen_isPrompt;
+  bool Muplusgen_fromHardProcess;
+  bool Muminusgen_fromHardProcess;
+  bool Jpsigen_sameDecay;
+
   std::array<float, 3> Muplus_refParms;
   std::array<float, 3> Muminus_refParms;
   
@@ -694,6 +789,16 @@ ResidualGlobalCorrectionMakerTwoTrackG4e::ResidualGlobalCorrectionMakerTwoTrackG
       : std::vector<int>{23, 443, 100443, 553, 100553, 200553};
   doVtxConstraint_ = iConfig.getParameter<bool>("doVtxConstraint");
   doMassConstraint_ = iConfig.getParameter<bool>("doMassConstraint");
+  // minimum size of a pair (see the member docs). `existsAs` so that every
+  // existing cfi keeps working; the DEFAULTS are the cut, not a no-op.
+  minNdof_ = iConfig.existsAs<int>("minNdof") ? iConfig.getParameter<int>("minNdof") : 1;
+  minPairHits_ = iConfig.existsAs<int>("minPairHits")
+                     ? iConfig.getParameter<int>("minPairHits") : -1;
+  if (minPairHits_ < 0) {
+    minPairHits_ = doVtxConstraint_ ? 10 : 11;
+  }
+  minLegHits_ = iConfig.existsAs<int>("minLegHits")
+                    ? iConfig.getParameter<int>("minLegHits") : 0;
   // THE VERTEX-CONSTRAINT RESIDUAL, off by default so that no existing
   // configuration changes its output by a byte.
   exportVtxResidual_ = iConfig.existsAs<bool>("exportVtxResidual")
@@ -1061,6 +1166,22 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::beginStream(edm::StreamID streami
 
     tree->Branch("Muplusgen_dr", &Muplusgen_dr);
     tree->Branch("Muminusgen_dr", &Muminusgen_dr);
+
+    // gen PROVENANCE (see the member docs): what the leg was matched TO, and
+    // whether the two legs are the two daughters of one decay.
+    tree->Branch("Muplusgen_pdgId", &Muplusgen_pdgId);
+    tree->Branch("Muminusgen_pdgId", &Muminusgen_pdgId);
+    tree->Branch("Muplusgen_idx", &Muplusgen_idx);
+    tree->Branch("Muminusgen_idx", &Muminusgen_idx);
+    tree->Branch("Muplusgen_motherPdgId", &Muplusgen_motherPdgId);
+    tree->Branch("Muminusgen_motherPdgId", &Muminusgen_motherPdgId);
+    tree->Branch("Muplusgen_motherIdx", &Muplusgen_motherIdx);
+    tree->Branch("Muminusgen_motherIdx", &Muminusgen_motherIdx);
+    tree->Branch("Muplusgen_isPrompt", &Muplusgen_isPrompt);
+    tree->Branch("Muminusgen_isPrompt", &Muminusgen_isPrompt);
+    tree->Branch("Muplusgen_fromHardProcess", &Muplusgen_fromHardProcess);
+    tree->Branch("Muminusgen_fromHardProcess", &Muminusgen_fromHardProcess);
+    tree->Branch("Jpsigen_sameDecay", &Jpsigen_sameDecay);
     
     // Per-track reference parameters at PCA (3-vector: q/pT, lambda, phi)
     // and Jacobians of those parameters and of the dimuon mass with
@@ -2057,6 +2178,30 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
       if (nhitsarr[0] == 0 || nhitsarr[1] == 0) {
         continue;
+      }
+
+      // THE MINIMUM-SIZE REQUIREMENT (see the minNdof_ / minPairHits_ docs).
+      // Evaluated for the unconstrained-mass pass, which is the one whose
+      // vertex residual and chi2/ndof are exported; the mass-constrained pass
+      // has one degree of freedom more and can never be the binding one.
+      {
+        const long long ndofpre = (long long)nvalid + (long long)nvalidpixel - 10LL
+                                  + (bsConstraint_ ? 3LL : 0LL)
+                                  + (doPointingConstraint_ ? 1LL : 0LL)
+                                  + (doVtxConstraint_ ? 1LL : 0LL);
+        if (minNdof_ > 0 && ndofpre < (long long)minNdof_) {
+          ++fitSkippedNdof_;
+          continue;
+        }
+        if (minPairHits_ > 0 && (int)nvalid < minPairHits_) {
+          ++fitSkippedHits_;
+          continue;
+        }
+        if (minLegHits_ > 0 && ((int)nvalidarr[0] < minLegHits_ ||
+                                (int)nvalidarr[1] < minLegHits_)) {
+          ++fitSkippedLegHits_;
+          continue;
+        }
       }
       
 // if (mu0gen == nullptr || mu1gen == nullptr || mu0gen->eta()<2.2 || mu1gen->eta()<2.2) {
@@ -5349,6 +5494,19 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
           Muplusgen_dr = -99.;
           Muminusgen_dr = -99.;
+          Muplusgen_pdgId = 0;
+          Muminusgen_pdgId = 0;
+          Muplusgen_idx = -1;
+          Muminusgen_idx = -1;
+          Muplusgen_motherPdgId = 0;
+          Muminusgen_motherPdgId = 0;
+          Muplusgen_motherIdx = -1;
+          Muminusgen_motherIdx = -1;
+          Muplusgen_isPrompt = false;
+          Muminusgen_isPrompt = false;
+          Muplusgen_fromHardProcess = false;
+          Muminusgen_fromHardProcess = false;
+          Jpsigen_sameDecay = false;
           Jpsigenpre_mass = -99.;
           Jpsigenpre_masslep = -99.;
           Jpsigenpre_status = -1;
@@ -5357,8 +5515,16 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           if (doGen_) {
             double drminplus = 0.1;
             double drminminus = 0.1;
+            // address -> position in the collection, so that the matched
+            // particle's mother can be reported as an INDEX (mother() hands
+            // back a pointer into this same product) and two candidates that
+            // matched the same muon can be recognised downstream.
+            std::unordered_map<const reco::Candidate *, int> genidx;
+            int igen = -1;
 
             for (auto const &genpart : *genPartCollection) {
+              ++igen;
+              genidx[&genpart] = igen;
               const int apid = std::abs(genpart.pdgId());
               const int st = genpart.status();
               // the hard-process resonance: last copy (62) wins over first
@@ -5392,6 +5558,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               const double dRplus = deltaR(genpart, muarr[idxplus]);
               if (dRplus < drminplus && genpart.charge() > 0) {
                 muplusgen = &genpart;
+                Muplusgen_idx = igen;
                 drminplus = dRplus;
               }
 
@@ -5399,6 +5566,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               const double dRminus = deltaR(genpart, muarr[idxminus]);
               if (dRminus < drminminus && genpart.charge() < 0) {
                 muminusgen = &genpart;
+                Muminusgen_idx = igen;
                 drminminus = dRminus;
               }
             }
@@ -5410,6 +5578,58 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             if (muminusgen != nullptr) {
               Muminusgen_dr = drminminus;
             }
+
+            // PROVENANCE. Walk up from the matched particle through its own
+            // copies (pdgId == +-13 at any status) to the first ancestor that
+            // is something else: the Z for a signal leg, a B/D/K/pi for a
+            // decay leg. The guard bounds a pathological self-referential
+            // chain; 50 is far above any real decay chain's depth.
+            auto firstNonMuonMother = [](const reco::Candidate *p) -> const reco::Candidate * {
+              const reco::Candidate *m = p;
+              for (int guard = 0; guard < 50 && m != nullptr; ++guard) {
+                if (m->numberOfMothers() == 0) {
+                  return nullptr;
+                }
+                m = m->mother(0);
+                if (m == nullptr) {
+                  return nullptr;
+                }
+                if (std::abs(m->pdgId()) != 13) {
+                  return m;
+                }
+              }
+              return nullptr;
+            };
+            auto fillProv = [&](const reco::Candidate *mu, int &pdgOut, int &mpdgOut,
+                                int &midxOut, bool &promptOut, bool &hardOut) {
+              if (mu == nullptr) {
+                return;
+              }
+              pdgOut = mu->pdgId();
+              const reco::GenParticle *gp = dynamic_cast<const reco::GenParticle *>(mu);
+              if (gp != nullptr) {
+                promptOut = gp->statusFlags().isPrompt();
+                hardOut = gp->statusFlags().fromHardProcess();
+              }
+              const reco::Candidate *mother = firstNonMuonMother(mu);
+              if (mother != nullptr) {
+                mpdgOut = mother->pdgId();
+                auto it = genidx.find(mother);
+                midxOut = it != genidx.end() ? it->second : -1;
+              }
+            };
+            fillProv(muplusgen, Muplusgen_pdgId, Muplusgen_motherPdgId,
+                     Muplusgen_motherIdx, Muplusgen_isPrompt, Muplusgen_fromHardProcess);
+            fillProv(muminusgen, Muminusgen_pdgId, Muminusgen_motherPdgId,
+                     Muminusgen_motherIdx, Muminusgen_isPrompt, Muminusgen_fromHardProcess);
+            // The two legs are one decay only if they are two DIFFERENT gen
+            // particles (an index collision is the same muon reconstructed
+            // twice) sharing one non-muon ancestor.
+            Jpsigen_sameDecay = muplusgen != nullptr && muminusgen != nullptr &&
+                                Muplusgen_idx >= 0 && Muminusgen_idx >= 0 &&
+                                Muplusgen_idx != Muminusgen_idx &&
+                                Muplusgen_motherIdx >= 0 &&
+                                Muplusgen_motherIdx == Muminusgen_motherIdx;
 
             if (resgen != nullptr) {
               Jpsigenpre_mass = resgen->mass();

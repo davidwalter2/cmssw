@@ -38,6 +38,22 @@ globalCorD0 = cms.EDProducer(
     bsConstraint=cms.bool(False),
     applyHitQuality=cms.bool(True),
     doVtxConstraint=cms.bool(True),
+    # Minimum size of a pair, required BEFORE the fit (see
+    # ResidualGlobalCorrectionMakerTwoTrackG4e.cc). ndof = nvalid +
+    # nvalidpixel - 10 (+3 beamspot, +1 pointing, +1 vertex constraint): one
+    # measurement coordinate per strip hit, two per pixel hit, against the ten
+    # state parameters the common vertex costs. minNdof = 1 therefore requires
+    # more than NINE measurement coordinates with the vertex constraint on and
+    # more than TEN with it off -- at ndof == 0 the fit is exactly determined
+    # (chi2 identically zero, chi2/ndof undefined) and the factored-Hessian
+    # export indexes past the end of its eigenvalue vector and aborts the
+    # process. minPairHits is the same requirement read on VALID HITS rather
+    # than on measurement coordinates; -1 = auto = 10 (constraint on) / 11
+    # (off). 0 disables either.
+    minNdof = cms.int32(1),
+    minPairHits = cms.int32(-1),
+    # minimum valid hits on the WEAKER leg; 0 = off (see the .cc).
+    minLegHits = cms.int32(0),
     doMassConstraint=cms.bool(False),
     massConstraint=cms.double(1.86483),
     massConstraintWidth=cms.double(1.605e-12),  # natural width Gamma = hbar/tau (D0), GeV

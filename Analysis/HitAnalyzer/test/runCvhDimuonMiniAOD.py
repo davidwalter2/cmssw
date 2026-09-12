@@ -288,6 +288,30 @@ opts.register('doVtxConstraint', True, VarParsing.VarParsing.multiplicity.single
               'and the fitted mass is the vertex-constrained one. Jpsi_mass_unc '
               'carries the unconstrained mass, so either can be formed offline. '
               'False leaves index 6 free (a plain two-track fit through the PCA)')
+opts.register('minLegHits', 0, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.int,
+              'minimum valid hits on the WEAKER leg. 0 = off (the default): '
+              'it is not part of the ndof requirement, but every candidate '
+              'with a non-finite exported mass resolution in dy_vtxon has a '
+              'leg of one or two hits while its PAIR total is 13-23, so a '
+              'pair-sum cut cannot see them and this can.')
+opts.register('minNdof', 1, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.int,
+              'minimum degrees of freedom of the two-track fit, required '
+              'BEFORE the fit. ndof = nvalid + nvalidpixel - 10 (+3 beamspot, '
+              '+1 pointing, +1 vertex constraint), i.e. one coordinate per '
+              'strip hit and two per pixel hit against the ten state '
+              'parameters the common vertex costs. The default 1 means more '
+              'than nine measurement coordinates with the vertex constraint '
+              'on and more than ten with it off: at ndof == 0 the fit is '
+              'exactly determined (chi2 identically zero, chi2/ndof 0/0) and '
+              'the factored-Hessian export aborts the process. 0 disables.')
+opts.register('minPairHits', -1, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.int,
+              'minimum number of VALID HITS summed over the two legs (pixel '
+              'hits counted once). -1 = auto = 10 with the vertex constraint '
+              'on, 11 with it off -- the same requirement as minNdof read on '
+              'hits rather than on measurement coordinates. 0 disables.')
 opts.register('exportVtxResidual', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'export the VERTEX-CONSTRAINT RESIDUAL (state index 6, the '
@@ -655,6 +679,9 @@ process.trackrefitdimuon = ResidualGlobalCorrectionMakerDiMuonG4e.clone(
     # --- the fit
     useIdealGeometry=cms.bool(bool(opts.useIdealGeometry)),
     doVtxConstraint=cms.bool(bool(opts.doVtxConstraint)),
+    minNdof=cms.int32(int(opts.minNdof)),
+    minPairHits=cms.int32(int(opts.minPairHits)),
+    minLegHits=cms.int32(int(opts.minLegHits)),
     exportVtxResidual=cms.bool(bool(opts.exportVtxResidual)),
     doMassConstraint=cms.bool(bool(opts.doMassConstraint)),
     massConstraint=cms.double(float(opts.massConstraint)),
