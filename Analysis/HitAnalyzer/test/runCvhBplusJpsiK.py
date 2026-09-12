@@ -171,8 +171,9 @@ opts.register('clampMomentumFloor', -1.0, VarParsing.VarParsing.multiplicity.sin
               'region) and NOT ABOVE THE PHYSICAL MOMENTUM SPECTRUM: a floor '
               'above it pins soft tracks at the floor and, where p_ref is '
               'already below it, scales the step to zero and freezes the fit '
-              'at its seed. The makers built-in 2.0 GeV default does exactly '
-              'that to the 0.3-0.9 GeV bachelor kaon (NOTES.md 2026-09-04).')
+              'at its seed. The built-in 2.0 GeV default of the maker would '
+              'do exactly that to the 0.3-0.9 GeV bachelor kaon, which is why '
+              'this driver always sets the floor from plimit.')
 opts.register('maxMomentumStepFactor', 2.0, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.float,
               'RELATIVE Gauss-Newton step damping: the max factor by which a '
@@ -181,8 +182,8 @@ opts.register('maxMomentumStepFactor', 2.0, VarParsing.VarParsing.multiplicity.s
               'max(clampMomentumFloor, p_ref/f) plus the symmetric cap '
               'p_ref*f, so the bound is ALWAYS strictly inside p_ref: neither '
               'the soft bachelor kaon nor any other leg can be pinned at a '
-              'fixed momentum or frozen by a zero step. <=1 = legacy '
-              'absolute-floor-only clamp (bit-identical).')
+              'fixed momentum or frozen by a zero step. <=1 switches it off '
+              'and leaves clampMomentumFloor as the only bound.')
 opts.register('stepBacktracking', True, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'chi2-based (Armijo) retroactive step backtracking: if the chi2 '
@@ -206,7 +207,7 @@ opts.register('armijoC', 1.e-4, VarParsing.VarParsing.multiplicity.singleton,
               'Armijo sufficient-decrease coefficient c1 (default 1e-4).')
 opts.register('armijoSlack', 1.0, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.float,
-              'relative chi2 slack in the Armijo test (default 1.0 = the chi2 may not more than DOUBLE in one iteration). This is a DIVERGENCE TRAP, not a line-search tolerance: the CVH/GBL iteration does not monotonically decrease r^T Vinv r, so a textbook 1e-4..1e-3 makes it halve the step forever at 6x the propagation cost for no change in the result (scan in NOTES.md 2026-09-05).')
+              'relative chi2 slack in the Armijo test (default 1.0 = the chi2 may not more than DOUBLE in one iteration). This is a DIVERGENCE TRAP, not a line-search tolerance: the CVH/GBL iteration does not monotonically decrease r^T Vinv r, so a textbook 1e-4..1e-3 makes it halve the step forever at 6x the propagation cost for no change in the result.')
 opts.register('nIters', 10, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.int,
               'CVH Gauss-Newton iteration cap per icons phase. Default 10 '
@@ -1151,8 +1152,8 @@ _clamped = []
 for _n, _m in process.producers.items():
     if str(_m.type_()).startswith('ResidualGlobalCorrectionMaker'):
         _m.clampMomentumFloor = cms.double(_clampFloor)
-        # Relative step damping + chi2 backtracking (2026-09-05 replacement for
-        # the bare momentum floor; see the option help and NOTES.md).
+        # Relative step damping + chi2 backtracking on top of the absolute
+        # momentum floor; see the option help.
         _m.maxMomentumStepFactor = cms.double(float(opts.maxMomentumStepFactor))
         _m.stepBacktracking = cms.bool(bool(opts.stepBacktracking))
         _m.maxChi2Backtrack = cms.uint32(int(opts.maxChi2Backtrack))

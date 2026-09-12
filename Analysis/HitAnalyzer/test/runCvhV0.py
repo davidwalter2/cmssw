@@ -59,15 +59,13 @@ opts.register('clampMomentumFloor', 0.1, VarParsing.VarParsing.multiplicity.sing
               'momentum floor (GeV) of the Gauss-Newton step clamp: fatal updates '
               '(charge flip / momentum collapse) are rescaled instead of aborted. '
               '0.1 GeV sits above the propagation floor but below the soft '
-              'V0-daughter spectrum. This driver passes its own value, so it '
-              'is unaffected by the 2026-09-04 change that made the J/psi '
-              'drivers derive theirs from the propagation limit. NOTE (2026-09-05): '
-              'the floor is now only the ABSOLUTE part of the bound. The makers '
-              'default to maxMomentumStepFactor=2 (relative q/p trust region, '
-              'effective floor max(floor, p_ref/2), symmetric cap p_ref*2) and '
-              'stepBacktracking=True (chi2 Armijo backtracking); this driver does '
-              'not expose those knobs, so it gets those defaults. Set them on the '
-              'producer directly to reproduce the pre-2026-09-05 behaviour.')
+              'V0-daughter spectrum. This is only the ABSOLUTE part of the '
+              'bound: the makers default to maxMomentumStepFactor=2 (relative '
+              'q/p trust region, effective floor max(floor, p_ref/2), '
+              'symmetric cap p_ref*2) and stepBacktracking=True (chi2 Armijo '
+              'backtracking). This driver does not expose those two, so they '
+              'take the maker defaults; set them on the producer directly to '
+              'change them.')
 opts.register('maxBacktracks', 4, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.int,
               'per-candidate budget of GN step halvings after a failed leg')

@@ -30,10 +30,10 @@ GeantPropagatorESProducer::GeantPropagatorESProducer(const edm::ParameterSet &p)
   // they are set before any physics list or fluctuation model is built.
   cvhcgf::configure(p);
 
-  // A knob that belongs to the OTHER weight is now silently inert rather than
-  // absent, which is the one cost of having both estimators in one build: a
-  // job configured with `IoniTruncationAlpha = 0.995` under the Fisher weight,
-  // or with `CgfRecentreDamping = 0.4` under the legacy one, runs happily and
+  // A knob that belongs to the OTHER weight is silently inert -- the one cost
+  // of having both estimators in one build: a job configured with
+  // `IoniTruncationAlpha = 0.995` under the Fisher weight, or with
+  // `CgfRecentreDamping = 0.4` under the legacy one, runs happily and
   // produces the DEFAULT physics while its provenance says otherwise.  Say so
   // once, at construction, rather than let a scan of a dead parameter be
   // reported as a null result.

@@ -5,9 +5,9 @@
 //
 // WHAT THIS IS FOR
 // ----------------
-// The offline resolution model (`calibration_studies/resolution/`) describes a
-// fitted track's q/p error -- and a two-track candidate's mass error -- by the
-// CHARACTERISTIC FUNCTION of the sum of its independent process-noise blocks:
+// The offline resolution model describes a fitted track's q/p error -- and a
+// two-track candidate's mass error -- by the CHARACTERISTIC FUNCTION of the
+// sum of its independent process-noise blocks:
 //
 //     phi_z(t) = phi_hit(t) * exp( S_ms(t) + S_ioni(t) + S_rad(t) + S_del(t) )
 //
@@ -15,12 +15,11 @@
 // compound-Poisson log-CF built from the Geant4 STEP RECORDS of the block and
 // the block's scalar standardized weight `wstd = sqrt(v_b/sq2)/sigma`.
 //
-// Until now those exponents were built OFFLINE (cf_track_resolution.extract,
-// cf_mass_likelihood.build_pairs_tt) from a raw export of every step record --
-// `ioniurbanv`, `msmoliv`, `radstepv`/`radstepspecv`, `reseigv`, `resinfv`.
-// That costs 430 kB and 2.2 s per candidate: 16 TB and 24k core-hours at the
-// 40M candidates the full calibration needs. Neither number is survivable, and
-// both are pure waste -- the exponents are 6 x 64 floats.
+// Building the exponents offline instead would mean exporting every step
+// record -- `ioniurbanv`, `msmoliv`, `radstepv`/`radstepspecv`, `reseigv`,
+// `resinfv` -- at 430 kB and 2.2 s per candidate, i.e. 16 TB and 24k
+// core-hours at the 40M candidates the full calibration needs, to carry what
+// is in the end 6 x 64 floats.
 //
 // The weights are known only AFTER the fit converges (they are the fit's own
 // influence coefficients), so this runs in the makers' doRes pass, from the
@@ -80,12 +79,11 @@ namespace cvhcf {
   // Why a subset and not `linspace(0, 8, 64)`: it makes the validation exact.
   // Every one of these tau is a point of the offline grid, so the in-maker
   // exponent can be compared against the reference at the SAME argument with
-  // no interpolation standing between them.  It is also the grid the
-  // 2026-09-04 compression study measured (`cfcompress/gridtest.py`, row
-  // `stride4/t<=8.0`): refitting the unbinned mass likelihood on it moves
-  // alpha by -1.6e-8 (-1.6e-5 in the 1e-3 units the fit reports), i.e. 1/1000
-  // of the full-sample statistical error, and every other fitted parameter by
-  // less than 0.001 sigma.
+  // no interpolation standing between them.  The truncation it implies is
+  // harmless: refitting the unbinned mass likelihood on this grid moves alpha
+  // by -1.6e-8 (-1.6e-5 in the 1e-3 units the fit reports), i.e. 1/1000 of the
+  // full-sample statistical error, and every other fitted parameter by less
+  // than 0.001 sigma.
   //
   // The grid is written into the runtree next to the exponents, so no consumer
   // has to reconstruct it.
@@ -117,8 +115,7 @@ namespace cvhcf {
     // Column holding the step's MATERIAL GROUP (the parmtype-15 index of the
     // global material model), or -1 when the rows carry none. `msmoliv` has
     // it at column 9; `ioniurbanv` and `radstepv` carry it as their LAST
-    // column (appended 2026-09-06, so every older index is unchanged).
-    // Only read when `TrackInput::wantGroups`.
+    // column.  Only read when `TrackInput::wantGroups`.
     int groupCol = -1;
   };
 
@@ -183,8 +180,8 @@ namespace cvhcf {
     //
     //     S_f(tau; k) = S_f^fixed(tau) + sum_g A(k_g) S_{f,g}(tau)
     //
-    // is exact with the fit's influence weights held fixed (NOTES 2026-09-05
-    // (II) section 1).  Off by default: ~22 live groups per candidate
+    // is exact with the fit's influence weights held fixed.  Off by default:
+    // ~22 live groups per candidate
     // multiply the 1.4 kB flat export by ~20.
     bool wantGroups = false;
     // Include the delta-recoil family in the per-group split.  The q/p
@@ -238,8 +235,8 @@ namespace cvhcf {
   // written per block (`ms_step_exponent(steps, wstd, tau)` and friends), so a
   // like-for-like comparison needs the same entry points, and going through
   // the full `trackExponents` would confound a formula error with a pooling
-  // error. `calibration_studies/resolution/cxx/build_cvhcf.sh` builds them
-  // into a ctypes shim, exactly as `cgfshim` already does for `cvhcgf`.
+  // error. They are built into a ctypes shim for that comparison, exactly as
+  // `cvhcgf`'s primitives already are.
   //
   // Every one of them ACCUMULATES into its output (length kNTau), and every
   // one takes the rows as the FLOATS the tree carries, so no conversion

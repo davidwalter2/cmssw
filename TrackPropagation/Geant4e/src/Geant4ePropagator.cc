@@ -730,14 +730,13 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
   // scale. 1/I is quoted in units of that scale, so the PHYSICAL answer
   // sigma^2 * (1/I_z) must be invariant under it. Verified offline to 7e-7
   // over a factor 16; this is the in-fit version of the same check.
-  // ATTRIBUTION CONTROL, default off: restore the historical substitution,
-  // which replaced Q(0,0) and left the other 24 elements of the transported
-  // ionization covariance carrying the alpha-truncated magnitude. It is kept
-  // because it is what MEASURES the consequence of that asymmetry -- with it
-  // set, freezing the weight and recomputing it every sweep disagree by
-  // rms 1.8e-3 on the fitted q/p; without it, by 2.5e-6 (NOTES_CGFFIT s54).
-  // A control that can only be described and not run is an argument, not a
-  // measurement.
+  // ATTRIBUTION CONTROL, default off: substitute Q(0,0) alone and leave the
+  // other 24 elements of the transported ionization covariance carrying the
+  // alpha-truncated magnitude. It exists because it is what MEASURES the
+  // consequence of that asymmetry -- with it set, freezing the weight and
+  // recomputing it every sweep disagree by rms 1.8e-3 on the fitted q/p;
+  // without it, by 2.5e-6. A control that can only be described and not run
+  // is an argument, not a measurement.
   static const bool cgfScalarOnly = (getenv("CVH_CGF_QOP_SCALARONLY") != nullptr);
   const bool cgfRadOn = (cgfQoPMode > 0) && cvhcgf::cgfRadiativeEnabled();
 
@@ -972,11 +971,8 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
   Matrix<double, 5, 5> g4errorEnd = Matrix<double, 5, 5>::Zero();
   Matrix<double, 5, 5> dQ = Matrix<double, 5, 5>::Zero();
   Matrix<double, 5, 5> dQ2 = Matrix<double, 5, 5>::Zero();
-  // `dQ2u`, the untruncated twin of `dQ2`, WAS HERE and is gone (2026-08-24).
-  // `computeErrorIoni` returns the record's own second cumulant now, so `dQ2`
-  // IS the untruncated ionization covariance: the twin was a second copy of it,
-  // built with a `blockKappa2` call per step. The substitution below scales
-  // `dQ2` itself.
+  // `computeErrorIoni` returns the record's own second cumulant, so `dQ2` IS
+  // the untruncated ionization covariance; the substitution below scales it.
 
   double dEdxlast = 0.;
   // whether `dEdxlast` has been set from a step of controlled length yet; see
@@ -1544,16 +1540,16 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
     // depend on it (scanned: 0.25/1/4 leaves Q(0,0) identical to all printed
     // digits).
     //
-    // IT IS NOT TAKEN FROM `g4errorEnd(0,0)` ANY MORE (2026-08-20). That is
-    // the ALPHA-TRUNCATED variance -- the very convention this scheme exists
-    // to remove -- and while the answer is invariant under the scale
+    // THE SCALE MUST BE ALPHA-FREE, so it is NOT taken from `g4errorEnd(0,0)`:
+    // that is the ALPHA-TRUNCATED variance -- the very convention this scheme
+    // exists to remove -- and while the answer is invariant under the scale
     // ANALYTICALLY, it is not invariant BITWISE, and this fit amplifies
-    // last-bit perturbations of the process-noise rows by ~1e12 (see the
-    // section at the top of NOTES_CGFFIT). Measured with the truncated scale:
-    // moving alpha 0.999 -> 0.997 still moved the CGF-weighted fit by
-    // rms 7.8e-6 on q/p, against 1.0e-5 for the legacy weight -- i.e. the
-    // scheme removed only ~40 % of a dependence it is supposed to remove
-    // ENTIRELY, and the residue was pure numerical leakage through this line.
+    // last-bit perturbations of the process-noise rows by ~1e12. Measured with
+    // the truncated scale: moving alpha 0.999 -> 0.997 still moved the
+    // CGF-weighted fit by rms 7.8e-6 on q/p, against 1.0e-5 for the legacy
+    // weight -- i.e. only ~40 % of a dependence the scheme is supposed to
+    // remove ENTIRELY was removed, and the residue was pure numerical leakage
+    // through this line.
     //
     // The block's own second cumulant is the natural alpha-free scale: it is
     // built from the same untruncated step record, so `blockKappa2` on the
@@ -1626,16 +1622,13 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
     for (auto &r : blk.rad)
       r.gs /= cgfSigma;
 
-    // THE BLOCK CGF IS REGIME-2/3 AWARE SINCE 2026-08-20. It used to throw
-    // here: `cvhcgf::blockExponent` read the record's `a3` slot as a delta-ray
-    // collision count, which in regime 2/3 (CVH_IONI_EXACTDELTA) holds xi, an
-    // energy -- a ~1e-5 error in a WEIGHT, i.e. one that does not fail. The
-    // refusal was the right behaviour while the channel was missing, but it
-    // made the in-fit CGF unusable on the physics the simulation actually runs
-    // (the exact delta is default-ON, e232c20), so the channel was ported from
-    // `cf_track_resolution.exact_delta_exponent` instead, together with the
+    // THE BLOCK CGF IS REGIME-2/3 AWARE: `cvhcgf::blockExponent` carries the
+    // exact knock-on cross section of CVH_IONI_EXACTDELTA together with the
     // Kokoulin correction that `G4UniversalFluctuationForExtrapolator` already
-    // applies to the variance. Both branch on `regime`, never on a heuristic.
+    // applies to the variance, so the in-fit weight can be evaluated on the
+    // physics the simulation actually runs. Both branch on `regime` -- never
+    // on a heuristic on the magnitude of `a3`, which holds a collision count
+    // in regime 1 and the energy scale xi in regime 2/3.
 
     // THE COUPLED CONVENTION. With CVH_IONONLY the reference is propagated
     // with ionization-only loss, so the block residual now carries the
@@ -1709,28 +1702,27 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
         // TRANSPORTS the accumulated matrix through the remaining steps. So by
         // the end of the leg that variance has spread over the whole 5x5:
         // dQ2 = sum_s v_s (A_s e0)(A_s e0)^T. Overwriting `g4errorEnd(0,0)`
-        // and leaving the rest, which is what this did until 2026-08-20, left
-        // every off-diagonal carrying the alpha-truncated magnitude, and that
-        // is measurably most of the fit's residual alpha dependence.
+        // and leaving the rest would leave every off-diagonal carrying the
+        // alpha-truncated magnitude, which is measurably most of the fit's
+        // residual alpha dependence.
         //
-        // `dQ2` is that sum, and since the truncation was deleted each step's
-        // variance in it IS the untruncated second cumulant, so it is
-        // alpha-free in shape as well as in scale, and
+        // `dQ2` is that sum, and each step's variance in it IS the untruncated
+        // second cumulant, so it is alpha-free in shape as well as in scale,
+        // and
         //
         //     sc = qcgf / dQ2(0,0)
         //
         // is the single factor that makes its (0,0) equal the Fisher weight.
-        // Replacing dQ2 by sc * dQ2 therefore (i) reproduces the previous
-        // (0,0) to the 2e-11 that MS leaks into it through the transport, and
-        // (ii) carries the same weight into every other element. It is exactly what scaling every step's
-        // injected ionization variance would have given, and it needs no
-        // second pass because the transport is linear in the injection.
+        // Replacing dQ2 by sc * dQ2 therefore (i) reproduces the scalar
+        // substitution's (0,0) to the 2e-11 that MS leaks into it through the
+        // transport, and (ii) carries the same weight into every other
+        // element. It is exactly what scaling every step's injected ionization
+        // variance would have given, and it needs no second pass because the
+        // transport is linear in the injection.
         //
-        // Mode 3 = weight AND re-centring; mode 1 = weight only. An earlier
-        // version gated this on `== 1` alone, which made mode 3 apply the
-        // re-centring WITHOUT the weight -- an inconsistent pair, caught by
-        // the Gaussian-psi control coming out identical to nominal instead of
-        // identical to mode 1.
+        // Mode 3 = weight AND re-centring; mode 1 = weight only. Both apply
+        // the weight, so both are gated here: the re-centring without the
+        // weight is an inconsistent pair.
         if (dQ2(0, 0) > 0. && !cgfScalarOnly) {
           const double sc = qcgf / dQ2(0, 0);
           cgfQScaleLast_ = sc;   // published for the maker's ioniqscale export
@@ -1744,8 +1736,8 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
           // 8e-9 max). Subtracting `dQ2` would therefore cancel (0,0) against
           // itself and leave a last-bit residue on top of `qcgf` -- and this
           // fit turns a 1e-17 relative perturbation of the process-noise rows
-          // into 1e-5 on the momentum (NOTES_CGFFIT, the section on
-          // amplification). Summing the two pieces has no cancellation at all.
+          // into 1e-5 on the momentum. Summing the two pieces has no
+          // cancellation at all.
           //
           // The identity is CHECKED rather than trusted: if anything ever adds
           // to `g4errorEnd` without going through `errMSIout`, this falls back
@@ -1760,8 +1752,8 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
         } else {
           // No untruncated twin (no ionization record on any step of this
           // leg): fall back to the scalar substitution rather than skip the
-          // weight, which is what shipped before. See the cached branch for
-          // why the exported factor stays 1.0 when dQ2(0,0) is not positive.
+          // weight. See the cached branch for why the exported factor stays
+          // 1.0 when dQ2(0,0) is not positive.
           if (dQ2(0, 0) > 0.) {
             cgfQScaleLast_ = qcgf / dQ2(0, 0);
           }
@@ -1986,8 +1978,7 @@ void Geant4ePropagator::debugReportTrackState(std::string const &currentContext,
 // switched off: compiling this file with -DG4EVERBOSE FAILS. `iverbose` and
 // `fError` are members of the upstream G4ErrorPropagator classes that this CVH
 // copy no longer derives from, so the guarded code refers to names that do not
-// exist here (measured 2026-08-19: 10 errors, at lines 1743, 1752, 1806, 1838,
-// 1854, 1855, 2110, 2155, 2168, 2170 of the pre-change file).
+// exist here.
 //
 // Consequence for anyone tidying up: variables that exist ONLY to be printed in
 // these blocks (RI here, XI in computeErrorIoni) are declared INSIDE the guard,

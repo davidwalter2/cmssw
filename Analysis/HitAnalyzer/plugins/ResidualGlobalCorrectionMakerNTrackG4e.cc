@@ -520,12 +520,12 @@ private:
   // J/psi muons (as in the single-track maker); V0 drivers lower it to
   // sit above the propagation floor but below the soft-daughter spectrum.
   double clampMomentumFloor_ = 2.0;
-  // Relative Gauss-Newton step damping (2026-09-05). Per iteration a track's
-  // momentum may change by at most this factor (default 2). Effective floor
+  // Relative Gauss-Newton step damping. Per iteration a track's momentum may
+  // change by at most this factor (default 2). Effective floor
   // max(clampMomentumFloor_, p_ref/f) plus the symmetric upward cap p_ref*f;
-  // the bound is always strictly inside p_ref, which supersedes this maker's
-  // ad-hoc effFloor = min(floor, 0.5*p_ref) guard. <= 1 restores that legacy
-  // guard bit-identically.
+  // the bound is always strictly inside p_ref, which supersedes the
+  // effFloor = min(floor, 0.5*p_ref) guard. <= 1 selects that absolute-floor
+  // guard instead, bit-identically.
   double maxMomentumStepFactor_ = 2.0;
   // chi2-based (Armijo) retroactive backtracking; see the two-track maker.
   bool stepBacktracking_ = true;
@@ -540,7 +540,7 @@ private:
   unsigned int stepBacktrackFromIter_ = 2;
   double armijoC_ = 1.e-4;
   // Relative chi2 slack in the Armijo test. NOT a textbook line-search
-  // tolerance: measured 2026-09-05, the CVH/GBL iteration does NOT
+  // tolerance: measured, the CVH/GBL iteration does NOT
   // monotonically decrease r^T Vinv r -- the realized chi2 drifts UP by
   // ~0.3-0.5 per iteration even at 1/16 of the step (the model's predicted
   // decrease is never realized because every iteration re-propagates and
@@ -549,7 +549,7 @@ private:
   // each, 6x the propagation cost, for no change in the result. At 1.0
   // (the chi2 may not more than DOUBLE in one iteration) the test becomes a
   // pure DIVERGENCE TRAP: +0.5 % propagation on the gun ditrack smoke,
-  // +0.2 % single track, fit output at the noise level. Scan in NOTES.md.
+  // +0.2 % single track, fit output at the noise level.
   double armijoSlack_ = 1.0;
   unsigned int stepPrintLimit_ = 200;
   // Per-candidate leg-failure retry budgets (see the recovery block).
@@ -3899,8 +3899,8 @@ void ResidualGlobalCorrectionMakerNTrackG4e::produce(edm::Event &iEvent, const e
               }
               double s = 1.;
               if (maxMomentumStepFactor_ > 1.) {
-                // NEW (2026-09-05): relative trust region in q/p (see member
-                // comment). Supersedes the effFloor = min(floor, 0.5*p_ref)
+                // Relative trust region in q/p (see the member comment).
+                // Supersedes the effFloor = min(floor, 0.5*p_ref)
                 // guard below: the bound max(floor, p_ref/f) is likewise always
                 // strictly below p_ref, but it also keeps the ABSOLUTE floor
                 // wherever the leg is above it, and it adds the symmetric
@@ -3909,9 +3909,10 @@ void ResidualGlobalCorrectionMakerNTrackG4e::produce(edm::Event &iEvent, const e
                                              maxMomentumStepFactor_, 0., nullptr);
               } else {
                 const double qopupd = qopref + dqop;
-                // LEGACY. The floor must never sit ABOVE where the track
-                // already is. clampMomentumFloor_ (2 GeV) was written for muon
-                // channels where p_ref >> floor. A bachelor kaon starts at
+                // ABSOLUTE-FLOOR GUARD (maxMomentumStepFactor_ <= 1). The
+                // floor must never sit ABOVE where the track already is.
+                // clampMomentumFloor_ (2 GeV) suits muon channels where
+                // p_ref >> floor. A bachelor kaon starts at
                 // p ~ 0.5-1.5 GeV, i.e. already under it -- the "scale back up
                 // to the floor" arithmetic then returns a negative s, which
                 // max(s, 0) turns into a HARD ZERO step, freezing the whole

@@ -363,8 +363,7 @@ namespace cvhcgf {
     //   y (F(y) - F(x)) = ia [ (CinA - CinW) - i s (SiA - SiW) ]
     //                   = a s (SiA - SiW)  +  i a (CinA - CinW)
     //
-    // and a s = a sgn(a) = |a|. (A `sgn` local was computed here and never
-    // used; it was this factor, already folded in.)
+    // and a s = a sgn(a) = |a|.
     const std::complex<double> ydF(std::fabs(a) * (siA - siW), a * (cinA - cinW));
 
     return (em1y - em1x / w + ydF) / N;
@@ -391,24 +390,22 @@ namespace cvhcgf {
   // -- the same three integrals the tree-level 1/E^2 term already needs (it is
   // J0/N), so the only new mathematics is J1 and J2.
   //
-  // UNTIL 2026-08-20 THIS THREW. The refusal was correct while nothing
-  // implemented the channel -- reading `a3` as a collision count when it holds
-  // xi is a ~1e-5 error in a WEIGHT, i.e. one that changes the answer without
-  // failing -- but it made the in-fit CGF and the exact-delta correction
-  // mutually exclusive, and the exact delta is default-ON (e232c20) precisely
-  // because it is what the simulation does. A weight that cannot be evaluated
-  // on the physics the fit runs is not a weight.
+  // The exact delta channel is default-ON because it is what the simulation
+  // does, so the block CGF has to be able to evaluate it: a weight that cannot
+  // be evaluated on the physics the fit runs is not a weight. `a3` is read as
+  // `xi` here and as a collision count in regime 1; the regime, never a
+  // heuristic on the magnitude, selects the branch.
   //
   // This is a port of `cf_track_resolution.exact_delta_exponent` and
-  // `_delta_terms_exact`, the offline routines every published closure number
-  // in NOTES_DELTASPEC rests on, and it is validated against them step for
-  // step (testCGFQoPBlock + cgf_cxx_validate.py).
+  // `_delta_terms_exact`, the offline routines the published closure numbers
+  // rest on, and it is validated against them step for step (testCGFQoPBlock
+  // + cgf_cxx_validate.py).
   //
   // `deltaTerm` above is deliberately NOT refactored to share this code. It
   // could be -- J0/N is exactly its return value -- but the series branches
   // differ in their termination test, so sharing would perturb the regime-1
-  // path in its last bits, and bit-identity of what already ships is worth
-  // more than the fifteen lines.
+  // path in its last bits, and bit-identity of that path is worth more than
+  // the fifteen lines.
   //--------------------------------------------------------------------------
   void deltaTermsExact(double a, double w, std::complex<double> &J0, std::complex<double> &J1,
                        std::complex<double> &J2) {
@@ -631,8 +628,9 @@ namespace cvhcgf {
 
   // The Kokoulin excess of the same second moment. Composite Simpson in ln T,
   // mirroring `G4UniversalFluctuationForExtrapolator::kokoulinVarIntegral`
-  // term for term -- the two must not drift apart, because one is the weight
-  // the fit used to use and the other is the weight it uses now.
+  // term for term -- the two must not drift apart, because they are the same
+  // second moment of the same channel, one in the fluctuation model and one
+  // here.
   double kokoulinKappa2(const IoniStep &s, int nbin) {
     const double m = s.etot * std::sqrt(std::max(1.0 - s.beta2, 0.0));
     if (std::fabs(m - kMuMass) >= kKokMassTol || !(s.etot - kMuMass > kKokMuMin))

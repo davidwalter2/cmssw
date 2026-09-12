@@ -161,12 +161,9 @@ public:
     // It is here so that the ionization channel of the per-group CF export can
     // be split EXACTLY.  The Urban log is an order-preserving SUBSEQUENCE of
     // the Moliere one -- `SampleFluctuations` returns without a record when
-    // `meanLoss = length * dedx < minLoss` -- so before this field the offline
-    // reader had to recover the correspondence by taking the `n_ioni` Moliere
-    // rows of largest areal density (`matres/groups.py:pair_ioni_rows`).  That
-    // heuristic is accurate (the dropped rows carry at most 3.9e-4 of a
-    // block's areal density, measured over 2.03M blocks) but it is a guess,
-    // and carrying the group costs 4 bytes.
+    // `meanLoss = length * dedx < minLoss` -- so the two cannot be paired by
+    // position, and recovering the correspondence downstream could only ever
+    // be a heuristic.  Carrying the group costs 4 bytes.
     int stepGroup = -1;
   };
   void setIoniStepLogging(bool on) { ioniStepLogging_ = on; }

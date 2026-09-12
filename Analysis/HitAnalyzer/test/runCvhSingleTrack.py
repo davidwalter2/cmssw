@@ -121,17 +121,14 @@ opts.register('kinkInjectDydz', 0.0, VarParsing.VarParsing.multiplicity.singleto
               'injected dy/dz kink for the kink closure test')
 opts.register('stepLengthLimit', 10.0, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.float,
-              'Geant4e maximum step [mm] (default 10.0 = the historical '
-              'hard-coded value). Scanning it forces a DIFFERENT step '
+              'Geant4e maximum step [mm]. Scanning it forces a DIFFERENT step '
               'decomposition of the same physical path, which is the '
               'controlled probe of whether a per-leg quantity depends on where '
               'Geant4 happened to put its step boundaries.')
-# The CVH energy-loss switches are ParameterSet parameters on Geant4ePropagator
-# (Geant4e b372e08), NOT the CVH_* environment variables they used to be.  They
-# were registered only on the clean-propagation drivers, which meant a REAL-TRACK
-# fit could not pin them at all and silently inherited the cfi default -- and
-# that default flipped to all-on (e232c20).  Registering them here makes the
-# configuration explicit and puts it in the output file's provenance.
+# The CVH energy-loss switches are ParameterSet parameters on Geant4ePropagator.
+# Registering them here lets a real-track fit pin them explicitly instead of
+# inheriting the cfi default, and puts the configuration in the output file's
+# provenance.
 import TrackPropagation.Geant4e.cvhSwitches as cvhSwitches
 cvhSwitches.register(opts)
 opts.parseArguments()

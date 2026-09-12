@@ -175,15 +175,14 @@ private:
   // Gauss-Newton momentum floor [GeV]: the updated |p| a step is allowed to
   // reach. Its ONLY job is to keep the state out of the propagator's
   // refusal region (Geant4ePropagator.PropagationPtotLimit), so it must
-  // track that limit and nothing else. It was a hard-coded 2.0 GeV until
-  // 2026-09-04, chosen when the propagation limit was 1.0 GeV; the drivers
-  // have since lowered the limit to 0.2 GeV, and a 2 GeV clamp then PINS
-  // every genuinely soft track at 2 GeV (momentum-high, chi2/ndof >> 1).
+  // track that limit and nothing else: a floor set well above the
+  // propagation limit PINS every genuinely soft track at the floor
+  // (momentum-high, chi2/ndof >> 1).
   // Configurable via the `clampMomentumFloor` cfi parameter, whose driver
   // default is derived from the propagation limit. Same name/semantics as
   // the two-track and N-track makers.
   double clampMomentumFloor_ = 2.0;
-  // Relative Gauss-Newton step damping (2026-09-05). Per iteration a track's
+  // Relative Gauss-Newton step damping. Per iteration a track's
   // momentum may change by at most this factor (default 2: p may at most halve
   // or double). Implemented as the effective floor max(clampMomentumFloor_,
   // p_ref/f) plus the symmetric upward cap p_ref*f, so the bound is ALWAYS
@@ -208,8 +207,8 @@ private:
   unsigned int stepBacktrackFromIter_ = 2;
   double armijoC_ = 1.e-4;              // sufficient-decrease coefficient
   // Relative chi2 slack in the Armijo test. NOT a textbook line-search
-  // tolerance: measured 2026-09-05, the CVH/GBL iteration does NOT
-  // monotonically decrease r^T Vinv r -- the realized chi2 drifts UP by
+  // tolerance: the CVH/GBL iteration does NOT monotonically decrease
+  // r^T Vinv r -- the realized chi2 drifts UP by
   // ~0.3-0.5 per iteration even at 1/16 of the step (the model's predicted
   // decrease is never realized because every iteration re-propagates and
   // re-linearizes). A tolerance of 1e-3 therefore turns the test into a
@@ -217,7 +216,7 @@ private:
   // each, 6x the propagation cost, for no change in the result. At 1.0
   // (the chi2 may not more than DOUBLE in one iteration) the test becomes a
   // pure DIVERGENCE TRAP: +0.5 % propagation on the gun ditrack smoke,
-  // +0.2 % single track, fit output at the noise level. Scan in NOTES.md.
+  // +0.2 % single track, fit output at the noise level.
   double armijoSlack_ = 1.0;
   // Cap on the per-job "GN step clamped/backtracked" printouts. The relative
   // damping legitimately fires far more often than the absolute floor did, and
@@ -438,7 +437,7 @@ ResidualGlobalCorrectionMakerG4e::ResidualGlobalCorrectionMakerG4e(const edm::Pa
   allowChargeFlipAboveP_ = iConfig.existsAs<double>("allowChargeFlipAboveP")
       ? iConfig.getParameter<double>("allowChargeFlipAboveP") : 1.e9;
   // Gauss-Newton momentum floor (see member comment). existsAs-guarded so a
-  // cfi that does not set it keeps the historical 2.0 GeV.
+  // cfi that does not set it keeps the default 2.0 GeV.
   clampMomentumFloor_ = iConfig.existsAs<double>("clampMomentumFloor")
       ? iConfig.getParameter<double>("clampMomentumFloor") : 2.0;
   // Relative step damping and chi2 backtracking (see member comments).
@@ -630,16 +629,6 @@ void ResidualGlobalCorrectionMakerG4e::beginStream(edm::StreamID streamid)
     tree->Branch("nHits", &nHits, basketSize);
     tree->Branch("nValidHits", &nValidHits, basketSize);
     tree->Branch("nValidPixelHits", &nValidPixelHits, basketSize);
-
-    // openspec/improve-cvh-refit-convergence §2: the `nValidHitsFinal` and
-    // `nValidPixelHitsFinal` branches previously emitted here were declared,
-    // initialised to 0, and never incremented in this single-track producer
-    // (the per-hit loop has no `morehitquality` quality gate). The branches
-    // therefore wrote literal 0 for every event in the published Run2016H
-    // sample, falsely suggesting that 100% of kaon hits had been dropped by
-    // the refit (`Kbach_nValidHitsFinal=0` in the joined tree). Removed
-    // entirely until a real per-hit rejection mechanism lands and the
-    // counters can carry meaningful information.
 
     if (fillJac_) {
       tree->Branch("nJacRef", &nJacRef, basketSize);
@@ -912,9 +901,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   // product for the label), queried only for its AlgoParam so the
   // hit-resolution export can record the CPE's own uProj.
   // NOT gated on fitFromGenParms_: hitUProj is exactly the class variable the
-  // offline CF needs on the NOMINAL-fit productions, and gating it there left
-  // every strip hit at -99 (found by the conditioning study, which then put
-  // the whole strip tracker in one uProj bin).
+  // offline CF needs on the NOMINAL-fit productions; gating it there would
+  // leave every strip hit at -99, putting the whole strip tracker in one
+  // uProj bin.
   const StripCPE *stripCPEForExport = nullptr;
   if (fillTrackTree_) {
     stripCPEForExport = dynamic_cast<const StripCPE*>(iSetup.getHandle(stripCPEToken_).product());
@@ -1127,9 +1116,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
           // genParticles:xyz0 (gen PV) is not kept in every ALCARECO
           // (the B->J/psi+X MC keeps only the recoGenParticles branch);
-          // fall back to the -99 sentinel rather than throwing. (This
-          // guard was originally a pixel-session working-tree fix that
-          // was lost in the 2026-07-25 session disentangling.)
+          // fall back to the -99 sentinel rather than throwing.
           genl3d = genXyz0.isValid()
               ? std::sqrt((g->vertex() - *genXyz0).mag2()) : -99.;
 
@@ -1137,24 +1124,13 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
           // GEN REFERENCE PARAMETERS IN THE FIT'S OWN CONVENTION.
           //
-          // They used to be hand-coded in the reco::TrackBase perigee
-          // convention, which agrees with `refParms` on (q/p, lambda, phi,
-          // d0) and NOT on the fifth:
-          //   * `refParms[4]` is `cart2pca(...)[4]`, the ABSOLUTE z of the
-          //     point of closest approach to the beamline, whereas the old
-          //     line computed `dsz` -- and computed it wrongly, because
-          //     `BeamSpot::position(z)` returns `Point(x(z), y(z), z)`, so
-          //     the `vtx.z() - myBeamSpot.z()` term was IDENTICALLY ZERO and
-          //     `genParms[4]` was the transverse remainder alone (~1e-4 cm
-          //     against a z0 of centimetres).  Measured on 2000 mu-gun
-          //     tracks: `Var((refParms[4]-genParms[4])/sigma) = 4.0e6` with a
-          //     median pull of +375, against ~1.0 for the other four
-          //     (NOTES 2026-09-09).
-          //   * `genParms[3]` was `dxy`, which IS `cart2pca`'s `d0` for a
-          //     beamline along z-hat -- no change in value, but now it is the
-          //     same formula rather than two that happen to agree.
-          // Calling `cart2pca` on the gen state makes gen and fitted
-          // DEFINITIONALLY identical, which is what a residual needs.
+          // `cart2pca` is the same map that produces `refParms`, so gen and
+          // fitted are DEFINITIONALLY identical, which is what a residual
+          // needs.  The reco::TrackBase perigee convention would NOT do: it
+          // agrees on (q/p, lambda, phi, d0) but its fifth parameter is
+          // `dsz`, whereas `refParms[4]` is `cart2pca(...)[4]`, the ABSOLUTE
+          // z of the point of closest approach to the beamline -- a
+          // difference of centimetres against a sigma of microns.
           {
             Matrix<double, 7, 1> genstate;
             genstate << vtx.x(), vtx.y(), vtx.z(), g->px(), g->py(), g->pz(),
@@ -2331,15 +2307,16 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         if (doSim_) {
           // The track can leave MORE THAN ONE PSimHit on a module -- a curling
           // low-momentum hadron, or a re-entry after a large-angle nuclear
-          // elastic scatter. Taking the first candidate produced a 0.126 %
-          // population of proton strip hits with |(rec-sim)/sigma| > 10 and a
-          // median |rec - sim| of 1.35 mm, which would be read as a hit
-          // resolution tail; the kaon gun shows 40x less of it, so it is
-          // proton kinematics and not a defect of the hit. The CHOICE among
-          // candidates is deferred to the point where the propagated local
-          // position exists (see the simhitCands re-selection below); the
-          // first candidate is kept here so the fitFromSimParms / simhitdebug
-          // paths behave exactly as before.
+          // elastic scatter. Taking the first candidate rather than the
+          // nearest one puts a 0.126 % population of proton strip hits at
+          // |(rec-sim)/sigma| > 10 with a median |rec - sim| of 1.35 mm,
+          // which would be read as a hit resolution tail; the kaon gun shows
+          // 40x less of it, so it is proton kinematics and not a defect of
+          // the hit. The CHOICE among candidates is deferred to the point
+          // where the propagated local position exists (see the simhitCands
+          // re-selection below); the first candidate is kept here so that the
+          // fitFromSimParms / simhitdebug paths, which run before that point,
+          // still see a sim hit.
           //
           // Species from the CONFIGURED gen-match hypothesis, not a hardcoded
           // muon. With |particleType|==13 the sim-hit machinery silently
@@ -2865,9 +2842,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                 const double dscore = psiz - z / cgfb.invFisher;
                 // SHRINKAGE. The re-centring is measured to be anti-correlated
                 // with the truth residual and to add scatter of a comparable
-                // size, so its variance-optimal scale is not 1 (NOTES_CGFFIT
-                // s85). `CgfRecentreDamping` is that scale; 1.0 reproduces
-                // every earlier stage bit for bit.
+                // size, so its variance-optimal scale is not 1.
+                // `CgfRecentreDamping` is that scale; 1.0 applies the
+                // re-centring undamped.
                 dx0[0] = cvhcgf::cgfRecentreDamping() * csig * cgfb.invFisher * dscore;
                 ++nCgfRecentre_;
                 if (getenv("CVH_CGF_QOP_DEBUG") != nullptr) {
@@ -3090,7 +3067,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               msmoliv.push_back(ms.beta);
               msmoliv.push_back(ms.thp2);
               msmoliv.push_back(ms.dOverX0);
-              // per-element Moliere sums (2026-08-08): effZ/effA are mass
+              // per-element Moliere sums: effZ/effA are mass
               // averages and both parameters are non-linear in Z
               msmoliv.push_back(ms.zzp1OverA);
               msmoliv.push_back(ms.lnScreenW);
@@ -3170,7 +3147,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               radstepv.push_back(rs.dedxBrem);
               radstepv.push_back(rs.dedxPair);
               radstepv.push_back(rs.cs);
-              radstepv.push_back(rs.stepGroup);   // column 11, appended 2026-09-06
+              radstepv.push_back(rs.stepGroup);   // column 11: material group
               for (int iv = 0; iv < RADSTEP_NV; ++iv) {
                 radstepspecv.push_back(rs.dNdvBrem[iv]);
               }
@@ -3185,14 +3162,14 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           //
           // `k_g` scales the step's MEAN loss AND, coherently, its MS
           // covariance and ionization variance (`matStepFact` in the
-          // propagator's M1 block).  The mean dependence has always been
-          // differentiated -- it is the parmtype-15 column of
-          // `transportJacobianBxByBzD`, whose only non-zero row is `dqopdxi`
-          // -- but the WIDTH dependence never was.  So the quadratic term
-          // measured a group's mean loss only while the mass CF measured its
-          // width: two functionals of one parameter, one of them blind, which
-          // is exactly the configuration in which a -37 % `tec_services` pull
-          // can sit unexplained (NOTES 2026-09-06, `resolution/qmsmodel/`).
+          // propagator's M1 block).  The mean dependence is the parmtype-15
+          // column of `transportJacobianBxByBzD`, whose only non-zero row is
+          // `dqopdxi`; the WIDTH dependence is this block.  Both are needed:
+          // with only the mean differentiated, the quadratic term measures a
+          // group's mean loss while the mass CF measures its width -- two
+          // functionals of one parameter, one of them blind, which is exactly
+          // the configuration in which a large unexplained group pull can
+          // sit.
           //
           // dV/dk_g is the same object the parmtype-10/11 blocks use, split by
           // group: the propagator accumulates (errMS + errI) per group in
@@ -3494,8 +3471,6 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             // here, where iV is finished and before anything reads it, so
             // Vinvfull, the resolution dV blocks and the dxerr export are all
             // consistent with one another. Defaults are 1.0 = no change.
-            // This is the dead `scalecov = ispixel ? 0.8 : 1.2` of the
-            // Vinvfullalt branch turned into something measurable.
             {
               const double covscale = ispixel ? hitCovScalePixel_ : hitCovScaleStrip_;
               if (covscale != 1.0) {
@@ -4154,10 +4129,10 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         const double qopFlipAllow = 1. / std::max(allowChargeFlipAboveP_, pFloor);
         double stepscale = 1.;
         if (maxMomentumStepFactor_ > 1.) {
-          // NEW (2026-09-05): relative trust region in q/p. The lower bound
+          // Relative trust region in q/p. The lower bound
           // max(pFloor, p_ref/f) is always strictly below p_ref, so a track
-          // whose true momentum is below pFloor is no longer pinned there and
-          // the scale can no longer be zero. The upward cap p_ref*f guards the
+          // whose true momentum is below pFloor is not pinned there and the
+          // scale cannot be zero. The upward cap p_ref*f guards the
           // opposite runaway (p -> inf / sign flip of a stiff track) and, at
           // f = 2, reproduces the legacy half-way-to-zero flip rule exactly.
           bool flipProtect = false;
@@ -4237,13 +4212,11 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       // NEXT iteration, where the realized chi2 becomes available.
       predDecrPrev = deltachisq * (2. - stepScaleApplied);
 
-      // Realized chi2 tracking (this maker historically never filled the
-      // chisqval/deltachisqval members in-loop -- they were stale storage;
-      // the always-stored chisqval branch is still overwritten with the
-      // final residual-projector value after the loop as before). chi2 at
-      // the current linearization point plus the predicted change of this
-      // step, mirroring the two-track maker; deltachisqval is the realized
-      // iteration-to-iteration change (per-iteration debug dump).
+      // Realized chi2 tracking: chi2 at the current linearization point plus
+      // the predicted change of this step, mirroring the two-track maker;
+      // deltachisqval is the realized iteration-to-iteration change
+      // (per-iteration debug dump). The always-stored chisqval branch is
+      // overwritten with the final residual-projector value after the loop.
       {
         const double chisq0val = chisq0valNow;
         const double chisqcur = chisq0val + deltachisq;
@@ -4313,7 +4286,6 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       // Position (impact) parameters at the PCA to the beamspot: d0 (=dxy) and
       // z0 (=dz). Reference value from the converged state (cart2pca of refFts)
       // plus the reference-block update, mirroring the momentum fill above.
-      // Resolves the longstanding "fill position parameters" TODO.
       const Matrix<double, 5, 1> statepcaRef = cart2pca(refFts, *bsH);
       refParms[3] = statepcaRef[3] + dxref[3];
       refParms[4] = statepcaRef[4] + dxref[4];
@@ -4321,9 +4293,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       // PHI IS AN ANGLE AND THE RESIDUAL IS NOT.  `genParms[2]` comes out of
       // `cart2pca` in (-pi, pi]; `refParms[2] = phi + dxref[2]` is the fitted
       // value and is NOT wrapped, so a track sitting on the branch cut has
-      // `refParms[2] - genParms[2] = +-2pi`, i.e. ~4e4 sigma. Measured 8
-      // tracks in 20 000 (0.04 %), enough to make `Var(z_phi) = 2.9e4`
-      // (NOTES 2026-09-09).  Put the gen value on the same branch as the
+      // `refParms[2] - genParms[2] = +-2pi`, i.e. ~4e4 sigma, on the ~0.04 %
+      // of tracks that sit there.  Put the gen value on the same branch as the
       // fitted one HERE, once, rather than leaving every reader to remember.
       if (genpart != nullptr) {
         const double dphi = double(refParms[2]) - double(genParms[2]);
@@ -4754,8 +4725,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             resinfcov += vb;
           }
           // The hit share on its own, so the two trees expose the same
-          // decomposition. Unlike the two-track maker, `resinfcov` HERE has
-          // always included the hit blocks, and that is left alone.
+          // decomposition. Unlike the two-track maker, `resinfcov` HERE
+          // includes the hit blocks.
           if (fam == 8 || fam == 9) {
             resinfcovhit += float(vb);
           }
@@ -4802,9 +4773,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                      ioniurbanidx.empty() ? 0 : int(ioniurbanv.size() / ioniurbanidx.size())};
         cfin.qsc = {ioniqscaleidx.data(), ioniqscalev.data(), int(ioniqscaleidx.size()), 2};
         cfin.rad = {radstepidx.data(), radstepv.data(), int(radstepidx.size()), RADSTEP_STRIDE};
-        // The material-group column of each record: `msmoliv` has carried it
-        // at column 9 since the global material model landed; `ioniurbanv`
-        // and `radstepv` carry it as their LAST column (2026-09-06). Set
+        // The material-group column of each record: `msmoliv` carries it at
+        // column 9; `ioniurbanv` and `radstepv` carry it as their LAST
+        // column. Set
         // explicitly rather than inferred so that a stride change cannot
         // silently relabel a group as a physics quantity.
         cfin.ms.groupCol = cfin.ms.stride >= 10 ? 9 : -1;
@@ -4944,22 +4915,15 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
           // (2) THE WHITENING.
           //
-          // The obvious route -- assemble `G = V_mm - F_m C F_m^T` and
-          // factorize it -- does not work, and it is worth saying why,
-          // because it looks like it should.  `G` is a Schur complement: its
-          // five null directions are a DIFFERENCE of two nearly equal
-          // numbers, and the solve they come from (`C = (F^T V^-1 F)^-1`) is
-          // badly conditioned, a thin layer giving its kink block very small
-          // process noise.  MEASURED on a 200-track smoke: the null
-          // eigenvalues of the assembled `G` come out at ~1e-9 of the
-          // diagonal instead of 1e-16, `max_k |(Psi^T G Psi)_kk - 1|` reaches
-          // 1e9, and the LAST whitened component of a track -- the one that
-          // closes the d-dimensional space -- misses `sum_b v^(k)_b = 1` by
-          // up to a factor of 19.  One step of iterative refinement made it
-          // worse, not better.
-          //
-          // So the construction is done in the STANDARDIZED space with
-          // ORTHOGONAL operations only.  With `Fw = V^-1/2 F`,
+          // The construction is done in the STANDARDIZED space with
+          // ORTHOGONAL operations only, so that the rank of the post-fit
+          // covariance is IMPOSED by a projector rather than discovered from
+          // a cancellation: its null eigenvalues sit at 1e-16 of the unit
+          // diagonal, where the Schur complement `G = V_mm - F_m C F_m^T`
+          // leaves them at ~1e-9 -- there the five null directions are a
+          // DIFFERENCE of two nearly equal numbers, taken through the
+          // ill-conditioned solve `C = (F^T V^-1 F)^-1` (a thin layer gives
+          // its kink block very small process noise).  With `Fw = V^-1/2 F`,
           //     R = V^-1/2 (I - P) V^-1/2 ,   P = Fw (Fw^T Fw)^-1 Fw^T
           //                                     = Q1 Q1^T
           // is an identity, so the projector is a QR of `Fw` and never an
@@ -4967,7 +4931,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           //   * `s = (I - Q1 Q1^T) V^-1/2 r` is the standardized post-fit
           //     residual and `chi2 = |s|^2 = r^T R r`;
           //   * `Gs = I - Q1_m Q1_m^T` is its covariance on the measurement
-          //     rows, and its null eigenvalues now sit at 1e-16 of the unit
+          //     rows, and its null eigenvalues sit at 1e-16 of the unit
           //     diagonal because `Q1_m Q1_m^T` is a submatrix of an
           //     orthogonal projector and not a cancelling product of solves.
           // `V` is block diagonal over exactly the blocks `resblockrng`
@@ -5152,8 +5116,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
             // (3b) THE TRUTH-REFERENCED COMPONENTS, appended to the same
             //      arrays.  `r = refParms - genParms` whitened by the lower
-            //      Cholesky factor of `refCov` is exactly the prototype of
-            //      `calibration_studies/resolution/hitlik`, and its influence
+            //      Cholesky factor of `refCov` is the truth-referenced
+            //      residual, and its influence
             //      is `W5 L^-T` -- the SAME `W5` the q/p export above already
             //      built.  Carrying it here rather than in a second
             //      production means the two terms are read out of one file
@@ -5277,17 +5241,12 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               // MINUS because the process-noise constraint row is built as
               // (propagated - state) rather than the other way round.
               //
-              // None of that is asserted: reference component 0 IS the q/p
-              // functional (see (3b)), so requiring it to reproduce the
-              // validated `cfqop_ioni_im` / `cfqop_rad_im` fixes the
-              // convention, and the three candidate conventions are
-              // distinguished by their worst-track relative difference --
-              // `W[r0,k]` with no minus: 2.0 (i.e. the opposite sign, every
-              // track); `W[r0,k]` with the minus: 5.3e-2; `W_b . u` with the
-              // minus: 1.2e-7, which is the float32 storage of the
-              // reference.  The real families (`ms`, `del`, `ioni_re`,
-              // `rad_re`) agree at 1.2e-7 under all three, as they must --
-              // they are even.
+              // The convention is checked, not asserted: reference component
+              // 0 IS the q/p functional (see (3b)), so it must reproduce the
+              // validated `cfqop_ioni_im` / `cfqop_rad_im`, and with the
+              // signed coefficient `W_b . u` it does, to the 1.2e-7 of their
+              // float32 storage.  The even families (`ms`, `del`, `ioni_re`,
+              // `rad_re`) are insensitive to the sign, as they must be.
               VectorXd udir = VectorXd::Zero(nb);
               if (fam == 11 && nb > 0) {
                 SelfAdjointEigenSolver<MatrixXd> esb(dVb);

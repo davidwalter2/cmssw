@@ -129,22 +129,16 @@ namespace {
   //   "Unable to initiate the connection: [ERROR] Socket error: network is
   //    unreachable"  /  "Redirect limit has been reached for message kXR_open"
   // and QueryTransport then fails, leaving the AnyObject empty. AnyObject::Get
-  // sets the pointer to 0 in that case (XrdClAnyObject.hh:78-86), so the
-  // unpatched code returned a NULL unique_ptr and the caller dereferenced it
-  // (`auth_method->empty()`, `*hostname_method`, ...) on the XrdCl JobManager
-  // thread -- i.e. outside any CMSSW module, which is why the framework's
-  // crash report says "Module: non-CMSSW (crashed)" and the visible stack
-  // frames belong to the *paused* worker threads.
+  // sets the pointer to 0 in that case (XrdClAnyObject.hh:78-86), and every
+  // call site formats the result unconditionally (`auth_method->empty()`,
+  // `*hostname_method`, ...) on the XrdCl JobManager thread -- i.e. outside
+  // any CMSSW module, so a null pointer there takes the job down with a crash
+  // report that names no module and whose visible stack frames belong to the
+  // *paused* worker threads.
   //
-  // Reproduced 2026-09-06 on submit82 streaming a UL16 MiniAOD chunk through
-  // cms-xrd-global (scratch_segv_260906/xrd1); it is the cause of the SIGSEGVs
-  // of the dymc_8p5M_260906_v2 and jpsimc_20M_260906_v2 condor productions.
-  // The same input read over POSIX ceph never crashes.
-  //
-  // Two guards, both of which the upstream code needs:
+  // Hence two guards:
   //   * the PostMaster can be gone during shutdown -> check it;
-  //   * a failed query must yield an EMPTY string, not a null pointer, because
-  //     every call site formats the result unconditionally.
+  //   * a failed query yields an EMPTY string, never a null pointer.
   std::unique_ptr<std::string> getQueryTransport(const XrdCl::URL &url, uint16_t query) {
     std::string *tmp = nullptr;
     if (XrdCl::PostMaster *pm = XrdCl::DefaultEnv::GetPostMaster()) {
@@ -158,9 +152,9 @@ namespace {
 
   void tracerouteRedirections(const XrdCl::HostList *hostList) {
     // XrdCl hands the handler a null host list when the open never got far
-    // enough to collect one; `for (auto const &host : *hostList)` below would
-    // dereference it. Source::determineHostExcludeString, the very next call
-    // at both call sites, already guards this -- this one did not.
+    // enough to collect one; the loop below would dereference it.
+    // Source::determineHostExcludeString, the very next call at both call
+    // sites, guards the same way.
     if (hostList == nullptr) {
       return;
     }

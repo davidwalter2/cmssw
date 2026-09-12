@@ -62,9 +62,9 @@ int main(int argc, char **argv) {
     blk.ioni.reserve(nstep);
     for (int i = 0; i < nstep; ++i) {
       std::istringstream rs(lines[++li]);
-      // The record is 11 doubles per step historically and 13 when the export
-      // ran with CVH_IONI_EXACTDELTA, which APPENDS beta2 and etot after cs so
-      // that every legacy column index is unchanged. Read whatever the line
+      // The record is 11 doubles per step, or 13 when the export ran with
+      // CVH_IONI_EXACTDELTA, which APPENDS beta2 and etot after cs so that
+      // every earlier column index is unchanged. Read whatever the line
       // holds rather than a fixed count: a stride mismatch would otherwise
       // consume the next row silently.
       std::vector<double> v;

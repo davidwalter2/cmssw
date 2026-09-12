@@ -63,7 +63,6 @@ namespace cvhcf {
       double lnY0 = 0., dlnY = 0.;
       double lnPhi0 = 0., dlnPhi = 0.;
       std::string path;
-      std::string md5;  // not computed; kept for the tag
       bool loaded = false;
     };
 
@@ -377,9 +376,7 @@ namespace cvhcf {
 
     // The two halves of the delta family, so that a per-group split can reuse
     // the block's carve. `acc` may be null, in which case only vd/vms are
-    // formed (the tau loop is the expensive part). Every statement is in the
-    // order the single-pass version had it, so the flat path is unchanged to
-    // the last bit.
+    // formed (the tau loop is the expensive part).
     void delAccumImpl(const float *rows, int stride, int n, double wstd, const double *tau, int nt, double *acc,
                       double &vd, double &vms) {
       const ShapeTables &tb = T();
@@ -552,13 +549,12 @@ namespace cvhcf {
   }
 
   void ioniBlock(const float *rows, int stride, int n, double wstdSigned, double *Sre, double *Sim) {
-    // 11 = the historical record, 13 = with the exact-delta beta^2/E columns,
-    // 12 / 14 = the same two with the material-group column appended
-    // (2026-09-06). Anything else is not an `ioniurbanv` row and is refused
-    // rather than mis-parsed -- but note the guard SILENTLY returns, so a
-    // stride that is not on this list zeroes the ionization exponent of every
-    // candidate. That is exactly what the group column did before this line
-    // was widened; keep the list in step with the writer.
+    // Accepted strides: 11 = the base record, 13 = with the exact-delta
+    // beta^2/E columns, 12 / 14 = the same two with the material-group column
+    // appended. Anything else is not an `ioniurbanv` row and is refused rather
+    // than mis-parsed -- but note the guard SILENTLY returns, so a stride that
+    // is not on this list zeroes the ionization exponent of every candidate;
+    // keep the list in step with the writer.
     if (rows == nullptr || n <= 0 || stride < 11 || stride > 14)
       return;
     std::vector<cvhcgf::IoniStep> st;
@@ -600,9 +596,8 @@ namespace cvhcf {
         continue;
       // GeV throughout, matching cf_brems_exact: dE/norm is unit-free, so the
       // reference's own units are used rather than the propagator's MeV
-      // convention, and `gs` below carries no 1e-3 (the radiative records
-      // store GeV, the Urban ones MeV -- putting a 1e3 here instead made the
-      // exponent 1e6 too large offline once, and collapsed the CF to zero).
+      // convention, and `gs` below carries no 1e-3 -- the radiative records
+      // store GeV where the Urban ones store MeV.
       cvhcgf::makeRadSpectrum(vgrid.data(), shapeB.data(), shapeP.data(), r[8] * stepCm, r[9] * stepCm, etot, nv,
                               dNdv.data());
       bool any = false;
@@ -847,9 +842,9 @@ namespace cvhcf {
             // wanted, a block whose steps are all one material (the common
             // case: a block is one propagation surface) is computed exactly
             // once.  Adding the same double to the flat accumulator and to the
-            // group slot is bitwise what the flat-only path did -- `a += x` is
-            // `a += x` -- so `sum_g` equals the flat exponent to the LAST BIT
-            // here, and the per-group export costs nothing but the copy.
+            // group slot is bitwise identical to accumulating it once -- `a +=
+            // x` is `a += x` -- so `sum_g` equals the flat exponent to the LAST
+            // BIT here, and the per-group export costs nothing but the copy.
             gtmp.clear();
             msBlock(blk.data(), rows.stride, ns, wstd, gtmp.ms.data(), in.wantDelta ? gtmp.del.data() : nullptr);
             for (int j = 0; j < kNTau; ++j) {
@@ -868,8 +863,8 @@ namespace cvhcf {
             }
           } else {
             // A block that straddles two materials: the flat exponent is
-            // formed over ALL its rows, exactly as before, and the split is a
-            // second pass.  The carve is a RATIO over the WHOLE block (see
+            // formed over ALL its rows and the split is a second pass.  The
+            // carve is a RATIO over the WHOLE block (see
             // delCarveFactor), so it is computed once and reused.
             msBlock(blk.data(), rows.stride, ns, wstd, out.S.ms.data(), in.wantDelta ? out.S.del.data() : nullptr);
             const double carve =

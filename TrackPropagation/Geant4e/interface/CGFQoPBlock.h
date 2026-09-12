@@ -43,11 +43,8 @@
 //   * SCALAR: the q/p (curvilinear component 0) marginal of the block. The
 //     joint 5x5 CGF is not attempted.
 //   * All three ionization regimes ARE covered: the Gaussian regime, the Urban
-//     1/E^2 compound Poisson, and -- since 2026-08-20 -- the exact knock-on
-//     cross section of CVH_IONI_EXACTDELTA together with the Kokoulin
-//     radiative correction. The last two used to THROW here, which made the
-//     in-fit CGF and the simulation's own delta-ray physics mutually
-//     exclusive.
+//     1/E^2 compound Poisson, and the exact knock-on cross section of
+//     CVH_IONI_EXACTDELTA together with the Kokoulin radiative correction.
 //
 // UNITS AND THE STANDARDIZATION CONVENTION
 // ----------------------------------------
@@ -127,19 +124,18 @@ namespace cvhcgf {
     // cfi carries the measurement that justifies it.
     bool cgfRadiative = false;
     // THE CGF WEIGHT ITSELF.
-    //   0 = the legacy Gaussian weight (diagnostic only since the truncation
-    //       was deleted -- see cgfQoPMode's comment in the cfi),
+    //   0 = the Gaussian weight (diagnostic only -- see cgfQoPMode's comment
+    //       in the cfi),
     //   1 = the Fisher weight (PRODUCTION DEFAULT),
     //   2 = 1 plus the per-leg diagnostic print,
-    //   3 = 1 plus the IRLS re-centring (prototype, see NOTES_CGFFIT s58).
-    // It was `CVH_CGF_QOP` in the environment while it was an experiment. A
-    // default-ON estimator may not live in a shell variable: which weight
-    // produced a file has to be recoverable from the file.
+    //   3 = 1 plus the IRLS re-centring (prototype).
+    // Configured rather than environment-driven: which weight produced a file
+    // has to be recoverable from the file.
     int cgfQoPMode = 1;
     // How often the block is recomputed: 0 = freeze after the first
     // Gauss-Newton sweep, N > 0 = every N sweeps. Freezing is the default and
     // is justified rather than assumed -- the fixed point is schedule-
-    // independent to 1.4e-6 (NOTES_CGFFIT s59) and freezing is 14x cheaper.
+    // independent to 1.4e-6 and freezing is 14x cheaper.
     int cgfQoPRefresh = 0;
     // SHRINKAGE on the mode-3 re-centring, in [0, 1].
     //
@@ -150,7 +146,7 @@ namespace cvhcgf {
     // itself an estimate. The net is a wash at full size. Scaling it by
     // `lambda` gives dVar = lambda^2 Var(delta) + lambda 2Cov, minimised at
     // lambda* = -Cov/Var(delta) = 0.40 with a predicted -1.1e-3 on the
-    // residual variance. See NOTES_CGFFIT section 85.
+    // residual variance.
     double cgfRecentreDamping = 1.0;
     double ioniExactDeltaT0 = 0.0;
   };
@@ -494,7 +490,7 @@ namespace cvhcgf {
     // energies, so that `gs` below means exactly what it means there. The
     // records are natively in GeV and the propagator converts; getting this
     // wrong is a factor 1e3 in the exponent, which collapses the CF to zero
-    // rather than failing (it happened once offline).
+    // rather than failing.
     double etot = 0.;
     // (residual units) per MeV, including the transport weight and the charge
     // sign -- identical convention to IoniStep::gs.
@@ -639,18 +635,16 @@ namespace cvhcgf {
   // Block CF exponent S(t): phi(t) = exp(S(t)). Centred (mean subtracted),
   // which is the convention the propagator's mean-loss table implies.
   //
-  // THROWS std::runtime_error if any step has `regime >= 2`. That regime's
-  // `a3` slot holds `xi` (an energy) rather than a collision count, so reading
-  // it here is wrong by ~1e-5 in the delta channel -- and, being a WEIGHT, it
-  // would not fail, it would silently change the answer. The refusal replaced
-  // a one-shot warning, and is KEPT now that CVH_IONI_EXACTDELTA is
-  // default-off again: a warning is not a safe guard for a silent-wrong-answer
-  // hazard at any default, and the two switches can still be set together by
-  // hand.
+  // Every regime is handled: the regime -- never a heuristic on the magnitude
+  // -- selects how `a3` is read, because that slot holds a collision count in
+  // regime 1 and the energy scale `xi` in regime 2/3, and confusing the two is
+  // a ~1e-5 error in a WEIGHT, i.e. one that changes the answer without
+  // failing.
   std::complex<double> blockExponent(const Block &blk, double t);
 
   // Gaussian-limit variance of the block in residual units, i.e. -S''(0).
-  // Throws on regime >= 2 for the same reason as blockExponent.
+  // IONIZATION ONLY: the radiative second moment is dominated by v -> 1 and
+  // belongs in the CF, not in a variance.
   double blockKappa2(const Block &blk);
 
   // t at which Re S(t) = lncut, bisected on a coarse log scan.

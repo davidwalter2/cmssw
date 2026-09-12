@@ -62,12 +62,6 @@ public:
 
   ~G4UniversalFluctuationForExtrapolator() override;
 
-  // CDF fraction of the delta-electron (1/E^2) spectrum kept when computing
-  // the truncated mean/variance of the ionization straggling (PANDA
-  // PV/01-07 eq. 68-69). The fitted "resolution" is convention-dependent
-  // through this cutoff (truncated sigma grows ~3x from alpha=0.99 to
-  // 0.999), so the resolution-closure diagnostic scans it.
-
   // Per-step Urban-model parameters recorded by the last SampleFluctuations
   // call. These are the exact ingredients of the analytic compound-Poisson
   // characteristic function of the step's ionization straggling:
@@ -120,9 +114,13 @@ public:
     double beta2 = 0., etot = 0.;   // regime 2/3 only; physical, unscaled
   };
   // The alpha quantile at which the delta-ray spectrum is truncated when this
-  // class forms a VARIANCE. Only reached with `CgfQoPMode == 0`, the legacy
-  // Gaussian weight -- the Fisher weight needs no cut and the setter is inert
-  // for it.
+  // class forms a VARIANCE: the CDF fraction of the delta-electron (1/E^2)
+  // spectrum kept when computing the truncated mean/variance of the ionization
+  // straggling (PANDA PV/01-07 eq. 68-69). The fitted "resolution" is
+  // convention-dependent through this cutoff (truncated sigma grows ~3x from
+  // alpha=0.99 to 0.999), so the resolution-closure diagnostic scans it.
+  // Only reached with `CgfQoPMode == 0`, the legacy Gaussian weight -- the
+  // Fisher weight needs no cut and the setter is inert for it.
   void SetIoniTruncationAlpha(double a) { ioniTruncAlpha_ = a; }
 
   const UrbanFluctRecord& lastRecord() const { return record_; }
@@ -199,8 +197,6 @@ protected:
 
   inline void SampleGauss2(CLHEP::HepRandomEngine* rndm, G4double eav, G4double esig2, G4double& eloss);
 
-  // delta-electron tail truncation of the ionization variance (see setter)
-
   // last-call Urban record (see lastRecord())
   UrbanFluctRecord record_;
   G4double ioniTruncAlpha_ = 0.999;
@@ -248,10 +244,10 @@ protected:
   // multi-thread CVH refits do not allocate ~tens of MB of duplicate
   // material × particle dE/dx tables per stream. Mirrors the existing
   // static pattern in G4EnergyLossForExtrapolatorForCVH::tables.
-  // ATOMIC + published under cvhExtrapolatorTablesMutex(), which is now the
-  // SAME mutex G4EnergyLossForExtrapolatorForCVH's build takes. The two builds
-  // run the same Initialisation() body and write the same process-wide Geant4
-  // EM statics; two per-class mutexes did not serialise them against each other.
+  // ATOMIC + published under cvhExtrapolatorTablesMutex(), the SAME mutex
+  // G4EnergyLossForExtrapolatorForCVH's build takes. The two builds run the
+  // same Initialisation() body and write the same process-wide Geant4 EM
+  // statics; a mutex per class would not serialise them against each other.
   static std::atomic<G4TablesForExtrapolatorForCVH*> tables;
 
   const G4PhysicsTable* table = nullptr;

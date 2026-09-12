@@ -93,8 +93,8 @@ private:
 
   std::vector<std::string> inactivate_;
   std::vector<std::string> activate_;
-  // empty = the all-particle overload (unchanged behaviour); non-empty =
-  // deactivate `inactivate_` only for these particle names
+  // empty = deactivate `inactivate_` for all particles; non-empty =
+  // deactivate them only for these particle names
   std::vector<std::string> particles_;
   const bool dumpHadModels_;
   const bool dumpEmParams_;

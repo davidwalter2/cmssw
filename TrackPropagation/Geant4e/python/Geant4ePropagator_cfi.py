@@ -26,13 +26,14 @@ Geant4ePropagator = cms.ESProducer("GeantPropagatorESProducer",
                                    # exists only because a Gaussian weight needs
                                    # a second moment while the Urban delta
                                    # channel's does not converge.  It is read
-                                   # ONLY under `CgfQoPMode = 0` (the legacy
-                                   # truncated-Q refit); under the default
-                                   # Fisher weight the cut has no meaning and
-                                   # this value is never used.  For the record:
-                                   # scanning it under the legacy weight moves
-                                   # the fitted q/p by rms 1.2e-5, i.e. the
-                                   # Z-mass target itself.
+                                   # ONLY under `CgfQoPMode = 0`, the
+                                   # truncated-Q weight and the default; under
+                                   # the Fisher weight of `CgfQoPMode = 1` the
+                                   # cut has no meaning and this value is
+                                   # unused.  Scanning it under the truncated-Q
+                                   # weight moves the fitted q/p by rms 1.2e-5,
+                                   # i.e. by the Z-mass target itself, so it is
+                                   # a convention that has to be held fixed.
                                    IoniTruncationAlpha=cms.double(0.999),
 
                                    # The CVH energy-loss corrections.  These
@@ -143,8 +144,9 @@ Geant4ePropagator = cms.ESProducer("GeantPropagatorESProducer",
                                    # mean -1.4e-07 with an rms of 9.4e-07 (the
                                    # rms is largely the conditioning floor --
                                    # see IoniKokoulinCgfNbin above -- so the
-                                   # channel is worth ~1e-07 on a momentum).  Note this is NOT the 18.6 % of
-                                   # the q/p kappa2 that radiative carries at
+                                   # channel is worth ~1e-07 on a momentum).
+                                   # Note this is NOT the 18.6 % of the q/p
+                                   # kappa2 that radiative carries at
                                    # pT = 40: Fisher information is
                                    # core-dominated, so a tail channel with a
                                    # fifth of the VARIANCE carries a thousandth
@@ -157,55 +159,45 @@ Geant4ePropagator = cms.ESProducer("GeantPropagatorESProducer",
 
                                    # THE PROCESS-NOISE WEIGHT FOR q/p.
                                    #
-                                   #   0 = THE LEGACY CVH REFIT.  The Gaussian
-                                   #       weight on the delta-truncated
-                                   #       variance, with `IoniTruncationAlpha`
-                                   #       live -- i.e. the estimator this fit
-                                   #       was built and validated on, restored
-                                   #       bit for bit (verified: 95/95 branches
-                                   #       identical to a build at 663639e, the
-                                   #       commit before the CGF default).  It
-                                   #       is a supported configuration and not
-                                   #       merely a diagnostic limit: it carries
-                                   #       an unphysical convention the Fisher
-                                   #       weight does not, but it costs
+                                   #   0 = THE DEFAULT.  The Gaussian weight on
+                                   #       the delta-truncated variance, with
+                                   #       `IoniTruncationAlpha` live.  It
+                                   #       carries an unphysical convention the
+                                   #       Fisher weight does not, but it costs
                                    #       114 ms/track against the CGF's
                                    #       1562 ms/track -- a factor 13.7 --
                                    #       and the CGF has NO measured accuracy
-                                   #       advantage over it against gen truth
-                                   #       (NOTES_CGFFIT s88, s89).
+                                   #       advantage over it against gen truth.
                                    #   1 = the FISHER INFORMATION of the block,
                                    #       by exact inversion of its
-                                   #       characteristic function.  THE
-                                   #       DEFAULT.
+                                   #       characteristic function.  The Urban
+                                   #       delta channel has a 1/E^2
+                                   #       single-collision spectrum, so its
+                                   #       second moment does not exist without
+                                   #       a cut; the Fisher information of the
+                                   #       same distribution needs none, which
+                                   #       is this mode's one physics advantage.
+                                   #       Schedule-independent to 1.4e-6 at no
+                                   #       convergence cost (8.60 against 8.56
+                                   #       mean iterations).
                                    #   2 = 1 plus the per-leg diagnostic print.
                                    #   3 = 1 plus the IRLS re-centring, a
                                    #       prototype whose fixed point is still
-                                   #       schedule-dependent at 1.6e-4
-                                   #       (NOTES_CGFFIT s58).
+                                   #       schedule-dependent at 1.6e-4.
                                    #
-                                   # Why the default moved to 1: the Urban
-                                   # delta channel has a 1/E^2 single-collision
-                                   # spectrum, so its second moment does not
-                                   # exist without a cut, and that cut was a
-                                   # convention worth ~1e-5 on the fitted q/p
-                                   # -- the Z-mass target itself.  The Fisher
-                                   # information of the same distribution needs
-                                   # no cut.  Measured: schedule-independent to
-                                   # 1.4e-6, no convergence cost (8.60 against
-                                   # 8.56 mean iterations), +11 % wall clock.
-                                   # Default moved BACK to 0 on 2026-09-05: the
-                                   # weight has no measured accuracy advantage
-                                   # against gen truth (NOTES_CGFFIT stages 12,
-                                   # 78-87), and every maker without the
-                                   # setCgfOverride cache (two-track, N-track,
-                                   # DiMuon, cosmics, the NanoAOD path) recomputes
-                                   # the block on every propagate call: measured
-                                   # 8.6 s vs 0.63 s per Z candidate, 15.7 s/event
-                                   # on the J/psi gun. Fourteen drivers inherit
-                                   # this default. The J/psi calibration production
-                                   # runs mode 0; keep the legs consistent. Mode 1
-                                   # stays available as an explicit opt-in.
+                                   # Why 0 is the default: only a maker with the
+                                   # setCgfOverride cache (the single-track one)
+                                   # computes the block once per leg.  Every
+                                   # other maker -- two-track, N-track, DiMuon,
+                                   # cosmics, the NanoAOD path -- recomputes it
+                                   # on every propagate call, measured at 8.6 s
+                                   # against 0.63 s per Z candidate and
+                                   # 15.7 s/event on the J/psi gun, and buys no
+                                   # measured accuracy against gen truth in
+                                   # exchange.  Every driver inherits this
+                                   # default, and all legs of one calibration
+                                   # must run the same mode; mode 1 is an
+                                   # explicit opt-in.
                                    CgfQoPMode=cms.int32(0),
 
                                    # Recompute the block every N Gauss-Newton
@@ -219,8 +211,7 @@ Geant4ePropagator = cms.ESProducer("GeantPropagatorESProducer",
                                    CgfQoPRefresh=cms.int32(0),
 
                                    # Shrinkage on the mode-3 re-centring.
-                                   # 1.0 = full size (what stage 7 built and
-                                   # what section 85 measured), 0 = none.
+                                   # 1.0 = full size, 0 = none.
                                    # Against gen truth the correction is
                                    # anti-correlated with the residual --
                                    # 2Cov/Var = -5.4e-3, the only thing in this

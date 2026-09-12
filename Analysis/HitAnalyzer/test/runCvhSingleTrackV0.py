@@ -72,10 +72,10 @@ opts.register('fillJac', False, VarParsing.VarParsing.multiplicity.singleton,
 opts.register('fillGrads', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'export the Millepede objects gradv/hesspackedv (implies fillJac)')
-# The CVH energy-loss switches are ParameterSet parameters on Geant4ePropagator
-# (Geant4e b372e08), NOT the CVH_* environment variables they used to be. A
-# driver that does not register them cannot pin them at all and silently
-# inherits the cfi default -- which is all-on since e232c20.
+# The CVH energy-loss switches are ParameterSet parameters on Geant4ePropagator.
+# Registering them here lets this driver pin them explicitly instead of
+# inheriting the cfi default, and puts the configuration in the output file's
+# provenance.
 import TrackPropagation.Geant4e.cvhSwitches as cvhSwitches
 cvhSwitches.register(opts)
 opts.parseArguments()

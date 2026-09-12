@@ -192,10 +192,10 @@ private:
   G4double speciesRangeDefect(G4double ekin, const G4ParticleDefinition* part, const G4Material* mat);
 
   // ATOMIC, and published with a release store under cvhExtrapolatorTablesMutex()
-  // (see the note on that mutex in G4TablesForExtrapolatorForCVH.h). The
-  // unsynchronised outer read of the double-checked lock was formally a data
-  // race; on x86-64 it happened to be benign because the store publishes an
-  // already-complete object, but nothing in the language guaranteed that.
+  // (see the note on that mutex in G4TablesForExtrapolatorForCVH.h), so that
+  // the unsynchronised OUTER read of the double-checked lock is well defined:
+  // a thread that sees a non-null pointer is ordered after the store that
+  // published the fully built object.
   static std::atomic<G4TablesForExtrapolatorForCVH*> tables;
 
   const G4ParticleDefinition* currentParticle = nullptr;

@@ -83,9 +83,9 @@ _KEEP = ['Geometry/TrackerCommonData/data/trackermaterial.xml']
 # own materials by name -- pixbarmaterial:Pix_Bar_Hybrid_Full and the like -- and
 # those namespaces live under TrackerCommonData, which the cull above removes.
 # All four are MATERIAL-ONLY files (one MaterialSection, no Solid/LogicalPart/
-# PosPart section: checked, not assumed), so keeping them reintroduces no tracker
-# volume -- the same argument trackermaterial.xml is kept on. Conditional so the
-# layered-toy path keeps exactly the file list it always had.
+# PosPart section), so keeping them reintroduces no tracker volume -- the same
+# argument trackermaterial.xml is kept on. Conditional so the layered-toy path
+# keeps exactly its own file list.
 if 'realmat' in opts.toyGeom.lower():
     _KEEP += ['Geometry/TrackerCommonData/data/pixbarmaterial.xml',
               'Geometry/TrackerCommonData/data/tibmaterial.xml',

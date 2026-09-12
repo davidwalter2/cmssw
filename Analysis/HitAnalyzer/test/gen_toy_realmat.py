@@ -43,7 +43,7 @@ are already loaded by the job, so `<rMaterial name="trackermaterial:Silicon"/>`
 costs nothing, and effective Z is not good enough for the simulation side: the
 nuclear-elastic kernel is per-element and a hydrogen kernel is 3x wider than
 oxygen at the same rate, which is a 10x over-correction when 8.8 % of the path
-is mis-assigned (NOTES_NUCELASTIC s5).  The namespace for each G4 name is found
+is mis-assigned.  The namespace for each G4 name is found
 by scanning the release's geometry XMLs rather than guessed.
 
 WHAT IS NOT COVERED
@@ -301,7 +301,7 @@ def main():
                          "never enters the last sensor -- which leaves the real "
                          "geometry's outermost LEG with no counterpart here. That "
                          "leg is the most anomalous one in the per-leg "
-                         "decomposition (NOTES_GEOMCLOSURE s12.1), so it needs a "
+                         "decomposition, so it needs a "
                          "control. The edge is already a geometry boundary, so no "
                          "split is required and the watcher fires there.")
     ap.add_argument("--write", action="store_true", help="write the xml and the plane file")

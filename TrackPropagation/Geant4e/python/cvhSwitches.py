@@ -49,10 +49,6 @@ FLOATS = (
     "IoniExactDeltaT0",
 )
 
-# Defaults to 1.0, so like DedxScale it needs a positive sentinel rather than
-# the <0 rule.
-FLOATS_POS_EXTRA = ()
-
 # DedxScale defaults to 1.0, not -1, so it needs its own "unset" sentinel
 # rather than the <0 rule the others use.
 FLOATS_POS = (

@@ -81,9 +81,9 @@ G4UniversalFluctuationForExtrapolator::G4UniversalFluctuationForExtrapolator(con
   if (nullptr == tables.load(std::memory_order_acquire)) {
     std::lock_guard<std::mutex> lk(cvhExtrapolatorTablesMutex());
     if (nullptr == tables.load(std::memory_order_relaxed)) {
-      // Grid from G4TablesForExtrapolatorForCVH, not restated here (it used to
-      // be 70 bins to 10 TeV against the reference's 80 to 100 TeV).
-      // `iononly = true` stays: this instance supplies the IONIZATION mean
+      // Grid from G4TablesForExtrapolatorForCVH, not restated here, so that
+      // this table and the reference's share their nodes.
+      // `iononly = true`: this instance supplies the IONIZATION mean
       // loss, and the radiative fluctuation is a separate channel.
       auto* built = new G4TablesForExtrapolatorForCVH(0,
                                                      G4TablesForExtrapolatorForCVH::kNbins,
@@ -939,11 +939,10 @@ G4double G4UniversalFluctuationForExtrapolator::SampleFluctuations(
   //   CgfQoPMode == 0 -- the LEGACY Gaussian weight. The delta channel's second
   //     moment does not converge, so a Gaussian weight needs a cut and
   //     `IoniTruncationAlpha` is it: the alpha-quantile machinery above runs
-  //     and its truncated integral is returned, exactly as it did before
-  //     9a7c692. This is a convention, and scanning it moves the fitted q/p by
-  //     rms 1.2e-5 (NOTES_CGFFIT s51) -- but it is the configuration the fit
-  //     was built and validated on, and it is ~6x cheaper than the CGF on MC
-  //     (s77), which is why it is an option again rather than deleted.
+  //     and its truncated integral is returned. This is a convention, and
+  //     scanning it moves the fitted q/p by rms 1.2e-5 -- but it is the
+  //     configuration the fit was built and validated on, and it is ~6x
+  //     cheaper than the CGF on MC, which is why it is kept as an option.
   //
   //   CgfQoPMode >= 1 -- the Fisher weight. `Q(0,0)` is replaced by the block's
   //     inverse Fisher information downstream, so the number returned here is
