@@ -101,14 +101,13 @@ opts.register('fillGradsFactored', False, VarParsing.VarParsing.multiplicity.sin
 opts.register('doTrigger', True, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'read TriggerResults::HLT (off for private samples without HLT)')
-opts.register('doVtxConstraint', False, VarParsing.VarParsing.multiplicity.singleton,
+opts.register('doVtxConstraint', True, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
-              'apply the common-vertex constraint in the two-track fit')
-opts.register('vtxConstraintZeroSeed', True, VarParsing.VarParsing.multiplicity.singleton,
-              VarParsing.VarParsing.varType.bool,
-              're-express the seed with d = 0 before freezing state index 6, '
-              'so that doVtxConstraint really means "one vertex" and not '
-              '"d = d_seed" (the historical behaviour is False)')
+              'apply the common-vertex constraint in the two-track fit: state '
+              'index 6, the signed track-track PCA distance, is frozen at zero '
+              'and the fitted mass is the vertex-constrained one. Jpsi_mass_unc '
+              'carries the unconstrained mass, so either can be formed offline. '
+              'False leaves index 6 free (a plain two-track fit through the PCA)')
 opts.register('exportVtxResidual', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'export the VERTEX-CONSTRAINT RESIDUAL (the track-track PCA '
@@ -134,8 +133,7 @@ opts.register('maxMomentumStepFactor', 2.0, VarParsing.VarParsing.multiplicity.s
               'so the bound is ALWAYS strictly inside p_ref -- unlike the bare '
               'absolute floor it can neither pin a genuinely soft track at a '
               'fixed momentum nor scale the step to exactly zero. Set <=1 to '
-              'switch it off and get the legacy absolute-floor-only clamp '
-              '(bit-identical).')
+              'switch it off and leave clampMomentumFloor as the only bound.')
 opts.register('stepBacktracking', True, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'chi2-based (Armijo) retroactive step backtracking. The chi2 '
@@ -167,8 +165,7 @@ opts.register('armijoSlack', 1.0, VarParsing.VarParsing.multiplicity.singleton,
               'monotonically decrease r^T Vinv r (it drifts up ~0.3-0.5 per '
               'iteration even at 1/16 step), so a textbook 1e-4..1e-3 makes it '
               'halve the step forever -- 57 % of gun candidates, 15.6 halvings '
-              'each, 6x the propagation cost, no change in the result. Scan in '
-              'NOTES.md 2026-09-05.')
+              'each, 6x the propagation cost, no change in the result.')
 opts.register('clampMomentumFloor', -1.0, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.float,
               'Gauss-Newton momentum floor [GeV] for the refit step clamp. '
@@ -180,10 +177,8 @@ opts.register('clampMomentumFloor', -1.0, VarParsing.VarParsing.multiplicity.sin
               'than that -- a floor above the physical momentum spectrum pins '
               'soft tracks at the floor (momentum-high, chi2/ndof >> 1) and, '
               'where p_ref is already below it, scales the step to zero and '
-              'freezes the fit at its seed. The hard-coded 2.0 GeV floor '
-              'against the 0.2 GeV limit did exactly that to 12 % of the '
-              'flat-pT J/psi-gun candidates and carried the entire +0.21e-3 '
-              'mass-scale offset (NOTES.md 2026-09-04).')
+              'freezes the fit at its seed, which biases the fitted momentum '
+              'and the mass scale built from it.')
 opts.register('doRes', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'register resolution families and export the per-candidate '
@@ -194,11 +189,10 @@ opts.register('exportStepRecords', False, VarParsing.VarParsing.multiplicity.sin
               'write the RAW per-step resolution export (ioniurbanv, msmoliv, '
               'radstepv/radstepspecv, reseigv, resinfv, resinfbv). It is 430 kB '
               'per candidate -- 16 TB over the 40M candidates of the full '
-              'calibration -- and its only consumer was the offline exponent '
-              'extractor, which the in-maker cfqop_*/cfmass_* export replaces. '
-              'Default FALSE since 2026-09-06 -- every production since '
-              '2026-09-05 set it so explicitly and the exponents are '
-              'validated; set True to re-derive them under a different model')
+              'calibration -- while the exponents it feeds are written '
+              'directly by the in-maker cfqop_*/cfmass_* export, so it is off '
+              'by default; set True to re-derive the exponents under a '
+              'different model')
 opts.register('exportMaterialNoise', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'register the parmtype-15 MATERIAL-GROUP process noise as a '
@@ -212,24 +206,23 @@ opts.register('exportVarianceGrads', False, VarParsing.VarParsing.multiplicity.s
               'add the VARIANCE (log-det) part of the profiled -2lnL to the '
               'exported global gradient and Hessian: '
               '-r^T V^-1 dV V^-1 r + tr(V^-1 dV) and the expected curvature '
-              'tr(dV R dV R). Without it a parameter that moves the '
-              'covariance (parmtype 15 through exp(k_g), and 8/9/10/11 '
-              'entirely) enters the quadratic hit-chi2 term only through the '
-              'MEAN. Two-track maker only (the single-track one always had '
-              'it); OFF reproduces the pre-2026-09-06 gradients bit for bit')
+              'tr(dV R dV R). Two-track maker only. With it OFF a parameter '
+              'that moves the covariance (parmtype 15 through exp(k_g), and '
+              '8/9/10/11 entirely) enters the quadratic hit-chi2 term only '
+              'through the MEAN')
 opts.register('varianceGradFamilies', [], VarParsing.VarParsing.multiplicity.list,
               VarParsing.VarParsing.varType.int,
               'which parmtypes exportVarianceGrads covers; empty = '
-              '{8,9,10,11,15}. 15 alone is the LAYOUT-PRESERVING subset (the '
-              'material-group globals are already columns of globalidxv), so '
-              'its output can be pooled with a production that ran without '
-              'the switch; 8/9/10/11 append per-module columns')
+              '{8,9,10,11,15}. 15 alone is LAYOUT-PRESERVING: the '
+              'material-group globals are already columns of globalidxv, so '
+              'only their VALUES change. 8/9/10/11 are per-module and APPEND '
+              'columns to globalidxv and to every array indexed by it')
 opts.register('exportObjective', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'write objval/objchisq/objlogdetv/objlogdetc, the marginal '
               'objective r^T R r + ln|V| + ln|C| in double precision. '
               'Validation only -- it costs an ncons x ncons LDLT per '
-              'candidate -- and exists so the new gradient can be '
+              'candidate -- and exists so the gradient can be '
               'finite-differenced against what it claims to differentiate')
 opts.register('varianceFDGlobalIdx', -1, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.int,
@@ -246,11 +239,10 @@ opts.register('exportHitResBlocks', True, VarParsing.VarParsing.multiplicity.sin
               VarParsing.VarParsing.varType.bool,
               'register the parmtype-8/9 HIT-RESOLUTION dV blocks in the '
               'influence export (reseigidx/resinfvarv/reshitcls + the '
-              'cf*_hitcls/cf*_hitv per-class shares). The single-track maker '
-              'has always done it; the two-track one did not, which is why the '
-              'per-hit-class resolution parameters have never been fitted. '
-              'Export only -- it cannot move the fit. Set False to reproduce a '
-              'pre-2026-09-06 two-track tree')
+              'cf*_hitcls/cf*_hitv per-class shares); they are what the '
+              'per-hit-class resolution parameters are fitted from. Export '
+              'only -- it cannot move the fit. Set False to leave them out of '
+              'the tree')
 opts.register('exportCfGroupExponents', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'additionally split the CF exponents by parmtype-15 MATERIAL '
@@ -387,8 +379,8 @@ opts.register('propagationDirection', 'anyDirection', VarParsing.VarParsing.mult
               'legacy forward-only behaviour (bit-identical for all fits '
               'that do not fail with it).')
 # The CVH physics/estimator switches (CgfQoPMode, IoniExactDelta, ...) as
-# command-line options, so the two-track driver can pin the estimator instead
-# of silently inheriting the cfi default (CGF Fisher weight since 9a7c692).
+# command-line options, so the two-track driver pins the estimator explicitly
+# instead of inheriting the cfi default.
 # NOTE: the two-track maker has no CGF override hooks, so the propagator never
 # substitutes the weight here; CgfQoPMode=1 only pays for computing the block.
 import TrackPropagation.Geant4e.cvhSwitches as cvhSwitches
@@ -402,8 +394,8 @@ opts.parseArguments()
 # the maker substitutes the Fisher weight through setCgfOverride. Only the
 # single-track maker does; this maker has no hooks, so the cfi default (1)
 # would run the fit with a ~1e3-1e4x inflated ionization variance and pay
-# ~10x for a block it never uses (measured 2026-09-02 on a 40-event smoke:
-# masses differ by up to 13 MeV between the modes, 8 min vs 47 s).
+# ~10x for a block it never uses: on a 40-event smoke the masses differ by up
+# to 13 MeV between the modes, at 8 min against 47 s.
 if opts.CgfQoPMode < 0:
     opts.CgfQoPMode = 0
     print('[cvh] two-track driver: CgfQoPMode not given, defaulting to 0 '
@@ -605,7 +597,6 @@ process.globalCor = cms.EDProducer(
     injectLorentzTan=cms.double(float(opts.injectLorentzTan)),
     injectLorentzWclean=cms.double(float(opts.injectLorentzWclean)),
     doVtxConstraint=cms.bool(bool(opts.doVtxConstraint)),
-    vtxConstraintZeroSeed=cms.bool(bool(opts.vtxConstraintZeroSeed)),
     exportVtxResidual=cms.bool(bool(opts.exportVtxResidual)),
     doMassConstraint=cms.bool(bool(opts.doMassConstraint)),
     massConstraint=cms.double(3.0969),
@@ -731,10 +722,9 @@ if _clampFloor <= float(opts.propagationPtotLimit):
 process.globalCor.clampMomentumFloor = cms.double(_clampFloor)
 print("[cvh] effective: PropagationPtotLimit=%g GeV, clampMomentumFloor=%g GeV"
       % (float(opts.propagationPtotLimit), _clampFloor))
-# Relative step damping + chi2 backtracking (2026-09-05 replacement for the
-# bare momentum floor; see the option help and NOTES.md). Defaults are the new
-# behaviour; maxMomentumStepFactor<=1 + stepBacktracking=False reproduce the
-# legacy clamp bit-identically.
+# Relative step damping + chi2 backtracking on top of the absolute momentum
+# floor; see the option help. maxMomentumStepFactor<=1 together with
+# stepBacktracking=False leaves the floor as the only bound.
 process.globalCor.maxMomentumStepFactor = cms.double(float(opts.maxMomentumStepFactor))
 process.globalCor.stepBacktracking = cms.bool(bool(opts.stepBacktracking))
 process.globalCor.maxChi2Backtrack = cms.uint32(int(opts.maxChi2Backtrack))

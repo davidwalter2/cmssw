@@ -31,7 +31,7 @@
 ##     fitFromGenParms=False doSimHits=False doGen=True requireGen=False \
 ##     useIdealGeometry=False useDefaultField=True \
 ##     globalTag=106X_mcRun2_asymptotic_v17 \
-##     doVtxConstraint=False doMassConstraint=False massMin=60 massMax=120 \
+##     doMassConstraint=False massMin=60 massMax=120 \
 ##     CgfQoPMode=0 tightG4eStepper=True \
 ##     propagationPtotLimit=0.2 maxMomentumStepFactor=2.0 stepBacktracking=True \
 ##     scalarPot3DInitFile=<...custom50.txt>
@@ -176,10 +176,11 @@ opts.register('exportStepRecords', False, VarParsing.VarParsing.multiplicity.sin
               VarParsing.VarParsing.varType.bool,
               'write the RAW per-step resolution export (ioniurbanv, msmoliv, '
               'radstep*, reseigv, resinf*). ~290 kB/candidate on Z (317 vs 28 '
-              'kB/cand measured) and its only consumer was the offline '
-              'exponent extractor that the in-maker cfmass_* export replaces. '
-              'Default False here (the maker cfi defaults it True when the '
-              'parameter is absent -- it is always passed explicitly).')
+              'kB/cand measured), while the exponents it feeds are written '
+              'directly by the in-maker cfmass_* export, so it is off here; '
+              'set True to re-derive the exponents under a different model. '
+              'Always passed explicitly: the maker cfi defaults it True when '
+              'the parameter is absent.')
 opts.register('exportMaterialNoise', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'register the parmtype-15 MATERIAL-GROUP process noise as a '
@@ -193,24 +194,23 @@ opts.register('exportVarianceGrads', False, VarParsing.VarParsing.multiplicity.s
               'add the VARIANCE (log-det) part of the profiled -2lnL to the '
               'exported global gradient and Hessian: '
               '-r^T V^-1 dV V^-1 r + tr(V^-1 dV) and the expected curvature '
-              'tr(dV R dV R). Without it a parameter that moves the '
-              'covariance (parmtype 15 through exp(k_g), and 8/9/10/11 '
-              'entirely) enters the quadratic hit-chi2 term only through the '
-              'MEAN. Two-track maker only (the single-track one always had '
-              'it); OFF reproduces the pre-2026-09-06 gradients bit for bit')
+              'tr(dV R dV R). Two-track maker only. With it OFF a parameter '
+              'that moves the covariance (parmtype 15 through exp(k_g), and '
+              '8/9/10/11 entirely) enters the quadratic hit-chi2 term only '
+              'through the MEAN')
 opts.register('varianceGradFamilies', [], VarParsing.VarParsing.multiplicity.list,
               VarParsing.VarParsing.varType.int,
               'which parmtypes exportVarianceGrads covers; empty = '
-              '{8,9,10,11,15}. 15 alone is the LAYOUT-PRESERVING subset (the '
-              'material-group globals are already columns of globalidxv), so '
-              'its output can be pooled with a production that ran without '
-              'the switch; 8/9/10/11 append per-module columns')
+              '{8,9,10,11,15}. 15 alone is LAYOUT-PRESERVING: the '
+              'material-group globals are already columns of globalidxv, so '
+              'only their VALUES change. 8/9/10/11 are per-module and APPEND '
+              'columns to globalidxv and to every array indexed by it')
 opts.register('exportObjective', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'write objval/objchisq/objlogdetv/objlogdetc, the marginal '
               'objective r^T R r + ln|V| + ln|C| in double precision. '
               'Validation only -- it costs an ncons x ncons LDLT per '
-              'candidate -- and exists so the new gradient can be '
+              'candidate -- and exists so the gradient can be '
               'finite-differenced against what it claims to differentiate')
 opts.register('varianceFDGlobalIdx', -1, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.int,
@@ -227,11 +227,10 @@ opts.register('exportHitResBlocks', True, VarParsing.VarParsing.multiplicity.sin
               VarParsing.VarParsing.varType.bool,
               'register the parmtype-8/9 HIT-RESOLUTION dV blocks in the '
               'influence export (reseigidx/resinfvarv/reshitcls + the '
-              'cf*_hitcls/cf*_hitv per-class shares). The single-track maker '
-              'has always done it; the two-track one did not, which is why the '
-              'per-hit-class resolution parameters have never been fitted. '
-              'Export only -- it cannot move the fit. Set False to reproduce a '
-              'pre-2026-09-06 two-track tree')
+              'cf*_hitcls/cf*_hitv per-class shares); they are what the '
+              'per-hit-class resolution parameters are fitted from. Export '
+              'only -- it cannot move the fit. Set False to leave them out of '
+              'the tree')
 opts.register('exportCfGroupExponents', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'additionally split the CF exponents by parmtype-15 MATERIAL '
@@ -282,14 +281,13 @@ opts.register('skipHitlessSurfaces', True, VarParsing.VarParsing.multiplicity.si
               'globalMaterialModel=True (auto-disabled otherwise)')
 
 # ------------------------------------------------------------- the fit ----
-opts.register('doVtxConstraint', False, VarParsing.VarParsing.multiplicity.singleton,
+opts.register('doVtxConstraint', True, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
-              'apply the common-vertex constraint in the two-track fit '
-              '(default False = plain two-track fit, PCA)')
-opts.register('vtxConstraintZeroSeed', True, VarParsing.VarParsing.multiplicity.singleton,
-              VarParsing.VarParsing.varType.bool,
-              're-express the seed with d = 0 before freezing state index 6, '
-              'so that doVtxConstraint really means "one vertex"')
+              'apply the common-vertex constraint in the two-track fit: state '
+              'index 6, the signed track-track PCA distance, is frozen at zero '
+              'and the fitted mass is the vertex-constrained one. Jpsi_mass_unc '
+              'carries the unconstrained mass, so either can be formed offline. '
+              'False leaves index 6 free (a plain two-track fit through the PCA)')
 opts.register('exportVtxResidual', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'export the VERTEX-CONSTRAINT RESIDUAL (state index 6, the '
@@ -344,8 +342,8 @@ opts.register('maxMomentumStepFactor', 2.0, VarParsing.VarParsing.multiplicity.s
               VarParsing.VarParsing.varType.float,
               'RELATIVE Gauss-Newton step damping: the max factor by which a '
               'track momentum may change in one iteration (2 = p may at most '
-              'halve or double). <=1 switches it off (legacy absolute-floor '
-              'clamp, bit-identical).')
+              'halve or double). <=1 switches it off and leaves '
+              'clampMomentumFloor as the only bound.')
 opts.register('stepBacktracking', True, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'chi2-based (Armijo) retroactive step backtracking; costs no '
@@ -657,7 +655,6 @@ process.trackrefitdimuon = ResidualGlobalCorrectionMakerDiMuonG4e.clone(
     # --- the fit
     useIdealGeometry=cms.bool(bool(opts.useIdealGeometry)),
     doVtxConstraint=cms.bool(bool(opts.doVtxConstraint)),
-    vtxConstraintZeroSeed=cms.bool(bool(opts.vtxConstraintZeroSeed)),
     exportVtxResidual=cms.bool(bool(opts.exportVtxResidual)),
     doMassConstraint=cms.bool(bool(opts.doMassConstraint)),
     massConstraint=cms.double(float(opts.massConstraint)),

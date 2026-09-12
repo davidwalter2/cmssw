@@ -42,7 +42,7 @@ globalCorLambda = cms.EDProducer(
     useIdealGeometry = cms.bool(True),
     bsConstraint = cms.bool(False),
     applyHitQuality = cms.bool(True),
-    doVtxConstraint = cms.bool(False),
+    doVtxConstraint = cms.bool(True),
     doMassConstraint = cms.bool(False),
     massConstraint = cms.double(1.115683),        # Lambda mass
     massConstraintWidth = cms.double(2.502e-15),  # natural width Gamma = hbar/tau (Lambda), GeV

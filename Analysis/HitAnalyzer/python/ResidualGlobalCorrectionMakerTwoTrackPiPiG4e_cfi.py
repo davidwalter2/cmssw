@@ -40,7 +40,7 @@ globalCorKs = cms.EDProducer(
     useIdealGeometry = cms.bool(True),
     bsConstraint = cms.bool(False),
     applyHitQuality = cms.bool(True),
-    doVtxConstraint = cms.bool(False),
+    doVtxConstraint = cms.bool(True),
     doMassConstraint = cms.bool(False),
     massConstraint = cms.double(0.497611),       # KS mass
     massConstraintWidth = cms.double(7.351e-15),  # natural width Gamma = hbar/tau (KS), GeV

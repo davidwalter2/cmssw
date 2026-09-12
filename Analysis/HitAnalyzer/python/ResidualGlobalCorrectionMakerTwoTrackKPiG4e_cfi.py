@@ -37,7 +37,7 @@ globalCorD0 = cms.EDProducer(
     useIdealGeometry=cms.bool(True),
     bsConstraint=cms.bool(False),
     applyHitQuality=cms.bool(True),
-    doVtxConstraint=cms.bool(False),
+    doVtxConstraint=cms.bool(True),
     doMassConstraint=cms.bool(False),
     massConstraint=cms.double(1.86483),
     massConstraintWidth=cms.double(1.605e-12),  # natural width Gamma = hbar/tau (D0), GeV

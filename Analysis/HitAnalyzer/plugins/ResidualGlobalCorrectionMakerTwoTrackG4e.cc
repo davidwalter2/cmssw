@@ -232,21 +232,21 @@ private:
   // keep the state out of the propagator's refusal region
   // (Geant4ePropagator.PropagationPtotLimit), so it must sit just above that
   // limit and below the soft-daughter spectrum -- the drivers derive it from
-  // the limit. The 2.0 GeV built-in default is the historical value, chosen
-  // when the propagation limit was 1.0 GeV; against the current 0.2 GeV limit
-  // it PINS every daughter below 2 GeV at 2 GeV (momentum-high, chi2/ndof>>1,
+  // the limit, and must re-derive it whenever the limit moves. The 2.0 GeV
+  // built-in default sits far above the current 0.2 GeV limit, and there it
+  // PINS every daughter below 2 GeV at 2 GeV (momentum-high, chi2/ndof>>1,
   // and, when p_ref is already under the floor, a scale-to-zero frozen step).
-  // Measured on the flat-pT J/psi gun: 12 % of candidates, carrying the whole
-  // +0.21e-3 mass-scale offset (NOTES.md 2026-09-04).
+  // On the flat-pT J/psi gun that is 12 % of candidates, carrying the whole
+  // +0.21e-3 mass-scale offset.
   double clampMomentumFloor_ = 2.0;
-  // Relative Gauss-Newton step damping (2026-09-05). Per iteration a daughter's
+  // Relative Gauss-Newton step damping. Per iteration a daughter's
   // momentum may change by at most this factor (default 2: p may at most halve
   // or double). Implemented as the effective floor max(clampMomentumFloor_,
   // p_ref/f) plus the symmetric upward cap p_ref*f. The lower bound is ALWAYS
   // strictly below p_ref, which removes both pathologies of the fixed floor:
   // no daughter is pinned at a fixed momentum, and the scale can no longer be
   // exactly zero (which froze the whole coupled step at its seed). <= 1
-  // restores the legacy absolute-floor-only clamp bit-identically.
+  // disables the relative cap and leaves the absolute floor as the only clamp.
   double maxMomentumStepFactor_ = 2.0;
   // chi2-based (Armijo) retroactive backtracking. The chi2 assembled in
   // iteration k is the REALIZED chi2 of the step taken at k-1; if it fails the
@@ -265,7 +265,7 @@ private:
   unsigned int stepBacktrackFromIter_ = 2;
   double armijoC_ = 1.e-4;              // sufficient-decrease coefficient
   // Relative chi2 slack in the Armijo test. NOT a textbook line-search
-  // tolerance: measured 2026-09-05, the CVH/GBL iteration does NOT
+  // tolerance: the CVH/GBL iteration does NOT
   // monotonically decrease r^T Vinv r -- the realized chi2 drifts UP by
   // ~0.3-0.5 per iteration even at 1/16 of the step (the model's predicted
   // decrease is never realized because every iteration re-propagates and
@@ -274,7 +274,7 @@ private:
   // each, 6x the propagation cost, for no change in the result. At 1.0
   // (the chi2 may not more than DOUBLE in one iteration) the test becomes a
   // pure DIVERGENCE TRAP: +0.5 % propagation on the gun ditrack smoke,
-  // +0.2 % single track, fit output at the noise level. Scan in NOTES.md.
+  // +0.2 % single track, fit output at the noise level.
   double armijoSlack_ = 1.0;
   unsigned int stepPrintLimit_ = 200;   // per-job cap on step-control printouts
   // Per-candidate leg-failure retry budgets (see the recovery block).
@@ -510,18 +510,17 @@ private:
   // ---- THE TWO LEGS' REFERENCE MOMENTUM COVARIANCE ----------------------
   //
   // `covrefmom` -- the (q/p, lambda, phi) covariance of BOTH legs at the
-  // reference, the very matrix `Jpsi_sigmamass` is contracted out of -- has
-  // never been exported, so the two second-order corrections the mass
-  // likelihood needs (MASSCFTERM_SPEC section 4b/4c) had to take their inputs
-  // from an MC measurement:
+  // reference, the very matrix `Jpsi_sigmamass` is contracted out of -- is
+  // exported so that the two second-order corrections the mass likelihood
+  // needs are measured PER CANDIDATE rather than taken from MC:
   //
   //     A = sigma_rel1^2 + sigma_rel2^2 ,  B = 2 rho sigma_rel1 sigma_rel2
   //
   // is the Jensen term's whole content, and `f_ang`, the share of the mass
   // variance carried by the ANGLES rather than the two curvatures, is the
   // only thing the closed form `1.5 (sigma_m/m)^2` misses. On data there is
-  // no MC to take them from. This is spec option B ("the full symmetric 6x6")
-  // plus the two pieces that make it self-contained.
+  // no MC to take them from, which is why the full symmetric 6x6 is written
+  // out together with the two derived pieces that make it self-contained.
   //
   // ORDER IS (PLUS, MINUS), NOT the internal leg order: entries 0-2 are the
   // mu+ (q/p, lambda, phi) and 3-5 the mu-, permuted here by idxplus/idxminus
@@ -567,7 +566,7 @@ private:
   unsigned int Muminus_nvalidFinal;
   unsigned int Muminus_nvalidpixelFinal;
 
-  // TRANSMISSION PROBE (2026-08-13). Total MEAN energy loss that the fit's
+  // TRANSMISSION PROBE. Total MEAN energy loss that the fit's
   // reference trajectory actually applies between the reference point and the
   // outermost hit, summed over propagation steps of the LAST iteration of the
   // UNCONSTRAINED (icons==0) pass, in GeV. This is the denominator of the
@@ -582,11 +581,10 @@ private:
   // momentum: max over surface-to-surface propagations of (E_in - E_out)/p_in.
   //
   // It is a QUALITY variable for the quadratic (hit-chi2) term's material
-  // information, not a physics observable. The 2026-09-06 investigation of
-  // the -37 % `tec_services` pull found that the mean-loss bias grows with the
-  // step's fractional loss and is universal across groups above
-  // dE/p ~ 0.1, while below 0.01 the pulls close (max/rms 0.96/0.19): thick
-  // steps crossed by curlers with pT < 1 GeV carry 83 % of that group's
+  // information, not a physics observable. The mean-loss bias of a group
+  // grows with the step's fractional loss and is universal across groups
+  // above dE/p ~ 0.1, while below 0.01 the pulls close (max/rms 0.96/0.19):
+  // thick steps crossed by curlers with pT < 1 GeV carry 83 % of a group's
   // information and essentially all of its bias. With this and `_dEref` the
   // offline accumulation can impose a `dE_ref/p < 0.01` requirement WITHOUT
   // the step records, which is the whole point (they are 430 kB/candidate).
@@ -700,15 +698,6 @@ ResidualGlobalCorrectionMakerTwoTrackG4e::ResidualGlobalCorrectionMakerTwoTrackG
   // configuration changes its output by a byte.
   exportVtxResidual_ = iConfig.existsAs<bool>("exportVtxResidual")
                            ? iConfig.getParameter<bool>("exportVtxResidual") : false;
-  // Zero the seed's track-track PCA distance when the common-vertex
-  // constraint is on.  WITHOUT this, `doVtxConstraint_` freezes index 6 at
-  // the SEED's DCA (the midPropagated/perigee reference points are each
-  // track's own PCA to the midpoint and do NOT coincide), i.e. it constrains
-  // `d = d_seed` instead of `d = 0` -- not a common-vertex constraint at all.
-  // Default TRUE: the path is dormant (every production runs
-  // `doVtxConstraint=False`), so nothing that exists changes.
-  vtxConstraintZeroSeed_ = iConfig.existsAs<bool>("vtxConstraintZeroSeed")
-                           ? iConfig.getParameter<bool>("vtxConstraintZeroSeed") : true;
   // Say out loud what the log-det term is doing, and to which families: it
   // changes the meaning of `gradv`/`hesspackedv`/`hessfactorv` and, for the
   // per-module families, the LAYOUT of `globalidxv`.
@@ -732,8 +721,8 @@ ResidualGlobalCorrectionMakerTwoTrackG4e::ResidualGlobalCorrectionMakerTwoTrackG
       std::cout << "  NOTE: families 8/9/10/11 are per-module and are NOT columns "
                 << "of this maker's parameter vector, so globalidxv/gradv/"
                 << "hesspackedv/hessfactorv/jacrefv/Jpsi_jacMass GROW.  Use "
-                << "varianceGradFamilies=15 to keep the layout poolable with a "
-                << "production that ran without the switch." << std::endl;
+                << "varianceGradFamilies=15 to leave the layout unchanged."
+                << std::endl;
     }
     if (wantHit) {
       std::cout << "  NOTE: this maker does not apply exp(corparms) to the hit "
@@ -1408,8 +1397,6 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
   // `Jpsi_jacVtx` emitter, which runs after the global-index remap. Members
   // for the same reason `covrefmom` is one: the two live in sibling scopes.
   Eigen::VectorXd wvtxinf;
-  const bool vtxDebug_ = (getenv("CVH_VTX_DEBUG") != nullptr);
-  int nVtxDebug_ = 0;
 
   // doRes port (per-candidate mass-CF export): the material process-noise
   // derivative blocks dV_b (MS and ionization parts of Q), their row
@@ -2096,11 +2083,11 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
       const unsigned int nstateparms = 10 + 5*nhits;
       const unsigned int nparmsfull = nstateparms + npars;
 
-      // Sparse GBL: the state params that are actually solved for. Mirrors
-      // the dense freezeparm() logic (old lines ~2282-2298): fitFromGenParms_
-      // freezes the 10-dim vertex PCA (idx 0..9); doVtxConstraint_ freezes
-      // the track-PCA distance (idx 6). A frozen index is simply excluded
-      // from freestateidxs instead of being deweighted with a 1e6 diagonal.
+      // Sparse GBL: the state params that are actually solved for.
+      // fitFromGenParms_ freezes the 10-dim vertex PCA (idx 0..9);
+      // doVtxConstraint_ freezes the track-PCA distance (idx 6). A frozen
+      // index is simply excluded from freestateidxs instead of being
+      // deweighted with a 1e6 diagonal.
       using VectorXb = Matrix<bool, Dynamic, 1>;
       VectorXb freestatemask = VectorXb::Ones(nstateparms);
       if (fitFromGenParms_) {
@@ -2182,6 +2169,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
       Jpsicons_eta = -99.f;
       Jpsicons_phi = -99.f;
       Jpsicons_mass = -99.f;
+      Jpsi_mass_unc = -99.f;
+      Jpsi_covmassvtx = 0.f;
       Mupluscons_pt = -99.f;
       Mupluscons_eta = -99.f;
       Mupluscons_phi = -99.f;
@@ -2361,7 +2350,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
         // Re-expressing the seed with d = 0 moves each reference point by
         // d_seed/2 along `n_hat` and changes nothing else (`twoTrackPca2cart`
         // is the exact inverse of `twoTrackCart2pca` at fixed momenta).
-        if (doVtxConstraint_ && vtxConstraintZeroSeed_) {
+        if (doVtxConstraint_) {
           Matrix<double, 10, 1> statepcaseed = twoTrackCart2pca(refftsarr[0], refftsarr[1]);
           statepcaseed[6] = 0.;
           refftsarr = twoTrackPca2cart(statepcaseed);
@@ -2882,7 +2871,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                   radstepv.push_back(rs.dedxBrem);
                   radstepv.push_back(rs.dedxPair);
                   radstepv.push_back(rs.cs);
-                  radstepv.push_back(rs.stepGroup);   // column 11, appended 2026-09-06
+                  radstepv.push_back(rs.stepGroup);   // column 11: the material group
                   for (int iv = 0; iv < RADSTEP_NV; ++iv) {
                     radstepspecv.push_back(rs.dNdvBrem[iv]);
                   }
@@ -3710,11 +3699,10 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
                   // ---- HIT-RESOLUTION BLOCKS (parmtype 8/9) --------------
                   //
-                  // The single-track maker has always registered these; this
-                  // maker registered only the material ones, which is why the
-                  // per-hit-class resolution parameters have never been
-                  // FITTED -- the mass functional had no hit blocks to weigh
-                  // (NOTES 2026-09-05 (II) 8c).
+                  // Registering the hit blocks here is what gives the mass
+                  // functional hit shares to weigh, so the per-hit-class
+                  // resolution parameters can be fitted from two-track
+                  // candidates and not only from single tracks.
                   //
                   // `dVs` in THIS maker feeds nothing but the influence
                   // export, so registering a block cannot move the fit; and
@@ -4182,13 +4170,12 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               }
               double s = 1.;
               if (maxMomentumStepFactor_ > 1.) {
-                // NEW (2026-09-05): relative trust region in q/p, see the
-                // member comment. The bound is always strictly inside p_ref,
-                // so a soft daughter is neither pinned at the floor nor frozen
-                // at its seed. No charge flip is permitted here (the two-track
-                // fit has no ambiguous-charge use case), which the qopFlipAllow
-                // = 0 argument expresses; at f = 2 the flip cap reproduces the
-                // legacy half-way-to-zero rule exactly.
+                // Relative trust region in q/p, see the member comment. The
+                // bound is always strictly inside p_ref, so a soft daughter is
+                // neither pinned at the floor nor frozen at its seed. No charge
+                // flip is permitted here (the two-track fit has no
+                // ambiguous-charge use case), which the qopFlipAllow = 0
+                // argument expresses.
                 s = cvhstep::legStepScaleRel(qopref, dqop, clampMomentumFloor_,
                                              maxMomentumStepFactor_, 0., nullptr);
               } else {
@@ -4426,15 +4413,24 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           const bool firstplus = statepcaupd[0] > 0.;
 
           if (icons == 0) {
-            // define sign of d wrt charge of tracks
-            Jpsi_d = firstplus ? statepcaupd[6] : -statepcaupd[6];
+            // THE SIGNED TRACK-TRACK PCA DISTANCE, raw:
+            //     d = n_hat . (x_b - x_a),   n_hat = (p_a x p_b)^
+            // (`twoTrackCart2pca`). Swapping the two legs flips BOTH `n_hat`
+            // and `x_b - x_a`, so `d` is invariant under the leg ordering and
+            // is already a well-defined signed quantity; it must NOT be
+            // multiplied by the charge of leg 0, which would make its sign
+            // depend on an ordering it does not depend on.
+            // Under `doVtxConstraint` index 6 is frozen at zero and `d` is
+            // identically zero: `Jpsi_vtxres` is then the DCA the
+            // unconstrained fit would have reported.
+            Jpsi_d = statepcaupd[6];
             Jpsi_x = statepcaupd[7];
             Jpsi_y = statepcaupd[8];
             Jpsi_z = statepcaupd[9];
           }
           else {
-            // define sign of d wrt charge of tracks
-            Jpsicons_d = firstplus ? statepcaupd[6] : -statepcaupd[6];
+            // same convention as `Jpsi_d` above
+            Jpsicons_d = statepcaupd[6];
             Jpsicons_x = statepcaupd[7];
             Jpsicons_y = statepcaupd[8];
             Jpsicons_z = statepcaupd[9];
@@ -4782,15 +4778,12 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                 const double vb = ub.squaredNorm();
                 resinfvarv.push_back(vb);
                 // MATERIAL and HIT shares are accumulated SEPARATELY.
-                // `resinfcov` keeps its historical meaning -- the material
-                // share alone -- so `cfmass_vgf = (sigma_m^2 - resinfcov)/
-                // sigma_m^2` still means the TOTAL Gaussian share (hits +
-                // beamspot + pointing), which is what the
-                // self-consistent-sigma correction's
-                // `a_i = (1 + f_hit) sigma_i/m_i` needs and what every cache
-                // built before the hit blocks existed assumes. Folding the
-                // hit blocks into `resinfcov` would have silently changed
-                // both (MASSCFTERM_SPEC section 3, option D).
+                // `resinfcov` is the MATERIAL share alone, so
+                // `cfmass_vgf = (sigma_m^2 - resinfcov)/sigma_m^2` is the
+                // TOTAL Gaussian share (hits + beamspot + pointing), which is
+                // what the self-consistent-sigma correction's
+                // `a_i = (1 + f_hit) sigma_i/m_i` needs. Folding the hit
+                // blocks into `resinfcov` would change both.
                 const int fam = ires < resfamily_.size() ? resfamily_[ires] : -1;
                 if (fam == 8 || fam == 9) {
                   resinfcovhit += float(vb);
@@ -4915,10 +4908,10 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               // mass term with a delta kernel at zero: no kernel, no theory,
               // no PDG input, a pure resolution term.
               //
-              // Two regimes, and BOTH are implemented because the gate is to
-              // run the same events in each and compare:
-              //   * index 6 FREE (`doVtxConstraint == False`, what every
-              //     production uses): the fit reports the DCA, so
+              // Both configurations of index 6 are supported, and the same
+              // three numbers come out of each:
+              //   * index 6 FREE (`doVtxConstraint == False`): the fit itself
+              //     reports the DCA, so
               //       sigma_v^2 = C_66,  w_v = Vinv F C e_6,  r_v = theta_6
               //   * index 6 FROZEN: b is zero on every free index at
               //     convergence and nonzero only on index 6, and with
@@ -4938,32 +4931,22 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                 // trajectory is built BY PROPAGATING, so every process-noise
                 // row of `rfull` is identically zero there.  The vertex state
                 // enters ONLY through the ihit == 0 propagation rows, so
-                // `F_6^T Vinv rfull` is exactly 0 on every candidate --
-                // measured, not assumed: `|F6| = 0.707` and `h_66 = 1e7` while
-                // `g6 = 0` bit for bit.  The gradient that matters is the one
-                // at the CONSTRAINED OPTIMUM, i.e. at
+                // `F_6^T Vinv rfull` vanishes identically on every candidate
+                // and says nothing.  The gradient that matters is the one at
+                // the OPTIMUM,
                 //     rho = rfull + F_f dxfree
-                // which is the same vector the exported `Rr` is built from.
-                // There the free-index gradient IS zero (gate (a)) and the
-                // index-6 one is not.
+                // the same vector the exported `Rr` is built from: there the
+                // free-index gradient is zero and the index-6 one is not.
                 const VectorXd rho = rfull + Fsparse * dxfree;
                 const double g6 = VinvF6.dot(rho);   // the half-gradient
-                // convergence gate: the half-gradient on the FREE indices
-                // The convergence gate, DIMENSIONLESS: |g_i| sqrt(C_ii) is
+                // THE CONVERGENCE GATE, DIMENSIONLESS.  `|g_i| sqrt(C_ii)` is
                 // the remaining Newton step of free parameter i in units of
-                // its own error, directly comparable with |z_v| = |b_6|
-                // sigma_v. The raw half-gradient is in 1/(cm, rad, GeV^-1)
-                // units and says nothing on its own.
-                // THE CONVERGENCE GATE, DIMENSIONLESS.  `rfull` is the
-                // residual at the LAST linearisation point and `dxfree` the
-                // step taken from it, so the honest convergence figure is the
-                // remaining step in units of each parameter's own error,
-                // max_i |dxfree_i| / sqrt(C_ii).  (The raw half-gradient is in
-                // 1/(cm, rad, GeV^-1) units and says nothing on its own; and
-                // it is NOT zero at the export point, by construction -- it is
-                // what generated `dxfree`.)  `r_v` below is built from the
-                // SAME pair (reference + one step), so the two regimes are
-                // compared at the same linearisation point.
+                // that parameter's own error, so it is directly comparable
+                // with `|z_v| = |b_6| sigma_v`; the raw half-gradient is in
+                // 1/(cm, rad, GeV^-1) units and says nothing on its own.
+                // `r_v` below is built from the SAME pair (reference + one
+                // step), so the two configurations of index 6 are compared at
+                // the same linearisation point.
                 const VectorXd gfree = VinvF.transpose() * rho;
                 double bfree = 0.;
                 for (unsigned int i = 0; i < nstatefree; ++i) {
@@ -4975,20 +4958,35 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                 Jpsi_vtxb6 = float(-g6);
                 Jpsi_vtxfree = !doVtxConstraint_;
 
-                // NO CHARGE RE-SIGN HERE, deliberately. theta_6 is
-                // INVARIANT under swapping the two legs (`twoTrackCart2pca`
-                // flips both `n_hat` and `x_b - x_a`), so the raw theta_6 is
-                // already a well-defined signed DCA. `Jpsi_d` multiplies it
-                // by the charge of leg 0 -- which, on an invariant quantity,
-                // does not "define the sign wrt charge" but randomizes it
-                // whenever the leg ordering is not charge-ordered. The CF
-                // exponents below are built from `w_v` in the RAW convention,
-                // so re-signing the residual and not the weights would put
-                // the Landau skew on the wrong side. `Jpsi_vtxfirstplus` is
-                // exported so the `Jpsi_d` convention can still be formed.
+                // NO CHARGE RE-SIGN. theta_6 is INVARIANT under swapping the
+                // two legs (`twoTrackCart2pca` flips both `n_hat` and
+                // `x_b - x_a`), so it is already a well-defined signed DCA and
+                // multiplying it by the charge of a leg would make its sign
+                // depend on the leg ordering. The CF exponents below are built
+                // from `w_v` in this same convention, so re-signing the
+                // residual and not the weights would put the Landau skew on
+                // the wrong side. `Jpsi_vtxfirstplus` records which leg is the
+                // positive one.
                 Jpsi_vtxfirstplus = firstplus;
                 double sig2 = 0.;
+                double rv = 0.;
                 VectorXd wv;
+                // THE UNCONSTRAINED MASS.  Freezing theta_6 at zero is a
+                // CONDITIONING of the unconstrained solution,
+                //     x_c = x_u - C_u e_6 sigma_v^-2 r_v ,
+                // so the mass functional a = dm/dx transforms as
+                //     m_u = m_c + cov(m, theta_6) sigma_v^-2 r_v ,
+                //     cov(m, theta_6) = a^T C_u e_6 .
+                // `a` lives on the momentum block alone (`afull.head<6>()`),
+                // so its index-6 entry is zero and, with the frozen-index
+                // block inverse C_u,f6 = -C h_f6 sigma_v^2,
+                //     cov(m, theta_6) = -sigma_v^2 (C a_f).h_f6
+                // and sigma_v^2 cancels out of `m_u` itself.  `dmdv` below is
+                // that slope; with index 6 free the fit already reports the
+                // unconstrained mass and the slope is zero, while the
+                // covariance element is the plain a_f^T C e_6.
+                double dmdv = 0.;
+                double covmv = 0.;
                 if (Jpsi_vtxfree) {
                   VectorXd afree6 = VectorXd::Zero(nstatefree);
                   for (unsigned int i = 0; i < nstatefree; ++i) {
@@ -4996,37 +4994,28 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                       afree6(i) = 1.;
                     }
                   }
-                  wv = VinvF * Cinvd.solve(afree6);
+                  const VectorXd Ce6 = Cinvd.solve(afree6);
+                  wv = VinvF * Ce6;
                   sig2 = covstate(6, 6);
-                  Jpsi_vtxres = float(statepcaupd[6]);
+                  rv = statepcaupd[6];
+                  covmv = afree.dot(Ce6);
                 } else {
                   const VectorXd hf6 = VinvF.transpose() * F6;
                   const VectorXd Cs = Cinvd.solve(hf6);
                   const double denom = F6.dot(VinvF6) - hf6.dot(Cs);
                   sig2 = denom > 0. ? 1. / denom : 0.;
                   wv = sig2 * (VinvF6 - VinvF * Cs);
-                  Jpsi_vtxres = float(statepcaupd[6] - sig2 * g6);
+                  rv = statepcaupd[6] - sig2 * g6;
+                  dmdv = -Cinvd.solve(afree).dot(hf6);
+                  covmv = sig2 * dmdv;
                 }
                 wvtxinf = wv;
+                Jpsi_vtxres = float(rv);
                 Jpsi_vtxsig = float(std::sqrt(std::max(sig2, 0.)));
                 Jpsi_vtxz = Jpsi_vtxsig > 0.f ? Jpsi_vtxres / Jpsi_vtxsig : 0.f;
                 Jpsi_vtxdchi2 = Jpsi_vtxz * Jpsi_vtxz;
-                if (vtxDebug_ && nVtxDebug_ < 5) {
-                  ++nVtxDebug_;
-                  std::cout << "[vtxdbg] free=" << (!doVtxConstraint_)
-                            << " |F6|=" << F6.norm()
-                            << " |VinvF6|=" << VinvF6.norm()
-                            << " |r|=" << rfull.norm() << " |rho|=" << rho.norm()
-                            << " g6=" << g6
-                            << " h66=" << F6.dot(VinvF6)
-                            << " bfree=" << Jpsi_vtxbfree
-                            << " |g6|sig=" << std::abs(g6) * std::sqrt(std::max(sig2, 0.))
-                            << " theta6=" << statepcaupd[6]
-                            << " dx6=" << dxfull[6]
-                            << " ncons=" << ncons << " nsf=" << nstatefree
-                            << std::endl;
-                }
-
+                Jpsi_covmassvtx = float(covmv);
+                Jpsi_mass_unc = float((muarr[0] + muarr[1]).M() + dmdv * rv);
                 // ---- the per-block influence, variance shares and signs ---
                 //
                 // THE IONIZATION SIGN. The ionization CF is not even in its
@@ -5036,13 +5025,15 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                 // `dQI` is rank one: in the curvilinear frame it is
                 // `e_0 e_0^T sigma^2` and the local rotation spreads it over
                 // all five rows, so the signed coefficient is `w_b . u` with
-                // `u` the leading eigenvector oriented by its qop component,
-                // and NOT `w[r0]` (perhit gate 5). The leg CHARGE multiplies
-                // it: the two legs have opposite charges, which is exactly
-                // what the MASS functional's single `ioniSign = -1` hides.
-                // NOT ASSERTED: `Jpsi_vtxsgnchk` applies the identical rule
-                // to the MASS influence `wmass`, where the answer must be -1
-                // on every ionization block.
+                // `u` the leading eigenvector of `dQI` oriented by its qop
+                // component, and NOT the single row `w[r0]`, which the
+                // rotation leaves no longer aligned with q/p. The leg CHARGE
+                // multiplies it: the two legs have opposite charges, which is
+                // exactly what the MASS functional's single `ioniSign = -1`
+                // hides. `Jpsi_vtxsgnchk` applies the identical rule to the
+                // MASS influence `wmass`, where the answer must be -1 on every
+                // ionization block, so the convention is checked per candidate
+                // rather than asserted.
                 const unsigned int nb_all = dVs.size();
                 resinfvtxv.clear();
                 resinfvtxv.reserve(5 * nb_all);
@@ -6354,7 +6345,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
         // B costs nvar*nParms floats -- measured at +57 % of a production
         // candidate with family 15 alone and +429 % with 8-11.  Its own
         // packed triangle costs nvar*(nvar+1)/2, ~20x less.  So `hessfactorv`
-        // factors the MEAN block only, at the historical `nRank = ndof`, and
+        // factors the MEAN block only, at `nRank = ndof`, and
         // the variance block rides in `hessvaridxv`/`hessvarpackedv`:
         //
         //     hess = B^T B + scatter(hessvarpackedv on hessvaridxv)

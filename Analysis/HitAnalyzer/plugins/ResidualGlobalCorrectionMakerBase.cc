@@ -200,18 +200,11 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
       ? iConfig.getParameter<double>("genMatchDR") : 0.1;
   // THE SLIMMING SWITCH.  `exportStepRecords` writes the raw per-step
   // ionization / Moliere / radiative records the resolution-CF model is built
-  // from -- 430 kB and, offline, 2.2 s per candidate.  With the in-maker
-  // exponents (`exportCfExponents`, cvhcf) validated against the offline
-  // reference it is needed only to re-derive them under a DIFFERENT model, so
-  // production runs with it off.
-  //
-  // DEFAULT FLIPPED TO FALSE on 2026-09-06.  Every production since
-  // 2026-09-05 has set it explicitly to False (`config_jpsimc20M.sh`,
-  // `config_dymc8p5M.sh`), the exponents it feeds are validated against the
-  // offline reference, and leaving the default at True meant that any new
-  // driver silently wrote 72 % of a two-track tree in records nothing reads.
-  // The flag STAYS: `exportStepRecords=True` reproduces the old output
-  // exactly, and is what a model change is re-derived from.
+  // from -- 430 kB and, offline, 2.2 s per candidate, which is 72 % of a
+  // two-track tree.  The in-maker exponents (`exportCfExponents`, cvhcf) carry
+  // the same information for the model in use, so the raw records are needed
+  // only to re-derive the exponents under a DIFFERENT model.  Hence the
+  // default False; set it True to re-derive.
   exportStepRecords_ = iConfig.existsAs<bool>("exportStepRecords")
                            ? iConfig.getParameter<bool>("exportStepRecords") : false;
   exportCfExponents_ = iConfig.existsAs<bool>("exportCfExponents")
@@ -238,8 +231,8 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   exportMaterialNoise_ = iConfig.existsAs<bool>("exportMaterialNoise")
                            ? iConfig.getParameter<bool>("exportMaterialNoise") : false;
   // THE VARIANCE (log-det) TERM of the two-track maker's exported gradient
-  // and Hessian.  See the member docs; off reproduces the pre-2026-09-06
-  // gradients bit for bit.
+  // and Hessian.  See the member docs; with it off the resolution and
+  // material parameters enter the exported gradient only through the mean.
   exportVarianceGrads_ = iConfig.existsAs<bool>("exportVarianceGrads")
                            ? iConfig.getParameter<bool>("exportVarianceGrads") : false;
   varianceGradFamilies_ = iConfig.existsAs<std::vector<unsigned int>>("varianceGradFamilies")
@@ -614,6 +607,8 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
         tree->Branch("Jpsi_vtxvchk", &Jpsi_vtxvchk);
         tree->Branch("Jpsi_vtxvgf", &Jpsi_vtxvgf);
         tree->Branch("Jpsi_vtxbfree", &Jpsi_vtxbfree);
+        tree->Branch("Jpsi_mass_unc", &Jpsi_mass_unc);
+        tree->Branch("Jpsi_covmassvtx", &Jpsi_covmassvtx);
         tree->Branch("Jpsi_vtxfirstplus", &Jpsi_vtxfirstplus);
         tree->Branch("Jpsi_vtxvhit", &Jpsi_vtxvhit);
         tree->Branch("Jpsi_vtxvms", &Jpsi_vtxvms);
@@ -2065,8 +2060,8 @@ Matrix<double, 7, 1> ResidualGlobalCorrectionMakerBase::localToGlobal(const Matr
 // stores.  Strips split on the cluster width N (clipped to 1..5) and on the
 // CPE's own uProj at 0.25; pixels on the template charge bin, separately for
 // the local-x and local-y blocks.  Those are the splits the pull study found
-// to move (NOTES_HITRES sections 3 and 10): the strip core runs +12 % to
-// -13 % across uProj, the pixel core 0.52 to 1.17 across the charge bin.
+// to move: the strip core runs +12 % to -13 % across uProj, the pixel core
+// 0.52 to 1.17 across the charge bin.
 // ---------------------------------------------------------------------------
 int ResidualGlobalCorrectionMakerBase::hitResClassIndex(int subdet, int sizeX, float uProj, int qBin, bool isY) {
   if (subdet <= 2) {  // PixelBarrel = 1, PixelEndcap = 2

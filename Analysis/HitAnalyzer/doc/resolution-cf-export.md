@@ -1,8 +1,8 @@
 # The resolution-CF export of the CVH makers
 
-*(2026-09-05. Companion to `TrackPropagation/Geant4e/interface/CvhCfExponents.h`,
-which carries the physics documentation; this file is the maker-side contract:
-what is written, what it replaces, and how to turn the old export off.)*
+*(Companion to `TrackPropagation/Geant4e/interface/CvhCfExponents.h`, which
+carries the physics documentation; this file is the maker-side contract: what is
+written, in what layout, and which switch governs it.)*
 
 ## What the makers write
 
@@ -12,9 +12,9 @@ its independent process-noise blocks,
 
     phi_z(t) = phi_hit(t) * exp( S_ms(t) + S_ioni(t) + S_rad(t) + S_del(t) )
 
-with `z` the residual standardized by the fit's own sigma. Since 2026-09-05 the
-four exponents are computed **inside the makers**, in the `doRes` pass, and
-written on a fixed 64-point tau grid:
+with `z` the residual standardized by the fit's own sigma. The four exponents
+are computed **inside the makers**, in the `doRes` pass, and written on a fixed
+64-point tau grid:
 
 | branch (single track) | branch (two track) | type | meaning |
 |---|---|---|---|
@@ -36,7 +36,7 @@ plus, once, in the **runtree**:
 | `cftau`   | the 64 tau values the exponents are sampled at |
 | `cfmodel` | the switch configuration and shape-table id that produced them |
 
-### The per-material-group split (2026-09-06, `exportCfGroupExponents`)
+### The per-material-group split (`exportCfGroupExponents`)
 
 Every step-level exponent is **linear in the step's material amount at fixed
 composition** — Moliere's `chi_c^2` and `Omega_0` carry the step length, the
@@ -87,21 +87,19 @@ purpose: a rank-16 PCA of the tau axis costs 6.8 kB at a relative error of
 4.2e-7 (ms) to 1.2e-3 (rad), but the basis should be fitted to the data rather
 than guessed, and this is the export that lets that happen.
 
-**The group is now on every step record.** `msmoliv` has carried it at column 9
-since the global material model landed; since 2026-09-06 `ioniurbanv` and
-`radstepv` carry it as their LAST column, so the offline
-`groups.pair_ioni_rows` heuristic (take the `n_ioni` Moliere rows of largest
-areal density) is no longer needed. Strides changed accordingly:
+**The material group is on every step record.** `msmoliv` carries it at column
+9, `ioniurbanv` and `radstepv` as their LAST column, so no offline heuristic is
+needed to associate an ionization or radiative row with its group:
 
-| array | before | after |
+| array | stride | where it is written |
 |---|---|---|
-| `ioniurbanv` | 11, or 13 with `CVH_IONI_EXACTDELTA` | **12 / 14**, new scalar branch `ioniurbanstride` |
-| `radstepv` | 11 (`radstepstride`) | **12** |
+| `ioniurbanv` | **12**, or **14** with `CVH_IONI_EXACTDELTA` | `ioniurbanstride` |
+| `radstepv` | **12** | `radstepstride` |
 
-Every existing column index is unchanged. **A reader that hard-codes 11/13 will
-mis-parse a new file** — read `ioniurbanstride` / `radstepstride`.
+**A reader that hard-codes the stride will mis-parse the file** — read
+`ioniurbanstride` / `radstepstride`.
 
-### The hit-class blocks and their Gaussian shares (2026-09-06)
+### The hit-class blocks and their Gaussian shares
 
 | branch | type | meaning |
 |---|---|---|
@@ -122,36 +120,32 @@ They feed the hit half of the same construction,
 
 with `v_other = vgf - sum_c v_c` formed offline.
 
-**`cfmass_vgf` and `resinfcov` do NOT change.** The two-track maker now
-registers parmtype-8/9 blocks (`exportHitResBlocks`, default True) — it never
-did, which is why the per-hit-class parameters could not be fitted at all — but
-their variances go into the NEW `resinfcovhit`, not into `resinfcov`. That is
-deliberate: `cfmass_vgf = (sigma_m^2 - resinfcov)/sigma_m^2` must keep meaning
-the TOTAL Gaussian share (hits + beamspot + pointing), because that is what the
-self-consistent-sigma correction's `a_i = (1 + f_hit) sigma_i/m_i` uses and what
-every cache built before the hit blocks existed assumes. Folding them in would
-have been a silent physics change.
+**The parmtype-8/9 variances stay out of `cfmass_vgf` and `resinfcov`.** The
+two-track maker registers parmtype-8/9 blocks (`exportHitResBlocks`, default
+True), but their variances go into `resinfcovhit` alone. That is deliberate:
+`cfmass_vgf = (sigma_m^2 - resinfcov)/sigma_m^2` means the TOTAL Gaussian share
+(hits + beamspot + pointing), because that is what the self-consistent-sigma
+correction's `a_i = (1 + f_hit) sigma_i/m_i` uses. Folding the hit blocks in
+would double-count them.
 
 The two-track `dVs` feed nothing but the influence export, so registering a
 block cannot move the fit; and the parmtype-8/9 corrections are deliberately
 NOT applied to the two-track hit covariance (the single-track maker scales `iV`
 by `exp(corparms)`), because that WOULD move it.
 
-In the single-track tree `resinfcov` has always included the hit blocks and
-still does; `resinfcovhit` is the same sum on its own, and `sum_c cfqop_hitv`
-equals `cfqop_vgf` exactly.
+In the single-track tree `resinfcov` includes the hit blocks; `resinfcovhit` is
+the same sum on its own, and `sum_c cfqop_hitv` equals `cfqop_vgf` exactly.
 
-### The material group's own PROCESS NOISE (2026-09-06, `exportMaterialNoise`)
+### The material group's own PROCESS NOISE (`exportMaterialNoise`)
 
 `k_g` — the parmtype-15 material-group amount — scales the step's MEAN energy
 loss AND, coherently, its MS covariance and ionization variance: they all carry
 the same `matStepFact = exp(k_g)` in the propagator's M1 block. The MEAN
-dependence has always been differentiated (it is the parmtype-15 column of
-`transportJacobianBxByBzD`, whose only non-zero row is `dqopdxi`). The WIDTH
-dependence never was. So the fit's quadratic hit-chi2 term measured a group's
-mean loss only, while the mass CF measured its width — two functionals of one
-parameter, one of them blind, which is exactly the configuration in which a
-−37 % `tec_services` pull can sit unexplained.
+dependence is the parmtype-15 column of `transportJacobianBxByBzD`, whose only
+non-zero row is `dqopdxi`. Without this switch the WIDTH dependence is not
+differentiated at all, so the fit's quadratic hit-chi2 term measures a group's
+mean loss while the mass CF measures its width — two functionals of one
+parameter, one of them blind.
 
 With `exportMaterialNoise=True` the propagator accumulates, per material group,
 the sum of that group's steps' `(errMS + errI)`, transported by the same
@@ -171,16 +165,12 @@ as a resolution block of family 15, so the existing log-det machinery —
 (`sum_g dQ_g == dQMS + dQI` exactly), not an addition to it. Folding them in
 would double-count the material share and break the offline coverage cut
 `|resinfcov/refCov(0,0) − 1| < 5e-3`. `resinfcovgrp` should therefore equal the
-parmtype-10 + parmtype-11 part of `resinfcov` per candidate — measured on 120
-gun tracks: ratio 1 to **3.6e-7**, the float32 storage floor.
+parmtype-10 + parmtype-11 part of `resinfcov` per candidate, to **3.6e-7** —
+the float32 storage floor.
 
-**As of the next section the two-track maker has it too** (`exportVarianceGrads`).
-It needed a new implementation rather than a port: that maker had no `gradll`
-and no log-det machinery at all, its `dVs` fed the influence export and nothing
-else, and the parmtype-8..11 families are not even columns of its parameter
-vector. On the two-track side `exportMaterialNoise` alone only REGISTERS the
-blocks (they feed `resinfcovgrp` and the influence export); it takes
-`exportVarianceGrads` as well to put them in the gradient.
+On the two-track side `exportMaterialNoise` alone only REGISTERS the blocks
+(they feed `resinfcovgrp` and the influence export); it takes
+`exportVarianceGrads` as well to put them in the gradient (next section).
 
 **Validation** (`materialFDGroup=<g> materialFDEps=<eps>`, which injects
 `k_g -> k_g + eps` and re-propagates):
@@ -189,7 +179,7 @@ blocks (they feed `resinfcovgrp` and the influence export); it takes
 |---|---|
 | V3, `max\|fd − analytic\|/max\|dQ_g\|` | **1.6e-4** (`bpix_support`), **3.4e-5** (`tib_active_L2`), unchanged between eps = 1e-3 and 1e-4 |
 | sum rule `max\|sum_g dQ_g − (dQMS+dQI)\|/max` | **4.9e-16 / 5.3e-16** — float64 round-off |
-| `exportMaterialNoise=False` | every gradient/Hessian branch (`gradv`, `gradllv`, `gradchisqv`, `hesspackedv`) BIT-IDENTICAL to the pre-2026-09-06 build |
+| `exportMaterialNoise=False` | the switch is inert: every gradient/Hessian branch (`gradv`, `gradllv`, `gradchisqv`, `hesspackedv`) is bit-identical with it off |
 | CPU | +17 ms/track on the low-pT muon gun (46.1 s vs 44.1 s user over 120 tracks), ~4.6 % |
 | bytes | none: same parameters, same H layout; `resinfcovgrp` is 4 B and the blocks ride in the existing `reseigidx`/`resinfvarv` arrays (~53 more entries per track) |
 
@@ -199,26 +189,27 @@ momentum along the leg, hence subsequent MS. That indirect path is 1.6e-4 of
 the direct scaling and is deliberately NOT in the analytic block — the same
 approximation the parmtype-10/11 families make.
 
-### The two-track VARIANCE (log-det) gradient (2026-09-06, `exportVarianceGrads`)
+### The two-track VARIANCE (log-det) gradient (`exportVarianceGrads`)
 
-The two-track maker's exported `gradv` / `hesspackedv` / `hessfactorv` were the
-derivatives of the QUADRATIC form alone,
+With `exportVarianceGrads=False` the exported `gradv` / `hesspackedv` /
+`hessfactorv` of the two-track maker are the derivatives of the QUADRATIC form
+alone,
 
     chi2(theta) = r^T R r,   r -> r + J theta,
     grad = 2 J^T R r,   hess = 2 J^T R J,
 
-i.e. every global parameter entered only through the MEAN of the residuals.
+i.e. every global parameter enters only through the MEAN of the residuals.
 For a parameter that also moves the COVARIANCE that is not the derivative of
 the likelihood, and three families are exactly that:
 
-| parmtype | how it enters V | how it entered the export before |
+| parmtype | how it enters V | what the mean-only export carries |
 |---|---|---|
 | 15 (material group) | `exp(k_g)` scales the group's steps' MS covariance and ionization variance, the SAME factor that scales their mean loss | mean loss only (the `dxi` column of `transportJacobianBxByBzD`, one non-zero row) |
-| 10 / 11 (MS, ionization) | they ARE the covariance | not at all -- they are not columns of this maker's parameter vector |
-| 8 / 9 (hit resolution) | they scale the hit covariance | not at all |
+| 10 / 11 (MS, ionization) | they ARE the covariance | nothing -- they are not columns of this maker's parameter vector |
+| 8 / 9 (hit resolution) | they scale the hit covariance | nothing |
 
-With `exportVarianceGrads=True` the exported objective becomes the MARGINAL
-(REML) one, the same one the single-track maker has always differentiated:
+With `exportVarianceGrads=True` the exported objective is the MARGINAL (REML)
+one, the same one the single-track maker differentiates:
 
     -2 lnL = r^T R r + ln|V| + ln|C|,
     R = V^-1 - V^-1 F C^-1 F^T V^-1,     C = F^T V^-1 F,
@@ -237,9 +228,8 @@ Three properties, all deliberate and all shared with the single-track code:
   `C`.
 * **The Hessian is the EXPECTED one.** The observed pieces
   `2 r^T R dV_i R dV_j R r` and the mean-variance cross term
-  `-2 J^T R dV_i R r` are dropped; the single-track maker has had them behind
-  `if (false)` since it was written. For a Gaussian the mean and variance
-  blocks of the Fisher matrix are exactly orthogonal, so the cross term is zero
+  `-2 J^T R dV_i R r` are dropped, in both makers. For a Gaussian the mean
+  and variance blocks of the Fisher matrix are exactly orthogonal, so the cross term is zero
   IN EXPECTATION; and the expected form is a Gram matrix,
   `tr(dV_i R dV_j R) = <R^1/2 dV_i R^1/2, R^1/2 dV_j R^1/2>_F`, hence PSD by
   construction, as `2 J^T R J` also is. **The exported `hess` is PSD whatever
@@ -251,8 +241,8 @@ Three properties, all deliberate and all shared with the single-track code:
 **What the switch costs in LAYOUT.** Parmtype 15 needs nothing new: the
 material-group globals are already columns of `globalidxv` (one slot per group
 per hit), so `varianceGradFamilies=15` changes the VALUES of the parmtype-15
-entries of `gradv`/`hess` and nothing else -- the file still pools with a
-production that ran without the switch. Parmtypes 8/9/10/11 are per-module and
+entries of `gradv`/`hess` and nothing else, i.e. a file written with it has the
+same layout as one written without it. Parmtypes 8/9/10/11 are per-module and
 are NOT columns of this maker's parameter vector (`npars = nparsAlignment +
 nparsBfield + nparsEloss`), so they are APPENDED; `nParms`, `globalidxv`,
 `gradv`, `hesspackedv`, `hessfactorv`, `jacrefv`, `Muplus_jacRef`,
@@ -279,14 +269,14 @@ with family 15 alone and **+429 %** with 8-11; its own packed triangle costs
 
 **`hesspackedv` is COMPLETE and must not have the block added to it** -- which
 is why the three branches are written only on the `fillGradsFactored` path.
-Their PRESENCE is the flag: a file without `hessvaridxv` has the historical
-semantics. `globalfit/extract.py` does the addition, and refuses to build a
-card from a factored file whose `gradllv` is filled but which has no
+Their PRESENCE is the flag: in a file without `hessvaridxv` the factored
+Hessian is `B^T B` alone. `globalfit/extract.py` does the addition, and refuses
+to build a card from a factored file whose `gradllv` is filled but which has no
 `hessvaridxv` -- that combination is an inconsistent `(G, K)` pair and would
 bias the fit rather than merely widen it.
 
-`gradchisqv` and `gradllv`, which this maker has always had branches for and
-never filled, are now filled when the switch is on:
+`gradchisqv` and `gradllv` are filled when the switch is on, and left empty
+otherwise:
 
 | branch | meaning |
 |---|---|
@@ -312,13 +302,11 @@ the two arms of a finite difference can be asserted to have dropped the same
 number. It costs a symmetric eigendecomposition of an ncons x ncons matrix per
 candidate and is validation-only.
 
-**Validation** (`calibration_studies/resolution/check_variance_grads_260906.py`
-and the four shell drivers next to it; full report in
-`runs/variancegrads260906/check_variance.txt`), gun ditrack, 59 candidates:
+**What is guaranteed**, on gun ditrack candidates:
 
 | gate | measured |
 |---|---|
-| switch OFF, three smokes | every branch BIT-IDENTICAL to the branch head, 246 / 157 / 264 branches |
+| switch OFF | the switch is inert: every exported branch is bit-identical with it off |
 | **FD at FIXED linearization** (`varianceFDGlobalIdx=-2`, 1382 columns x 19 candidates) | median `\|fd - an\|` / per-candidate scale = **1.3e-6** at eps = 1e-3, and it GROWS as 1/eps (1.1e-5 at 1e-4, 9.8e-5 at 1e-5) -- so the residual is the numerical floor of re-doing the profile, NOT a modelling gap |
 | ... and its structure | for parmtype 15, `an_chisq - fd_chisq` equals the MEAN-loss gradient to a median of **3.6e-7** (float32 storage of `gradv`); for parmtypes 10/11 it is **2.2e-7**, i.e. zero, as it must be since their `J` columns vanish |
 | FD at the PROPAGATOR level, parmtype 15 (`k_init` of one group) | best **6.0e-4** on the log-det part of the summed column, **1.8e-2** on the chi2 part. It does not improve monotonically with delta: an FD across a RE-FIT has truncation (prop delta) fighting the reference movement and the Gauss-Newton stopping tolerance (prop 1/delta) |
@@ -331,7 +319,7 @@ and the four shell drivers next to it; full report in
 | bytes, production layout | **+7.0 %** with family 15, **+105 %** with 8-11 as well |
 | information | the parmtype-15 Fisher information on the J/psi gun goes from **4.07 to 166.3** (41x), and `Jpsi_jacMass`'s parmtype-15 entries move by a median factor **2.28** (the parmtype-14 ones by exactly zero) |
 
-### The per-leg reference energy loss (2026-09-06)
+### The per-leg reference energy loss
 
 | branch | meaning |
 |---|---|
@@ -344,7 +332,7 @@ information, imposable without the step records. The granularity is the
 PROPAGATION step (surface to surface) — the granularity at which the fit
 applies the loss — not the Geant4 step.
 
-### The two legs' reference momentum covariance (2026-09-06)
+### The two legs' reference momentum covariance
 
 | branch | type | meaning |
 |---|---|---|
@@ -363,11 +351,11 @@ so the matrix can be checked rather than trusted.
 This is what makes the second-order corrections of
 `resolution/oddmoment/MASSCFTERM_SPEC.md` truth-free on DATA. The Jensen term
 needs `A = sigma_rel1^2 + sigma_rel2^2` and `B = 2 rho sigma_rel1 sigma_rel2`,
-and the closed form `1.5 (sigma_m/m)^2` misses exactly `f_ang`; until now all
-three had to be taken from an MC measurement (rho = 0, f_ang = 0.11, the closed
-form 4.6 % high).
+and the closed form `1.5 (sigma_m/m)^2` misses exactly `f_ang`; without these
+branches all three have to be taken from an MC measurement (rho = 0,
+f_ang = 0.11, the closed form 4.6 % high).
 
-### The pre-FSR gen mass (2026-09-06)
+### The pre-FSR gen mass
 
 | branch | meaning |
 |---|---|
@@ -380,11 +368,10 @@ form 4.6 % high).
 carries `fromHardProcessBeforeFSR`; what exists is the Z at status 22/62 (masses
 identical in 4000/4000 events) and, in the 59 % of events that radiated, the
 status-746 pair, with `m(mumu, 746) == m(Z, 62)` to an RMS of 4e-6 GeV. So the
-status-62 resonance IS the pre-FSR mass and it exists in every event
-(`calibration_studies/zchannel/README.md`). With these branches
-`zfsr_kernel.py` runs off the production's own pairs cache and inherits the
-analysis selection exactly, instead of a separate FWLite pass whose selection
-has to be kept in step by hand.
+status-62 resonance IS the pre-FSR mass and it exists in every event. With
+these branches `zfsr_kernel.py` runs off the production's own pairs cache and
+inherits the analysis selection exactly, instead of a separate FWLite pass whose
+selection has to be kept in step by hand.
 
 `genResonancePdgIds` defaults to `{23, 443, 100443, 553, 100553, 200553}`. A
 J/psi from a B decay has no status-22/62 copy, so `Jpsigenpre_mass` is −99 there
@@ -393,6 +380,99 @@ J/psi from a B decay has no status-22/62 copy, so `Jpsigenpre_mass` is −99 the
 photons' `isPrompt` is asked for through a `dynamic_cast` and simply not
 required when the cast fails.
 
+### The vertex-constraint residual (`exportVtxResidual`, two track)
+
+State index 6 of the 10-dim vertex-PCA block is the signed track-track PCA
+distance
+
+    theta_6 = n_hat . (x_b - x_a),   n_hat = (p_a x p_b)^
+
+Two free helices have 10 vertex parameters and two through a common point have
+9, so a common-vertex constraint removes exactly ONE degree of freedom and
+leaves exactly ONE residual per candidate. Both legs come from one production
+point, so on ideal geometry its mean is zero BY CONSTRUCTION: it is the mass
+term with a delta kernel at zero — no kernel, no theory, no PDG input, a pure
+resolution term.
+
+`theta_6` is INVARIANT under swapping the two legs (`twoTrackCart2pca` flips
+both `n_hat` and `x_b - x_a`), so it is already a well-defined signed quantity
+and neither `Jpsi_vtxres` nor `Jpsi_d` re-signs it by charge;
+`Jpsi_vtxfirstplus` says which leg is the positive one for anyone who wants a
+charge-ordered convention.
+
+| branch | meaning |
+|---|---|
+| `Jpsi_vtxres` | r_v, cm — the DCA the UNCONSTRAINED fit reports |
+| `Jpsi_vtxsig` | sigma_v, cm |
+| `Jpsi_vtxz` | the pull r_v/sigma_v |
+| `Jpsi_vtxdchi2` | z_v^2 = chi2(constrained) − chi2(free) |
+| `Jpsi_vtxb6`, `Jpsi_vtxbfree` | the half-gradient at index 6, and max_i abs(g_i) sqrt(C_ii) over the FREE indices (dimensionless, comparable with abs(z_v)) |
+| `Jpsi_vtxvchk` | abs(sum_b v_b/sigma_v^2 − 1) over fam != 15, the closure gate |
+| `Jpsi_vtxvgf`/`vtxvhit`/`vtxvms`/`vtxvioni` | the variance shares of sigma_v^2 by family |
+| `Jpsi_massvms`, `Jpsi_massvioni` | the same split for the MASS functional |
+| `Jpsi_vtxsgnchk` | the ionization-sign convention gate (below) |
+| `Jpsi_vtxfree`, `Jpsi_vtxfirstplus`, `Jpsi_vtxok` | flags |
+| `vtxvarv`, `vtxsgnv` | per-block v_b/sigma_v^2 and ionization sign |
+| `resinfvtxv` | a_b = dV_b^(1/2) w_v,b for the vertex functional, 5/block padded |
+| `cfvtx_{ms,del,ioni_re,ioni_im,rad_re,rad_im}` | the exponents at the vertex weights |
+| `cfvtx_hitcls`, `cfvtx_hitv` | per-hit-class shares of sigma_v^2 |
+| `cfvtx_grp*` | the per-material-group split of the same |
+| `Jpsi_jacVtx` | d theta_6(unconstrained) / d(global params), aligned with `globalidxv` |
+
+Both configurations of index 6 give the same three numbers:
+
+* index 6 FREE (`doVtxConstraint = False`): the fit reports the DCA, so
+  `sigma_v^2 = C_66`, `w_v = Vinv F C e_6`, `r_v = theta_6`;
+* index 6 FROZEN (`doVtxConstraint = True`, the default): with
+  `F_6 = Ffull.col(6)`, `h_f6 = F_f^T Vinv F_6`, `Cs = C h_f6`,
+  `sigma_v^2 = 1/(h_66 − h_f6^T Cs)`, `b_6 = −(Vinv F_6).rho`,
+  `r_v = sigma_v^2 b_6` (one Newton step off the frozen value) and
+  `w_v = sigma_v^2 (Vinv F_6 − Vinv F Cs)`.
+
+In both, `sum_b abs(dV_b^(1/2) w_v,b)^2 == sigma_v^2` exactly — that identity is
+`Jpsi_vtxvchk`, and a consumer should require it below ~1e-6.
+
+`rho = rfull + F_f dxfree` and NOT `rfull`: in a GBL-type fit the reference
+trajectory is built by propagating, so every process-noise row of `rfull` is
+identically zero at the linearisation point and `F_6^T Vinv rfull` vanishes on
+every candidate. The gradient that carries information is the one at the
+optimum.
+
+THE IONIZATION SIGN is per block, not global. An energy loss moves the DCA
+either way depending on geometry and charge, so the sign travels with the block
+in `cvhcf::TrackInput::ressgn`: `dQI` is rank one, and the local rotation
+spreads it over all five rows, so the signed coefficient is `w_b . u` with `u`
+the leading eigenvector of `dV_b` oriented by its q/p component — not the single
+row `w[r0]`. The leg charge multiplies it. The convention is CHECKED rather than
+asserted: `Jpsi_vtxsgnchk` applies the identical rule to the MASS influence,
+where the answer must be −1 on every ionization block.
+
+### The unconstrained mass (`Jpsi_mass_unc`, `Jpsi_covmassvtx`)
+
+With `doVtxConstraint = True` the fitted `Jpsi_mass` is the VERTEX-CONSTRAINED
+mass. Freezing `theta_6` at zero is a conditioning of the unconstrained
+solution,
+
+    x_c = x_u − C_u e_6 sigma_v^-2 r_v ,
+
+so the (linearised) mass functional `a = dm/dx` obeys
+
+    m_u = m_c + cov(m, theta_6) sigma_v^-2 r_v ,
+    cov(m, theta_6) = a^T C_u e_6 = sigma_v^2 (a_6 − a_f^T C h_f6) .
+
+`a` lives on the momentum block alone, so `a_6 = 0`, the slope is
+`−(C a_f).h_f6` and `sigma_v^2` cancels out of the mass itself. The maker writes
+both: `Jpsi_mass_unc` (GeV) and `Jpsi_covmassvtx` (GeV cm), so ONE constrained
+fit gives the analysis EITHER mass. With index 6 free, `Jpsi_mass_unc` is
+`Jpsi_mass` and `Jpsi_covmassvtx` is the plain `a_f^T C e_6`.
+
+The CF exponents and influence weights of the MASS functional are those the fit
+computes in whichever regime it ran. That is the point of running constrained:
+in the constrained system `w_mass^T V w_v = 0` identically, so the constrained
+mass and the vertex residual are exactly uncorrelated per candidate and the two
+terms multiply in the likelihood.
+
+
 `cfqop_*` and `cfmass_*` are **different functionals of the same blocks** — they
 differ in the standardization sigma (`sqrt(refCov(0,0))` against
 `Jpsi_sigmamass`) and in the sign the ionization and radiative weights carry
@@ -400,13 +480,13 @@ differ in the standardization sigma (`sqrt(refCov(0,0))` against
 apart so that nothing can read one as the other.
 
 `vgf` also means different things in the two trees, and both are what the
-offline cache called `vgf`:
+offline cache calls `vgf`:
 
 * single track — `sum_b v_b` over the hit families (parmtype 8/9) divided by
   `refCov(0,0)`;
 * two track — `(sigma_m^2 − resinfcov)/sigma_m^2`, i.e. hits + beamspot +
-  pointing by construction, because the two-track maker does not register hit
-  blocks at all.
+  pointing by construction, because the hit blocks are excluded from
+  `resinfcov` (they go to `resinfcovhit`).
 
 ## Why in the maker
 
@@ -429,20 +509,19 @@ file and is quoted separately):
 | the offline extraction it replaces | 2.2 s | 2.2 s |
 
 Projected over 20M J/psi + 8M Z + 10M Upsilon = 38M dimuon candidates: 17.0 TB
-today, **4.51 TB** with the switch off, and ~0.84 TB once `fillGradsFactored`
-also replaces the dense Hessian (which is 4.10 TB of the 4.51). The exponents
-themselves are 54 GB.
+with the raw records, **4.51 TB** with the switch off, and ~0.84 TB when
+`fillGradsFactored` also replaces the dense Hessian (which is 4.10 TB of the
+4.51). The exponents themselves are 54 GB.
 
-i.e. the switch removes 72 % of the two-track tree, and the evaluation is 53x faster
-than the offline extraction of the same object — inside a fit that costs O(1 s)
-per candidate, so 4–10 % of it. Two thirds of that time is the radiative
-channel (`nsteps x nv x ntau` trigonometric evaluations); a further factor ~2
-is available there from the half-angle identity and was not taken, because the
-exactness of the port is worth more at this size.
+i.e. the switch removes 72 % of the two-track tree, and the evaluation is 53x
+faster than the offline extraction of the same object — inside a fit that costs
+O(1 s) per candidate, so 4–10 % of it. Two thirds of that time is the radiative
+channel (`nsteps x nv x ntau` trigonometric evaluations); a further factor ~2 is
+available there from the half-angle identity, not taken because exactness
+against the offline reference is worth more at this size.
 
 What is LEFT after the switch is dominated by `hesspackedv` (59 kB/track,
-108 kB/candidate) — a separate problem with a separate solution already in the
-tree (`fillGradsFactored`).
+108 kB/candidate), which `fillGradsFactored` addresses separately.
 
 The inputs are the **export arrays**, not the propagator's internal logs, so
 the in-maker pooling by global parameter index is identical to the offline
@@ -457,11 +536,10 @@ truncated at 8, i.e. `tau_i = 4*i*14/447`, `tau_63 = 7.8926`.
 A subset rather than a fresh `linspace(0, 8, 64)` because every point is then
 also a point of the offline grid, so the in-maker exponent can be compared
 against the reference *at the same argument* with no interpolation in between.
-It is also the grid the 2026-09-04 compression study measured
-(`calibration_studies/resolution/cfcompress/gridtest.py`, row `stride4/t<=8.0`):
-refitting the unbinned mass likelihood on it moves alpha by −1.6e-8, about
-1/1000 of the full-sample statistical error, and every other fitted parameter by
-less than 0.001 sigma.
+The truncation is safe at the level the fit cares about: refitting the unbinned
+mass likelihood on this grid rather than the full 448-point one moves alpha by
+−1.6e-8, about 1/1000 of the full-sample statistical error, and every other
+fitted parameter by less than 0.001 sigma.
 
 ## The slimming switch
 
@@ -470,21 +548,14 @@ cmsRun runCvhResClosure.py  ... exportStepRecords=False
 cmsRun runCvhJpsiGenMC.py   ... exportStepRecords=False
 ```
 
-`exportStepRecords` (default **False** since 2026-09-06; it was True) governs
-the RAW per-step export that the exponents are built from:
+`exportStepRecords` (default **False**) governs the RAW per-step export that the
+exponents are built from:
 
 * dropped when False: `ioniurbanidx`/`ioniurbanv`, `msmoliidx`/`msmoliv`,
   `radstepidx`/`radstepv`/`radstepspecv`, `reseigv`, `resinfv`, `resinfbv`;
 * **kept regardless**: `reseigidx`, `reshitidx`, `reshitcls`, `resinfvarv`,
   `resinfcov`, `resinfcovhit`, `ioniqscaleidx`/`ioniqscalev`, `radvgrid`,
   `radstepstride`, `radstepnv`, `ioniurbanstride`, and every `cf*` branch.
-
-The default flipped because every production since 2026-09-05 set it to False
-explicitly (`production/config_jpsimc20M.sh`, `config_dymc8p5M.sh`) and the
-exponents it feeds are validated against the offline reference, so leaving the
-default at True meant a new driver silently wrote 72 % of a two-track tree in
-records nothing reads. `exportStepRecords=True` still reproduces the old output
-(modulo the two appended group columns above).
 
 The keep list is what a reader still needs and what costs nothing: `resinfvarv`
 + `reseigidx` + `reshitidx` are the per-block variance shares and their hit
@@ -496,11 +567,12 @@ them are O(100 B).
 
 `resinfbv` (the 5×5 `B_b = M_b dV_b^{1/2}` per block, ~6 kB/candidate) goes with
 the raw records rather than the keep list: its only consumer is
-`cf_mass_likelihood.leg_exponents`, the single-track pairing route that the
-two-track maker's own `cfmass_*` export supersedes.
+`cf_mass_likelihood.leg_exponents`, the single-track pairing route whose
+two-track equivalent is the maker's own `cfmass_*` export.
 
-`exportCfExponents` (default True) governs the exponents themselves. Turning
-both off reproduces a pre-2026-09-05 tree exactly.
+`exportCfExponents` (default True) governs the exponents themselves; with both
+switches off the tree carries neither the exponents nor the records they are
+built from.
 
 **Do not turn `exportStepRecords` off on a sample whose model has not been
 validated yet.** Its purpose is to make a DIFFERENT model derivable from the
@@ -523,8 +595,8 @@ builds a DIFFERENT model from the one the maker exported. That is exactly what
 ## Reading it back
 
 `calibration_studies/resolution/cf_inmaker.py` turns these branches into the
-same npz caches `cf_track_resolution --extract` and
-`cf_mass_likelihood --pairs-tt` used to write:
+same npz caches the offline `cf_track_resolution --extract` and
+`cf_mass_likelihood --pairs-tt` routes produce:
 
 ```bash
 python3 cf_inmaker.py extract --files '<glob>/globalcor_resclosure_0.root' --cache runs/cf_trackres_<tag>.npz
@@ -540,19 +612,18 @@ is a formula error) and per whole track (a failure that block level passes is a
 pooling error):
 
 ```bash
-source /work/submit/david_w/ZMass/mfs/.venv/bin/activate
-export CMSSW_SRC=/work/submit/david_w/ZMass/CMSSW_15_0_19_patch2_dev/src
+source <the offline python environment>
+export CMSSW_SRC=<this release>/src
 ./cxx/build_cvhcf.sh                      # compiles the maker's own .cc into a ctypes shim
 python3 cvhcf_validate.py --file <globalcor.root> --ntracks 40
 ```
 
-The requirement is 1e-6 absolute on the exponent. Measured on the reference
-smokes: **1.2e-11** (single track, 40 tracks / 515 blocks) and **1.6e-11**
-(two track, 28 candidates / 734 blocks) per block and per track, and 9.5e-7 on
-the floats the maker wrote — which IS the float32 storage floor at those |S|,
-every other family being 100x below it.
+The requirement is **1e-6 absolute on the exponent**. What is achieved is
+**1.2e-11** (single track, per block and per track) and **1.6e-11** (two track),
+and **9.5e-7** on the floats the maker wrote — which IS the float32 storage
+floor at those |S|, every other family being 100x below it, so a consumer should
+treat 1e-6 as the tolerance on any exponent read back from a file.
 
-End to end (`cvhcf_e2e_260905.sh`, 1891 gun ditrack candidates): the unbinned
-mass likelihood moves by `d(alpha) = 2e-10` in its 1e-3 units, i.e. 2e-9 of its
-own sigma, and the single-track even closure is identical to every printed
-digit. See `Documents/Resolution/NOTES.md`, 2026-09-05.
+End to end, on gun ditrack candidates, the unbinned mass likelihood moves by
+`d(alpha) = 2e-10` in its 1e-3 units, i.e. 2e-9 of its own sigma, and the
+single-track even closure is identical to every printed digit.

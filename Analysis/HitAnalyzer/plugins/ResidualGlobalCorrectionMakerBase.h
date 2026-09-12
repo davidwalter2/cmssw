@@ -397,9 +397,9 @@ protected:
   // 15 alone, +429 % with 8-11), while its own packed triangle costs
   // nvar*(nvar+1)/2 -- a factor ~20 less.
   //
-  // The presence of `hessvaridxv` IS the flag: a file without it has the
-  // historical semantics (hessfactorv complete), a file with it needs the
-  // addition.  `globalfit/extract.py` does it.
+  // The presence of `hessvaridxv` IS the flag: in a file without it
+  // `hessfactorv` is complete, in a file with it this addition is required.
+  // `globalfit/extract.py` does it.
   unsigned int nHessVar = 0;
   std::vector<unsigned int> hessvaridxv;   // columns, ascending, into nParms
   std::vector<float> hessvarpackedv;       // upper triangle, row-major
@@ -818,7 +818,7 @@ protected:
   std::vector<unsigned int> ioniurbanidx;
   std::vector<float> ioniurbanv;
 
-  // THE SCALE THAT WAS APPLIED TO EACH IONIZATION BLOCK (2026-09-03).
+  // THE SCALE APPLIED TO EACH IONIZATION BLOCK.
   //
   // `ioniurbanv`'s gsig2 column is the RECORD's variance; the matrix that
   // entered the fit (and hence `resinfvarv` = w_b^T dV_b w_b) is
@@ -844,7 +844,7 @@ protected:
   std::vector<unsigned int> ioniqscaleidx;
   std::vector<float> ioniqscalev;
 
-  // RADIATIVE (brems + pair) STEP EXPORT (2026-09-03), for the offline
+  // RADIATIVE (brems + pair) STEP EXPORT, for the offline
   // radiative CF term (cf_brems_exact.py). One entry per Geant4 step of the
   // leg -- i.e. aligned 1:1 with `msmoliv`, NOT with `ioniurbanv`, which only
   // has rows for steps that produced a fluctuation record -- tagged with the
@@ -856,10 +856,8 @@ protected:
   // R_* column constants, step_spectrum() and rad_exponent() apply verbatim:
   //     [effZ, effA, xg(g/cm2), etot(GeV), p(GeV), d/X0, step(cm),
   //      dedxRad, dedxBrem, dedxPair (all GeV/cm), cs(GeV^-2), stepGroup]
-  // Column 11 (`stepGroup`) was APPENDED on 2026-09-06 for the per-group CF
-  // export; every existing column index is unchanged, and files written
-  // before that carry stride 11 and no group column. Read the stride from
-  // `radstepstride`, never assume it.
+  // Column 11 (`stepGroup`) is the step's material group, which the per-group
+  // CF export keys on. Read the stride from `radstepstride`, never assume it.
   // `radstepspecv`: 2*RADSTEP_NV = 96 floats per step, dN/dv SHAPE for
   // bremsstrahlung (48) then pair production (48) on the shared v grid.
   // These are shapes only; each must be renormalized offline to its own
@@ -879,9 +877,7 @@ protected:
 
   // `ioniurbanv`'s stride is not a compile-time constant -- it is 12, or 14
   // with CVH_IONI_EXACTDELTA on -- so it is written as its own scalar branch
-  // rather than left to be inferred from `size(v)/size(idx)`. (Before
-  // 2026-09-06 it was 11 / 13; the material-group column was appended after
-  // the exact-delta columns, so every existing column index is unchanged.)
+  // rather than left to be inferred from `size(v)/size(idx)`.
   int ioniurbanstride = 0;
 
   // Phase B analogue for multiple scattering: per Geant4 step, raw
@@ -926,11 +922,10 @@ protected:
   // Sum of v_b over the HIT families (parmtype 8/9).  A SEPARATE scalar
   // deliberately: `resinfcov` keeps its meaning of "the material share", so
   //     cfmass_vgf = (sigma_m^2 - resinfcov)/sigma_m^2
-  // still means the TOTAL Gaussian share (hits + beamspot + pointing) and
-  // every cache built before the hit blocks existed stays valid.  The
+  // still means the TOTAL Gaussian share (hits + beamspot + pointing).  The
   // self-consistent-sigma correction's `a_i = (1 + f_hit) sigma_i/m_i` uses
-  // exactly that total, so changing it would have been a silent physics
-  // change (MASSCFTERM_SPEC section 3, option D).
+  // exactly that total, so folding the hit share into `resinfcov` would be a
+  // silent physics change.
   float resinfcovhit = 0.f;
   // Sum of v_b over the parmtype-15 MATERIAL-GROUP blocks. They are a
   // RE-PARTITION of the same process noise the parmtype-10/11 blocks carry
@@ -1002,10 +997,10 @@ protected:
   //     S_f(tau; k) = S_f^fixed(tau) + sum_g A(k_g) S_{f,g}(tau),
   //     A(k) = exp(k)  (the propagator's own `matStepFact` convention)
   //
-  // is exact and `k = 0` reproduces the flat exponents above. That is what
-  // replaces the four per-family `k_hit/k_ms/k_ioni/k_rad` knobs with the
-  // parmtype-15 material-group amounts the hit chi2 already floats (NOTES
-  // 2026-09-05 (II)).
+  // is exact and `k = 0` reproduces the flat exponents above. It is what lets
+  // the material amounts be floated as the parmtype-15 material-group
+  // parameters the hit chi2 already carries, rather than through per-family
+  // `k_hit/k_ms/k_ioni/k_rad` knobs.
   //
   // Layout, sparse over the groups the candidate actually touched (~22 of 42
   // on a J/psi gun candidate): `cf*_grp` is the ascending group id, and each
@@ -1070,7 +1065,7 @@ protected:
   // one gen point, so its mean is ZERO BY CONSTRUCTION -- no kernel, no
   // theory, no PDG input.  It is the mass term with a delta kernel at zero.
   //
-  //   index 6 FREE (`doVtxConstraint == False`, what every production uses):
+  //   index 6 FREE (`doVtxConstraint == False`):
   //      sigma_v^2 = C_66,  w_v = Vinv F C e_6,  r_v = statepcaupd[6]
   //   index 6 FROZEN:
   //      sigma_v^2 = 1/(h_66 - h_6f C h_6f^T),  b_6 = -(Vinv F_6).r,
@@ -1078,8 +1073,7 @@ protected:
   // Both satisfy `sum_b |dV_b^{1/2} w_v,b|^2 == sigma_v^2` exactly (= the
   // gate `vtxvchk`).
   bool exportVtxResidual_ = false;
-  bool vtxConstraintZeroSeed_ = true;
-  float Jpsi_vtxres = 0.f;    // r_v, cm, signed like `Jpsi_d` (leg a = mu+)
+  float Jpsi_vtxres = 0.f;    // r_v, cm, the raw swap-invariant signed DCA
   float Jpsi_vtxsig = 0.f;    // sigma_v, cm
   float Jpsi_vtxz = 0.f;      // the pull r_v/sigma_v
   float Jpsi_vtxb6 = 0.f;     // -(Vinv F_6).r at convergence (0 when 6 free)
@@ -1091,9 +1085,9 @@ protected:
   // directly comparable with |z_v| (which is |b_6| sigma_v).
   float Jpsi_vtxbfree = 0.f;
   // Was leg 0 the POSITIVE muon?  theta_6 is invariant under swapping the two
-  // legs (n_hat and x_b - x_a both flip), so the RAW theta_6 is already
-  // well defined and is what `Jpsi_vtxres` carries -- unlike `Jpsi_d`, which
-  // multiplies it by the charge of leg 0 (see the note in the maker).
+  // legs (n_hat and x_b - x_a both flip), so it is already a well-defined
+  // signed DCA and neither `Jpsi_vtxres` nor `Jpsi_d` re-signs it by charge;
+  // this flag is here for anyone who wants a charge-ordered convention.
   bool Jpsi_vtxfirstplus = false;
   // The variance shares of sigma_v^2 by FAMILY: hits (parmtype 8/9), multiple
   // scattering (10) and ionization (11).  They sum to 1 (the fit's Q has no
@@ -1101,6 +1095,21 @@ protected:
   float Jpsi_vtxvhit = 0.f, Jpsi_vtxvms = 0.f, Jpsi_vtxvioni = 0.f;
   // the same split for the MASS functional, for the side-by-side composition
   float Jpsi_massvms = 0.f, Jpsi_massvioni = 0.f;
+  // THE UNCONSTRAINED MASS, and the covariance element that produces it.
+  //
+  // Freezing theta_6 at zero is a conditioning of the unconstrained solution,
+  //     x_c = x_u - C_u e_6 sigma_v^-2 r_v ,
+  // so for the (linearised) mass functional a = dm/dx,
+  //     m_u = m_c + cov(m, theta_6) sigma_v^-2 r_v ,
+  //     cov(m, theta_6) = a^T C_u e_6 = sigma_v^2 (a_6 - a_f^T C h_f6) ,
+  // and a_6 = 0 because the mass depends on the two momenta only. So the
+  // slope is just -(C a_f).h_f6 and sigma_v^2 cancels out of the mass:
+  // the analysis can form EITHER mass from one constrained fit.
+  // With index 6 free the fit already reports the unconstrained mass, and
+  // `Jpsi_mass_unc` is `Jpsi_mass` while `cov(m, theta_6) = a_f^T C e_6`
+  // is still written out.
+  float Jpsi_mass_unc = -99.f;    // GeV
+  float Jpsi_covmassvtx = 0.f;    // GeV cm
   bool Jpsi_vtxfree = false;  // was index 6 a free parameter?
   bool Jpsi_vtxok = false;
   // The convention gate: the general per-block ionization sign rule applied
@@ -1127,9 +1136,9 @@ protected:
   // THE PER-HIT (COMPLEMENT) RESIDUAL EXPORT -- the DATA version of the
   // hit-residual CF likelihood.  See `exportPerHitResidual_`.
   //
-  // The truth-referenced prototype (`calibration_studies/resolution/hitlik`)
-  // whitens `refParms - genParms` and needs MC.  What exists on data is the
-  // part of the constraint residual the fit has NOT absorbed:
+  // A truth-referenced form whitens `refParms - genParms` and needs MC.
+  // What exists on data is the part of the constraint residual the fit has
+  // NOT absorbed:
   //
   //     rho = V R r ,   R = V^-1 - V^-1 F C F^T V^-1 ,   Cov(rho) = V R V
   //
@@ -1233,10 +1242,8 @@ protected:
   //                          so it is opt-in and off by default.
   bool exportCfGroupExponents_ = false;
   //   exportPerHitResidual_ -- build and write the per-hit (complement)
-  //                          residual block above.  OFF by default: it is a
-  //                          new export, it costs `d` extra `cvhcf`
-  //                          evaluations per track, and every existing
-  //                          configuration must be untouched by it.
+  //                          residual block above.  OFF by default: it costs
+  //                          `d` extra `cvhcf` evaluations per track.
   bool exportPerHitResidual_ = false;
   //   perHitCfGroups_    -- also split the per-component exponents by
   //                          material group.  On by default WHEN the block is
@@ -1266,10 +1273,10 @@ protected:
   // the two-track maker does not pay for a sixth per-group array.
   bool cfGroupDelta_ = true;
   //   exportHitResBlocks_ -- register the parmtype-8/9 HIT-RESOLUTION dV
-  //                          blocks. The single-track maker has always done
-  //                          it; the two-track maker did not, which is why
-  //                          the per-hit-class resolution parameters have
-  //                          never been fitted (NOTES 2026-09-05 (II) 8c).
+  //                          blocks in the two-track maker, which is what
+  //                          makes the per-hit-class resolution parameters
+  //                          fittable from two-track candidates (the
+  //                          single-track maker always registers them).
   //                          It is EXPORT ONLY -- the two-track `dVs` feed
   //                          nothing but the influence export -- so it
   //                          cannot move the fit.
@@ -1280,19 +1287,18 @@ protected:
   //                          group's WIDTH as well as its mean loss. It
   //                          CHANGES the exported G and H of the parmtype-15
   //                          columns (not the track fit, which does not read
-  //                          `dVs`), so it is opt-in; False reproduces the
-  //                          pre-2026-09-06 gradients exactly.
+  //                          `dVs`), so it is opt-in; with False the group
+  //                          amount enters only through the mean loss.
   bool exportMaterialNoise_ = false;
 
   //   exportVarianceGrads_ -- add the VARIANCE (log-det) part of the profiled
   //                          -2lnL to the exported global gradient and
-  //                          Hessian of the TWO-TRACK maker.  The single-track
-  //                          maker has always had this (`gradll`); the
-  //                          two-track one had no log-det machinery at all,
-  //                          so its `k_g` (and every parmtype-8..11 family)
-  //                          entered the quadratic hit-chi2 term only through
-  //                          the MEAN loss.  Opt-in, and OFF reproduces the
-  //                          pre-2026-09-06 gradients bit for bit.
+  //                          Hessian of the TWO-TRACK maker; it is the
+  //                          two-track counterpart of the single-track
+  //                          maker's `gradll`.  Opt-in: with it off `k_g`
+  //                          (and every parmtype-8..11 family) enters the
+  //                          exported gradient and Hessian only through the
+  //                          MEAN loss.
   //
   //                          The objective differentiated is the REML/marginal
   //                          one, the same one the single-track maker uses:
@@ -1410,20 +1416,20 @@ void ResidualGlobalCorrectionMakerBase::init_twice_active_var(T &ad, const unsig
 
 // ---------------------------------------------------------------------------
 // Gauss-Newton step control shared by the single-track, two-track and N-track
-// makers (2026-09-05). See NOTES.md "the momentum-floor clamp -> proper step
-// damping" entry.
+// makers.
 //
-// The legacy guard was a single ABSOLUTE momentum floor: a step that would put
-// a leg below `clampMomentumFloor` was scaled so that the leg lands exactly on
-// the floor. That protects the propagator (which refuses p < PropagationPtotLimit)
-// but it is a hard non-linearity at a fixed momentum: every track whose TRUE
-// momentum is below the floor is pinned at it, and a leg whose reference
-// momentum is ALREADY below the floor gets a negative scale, which max(s,0)
-// turns into a frozen (zero) step.
+// The damping is a RELATIVE trust region in q/p, on top of the absolute
+// momentum floor that keeps a leg above the propagator's refusal threshold
+// (p < PropagationPtotLimit). A bare absolute floor does not work on its own:
+// scaling a step so that the leg lands exactly on the floor is a hard
+// non-linearity at a fixed momentum, so every track whose TRUE momentum is
+// below the floor is pinned at it, and a leg whose reference momentum is
+// ALREADY below the floor gets a negative scale, which max(s,0) turns into a
+// frozen (zero) step.
 //
-// The replacement is a relative trust region in q/p: per iteration a leg's
-// momentum may change by at most a factor f = maxMomentumStepFactor (default
-// 2, i.e. p may at most halve or double). The effective lower bound is
+// With the trust region, per iteration a leg's momentum may change by at most
+// a factor f = maxMomentumStepFactor (default 2, i.e. p may at most halve or
+// double). The effective lower bound is
 //     p_lo = max(absFloor, p_ref/f)   if p_ref > absFloor
 //     p_lo = p_ref/f                  otherwise
 // which is ALWAYS strictly below p_ref -- so the scale is never zero, no leg
@@ -1439,16 +1445,15 @@ namespace cvhstep {
   //   absFloor     absolute momentum floor [GeV]; must stay above the
   //                propagator's PropagationPtotLimit refusal.
   //   f            max per-iteration momentum change factor; f <= 1 disables
-  //                the relative window (caller should then use its legacy path).
+  //                the relative window.
   //   qopFlipAllow |q/p| at or below which a genuine charge flip is permitted
-  //                (i.e. p_ref >= allowChargeFlipAboveP). Same semantics as the
-  //                legacy single-track clamp: such a flip is let through subject
-  //                only to the momentum floor on the far side.
-  //   flipProtect  set to true when a NON-permitted flip was capped (the legacy
+  //                (i.e. p_ref >= allowChargeFlipAboveP). Such a flip is let
+  //                through subject only to the momentum floor on the far side.
+  //   flipProtect  set to true when a NON-permitted flip was capped (the
   //                nChargeFlipProtect bookkeeping).
   //
-  // At the default f = 2 the cap on a non-permitted flip is numerically
-  // identical to the legacy "stop half-way toward q/p = 0" rule.
+  // At the default f = 2 the cap on a non-permitted flip stops the step
+  // half-way toward q/p = 0.
   inline double legStepScaleRel(double qopref, double dqop, double absFloor,
                                 double f, double qopFlipAllow,
                                 bool *flipProtect = nullptr) {
