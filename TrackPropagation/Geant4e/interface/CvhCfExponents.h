@@ -214,7 +214,7 @@ namespace cvhcf {
     // so the flag is exported and the reader drops it identically rather than
     // silently keeping a track whose model is missing a block.
     bool ok = false;
-    double vgauss = 0.;  // sum of v_b over the hit families (8, 9)
+    double vgauss = 0.;  // sum of v_b over the GAUSSIAN families (8, 9, and 16 = beam line)
     int nblockms = 0, nblockioni = 0, npooled = 0;
     Exponents S;
     // The per-group split of `S`, ascending in `group`; empty unless

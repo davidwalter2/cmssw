@@ -181,6 +181,14 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
       ? iConfig.getParameter<bool>("doSimDecayTruth") : false;
   fitSimHitPositions_ = iConfig.getUntrackedParameter<bool>("fitSimHitPositions", false);
   bsConstraint_ = iConfig.getParameter<bool>("bsConstraint");
+  // The luminous-region width multiplier. 1.0 = the record as read; the gate
+  // for the beam rows runs at 1e6, where the rows are weightless and the fit
+  // must reproduce the rows-OFF fit on every export. existsAs-guarded so
+  // every legacy cfi is untouched.
+  beamWidthScale_ = iConfig.existsAs<double>("beamWidthScale")
+      ? iConfig.getParameter<double>("beamWidthScale") : 1.0;
+  exportBsResidual_ = iConfig.existsAs<bool>("exportBsResidual")
+      ? iConfig.getParameter<bool>("exportBsResidual") : false;
   applyHitQuality_ = iConfig.getParameter<bool>("applyHitQuality");
   hitCovScalePixel_ = iConfig.existsAs<double>("hitCovScalePixel")
       ? iConfig.getParameter<double>("hitCovScalePixel") : 1.0;
@@ -653,6 +661,63 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
         }
         if (fillJac_) {
           tree->Branch("Jpsi_jacVtx", &Jpsi_jacVtx);
+        }
+        tree->Branch("Jpsi_covvtx", Jpsi_covvtx.data(), "Jpsi_covvtx[6]/F");
+      }
+
+      // THE BEAM-LINE (LUMINOUS-REGION) RESIDUALS. Two constraint residuals
+      // of exactly the vertex-residual kind, in the transverse plane: the
+      // vertex the fit finds WITHOUT the beam rows, minus the beam line at
+      // that vertex's z, whitened by the covariance of that difference. See
+      // the member docs for the leave-one-out identity and the projector.
+      // Written only when the beam rows are actually on.
+      if (exportBsResidual_ && bsConstraint_) {
+        tree->Branch("Jpsi_bsres", Jpsi_bsres.data(), "Jpsi_bsres[2]/F");
+        tree->Branch("Jpsi_bscov", Jpsi_bscov.data(), "Jpsi_bscov[3]/F");
+        tree->Branch("Jpsi_bsz", Jpsi_bsz.data(), "Jpsi_bsz[2]/F");
+        tree->Branch("Jpsi_bschi2", &Jpsi_bschi2);
+        tree->Branch("Jpsi_bschi2fit", &Jpsi_bschi2fit);
+        tree->Branch("Jpsi_bschi20", &Jpsi_bschi20);
+        tree->Branch("Jpsi_bsvchk", &Jpsi_bsvchk);
+        tree->Branch("Jpsi_bsok", &Jpsi_bsok);
+        tree->Branch("Jpsi_bsvtx", Jpsi_bsvtx.data(), "Jpsi_bsvtx[3]/F");
+        tree->Branch("Jpsi_bsspot", Jpsi_bsspot.data(), "Jpsi_bsspot[3]/F");
+        tree->Branch("Jpsi_bsslope", Jpsi_bsslope.data(), "Jpsi_bsslope[2]/F");
+        tree->Branch("Jpsi_bswidth", Jpsi_bswidth.data(), "Jpsi_bswidth[3]/F");
+        tree->Branch("Jpsi_bsmeanmass", Jpsi_bsmeanmass.data(), "Jpsi_bsmeanmass[3]/F");
+        tree->Branch("Jpsi_bsmeanvtx", Jpsi_bsmeanvtx.data(), "Jpsi_bsmeanvtx[3]/F");
+        tree->Branch("Jpsi_bsmeanbs", Jpsi_bsmeanbs.data(), "Jpsi_bsmeanbs[6]/F");
+        tree->Branch("Jpsi_bsvbs", Jpsi_bsvbs.data(), "Jpsi_bsvbs[2]/F");
+        tree->Branch("Jpsi_bsvhit", Jpsi_bsvhit.data(), "Jpsi_bsvhit[2]/F");
+        tree->Branch("Jpsi_bsvms", Jpsi_bsvms.data(), "Jpsi_bsvms[2]/F");
+        tree->Branch("Jpsi_bsvioni", Jpsi_bsvioni.data(), "Jpsi_bsvioni[2]/F");
+        tree->Branch("Jpsi_bssgnchk", Jpsi_bssgnchk.data(), "Jpsi_bssgnchk[2]/F");
+        tree->Branch("Jpsi_massvbs", &Jpsi_massvbs);
+        tree->Branch("Jpsi_vtxvbs", &Jpsi_vtxvbs);
+        tree->Branch("bsvarv", &bsvarv);
+        tree->Branch("resinfbsv", &resinfbsv, basketSize);
+        if (exportCfExponents_) {
+          tree->Branch("cfbs_ms", &cfbsmsv);
+          tree->Branch("cfbs_del", &cfbsdelv);
+          tree->Branch("cfbs_ioni_re", &cfbsiorev);
+          tree->Branch("cfbs_ioni_im", &cfbsioimv);
+          tree->Branch("cfbs_rad_re", &cfbsradrev);
+          tree->Branch("cfbs_rad_im", &cfbsradimv);
+          tree->Branch("cfbs_hitcls", &cfbshitclsv);
+          tree->Branch("cfbs_hitcomp", &cfbshitcompv);
+          tree->Branch("cfbs_hitv", &cfbshitvv);
+          if (exportCfGroupExponents_) {
+            tree->Branch("cfbs_grp", &cfbsgrpv);
+            tree->Branch("cfbs_grpcomp", &cfbsgrpcompv);
+            tree->Branch("cfbs_grp_ms", &cfbsgrpmsv, basketSize);
+            tree->Branch("cfbs_grp_ioni_re", &cfbsgrpiorev, basketSize);
+            tree->Branch("cfbs_grp_ioni_im", &cfbsgrpioimv, basketSize);
+            tree->Branch("cfbs_grp_rad_re", &cfbsgrpradrev, basketSize);
+            tree->Branch("cfbs_grp_rad_im", &cfbsgrpradimv, basketSize);
+            tree->Branch("cfbs_grp_vqms", &cfbsgrpvqmsv);
+            tree->Branch("cfbs_grp_vqio", &cfbsgrpvqiov);
+            tree->Branch("cfbs_grp_closure", cfbsgrpclosure.data(), "cfbs_grp_closure[2]/F");
+          }
         }
       }
 

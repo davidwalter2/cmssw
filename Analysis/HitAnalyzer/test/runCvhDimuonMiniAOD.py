@@ -318,6 +318,22 @@ opts.register('exportVtxResidual', False, VarParsing.VarParsing.multiplicity.sin
               VarParsing.VarParsing.varType.bool,
               'export the VERTEX-CONSTRAINT RESIDUAL (state index 6, the '
               'track-track PCA distance) as a CF resolution term')
+opts.register('bsConstraint', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'constrain the common vertex to the LUMINOUS REGION: three '
+              'Gaussian rows with the beam-width covariance, one per PAIR. '
+              'Right for a prompt resonance (Z), wrong for the non-prompt '
+              'fraction of a J/psi sample.')
+opts.register('beamWidthScale', 1.0, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'multiply the three beam widths (covariance by its square). '
+              '1e6 makes the beam rows weightless -- the gate that the whole '
+              'block reduces to bsConstraint=False.')
+opts.register('exportBsResidual', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'export the two TRANSVERSE BEAM-LINE RESIDUALS (leave-one-out '
+              'vertex minus the beam line at that vertex z) as CF resolution '
+              'terms; needs bsConstraint=True')
 opts.register('doMassConstraint', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'apply the dimuon mass constraint (adds a second nicons pass)')
@@ -685,6 +701,9 @@ process.trackrefitdimuon = ResidualGlobalCorrectionMakerDiMuonG4e.clone(
     minPairHits=cms.int32(int(opts.minPairHits)),
     minLegHits=cms.int32(int(opts.minLegHits)),
     exportVtxResidual=cms.bool(bool(opts.exportVtxResidual)),
+    bsConstraint=cms.bool(bool(opts.bsConstraint)),
+    beamWidthScale=cms.double(float(opts.beamWidthScale)),
+    exportBsResidual=cms.bool(bool(opts.exportBsResidual)),
     doMassConstraint=cms.bool(bool(opts.doMassConstraint)),
     massConstraint=cms.double(float(opts.massConstraint)),
     massConstraintWidth=cms.double(float(opts.massConstraintWidth)),

@@ -769,8 +769,15 @@ namespace cvhcf {
       return;
     }
 
+    // The GAUSSIAN families. 8/9 are the hit blocks; 16 is the beam-line
+    // (luminous-region) block of the two-track maker, which is a Gaussian
+    // noise block of exactly the same kind -- a fixed covariance, no Landau
+    // channel -- so it belongs here and NOT with the material families.
+    // Counting it keeps the reader's closure
+    // `sum_g (vqms + vqio) + vgauss/sigma^2 == 1` exact with the beam rows
+    // on. No maker that does not register family 16 is affected.
     for (int i = 0; i < in.nres; ++i)
-      if (in.resfamily[i] == 8 || in.resfamily[i] == 9)
+      if (in.resfamily[i] == 8 || in.resfamily[i] == 9 || in.resfamily[i] == 16)
         out.vgauss += in.resvarv[i];
 
     std::vector<unsigned int> gs;

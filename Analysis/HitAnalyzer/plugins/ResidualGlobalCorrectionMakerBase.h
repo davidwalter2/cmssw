@@ -1131,6 +1131,152 @@ protected:
   // exactly as `Jpsi_jacMass` is: the D row a DATA fit needs for the mean
   // (alignment / field) part of this term.
   std::vector<float> Jpsi_jacVtx;
+  // The FITTED common vertex's 3x3 covariance (state indices 7,8,9), cm^2,
+  // packed (xx, xy, xz, yy, yz, zz).  Exported in BOTH regimes and with the
+  // beam rows on or off, because the leave-one-out beam residual is built
+  // from it: the rows-OFF run's `Jpsi_x/y/z` and this matrix are what the ON
+  // export must reproduce (gate G7).
+  std::array<float, 6> Jpsi_covvtx = {{0.f, 0.f, 0.f, 0.f, 0.f, 0.f}};
+
+  // ======================================================================
+  // THE BEAM-LINE (LUMINOUS-REGION) CONSTRAINT, AND ITS TWO RESIDUALS
+  // ======================================================================
+  //
+  // The luminous region is a GAUSSIAN NOISE BLOCK, not a prior on a global
+  // parameter: constraining the common vertex to the beam line with the
+  // beam-width covariance is mathematically ONE EXTRA HIT shared by the two
+  // legs -- three rows with Jacobian `Fbs = I` on the vertex-PCA position
+  // (state indices 7,8,9), residual `dbs0 = x_v - b0` and weight
+  // `covBS^-1`.  It is right for a PROMPT resonance (Z) and WRONG for a
+  // non-prompt one (the J/psi's B-decay fraction), so nothing here is
+  // enabled by default.
+  //
+  // TWO DEFECTS of the original code, both fixed (branch `beamline-260913`):
+  //
+  //  1. THE ROWS ENTERED TWICE.  The emission sat inside the per-leg
+  //     `for (id...)` loop with no `id == 0` guard (the pointing constraint
+  //     right below it HAS one), so the same three rows -- same residual,
+  //     same Jacobian on the same three state indices, same weight -- were
+  //     written once per leg and `chisq0val += bschisq` ran twice.  The
+  //     effective luminous-region covariance was therefore HALVED and the
+  //     beam chi2 double-counted, while `ndof` already counted +3.  Now
+  //     emitted once, `nbscons = 3`.
+  //
+  //  2. THE RESIDUAL WAS THE LEG'S REFERENCE POINT, not the vertex.
+  //     `twoTrackPca2cart` puts the two reference points at
+  //     `x_v -+ (d/2) n_hat`, so with index 6 free `refFts.head<3>()` is NOT
+  //     `x_v` and `Fbs = I` on indices 7,8,9 is not its Jacobian.  The
+  //     MIDPOINT `(x_a + x_b)/2` IS `x_v` identically, with Jacobian exactly
+  //     `I` on 7,8,9 and zero on index 6 and on the momenta, so the residual
+  //     is built from it and the Jacobian is exact in BOTH regimes.
+  //
+  // `beamWidthScale_` multiplies the three widths (covariance by its
+  // square).  It exists for the gate: at 1e6 the rows are weightless and the
+  // fit must reproduce the rows-OFF fit on every export.
+  //
+  // THE BLOCK IS REGISTERED AS A RESOLUTION BLOCK, family 16, `dV = covBS`
+  // (the same convention as the hit families 8/9, whose `dV` is the hit
+  // covariance: `V_b -> e^k V_b` has `dV_b/dk = V_b`).  Registering it is
+  // what keeps `sum_b |a_b|^2 == sigma^2` EXACT for every functional with
+  // the rows on -- the mass (`resinfv`), the vertex (`resinfvtxv`) and the
+  // two beam residuals below.  Family 16 is a FAMILY LABEL ONLY: it has no
+  // `detidparms` entry and adds no column to the quadratic term, so
+  // `resglobidx` carries the sentinel `kBeamSpotGlobIdx` and
+  // `varianceFamilyWanted(16)` is never true in any shipped configuration.
+  // `cvhcf::trackExponents` counts it into `vgauss` alongside 8/9 (it IS a
+  // Gaussian block), so the reader's group closure
+  // `sum_g (vqms + vqio) + vgauss/sigma^2 == 1` stays exact.
+  //
+  // THE BEAM-SPOT GLOBAL PARAMETERS NEED NO SEPARATE EXPORT.  A shift `delta`
+  // of the centroid x0 (y0) moves the beam residual row by `-delta`, and any
+  // functional is `theta = w^T n`, so
+  //     d theta / d x0 = -w[bs row x] ,     d theta / d y0 = -w[bs row y]
+  // -- its own influence weight on the beam block's x (y) row.  For the
+  // slopes, moving `dxdz` by `ds` moves the same row by `-ds (z_v - z0)`, so
+  //     d theta / d dxdz = -w[bs row x] (z_v - z0)
+  // (the tilt also enters `covBS`'s off-diagonal, a second-order effect on
+  // the MEAN and ignored here).  `Jpsi_bsmean*` below are exactly those
+  // weights, and `Jpsi_bsvtx` carries `z_v` so the slope rows follow.  No new
+  // global parameters are added to the quadratic term by this study.
+  //
+  // THE TWO RESIDUALS.  With the rows ON the beam rows are MEASUREMENT rows,
+  // so their unbiased residual is the LEAVE-ONE-OUT (innovation) residual:
+  // the vertex the fit finds WITHOUT the beam rows, minus the beam line.
+  // With `A = C[7:10,7:10]` (the fitted vertex covariance, rows in),
+  // `M = covBS - A = Cov(rho_B)` and `rho_B = x_v^fit - b0` the post-step
+  // residual on those rows,
+  //     e_B    = covBS M^-1 rho_B             = x_v^{-B} - b0
+  //     Cov(e) = covBS M^-1 covBS             = C_{-B} + covBS
+  // (Sherman-Morrison; `C_{-B} = A + A M^-1 A` is the vertex covariance with
+  // the block removed).  Projecting to the transverse plane with the
+  // CONDITIONAL-MEAN projector
+  //     P = [ I_2 , -s ] ,   s = covBS[0:2,2] / covBS[2,2]
+  // is exactly "the beam line evaluated at that vertex's z": `P covBS P^T`
+  // is the conditional covariance `Sigma_{xy|z}`, so
+  //     r_bs      = P e_B                              (2, cm)
+  //     Cov(r_bs) = P Cov(e) P^T = P C_{-B} P^T + Sigma_{xy|z}
+  // -- the task's two readings are the same formula.  z is LEFT OUT: its row
+  // is weightless (sigmaZ ~ 3.5 cm against a ~100 um vertex error).
+  //
+  // The influence weights follow from `rho = (I - F C F^T Vinv) n`:
+  //     w_i = u_i - Vinv F C F^T u_i ,   u_i = G_i^T on the 3 beam rows
+  // with `G = P covBS M^-1`, and then `sum_b |dV_b^{1/2} w_i,b|^2` is
+  // `Cov(r_bs)_{ii}` exactly (gate `Jpsi_bsvchk`).
+  bool exportBsResidual_ = false;
+  double beamWidthScale_ = 1.0;
+  static constexpr unsigned int kBeamSpotGlobIdx = 0xffffffffu;
+  static constexpr int kBeamSpotFamily = 16;
+  // r_bs, cm, (x, y) -- the leave-one-out vertex minus the beam line at z_v
+  std::array<float, 2> Jpsi_bsres = {{0.f, 0.f}};
+  // Cov(r_bs), cm^2, packed (xx, xy, yy)
+  std::array<float, 3> Jpsi_bscov = {{0.f, 0.f, 0.f}};
+  // the whitened pulls, LOWER-CHOLESKY basis in the order (x, y):
+  // Cov = L L^T with L lower triangular, z = L^-1 r_bs.  So z[0] is the x
+  // pull and z[1] the y pull GIVEN x -- stated because the basis is a
+  // choice, and the eigenbasis would mix the two.
+  std::array<float, 2> Jpsi_bsz = {{0.f, 0.f}};
+  float Jpsi_bschi2 = 0.f;     // r_bs^T Cov^-1 r_bs == rho_B^T M^-1 rho_B (2 dof)
+  float Jpsi_bschi2fit = 0.f;  // the FITTED beam rows' chi2, rho_B^T covBS^-1 rho_B
+  float Jpsi_bschi20 = 0.f;    // the same at the LINEARISATION point, dbs0^T covBS^-1 dbs0
+  float Jpsi_bsvchk = 0.f;     // max_i |sum_b |a_{b,i}|^2 / Cov_ii - 1|
+  bool Jpsi_bsok = false;
+  // the fitted common vertex (cm) and the beam spot it is measured against,
+  // so the slope response and any re-derivation offline need no extra record
+  std::array<float, 3> Jpsi_bsvtx = {{0.f, 0.f, 0.f}};
+  std::array<float, 3> Jpsi_bsspot = {{0.f, 0.f, 0.f}};
+  std::array<float, 2> Jpsi_bsslope = {{0.f, 0.f}};   // (dxdz, dydz) as used
+  std::array<float, 3> Jpsi_bswidth = {{0.f, 0.f, 0.f}};  // the SCALED widths, cm
+  // THE MEAN TERM: -w[bs rows] for each functional, i.e. d(functional)/d(x0,y0,z0).
+  // Units: GeV/cm for the mass, dimensionless for the vertex (cm/cm) and the
+  // beam residuals.  Slope response = the x (y) entry times (z_v - z0).
+  std::array<float, 3> Jpsi_bsmeanmass = {{0.f, 0.f, 0.f}};
+  std::array<float, 3> Jpsi_bsmeanvtx = {{0.f, 0.f, 0.f}};
+  std::array<float, 6> Jpsi_bsmeanbs = {{0.f, 0.f, 0.f, 0.f, 0.f, 0.f}};  // x-func then y-func
+  // per-block influence for the TWO beam functionals, COMPONENT MAJOR:
+  // entry (k, b, j) at ((k * nblock) + b) * 5 + j, k = 0 (x) / 1 (y)
+  std::vector<float> resinfbsv;
+  // v_{b,i} / Cov_ii, same component-major layout without the 5-padding
+  std::vector<float> bsvarv;
+  // the family shares of Cov_ii, i = x then y: beam block, hits, MS, ionization
+  std::array<float, 2> Jpsi_bsvbs = {{0.f, 0.f}};
+  std::array<float, 2> Jpsi_bsvhit = {{0.f, 0.f}};
+  std::array<float, 2> Jpsi_bsvms = {{0.f, 0.f}};
+  std::array<float, 2> Jpsi_bsvioni = {{0.f, 0.f}};
+  // the beam block's share of the MASS and VERTEX functionals' variance
+  float Jpsi_massvbs = 0.f, Jpsi_vtxvbs = 0.f;
+  // CF exponents at the two beam weights, component major [2 * kNTau]
+  std::vector<float> cfbsmsv, cfbsdelv, cfbsiorev, cfbsioimv, cfbsradrev, cfbsradimv;
+  std::vector<short> cfbshitclsv;   // (component, class) pairs: comp in cfbshitcompv
+  std::vector<short> cfbshitcompv;
+  std::vector<float> cfbshitvv;
+  // per-material-group exponents at the two beam weights; the group key is
+  // (component, group) via `cfbsgrpcompv` / `cfbsgrpv`
+  std::vector<short> cfbsgrpv, cfbsgrpcompv;
+  std::vector<float> cfbsgrpmsv, cfbsgrpdelv, cfbsgrpiorev, cfbsgrpioimv, cfbsgrpradrev,
+      cfbsgrpradimv;
+  std::vector<float> cfbsgrpvqmsv, cfbsgrpvqiov;
+  std::array<float, 2> cfbsgrpclosure = {{0.f, 0.f}};
+  std::array<float, 2> Jpsi_bssgnchk = {{0.f, 0.f}};
 
   // ======================================================================
   // THE PER-HIT (COMPLEMENT) RESIDUAL EXPORT -- the DATA version of the

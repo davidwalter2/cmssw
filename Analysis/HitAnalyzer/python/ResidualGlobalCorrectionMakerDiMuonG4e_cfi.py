@@ -50,6 +50,17 @@ ResidualGlobalCorrectionMakerDiMuonG4e = cms.EDProducer(
     doRes = cms.bool(False),
     useIdealGeometry = cms.bool(False),
     bsConstraint = cms.bool(False),
+    # The luminous region as a Gaussian noise block: three rows on the common
+    # vertex with the beam-width covariance, ONE per pair (it used to be one
+    # per leg -- see the beam-line block in ResidualGlobalCorrectionMakerBase.h).
+    # Right for a PROMPT resonance (Z), wrong for the J/psi's non-prompt
+    # fraction, so it stays off by default.
+    # `beamWidthScale` multiplies the three widths; 1e6 makes the rows
+    # weightless and is the gate that the block reduces to bsConstraint=False.
+    beamWidthScale = cms.double(1.0),
+    # the two transverse beam-line residuals (leave-one-out vertex minus the
+    # beam line at that vertex's z), their influence weights and CF exponents
+    exportBsResidual = cms.bool(False),
     applyHitQuality = cms.bool(True),
     keepPixelEdgeHits = cms.bool(False),
     pixelMinSizeX = cms.int32(2),
