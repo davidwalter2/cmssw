@@ -1205,10 +1205,22 @@ protected:
   // With `A = C[7:10,7:10]` (the fitted vertex covariance, rows in),
   // `M = covBS - A = Cov(rho_B)` and `rho_B = x_v^fit - b0` the post-step
   // residual on those rows,
-  //     e_B    = covBS M^-1 rho_B             = x_v^{-B} - b0
-  //     Cov(e) = covBS M^-1 covBS             = C_{-B} + covBS
-  // (Sherman-Morrison; `C_{-B} = A + A M^-1 A` is the vertex covariance with
-  // the block removed).  Projecting to the transverse plane with the
+  //     e_B    = rho_B + A M^-1 rho_B         = x_v^{-B} - b0
+  //     C_{-B} = A + A M^-1 A                 (the rows-OFF vertex covariance)
+  //     Cov(e) = C_{-B} + covBS
+  // (Sherman-Morrison.)  THE "+" FORM IS DELIBERATE.  The same quantities are
+  // `covBS M^-1 rho_B` and `covBS M^-1 covBS`, which is how they were first
+  // written -- and that form evaluates the WHOLE answer through `M^-1`.  `M`
+  // is a DIFFERENCE of two nearly equal covariances (it degenerates as the
+  // tracks stop constraining the vertex, `A -> covBS`) and `A` carries the
+  // numerical error of a large sparse solve, so the product could lose the
+  // leading order entirely and could return an INDEFINITE covariance -- which
+  // is what produced the 5 sigma tail in the first pass of this study.  In the
+  // "+" form the leading order is explicit, only the correction is amplified,
+  // and `Cov(e) >= covBS` holds by construction.  `A M^-1` comes from an `LLT`
+  // solve of `M`, not an explicit inverse.  `Jpsi_bscovlo` exports `C_{-B}`,
+  // which the rows-OFF run's `Jpsi_covvtx` must reproduce (gate G7a).
+  // Projecting to the transverse plane with the
   // CONDITIONAL-MEAN projector
   //     P = [ I_2 , -s ] ,   s = covBS[0:2,2] / covBS[2,2]
   // is exactly "the beam line evaluated at that vertex's z": `P covBS P^T`
@@ -1218,10 +1230,27 @@ protected:
   // -- the task's two readings are the same formula.  z is LEFT OUT: its row
   // is weightless (sigmaZ ~ 3.5 cm against a ~100 um vertex error).
   //
+  // THE TWO CF FUNCTIONALS ARE THE WHITENED PAIR, not the global x and y
+  // components.  `Cov(r_bs) = L L^T` (lower Cholesky, order x then y) and
+  // `z = L^-1 r_bs`, so `Cov(z) = I`: each pull has UNIT variance and the two
+  // are UNCORRELATED.  That is what stops the product of the two terms from
+  // over-counting -- with the global pair `Cov_xy` is not zero (correlation
+  // ~0.2) and multiplying the two likelihoods treated them as independent,
+  // which showed up as sandwich/quoted = 1.385 for the `bs` channel alone.
+  // The price, stated: neither pull is the response to a SINGLE beam-spot
+  // parameter any more, so `Jpsi_bslinv` (the packed `L^-1`) is exported and
+  // the global-basis reading of any weight is one 2x2 multiply away.
+  //
   // The influence weights follow from `rho = (I - F C F^T Vinv) n`:
-  //     w_i = u_i - Vinv F C F^T u_i ,   u_i = G_i^T on the 3 beam rows
-  // with `G = P covBS M^-1`, and then `sum_b |dV_b^{1/2} w_i,b|^2` is
-  // `Cov(r_bs)_{ii}` exactly (gate `Jpsi_bsvchk`).
+  //     w_k = u_k - Vinv F C F^T u_k ,   u_k = G_k^T on the 3 beam rows
+  // with `G = L^-1 P (I + A M^-1)` (the "+" form again), and then
+  // `sum_b |dV_b^{1/2} w_k,b|^2 == 1` exactly (gate `Jpsi_bsvchk`).
+  //
+  // `dV_b^{1/2}` is CACHED once per candidate (`ressqrtdV` in the two-track
+  // maker) and shared by the mass, vertex and both beam influence loops: it
+  // is a property of the block, not of the functional, and recomputing its
+  // eigendecomposition four times per block was most of the beam
+  // functionals' cost.
   bool exportBsResidual_ = false;
   double beamWidthScale_ = 1.0;
   static constexpr unsigned int kBeamSpotGlobIdx = 0xffffffffu;
@@ -1240,6 +1269,24 @@ protected:
   float Jpsi_bschi20 = 0.f;    // the same at the LINEARISATION point, dbs0^T covBS^-1 dbs0
   float Jpsi_bsvchk = 0.f;     // max_i |sum_b |a_{b,i}|^2 / Cov_ii - 1|
   bool Jpsi_bsok = false;
+  // THE LEAVE-ONE-OUT VERTEX COVARIANCE `C_{-B} = A + A M^-1 A`, cm^2, packed
+  // (xx, xy, xz, yy, yz, zz) -- the vertex covariance the SAME fit would have
+  // WITHOUT the beam rows, predicted from the rows-ON fit.  The rows-OFF
+  // run's `Jpsi_covvtx` must reproduce it (gate G7a), and
+  // `Cov(e_B) = C_{-B} + covBS` is the well-conditioned "+" form of the
+  // innovation covariance: manifestly >= covBS, so it can never come back
+  // indefinite the way `covBS M^-1 covBS` could.
+  std::array<float, 6> Jpsi_bscovlo = {{0.f, 0.f, 0.f, 0.f, 0.f, 0.f}};
+  // the lower-Cholesky inverse of `Cov(r_bs)`, packed (00, 10, 11): the map
+  // from the RAW transverse pair to the WHITENED pair, `z = L^-1 r`.  The two
+  // CF functionals are the whitened pulls, so this is what takes an influence
+  // weight (or a beam-spot mean response) back to the global x/y basis.
+  std::array<float, 3> Jpsi_bslinv = {{0.f, 0.f, 0.f}};
+  // smallest eigenvalue of `M = covBS - C_vtx(ON)` in units of covBS's own
+  // scale: the conditioning of the leave-one-out step, 1 when the tracks say
+  // nothing about the vertex and 0 when the beam rows are redundant.  A
+  // DIAGNOSTIC for the tail, not a cut.
+  float Jpsi_bsmeig = 0.f;
   // the fitted common vertex (cm) and the beam spot it is measured against,
   // so the slope response and any re-derivation offline need no extra record
   std::array<float, 3> Jpsi_bsvtx = {{0.f, 0.f, 0.f}};
@@ -1251,8 +1298,12 @@ protected:
   // beam residuals.  Slope response = the x (y) entry times (z_v - z0).
   std::array<float, 3> Jpsi_bsmeanmass = {{0.f, 0.f, 0.f}};
   std::array<float, 3> Jpsi_bsmeanvtx = {{0.f, 0.f, 0.f}};
-  std::array<float, 6> Jpsi_bsmeanbs = {{0.f, 0.f, 0.f, 0.f, 0.f, 0.f}};  // x-func then y-func
-  // per-block influence for the TWO beam functionals, COMPONENT MAJOR:
+  // WHITENED pull 1 then whitened pull 2 (it was the global x then y
+  // functional before the pair was whitened): `w_k` on the beam rows is
+  // `(L^-1 P)_k^T`, so these are `-(L^-1 P)`.
+  std::array<float, 6> Jpsi_bsmeanbs = {{0.f, 0.f, 0.f, 0.f, 0.f, 0.f}};
+  // per-block influence for the TWO beam functionals (the WHITENED pulls),
+  // COMPONENT MAJOR:
   // entry (k, b, j) at ((k * nblock) + b) * 5 + j, k = 0 (x) / 1 (y)
   std::vector<float> resinfbsv;
   // v_{b,i} / Cov_ii, same component-major layout without the 5-padding
@@ -1264,6 +1315,19 @@ protected:
   std::array<float, 2> Jpsi_bsvioni = {{0.f, 0.f}};
   // the beam block's share of the MASS and VERTEX functionals' variance
   float Jpsi_massvbs = 0.f, Jpsi_vtxvbs = 0.f;
+  // THE SAME SHARE SPLIT BY BEAM DIRECTION -- the derivative of the block's
+  // variance share with respect to a scale on `sigma_x^2` (`...x`) and on
+  // `sigma_y^2` (`...y`), each cross term split half and half, so
+  // `...x + ...y + (the z part) == the total share` identically.  These are
+  // what makes the luminous-region WIDTHS float in the CF terms exactly as a
+  // hit class does: a LINEAR variance scale `(1 + eps)` on them.
+  float Jpsi_massvbsx = 0.f, Jpsi_massvbsy = 0.f;
+  float Jpsi_vtxvbsx = 0.f, Jpsi_vtxvbsy = 0.f;
+  std::array<float, 2> Jpsi_bsvbsx = {{0.f, 0.f}};
+  std::array<float, 2> Jpsi_bsvbsy = {{0.f, 0.f}};
+  // the RECORD's errors on the two transverse widths, cm (BeamWidthXError /
+  // BeamWidthYError as read) -- the prior width for the two scales
+  std::array<float, 2> Jpsi_bswidtherr = {{0.f, 0.f}};
   // CF exponents at the two beam weights, component major [2 * kNTau]
   std::vector<float> cfbsmsv, cfbsdelv, cfbsiorev, cfbsioimv, cfbsradrev, cfbsradimv;
   std::vector<short> cfbshitclsv;   // (component, class) pairs: comp in cfbshitcompv

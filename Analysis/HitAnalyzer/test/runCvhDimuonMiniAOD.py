@@ -318,12 +318,15 @@ opts.register('exportVtxResidual', False, VarParsing.VarParsing.multiplicity.sin
               VarParsing.VarParsing.varType.bool,
               'export the VERTEX-CONSTRAINT RESIDUAL (state index 6, the '
               'track-track PCA distance) as a CF resolution term')
-opts.register('bsConstraint', False, VarParsing.VarParsing.multiplicity.singleton,
+opts.register('bsConstraint', True, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'constrain the common vertex to the LUMINOUS REGION: three '
               'Gaussian rows with the beam-width covariance, one per PAIR. '
-              'Right for a prompt resonance (Z), wrong for the non-prompt '
-              'fraction of a J/psi sample.')
+              'DEFAULT ON: this driver runs the Z/DY MiniAOD channel and the Z '
+              'is PROMPT (Upsilon(nS) is prompt too -- no b hadron is heavy '
+              'enough to decay to one). Set it False for any CHARMONIUM window: '
+              'the B -> J/psi X fraction is displaced by c*tau ~ 460 um, a '
+              '20-30 sigma pull against an ~11 um constraint.')
 opts.register('beamWidthScale', 1.0, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.float,
               'multiply the three beam widths (covariance by its square). '

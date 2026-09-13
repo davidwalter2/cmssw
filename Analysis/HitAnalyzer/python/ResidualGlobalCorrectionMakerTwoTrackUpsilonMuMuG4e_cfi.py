@@ -30,7 +30,14 @@ globalCorUpsilon = cms.EDProducer(
     l1Triggers = cms.vstring(),
     doRes = cms.bool(False),
     useIdealGeometry = cms.bool(True),
-    bsConstraint = cms.bool(False),
+    # THE LUMINOUS REGION AS A GAUSSIAN NOISE BLOCK: three rows on the common
+    # vertex with the beam-width covariance, ONE per pair (see the beam-line
+    # block in ResidualGlobalCorrectionMakerBase.h). ON here because every Upsilon(nS) is PROMPT -- no b hadron is heavy
+    # enough to decay to an Upsilon, so there is no non-prompt Upsilon, and the
+    # chi_b feed-down is at the primary vertex too. The only DISPLACED dimuons
+    # under the Upsilon peak are the bb-bar -> mu mu continuum (two different B
+    # vertices) and cosmics, which the constraint REJECTS.
+    bsConstraint = cms.bool(True),
     applyHitQuality = cms.bool(True),
     doVtxConstraint = cms.bool(True),
     # Minimum size of a pair, required BEFORE the fit (see

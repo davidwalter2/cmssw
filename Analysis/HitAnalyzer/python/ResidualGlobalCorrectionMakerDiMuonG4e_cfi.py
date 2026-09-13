@@ -49,12 +49,20 @@ ResidualGlobalCorrectionMakerDiMuonG4e = cms.EDProducer(
     l1Triggers = cms.vstring(),
     doRes = cms.bool(False),
     useIdealGeometry = cms.bool(False),
-    bsConstraint = cms.bool(False),
-    # The luminous region as a Gaussian noise block: three rows on the common
+    # THE LUMINOUS REGION AS A GAUSSIAN NOISE BLOCK: three rows on the common
     # vertex with the beam-width covariance, ONE per pair (it used to be one
     # per leg -- see the beam-line block in ResidualGlobalCorrectionMakerBase.h).
-    # Right for a PROMPT resonance (Z), wrong for the J/psi's non-prompt
-    # fraction, so it stays off by default.
+    # ON here because the resonance this module is CONFIGURED for is the Z:
+    # `diMuonTrackVertexCandidates` has a 50-150 GeV window, and the Z is PROMPT
+    # -- it decays at the primary vertex, so the common vertex IS in the
+    # luminous region.  Upsilon(nS) is prompt too (no b hadron is heavy enough
+    # to decay to one), so an Upsilon clone keeps it ON.
+    # *** TRAP: this module is RESONANCE-AGNOSTIC.  If you clone it with a
+    # CHARMONIUM window you MUST set bsConstraint=False: the B -> J/psi X
+    # fraction is displaced by c*tau ~ 460 um, a 20-30 sigma pull against an
+    # ~11 um constraint, and the fit would drag the vertex onto the beam line
+    # and mis-measure both momenta. ***
+    bsConstraint = cms.bool(True),
     # `beamWidthScale` multiplies the three widths; 1e6 makes the rows
     # weightless and is the gate that the block reduces to bsConstraint=False.
     beamWidthScale = cms.double(1.0),

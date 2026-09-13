@@ -33,6 +33,12 @@ globalCorJpsi = cms.EDProducer(
     l1Triggers = cms.vstring(),
     doRes = cms.bool(False),
     useIdealGeometry = cms.bool(True),
+    # The luminous-region rows (see the beam-line block in
+    # ResidualGlobalCorrectionMakerBase.h) are OFF here because a J/psi sample is NOT prompt: the B -> J/psi X
+    # fraction has c*tau ~ 460 um, a few hundred microns of transverse flight
+    # against a ~11 um constraint -- a 20-30 sigma pull, and the fit would drag
+    # the vertex onto the beam line and mis-measure both momenta. The same holds
+    # for any charmonium.
     bsConstraint = cms.bool(False),
     applyHitQuality = cms.bool(True),
     doVtxConstraint = cms.bool(True),

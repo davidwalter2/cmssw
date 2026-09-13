@@ -297,6 +297,15 @@ opts.register('trackSrc', 'ALCARECOTkAlJpsiX', VarParsing.VarParsing.multiplicit
               'TkAl ALCARECO of the JPsiToMuMu MC; pair with useLegacyPairLoop=True)')
 opts.register('doMassConstraint', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool, 'apply J/psi mass constraint in the two-track fit')
+opts.register('bsConstraint', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'constrain the common vertex to the LUMINOUS REGION: three '
+              'Gaussian rows with the beam-width covariance, one per PAIR. '
+              'DEFAULT OFF for a J/psi: a charmonium sample is NOT prompt -- '
+              'the B -> J/psi X fraction has c*tau ~ 460 um, a few hundred '
+              'microns of transverse flight against an ~11 um constraint '
+              '(20-30 sigma), and the fit would drag the vertex onto the beam '
+              'line and mis-measure both momenta. On for the Z and the Upsilon.')
 opts.register('useIdealGeometry', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'Default False (btojpsik option (B), aligned geometry from GT). Set True '
@@ -609,7 +618,7 @@ process.globalCor = cms.EDProducer(
     varianceFDEps=cms.double(float(opts.varianceFDEps)),
 
     useIdealGeometry=cms.bool(bool(opts.useIdealGeometry)),
-    bsConstraint=cms.bool(False),
+    bsConstraint=cms.bool(bool(opts.bsConstraint)),
     applyHitQuality=cms.bool(True),
     keepPixelEdgeHits=cms.bool(bool(opts.keepPixelEdgeHits)),
     pixelMinSizeX=cms.int32(int(opts.pixelMinSizeX)),

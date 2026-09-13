@@ -56,6 +56,9 @@ globalCorJpsiK = cms.EDProducer(
     # broken Stage-1-only configuration (ideal geometry, no corrections)
     # the maker itself warns about. The driver overrides per leg.
     useIdealGeometry = cms.bool(False),
+    # The luminous-region rows (see the beam-line block in
+    # ResidualGlobalCorrectionMakerBase.h) are OFF here because the B vertex is DISPLACED by construction; the
+    # pointing constraint is this channel's analogue of the beam line.
     bsConstraint = cms.bool(False),
     applyHitQuality = cms.bool(True),
     doVtxConstraint = cms.bool(True),

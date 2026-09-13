@@ -40,6 +40,8 @@ globalCorLambda = cms.EDProducer(
     l1Triggers = cms.vstring(),
     doRes = cms.bool(False),
     useIdealGeometry = cms.bool(True),
+    # The luminous-region rows (see the beam-line block in
+    # ResidualGlobalCorrectionMakerBase.h) are OFF here because Lambda -> p pi is DISPLACED by construction.
     bsConstraint = cms.bool(False),
     applyHitQuality = cms.bool(True),
     doVtxConstraint = cms.bool(True),

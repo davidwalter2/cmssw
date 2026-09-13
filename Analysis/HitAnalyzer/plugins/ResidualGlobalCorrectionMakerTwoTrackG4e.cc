@@ -2625,6 +2625,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           // values are what is written. -1 = the rows are off.
           int bsrow = -1;
           Matrix<double, 3, 3> bscovBS = Matrix<double, 3, 3>::Zero();
+          Matrix<double, 2, 1> bswidtherr = Matrix<double, 2, 1>::Zero();
           Matrix<double, 3, 1> bsspot = Matrix<double, 3, 1>::Zero();
           Matrix<double, 2, 1> bsslope = Matrix<double, 2, 1>::Zero();
           Matrix<double, 3, 1> bswidth = Matrix<double, 3, 1>::Zero();
@@ -2787,6 +2788,12 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               bsspot << x0, y0, z0;
               bsslope << dxdz, dydz;
               bswidth << sigb1, sigb2, sigb3;
+              // the RECORD's own errors on the two transverse widths -- the
+              // prior width for the two `beamwidth_*` variance scales.  They
+              // are quoted on sigma, so the prior on a VARIANCE scale
+              // `k = (sigma'/sigma)^2` is `2 * BeamWidthXError/BeamWidthX`.
+              bswidtherr << beamWidthScale_*bsH->BeamWidthXError(),
+                            beamWidthScale_*bsH->BeamWidthYError();
               bschisq0 = bschisq;
               rfull.segment<3>(irow) = dbs0;
               Ffull.block(irow, fullvtxidx, 3, nlocalvtx) =
@@ -4972,6 +4979,50 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             cfgrpradimv.clear();
             cfgrpclosure = 0.f;
             if (dores && !dVs.empty()) {
+              // ================= THE sqrt(dV_b) CACHE ======================
+              // `dV_b^{1/2}` is a property of the BLOCK, not of the
+              // functional: the same matrix serves the MASS influence, the
+              // VERTEX influence and the two BEAM influences.  It used to be
+              // recomputed from scratch in each of those loops -- four
+              // `SelfAdjointEigenSolver` calls per block per candidate, which
+              // is where the beam functionals' +63 % of maker time went.  It
+              // is now computed ONCE here and read everywhere.
+              //
+              // The ionization SIGN rule needs the dominant eigenVECTOR of
+              // the same decomposition (sign-fixed by `udir(0) >= 0`), so
+              // that is cached alongside, for family 11 only; every other
+              // family leaves an empty vector and the consumers fall back to
+              // sign +1 exactly as before.
+              //
+              // Bit-identity is not an approximation here: it is the same
+              // solver on the same matrix, so every consumer sees the same
+              // bits it computed for itself before.
+              std::vector<MatrixXd> ressqrtdV(dVs.size());
+              std::vector<VectorXd> resionidir(dVs.size());
+              for (unsigned int ires = 0; ires < dVs.size(); ++ires) {
+                const unsigned int r0c = resblockrng[ires][0];
+                const unsigned int nbc = resblockrng[ires][1];
+                const MatrixXd dVb = MatrixXd(dVs[ires]).block(r0c, r0c, nbc, nbc);
+                const SelfAdjointEigenSolver<MatrixXd> eigv(dVb);
+                ressqrtdV[ires] = eigv.eigenvectors() *
+                                  eigv.eigenvalues().cwiseMax(0.).cwiseSqrt().asDiagonal() *
+                                  eigv.eigenvectors().transpose();
+                const int famc = ires < resfamily_.size() ? resfamily_[ires] : -1;
+                if (famc == 11 && nbc > 0) {
+                  int imax = 0;
+                  for (int q = 1; q < int(nbc); ++q) {
+                    if (std::abs(eigv.eigenvalues()(q)) > std::abs(eigv.eigenvalues()(imax))) {
+                      imax = q;
+                    }
+                  }
+                  VectorXd udirc = eigv.eigenvectors().col(imax);
+                  if (udirc(0) < 0.) {
+                    udirc = -udirc;
+                  }
+                  resionidir[ires] = udirc;
+                }
+              }
+              // ============================================================
               VectorXd afull = VectorXd::Zero(nstateparms);
               afull.head<6>() = mjacalt.transpose();
               VectorXd afree = VectorXd::Zero(nstatefree);
@@ -4982,16 +5033,11 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               // the BEAM block's share of sigma_m^2, kept out of `resinfcov`
               // (material) and out of `resinfcovhit` so `cfvgf` keeps its
               // meaning: the Gaussian remainder = hits + beamspot + pointing.
-              double vbsmass = 0.;
+              double vbsmass = 0., vbsmassx = 0., vbsmassy = 0.;
               for (unsigned int ires = 0; ires < dVs.size(); ++ires) {
                 const unsigned int r0 = resblockrng[ires][0];
                 const unsigned int nb = resblockrng[ires][1];
-                const MatrixXd dVb = MatrixXd(dVs[ires]).block(r0, r0, nb, nb);
-                SelfAdjointEigenSolver<MatrixXd> eigv(dVb);
-                const MatrixXd sqrtdV = eigv.eigenvectors() *
-                                        eigv.eigenvalues().cwiseMax(0.).cwiseSqrt().asDiagonal() *
-                                        eigv.eigenvectors().transpose();
-                const VectorXd ub = sqrtdV * wmass.segment(r0, nb);
+                const VectorXd ub = ressqrtdV[ires] * wmass.segment(r0, nb);
                 reseigidx.push_back(resglobidx[ires]);
                 reshitidx.push_back(ires < resvalidhit_.size() ? resvalidhit_[ires] : -1);
                 reshitcls.push_back(static_cast<short>(ires < rescls_.size() ? rescls_[ires] : -1));
@@ -5014,6 +5060,28 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                   // the luminous region is a Gaussian block like a hit, but
                   // it is neither a hit nor material: its own accumulator.
                   vbsmass += vb;
+                  // THE BEAM BLOCK'S VARIANCE SHARE, SPLIT BY DIRECTION.
+                  // The luminous-region WIDTHS are physical parameters, so
+                  // they float like a hit class: `sigma_x -> sqrt(k_x)
+                  // sigma_x` sends `covBS -> D covBS D` with
+                  // `D = diag(sqrt(k_x), sqrt(k_y), 1)`, and
+                  //   v_b(k) = sum_ij w_i w_j C_ij d_i d_j ,  d = (rt kx, rt ky, 1)
+                  // whose derivative at k = 1 is, EXACTLY,
+                  //   dv/dk_x = w_x^2 C_xx + w_x w_y C_xy + w_x w_z C_xz
+                  // -- each cross term split in half between the two
+                  // directions.  So the half-split shares below ARE the
+                  // first derivatives, they sum to `v_b` identically, and a
+                  // LINEAR variance scale `(1 + eps)` on them is the same
+                  // parameterisation the hit classes use (`--hit-mode
+                  // linear`, where the card value IS `eps`).
+                  {
+                    const Matrix<double, 3, 1> wbb = wmass.segment<3>(r0);
+                    const double cxx = bscovBS(0, 0), cyy = bscovBS(1, 1), czz = bscovBS(2, 2);
+                    const double cxy = bscovBS(0, 1), cxz = bscovBS(0, 2), cyz = bscovBS(1, 2);
+                    vbsmassx = wbb(0)*wbb(0)*cxx + wbb(0)*wbb(1)*cxy + wbb(0)*wbb(2)*cxz;
+                    vbsmassy = wbb(1)*wbb(1)*cyy + wbb(0)*wbb(1)*cxy + wbb(1)*wbb(2)*cyz;
+                    (void)czz;
+                  }
                 } else if (fam == 15) {
                   // The parmtype-15 blocks are a RE-PARTITION of the
                   // parmtype-10/11 noise (`sum_g dQ_g == dQMS + dQI`), not an
@@ -5030,6 +5098,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               {
                 const double sm2b = double(Jpsi_sigmamass) * double(Jpsi_sigmamass);
                 Jpsi_massvbs = sm2b > 0. ? float(vbsmass / sm2b) : 0.f;
+                Jpsi_massvbsx = sm2b > 0. ? float(vbsmassx / sm2b) : 0.f;
+                Jpsi_massvbsy = sm2b > 0. ? float(vbsmassy / sm2b) : 0.f;
               }
 
               // Per-hit-class Gaussian shares, ascending in class index.
@@ -5282,18 +5352,14 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                 vtxsgnv.reserve(nb_all);
                 std::vector<float> vabs(nb_all, 0.f);
                 double vsum = 0., vmat = 0., vhit = 0., vms = 0., vioni = 0., vbs = 0.;
+                double vbsx = 0., vbsy = 0.;
                 double mms = 0., mioni = 0.;
                 double nioni = 0., nionimass = 0.;
                 for (unsigned int ires = 0; ires < nb_all; ++ires) {
                   const unsigned int r0 = resblockrng[ires][0];
                   const unsigned int nb = resblockrng[ires][1];
-                  const MatrixXd dVb = MatrixXd(dVs[ires]).block(r0, r0, nb, nb);
-                  SelfAdjointEigenSolver<MatrixXd> eigv(dVb);
-                  const MatrixXd sqrtdV = eigv.eigenvectors() *
-                                          eigv.eigenvalues().cwiseMax(0.).cwiseSqrt().asDiagonal() *
-                                          eigv.eigenvectors().transpose();
                   const VectorXd wb = wv.segment(r0, nb);
-                  const VectorXd ab = sqrtdV * wb;
+                  const VectorXd ab = ressqrtdV[ires] * wb;
                   for (unsigned int j = 0; j < 5; ++j) {
                     resinfvtxv.push_back(j < nb ? float(ab(j)) : 0.f);
                   }
@@ -5311,19 +5377,18 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                     vhit += vb;
                   } else if (fam == kBeamSpotFamily) {
                     vbs += vb;
+                    {
+                      const Matrix<double, 3, 1> wbb = wv.segment<3>(r0);
+                      const double cxx = bscovBS(0, 0), cyy = bscovBS(1, 1), czz = bscovBS(2, 2);
+                      const double cxy = bscovBS(0, 1), cxz = bscovBS(0, 2), cyz = bscovBS(1, 2);
+                      vbsx = wbb(0)*wbb(0)*cxx + wbb(0)*wbb(1)*cxy + wbb(0)*wbb(2)*cxz;
+                      vbsy = wbb(1)*wbb(1)*cyy + wbb(0)*wbb(1)*cxy + wbb(1)*wbb(2)*cyz;
+                      (void)czz;
+                    }
                   }
                   float sg = 1.f;
-                  if (fam == 11 && nb > 0) {
-                    int imax = 0;
-                    for (int q = 1; q < int(nb); ++q) {
-                      if (std::abs(eigv.eigenvalues()(q)) > std::abs(eigv.eigenvalues()(imax))) {
-                        imax = q;
-                      }
-                    }
-                    VectorXd udir = eigv.eigenvectors().col(imax);
-                    if (udir(0) < 0.) {
-                      udir = -udir;
-                    }
+                  if (fam == 11 && nb > 0 && resionidir[ires].size() == Eigen::Index(nb)) {
+                    const VectorXd &udir = resionidir[ires];
                     const unsigned int leg = (ires >= resLegStart_[1]) ? 1u : 0u;
                     const double qleg = refftsarr[leg][6] >= 0. ? 1. : -1.;
                     sg = float(qleg * (wb.dot(udir) > 0. ? -1. : 1.));
@@ -5349,6 +5414,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                 Jpsi_vtxvgf = sig2 > 0. ? float((sig2 - vmat) / sig2) : 0.f;
                 Jpsi_vtxvhit = sig2 > 0. ? float(vhit / sig2) : 0.f;
                 Jpsi_vtxvbs = sig2 > 0. ? float(vbs / sig2) : 0.f;
+                Jpsi_vtxvbsx = sig2 > 0. ? float(vbsx / sig2) : 0.f;
+                Jpsi_vtxvbsy = sig2 > 0. ? float(vbsy / sig2) : 0.f;
                 Jpsi_vtxvms = sig2 > 0. ? float(vms / sig2) : 0.f;
                 Jpsi_vtxvioni = sig2 > 0. ? float(vioni / sig2) : 0.f;
                 const double sm2v = double(Jpsi_sigmamass) * double(Jpsi_sigmamass);
@@ -5503,7 +5570,12 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                 Jpsi_bschi20 = float(bschisq0);
                 Jpsi_bsvchk = 0.f;
                 Jpsi_bsok = false;
+                Jpsi_bscovlo = {{0.f, 0.f, 0.f, 0.f, 0.f, 0.f}};
+                Jpsi_bslinv = {{0.f, 0.f, 0.f}};
+                Jpsi_bsmeig = 0.f;
                 Jpsi_bsvbs = {{0.f, 0.f}};
+                Jpsi_bsvbsx = {{0.f, 0.f}};
+                Jpsi_bsvbsy = {{0.f, 0.f}};
                 Jpsi_bsvhit = {{0.f, 0.f}};
                 Jpsi_bsvms = {{0.f, 0.f}};
                 Jpsi_bsvioni = {{0.f, 0.f}};
@@ -5548,20 +5620,54 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                 Jpsi_bsspot = {{float(bsspot[0]), float(bsspot[1]), float(bsspot[2])}};
                 Jpsi_bsslope = {{float(bsslope[0]), float(bsslope[1])}};
                 Jpsi_bswidth = {{float(bswidth[0]), float(bswidth[1]), float(bswidth[2])}};
+                Jpsi_bswidtherr = {{float(bswidtherr[0]), float(bswidtherr[1])}};
 
-                // `M = covBS - A` degenerates when the vertex is determined
-                // by the beam rows alone (A -> covBS): the leave-one-out
-                // residual is then undefined, not large, so it is flagged
-                // and not written as a number.  Tested on the SMALLEST
-                // eigenvalue relative to covBS's own scale, which is
-                // dimensionally clean because both are covariances of the
-                // same three coordinates.
+                // THE CONDITIONING FIX.  `M = covBS - A` is a DIFFERENCE of
+                // two nearly equal covariances whenever the two tracks barely
+                // constrain the vertex in some direction (A -> covBS), and
+                // `A` comes out of a large sparse solve with its own
+                // numerical error.  Building the innovation as
+                // `covBS M^-1 covBS` then evaluates the WHOLE answer through
+                // that amplification and can even return a non-positive
+                // matrix -- which is what produced the 5 sigma tail.
+                //
+                // The "+" form puts the leading order in explicitly and
+                // leaves only the CORRECTION to be amplified:
+                //     C_{-B} = A + A M^-1 A            (the rows-OFF vertex
+                //                                       covariance)
+                //     Cov(e) = C_{-B} + covBS          (manifestly >= covBS,
+                //                                       so positive definite)
+                //     e_B    = rho_B + A M^-1 rho_B    (= covBS M^-1 rho_B)
+                // Algebraically identical, numerically not: the answer is
+                // never smaller than its own leading term, and `Cov(e)` can
+                // no longer come back indefinite.  `Jpsi_bscovlo` exports
+                // `C_{-B}`, which the rows-OFF run's `Jpsi_covvtx` must
+                // reproduce (gate G7a).
+                //
+                // The guard below is a DEFINEDNESS test, not a clip: when the
+                // vertex is determined by the beam rows alone (`A -> covBS`,
+                // `M -> 0`) the leave-one-out residual does not exist, so it
+                // is flagged (`Jpsi_bsok = false`) and not written as a
+                // number.  It is tested on the smallest eigenvalue of `M`
+                // relative to `covBS`'s own scale, which is dimensionally
+                // clean because both are covariances of the same three
+                // coordinates, and that ratio is EXPORTED (`Jpsi_bsmeig`) so
+                // the degenerate corner can be studied rather than guessed.
                 SelfAdjointEigenSolver<Matrix<double, 3, 3>> esM(Mbs);
                 const double mmin = esM.eigenvalues().minCoeff();
                 const double bsscale = bscovBS.diagonal().minCoeff();
+                Jpsi_bsmeig = float(bsscale > 0. ? mmin/bsscale : 0.);
                 if (mmin > 1.e-9*bsscale && bsscale > 0.) {
-                  const Matrix<double, 3, 3> Mbsinv = Mbs.inverse();
-                  const Matrix<double, 3, 1> eB = bscovBS*Mbsinv*rhoB;
+                  const LLT<Matrix<double, 3, 3>> lltM(Mbs);
+                  const Matrix<double, 3, 3> AMinv =
+                      lltM.info() == Eigen::Success
+                          ? Matrix<double, 3, 3>(lltM.solve(Abs).transpose())
+                          : Matrix<double, 3, 3>(Abs*Mbs.inverse());
+                  const Matrix<double, 3, 1> eB = rhoB + AMinv*rhoB;
+                  const Matrix<double, 3, 3> Clo = Abs + AMinv*Abs;
+                  const Matrix<double, 3, 3> Se = Clo + bscovBS;
+                  Jpsi_bscovlo = {{float(Clo(0, 0)), float(Clo(0, 1)), float(Clo(0, 2)),
+                                   float(Clo(1, 1)), float(Clo(1, 2)), float(Clo(2, 2))}};
 
                   Matrix<double, 2, 3> P = Matrix<double, 2, 3>::Zero();
                   P(0, 0) = 1.;
@@ -5570,7 +5676,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                   P(1, 2) = -bscovBS(1, 2)/bscovBS(2, 2);
 
                   const Matrix<double, 2, 1> rbs = P*eB;
-                  const Matrix<double, 2, 2> Cbs = P*(bscovBS*Mbsinv*bscovBS)*P.transpose();
+                  const Matrix<double, 2, 2> Cbs = P*Se*P.transpose();
 
                   Jpsi_bsres = {{float(rbs[0]), float(rbs[1])}};
                   Jpsi_bscov = {{float(Cbs(0, 0)), float(Cbs(0, 1)), float(Cbs(1, 1))}};
@@ -5581,15 +5687,33 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                   // this is the one stated in the branch docs; the chi2
                   // below is basis independent.
                   const LLT<Matrix<double, 2, 2>> llt(Cbs);
-                  if (llt.info() == Eigen::Success) {
+                  const bool lok = llt.info() == Eigen::Success;
+                  Matrix<double, 2, 2> Linv = Matrix<double, 2, 2>::Identity();
+                  if (lok) {
                     const Matrix<double, 2, 1> zbs = llt.matrixL().solve(rbs);
                     Jpsi_bsz = {{float(zbs[0]), float(zbs[1])}};
                     Jpsi_bschi2 = float(zbs.squaredNorm());
                     Jpsi_bsok = true;
+                    Linv = llt.matrixL().solve(Matrix<double, 2, 2>::Identity());
+                    Jpsi_bslinv = {{float(Linv(0, 0)), float(Linv(1, 0)), float(Linv(1, 1))}};
                   }
 
                   // ---- the two influence rows, and everything at them ----
-                  const Matrix<double, 2, 3> Gbs = P*bscovBS*Mbsinv;
+                  // THE TWO FUNCTIONALS ARE THE WHITENED PAIR, not the global
+                  // x and y components.  `r = P e_B = Gbs rho_B` with
+                  // `Gbs = P (I + A M^-1)` (the "+" form again), so the
+                  // whitened pulls are `z = L^-1 r = (L^-1 Gbs) rho_B` and
+                  // the functional's row is that product.  By construction
+                  // `Cov(z) = I`: each pull has unit variance -- so the
+                  // closure below is `sum_b |a_b|^2 == 1` -- and the two are
+                  // UNCORRELATED, which is what stops their product from
+                  // over-counting (the global pair's sandwich/quoted was
+                  // 1.385 because `Cov_xy` is not zero).  The price, stated:
+                  // neither pull is the response to a single beam-spot
+                  // parameter any more; `Jpsi_bslinv` is exported so the
+                  // global-basis response is one 2x2 multiply away.
+                  const Matrix<double, 2, 3> Gbs =
+                      Linv*(P*(Matrix<double, 3, 3>::Identity() + AMinv));
                   const unsigned int nb_bs = dVs.size();
                   resinfbsv.assign(2*5*nb_bs, 0.f);
                   bsvarv.assign(2*nb_bs, 0.f);
@@ -5615,16 +5739,12 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                     vabsbs[k].assign(nb_bs, 0.f);
                     sgnbs[k].assign(nb_bs, 1.f);
                     double vsumk = 0., vbsk = 0., vhitk = 0., vmsk = 0., vionik = 0.;
+                    double vbsxk = 0., vbsyk = 0.;
                     for (unsigned int ires = 0; ires < nb_bs; ++ires) {
                       const unsigned int r0b = resblockrng[ires][0];
                       const unsigned int nbb = resblockrng[ires][1];
-                      const MatrixXd dVb = MatrixXd(dVs[ires]).block(r0b, r0b, nbb, nbb);
-                      SelfAdjointEigenSolver<MatrixXd> eigv(dVb);
-                      const MatrixXd sqrtdV = eigv.eigenvectors() *
-                                              eigv.eigenvalues().cwiseMax(0.).cwiseSqrt().asDiagonal() *
-                                              eigv.eigenvectors().transpose();
                       const VectorXd wb = wbs.segment(r0b, nbb);
-                      const VectorXd ab = sqrtdV*wb;
+                      const VectorXd ab = ressqrtdV[ires]*wb;
                       for (unsigned int j = 0; j < 5; ++j) {
                         resinfbsv[(k*nb_bs + ires)*5 + j] = j < nbb ? float(ab(j)) : 0.f;
                       }
@@ -5642,30 +5762,34 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                         vhitk += vb;
                       } else if (fam == kBeamSpotFamily) {
                         vbsk += vb;
+                        {
+                          const Matrix<double, 3, 1> wbb = wbs.segment<3>(r0b);
+                          const double cxx = bscovBS(0, 0), cyy = bscovBS(1, 1), czz = bscovBS(2, 2);
+                          const double cxy = bscovBS(0, 1), cxz = bscovBS(0, 2), cyz = bscovBS(1, 2);
+                          vbsxk = wbb(0)*wbb(0)*cxx + wbb(0)*wbb(1)*cxy + wbb(0)*wbb(2)*cxz;
+                          vbsyk = wbb(1)*wbb(1)*cyy + wbb(0)*wbb(1)*cxy + wbb(1)*wbb(2)*cyz;
+                          (void)czz;
+                        }
                       }
                       // the per-block ionization sign, the same rule as the
                       // vertex functional's (the two legs carry opposite
                       // charges, so the sign travels with the block)
-                      if (fam == 11 && nbb > 0) {
-                        int imax = 0;
-                        for (int q = 1; q < int(nbb); ++q) {
-                          if (std::abs(eigv.eigenvalues()(q)) > std::abs(eigv.eigenvalues()(imax))) {
-                            imax = q;
-                          }
-                        }
-                        VectorXd udir = eigv.eigenvectors().col(imax);
-                        if (udir(0) < 0.) {
-                          udir = -udir;
-                        }
+                      if (fam == 11 && nbb > 0 && resionidir[ires].size() == Eigen::Index(nbb)) {
+                        const VectorXd &udir = resionidir[ires];
                         const unsigned int leg = (ires >= resLegStart_[1]) ? 1u : 0u;
                         const double qleg = refftsarr[leg][6] >= 0. ? 1. : -1.;
                         sgnbs[k][ires] = float(qleg*(wb.dot(udir) > 0. ? -1. : 1.));
                       }
                     }
-                    const double ckk = Cbs(k, k);
+                    // the whitened functional has UNIT variance by
+                    // construction; `ckk` stays the normaliser so the closure
+                    // reads as `sum_b |a_b|^2 / Cov_kk - 1` exactly as before
+                    const double ckk = lok ? 1. : Cbs(k, k);
                     if (ckk > 0.) {
                       vchkmax = std::max(vchkmax, std::abs(vsumk/ckk - 1.));
                       Jpsi_bsvbs[k] = float(vbsk/ckk);
+                      Jpsi_bsvbsx[k] = float(vbsxk/ckk);
+                      Jpsi_bsvbsy[k] = float(vbsyk/ckk);
                       Jpsi_bsvhit[k] = float(vhitk/ckk);
                       Jpsi_bsvms[k] = float(vmsk/ckk);
                       Jpsi_bsvioni[k] = float(vionik/ckk);

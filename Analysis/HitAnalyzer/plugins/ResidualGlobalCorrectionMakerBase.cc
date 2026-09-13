@@ -680,6 +680,9 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
         tree->Branch("Jpsi_bschi20", &Jpsi_bschi20);
         tree->Branch("Jpsi_bsvchk", &Jpsi_bsvchk);
         tree->Branch("Jpsi_bsok", &Jpsi_bsok);
+        tree->Branch("Jpsi_bscovlo", Jpsi_bscovlo.data(), "Jpsi_bscovlo[6]/F");
+        tree->Branch("Jpsi_bslinv", Jpsi_bslinv.data(), "Jpsi_bslinv[3]/F");
+        tree->Branch("Jpsi_bsmeig", &Jpsi_bsmeig);
         tree->Branch("Jpsi_bsvtx", Jpsi_bsvtx.data(), "Jpsi_bsvtx[3]/F");
         tree->Branch("Jpsi_bsspot", Jpsi_bsspot.data(), "Jpsi_bsspot[3]/F");
         tree->Branch("Jpsi_bsslope", Jpsi_bsslope.data(), "Jpsi_bsslope[2]/F");
@@ -694,6 +697,13 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
         tree->Branch("Jpsi_bssgnchk", Jpsi_bssgnchk.data(), "Jpsi_bssgnchk[2]/F");
         tree->Branch("Jpsi_massvbs", &Jpsi_massvbs);
         tree->Branch("Jpsi_vtxvbs", &Jpsi_vtxvbs);
+        tree->Branch("Jpsi_massvbsx", &Jpsi_massvbsx);
+        tree->Branch("Jpsi_massvbsy", &Jpsi_massvbsy);
+        tree->Branch("Jpsi_vtxvbsx", &Jpsi_vtxvbsx);
+        tree->Branch("Jpsi_vtxvbsy", &Jpsi_vtxvbsy);
+        tree->Branch("Jpsi_bsvbsx", Jpsi_bsvbsx.data(), "Jpsi_bsvbsx[2]/F");
+        tree->Branch("Jpsi_bsvbsy", Jpsi_bsvbsy.data(), "Jpsi_bsvbsy[2]/F");
+        tree->Branch("Jpsi_bswidtherr", Jpsi_bswidtherr.data(), "Jpsi_bswidtherr[2]/F");
         tree->Branch("bsvarv", &bsvarv);
         tree->Branch("resinfbsv", &resinfbsv, basketSize);
         if (exportCfExponents_) {

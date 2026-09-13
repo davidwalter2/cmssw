@@ -35,6 +35,8 @@ globalCorD0 = cms.EDProducer(
     l1Triggers=cms.vstring(),
     doRes=cms.bool(False),
     useIdealGeometry=cms.bool(True),
+    # The luminous-region rows (see the beam-line block in
+    # ResidualGlobalCorrectionMakerBase.h) are OFF here because the D0 (and any V0) vertex is DISPLACED by construction.
     bsConstraint=cms.bool(False),
     applyHitQuality=cms.bool(True),
     doVtxConstraint=cms.bool(True),

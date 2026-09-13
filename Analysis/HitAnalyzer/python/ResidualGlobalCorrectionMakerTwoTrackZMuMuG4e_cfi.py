@@ -30,7 +30,11 @@ globalCorZ = cms.EDProducer(
     l1Triggers = cms.vstring(),
     doRes = cms.bool(False),
     useIdealGeometry = cms.bool(True),
-    bsConstraint = cms.bool(False),
+    # THE LUMINOUS REGION AS A GAUSSIAN NOISE BLOCK: three rows on the common
+    # vertex with the beam-width covariance, ONE per pair (see the beam-line
+    # block in ResidualGlobalCorrectionMakerBase.h). ON here because the Z is PROMPT: it decays at the primary vertex, so the
+    # common vertex IS in the luminous region.
+    bsConstraint = cms.bool(True),
     applyHitQuality = cms.bool(True),
     doVtxConstraint = cms.bool(True),
     # Minimum size of a pair, required BEFORE the fit (see
