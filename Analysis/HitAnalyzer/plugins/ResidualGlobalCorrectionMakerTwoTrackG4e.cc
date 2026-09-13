@@ -5126,6 +5126,78 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                 }
               }
 
+              // ---- THE FUNCTIONALS THAT SHARE ONE EVALUATOR PASS --------
+              //
+              // The candidate MASS, the vertex DCA and the two whitened
+              // BEAM-LINE pulls are four linear functionals of the SAME
+              // converged fit: the same blocks, the same step records, and
+              // different per-block weights.  Every `cvhcf` exponent
+              // primitive depends on (weight, tau) ONLY through the product
+              // `w tau`, so the four are ONE `cvhcf::trackExponents` pass on
+              // the concatenated argument list { w_{b,k} tau_j } instead of
+              // four passes over the same records -- and the pooling by
+              // global index, the Moliere step parameters, the `gshape_elec`
+              // rows and the radiative spectra are then built once rather
+              // than four times.  It is EXACT: `phi_{aU}(tau) = phi_U(a tau)`
+              // is an identity and the products are formed by the same
+              // expression a single call forms them with, so each
+              // functional's arrays are bitwise what its own call wrote.
+              //
+              // Each site below REGISTERS its weights here, in the order the
+              // exported branches expect, and reads its results back from the
+              // single pass that follows the beam block; nothing else about
+              // them changes.  The weights are COPIED because `vabs` and the
+              // two `vabsbs` live only inside their own blocks.
+              std::vector<cvhcf::TrackInput> cfins;
+              std::vector<std::vector<float>> cfvarw;
+              std::vector<std::vector<float>> cfsgnw;
+              std::vector<cvhcf::TrackResult> cfress;
+              cfins.reserve(4);
+              cfvarw.reserve(4);
+              cfsgnw.reserve(4);
+              int cfslotmass = -1;
+              int cfslotvtx = -1;
+              std::array<int, 2> cfslotbs = {{-1, -1}};
+              auto cfRegister = [&](const float *var, int nvar, const float *sgn, double sigma,
+                                    double ioniSign) -> int {
+                cfvarw.emplace_back(var, var + nvar);
+                cfsgnw.emplace_back();
+                if (sgn != nullptr) {
+                  cfsgnw.back().assign(sgn, sgn + nvar);
+                }
+                cvhcf::TrackInput ci;
+                ci.resglobidx = resglobidx.data();
+                ci.resfamily = resfamily_.data();
+                ci.resvarv = cfvarw.back().data();
+                ci.nres = int(std::min({resglobidx.size(), resfamily_.size(), cfvarw.back().size()}));
+                ci.ressgn = cfsgnw.back().empty() ? nullptr : cfsgnw.back().data();
+                ci.ms = {msmoliidx.data(), msmoliv.data(), int(msmoliidx.size()),
+                         msmoliidx.empty() ? 0 : int(msmoliv.size() / msmoliidx.size())};
+                ci.ioni = {ioniurbanidx.data(), ioniurbanv.data(), int(ioniurbanidx.size()),
+                           ioniurbanidx.empty() ? 0 : int(ioniurbanv.size() / ioniurbanidx.size())};
+                ci.qsc = {ioniqscaleidx.data(), ioniqscalev.data(), int(ioniqscaleidx.size()), 2};
+                ci.rad = {radstepidx.data(), radstepv.data(), int(radstepidx.size()), RADSTEP_STRIDE};
+                // material-group column of each record; see the single-track
+                // maker for why these are set explicitly
+                ci.ms.groupCol = ci.ms.stride >= 10 ? 9 : -1;
+                ci.ioni.groupCol = ci.ioni.stride - 1;
+                ci.rad.groupCol = RADSTEP_STRIDE - 1;
+                ci.radspec = radstepspecv.data();
+                ci.radvgrid = radvgrid.data();
+                ci.radnv = int(radvgrid.size());
+                ci.sigma = sigma;
+                ci.ioniSign = ioniSign;
+                ci.wantDelta = true;
+                ci.wantGroups = exportCfGroupExponents_;
+                // No functional's reference model splits the DELTA-RAY family
+                // per group (`cf_mass_likelihood.build_pairs_tt` has no
+                // `Sdel`), so the flat delta family is exported for comparison
+                // but is not split.
+                ci.wantGroupDelta = false;
+                cfins.push_back(ci);
+                return int(cfins.size()) - 1;
+              };
+
               // ---- THE RESOLUTION-CF EXPONENTS, for the MASS functional ---
               //
               // Same blocks, same step records, DIFFERENT functional: the
@@ -5145,56 +5217,13 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               // exported so the two can be compared, and the reader leaves it
               // out of the pairs cache unless asked.
               if (exportCfExponents_) {
-                cvhcf::TrackInput cfin;
-                cfin.resglobidx = resglobidx.data();
-                cfin.resfamily = resfamily_.data();
-                cfin.resvarv = resinfvarv.data();
-                cfin.nres = int(std::min({resglobidx.size(), resfamily_.size(), resinfvarv.size()}));
-                cfin.ms = {msmoliidx.data(), msmoliv.data(), int(msmoliidx.size()),
-                           msmoliidx.empty() ? 0 : int(msmoliv.size() / msmoliidx.size())};
-                cfin.ioni = {ioniurbanidx.data(), ioniurbanv.data(), int(ioniurbanidx.size()),
-                             ioniurbanidx.empty() ? 0 : int(ioniurbanv.size() / ioniurbanidx.size())};
-                cfin.qsc = {ioniqscaleidx.data(), ioniqscalev.data(), int(ioniqscaleidx.size()), 2};
-                cfin.rad = {radstepidx.data(), radstepv.data(), int(radstepidx.size()), RADSTEP_STRIDE};
-                // material-group column of each record; see the single-track
-                // maker for why these are set explicitly
-                cfin.ms.groupCol = cfin.ms.stride >= 10 ? 9 : -1;
-                cfin.ioni.groupCol = cfin.ioni.stride - 1;
-                cfin.rad.groupCol = RADSTEP_STRIDE - 1;
-                cfin.radspec = radstepspecv.data();
-                cfin.radvgrid = radvgrid.data();
-                cfin.radnv = int(radvgrid.size());
-                cfin.sigma = Jpsi_sigmamass;
-                cfin.ioniSign = -1.;
-                cfin.wantDelta = true;
-                cfin.wantGroups = exportCfGroupExponents_;
-                // The mass functional's reference model has no S_del
-                // (`cf_mass_likelihood.build_pairs_tt`), so the flat delta
-                // family is exported for comparison but is not split.
-                cfin.wantGroupDelta = false;
-                cvhcf::TrackResult cfres;
-                cvhcf::trackExponents(cfin, cfres);
-                cfok = cfres.ok;
-                cfnblock = cfres.nblockms + cfres.nblockioni;
-                cfnpooled = cfres.npooled;
+                cfslotmass = cfRegister(resinfvarv.data(), int(resinfvarv.size()), nullptr, Jpsi_sigmamass, -1.);
                 // The GAUSSIAN REMAINDER: hits + beamspot + pointing, i.e.
                 // sigma_m^2 minus the material share, BY CONSTRUCTION --
                 // unlike the single-track tree, resinfcov here does not carry
                 // the hit blocks at all (they are not registered).
                 const double sm2 = double(Jpsi_sigmamass) * double(Jpsi_sigmamass);
                 cfvgf = (sm2 > 0.) ? float((sm2 - resinfcov) / sm2) : 0.f;
-                auto storecf = [](const std::array<double, cvhcf::kNTau> &a, std::vector<float> &v) {
-                  v.resize(cvhcf::kNTau);
-                  for (int j = 0; j < cvhcf::kNTau; ++j)
-                    v[j] = float(a[j]);
-                };
-                storecf(cfres.S.ms, cfmsv);
-                storecf(cfres.S.del, cfdelv);
-                storecf(cfres.S.ioRe, cfiorev);
-                storecf(cfres.S.ioIm, cfioimv);
-                storecf(cfres.S.radRe, cfradrev);
-                storecf(cfres.S.radIm, cfradimv);
-                storeCfGroups(cfres);
               }
 
               // ================= THE VERTEX-CONSTRAINT RESIDUAL ===========
@@ -5471,57 +5500,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                 cfvtxgrpclosure = 0.f;
                 Jpsi_vtxok = false;
                 if (exportCfExponents_ && Jpsi_vtxsig > 0.f) {
-                  cvhcf::TrackInput cfinv;
-                  cfinv.resglobidx = resglobidx.data();
-                  cfinv.resfamily = resfamily_.data();
-                  cfinv.resvarv = vabs.data();
-                  cfinv.nres = int(std::min({resglobidx.size(), resfamily_.size(), vabs.size()}));
-                  cfinv.ressgn = vtxsgnv.data();
-                  cfinv.ms = {msmoliidx.data(), msmoliv.data(), int(msmoliidx.size()),
-                              msmoliidx.empty() ? 0 : int(msmoliv.size() / msmoliidx.size())};
-                  cfinv.ioni = {ioniurbanidx.data(), ioniurbanv.data(), int(ioniurbanidx.size()),
-                                ioniurbanidx.empty() ? 0 : int(ioniurbanv.size() / ioniurbanidx.size())};
-                  cfinv.qsc = {ioniqscaleidx.data(), ioniqscalev.data(), int(ioniqscaleidx.size()), 2};
-                  cfinv.rad = {radstepidx.data(), radstepv.data(), int(radstepidx.size()), RADSTEP_STRIDE};
-                  cfinv.ms.groupCol = cfinv.ms.stride >= 10 ? 9 : -1;
-                  cfinv.ioni.groupCol = cfinv.ioni.stride - 1;
-                  cfinv.rad.groupCol = RADSTEP_STRIDE - 1;
-                  cfinv.radspec = radstepspecv.data();
-                  cfinv.radvgrid = radvgrid.data();
-                  cfinv.radnv = int(radvgrid.size());
-                  cfinv.sigma = Jpsi_vtxsig;
-                  cfinv.ioniSign = 1.;
-                  cfinv.wantDelta = true;
-                  cfinv.wantGroups = exportCfGroupExponents_;
-                  cfinv.wantGroupDelta = false;
-                  cvhcf::TrackResult cfresv;
-                  cvhcf::trackExponents(cfinv, cfresv);
-                  Jpsi_vtxok = cfresv.ok;
-                  auto storecfv = [](const std::array<double, cvhcf::kNTau> &a, std::vector<float> &v) {
-                    v.resize(cvhcf::kNTau);
-                    for (int j = 0; j < cvhcf::kNTau; ++j)
-                      v[j] = float(a[j]);
-                  };
-                  storecfv(cfresv.S.ms, cfvtxmsv);
-                  storecfv(cfresv.S.del, cfvtxdelv);
-                  storecfv(cfresv.S.ioRe, cfvtxiorev);
-                  storecfv(cfresv.S.ioIm, cfvtxioimv);
-                  storecfv(cfresv.S.radRe, cfvtxradrev);
-                  storecfv(cfresv.S.radIm, cfvtxradimv);
-                  if (exportCfGroupExponents_) {
-                    storeCfGroupsTo(cfresv,
-                                    cfvtxgrpv,
-                                    cfvtxgrpmsv,
-                                    cfvtxgrpdelv,
-                                    cfvtxgrpiorev,
-                                    cfvtxgrpioimv,
-                                    cfvtxgrpradrev,
-                                    cfvtxgrpradimv,
-                                    cfvtxgrpclosure,
-                                    false,
-                                    &cfvtxgrpvqmsv,
-                                    &cfvtxgrpvqiov);
-                  }
+                  cfslotvtx = cfRegister(vabs.data(), int(vabs.size()), vtxsgnv.data(), Jpsi_vtxsig, 1.);
                 }
               }
 
@@ -5819,68 +5798,15 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                     }
 
                     // ---- the CF exponents at THIS beam weight ------------
-                    // A second (and third) `trackExponents` call per
-                    // candidate on the SAME step records, so the cost is the
-                    // pooling and the tau grid, not the propagation: see the
-                    // timing line in the study.
+                    // The third and fourth functional of the same fit. They
+                    // no longer cost a `trackExponents` call each: the four
+                    // weight sets are evaluated together on the concatenated
+                    // argument list after this block (see the registration
+                    // above), so the pooling and the step-record work they
+                    // used to repeat is paid once.
                     if (exportCfExponents_ && ckk > 0.) {
-                      cvhcf::TrackInput cfinb;
-                      cfinb.resglobidx = resglobidx.data();
-                      cfinb.resfamily = resfamily_.data();
-                      cfinb.resvarv = vabsbs[k].data();
-                      cfinb.nres = int(std::min({resglobidx.size(), resfamily_.size(), vabsbs[k].size()}));
-                      cfinb.ressgn = sgnbs[k].data();
-                      cfinb.ms = {msmoliidx.data(), msmoliv.data(), int(msmoliidx.size()),
-                                  msmoliidx.empty() ? 0 : int(msmoliv.size() / msmoliidx.size())};
-                      cfinb.ioni = {ioniurbanidx.data(), ioniurbanv.data(), int(ioniurbanidx.size()),
-                                    ioniurbanidx.empty() ? 0 : int(ioniurbanv.size() / ioniurbanidx.size())};
-                      cfinb.qsc = {ioniqscaleidx.data(), ioniqscalev.data(), int(ioniqscaleidx.size()), 2};
-                      cfinb.rad = {radstepidx.data(), radstepv.data(), int(radstepidx.size()), RADSTEP_STRIDE};
-                      cfinb.ms.groupCol = cfinb.ms.stride >= 10 ? 9 : -1;
-                      cfinb.ioni.groupCol = cfinb.ioni.stride - 1;
-                      cfinb.rad.groupCol = RADSTEP_STRIDE - 1;
-                      cfinb.radspec = radstepspecv.data();
-                      cfinb.radvgrid = radvgrid.data();
-                      cfinb.radnv = int(radvgrid.size());
-                      cfinb.sigma = std::sqrt(ckk);
-                      cfinb.ioniSign = 1.;
-                      cfinb.wantDelta = true;
-                      cfinb.wantGroups = exportCfGroupExponents_;
-                      cfinb.wantGroupDelta = false;
-                      cvhcf::TrackResult cfresb;
-                      cvhcf::trackExponents(cfinb, cfresb);
-                      auto appendcf = [](const std::array<double, cvhcf::kNTau> &a, std::vector<float> &v) {
-                        for (int j = 0; j < cvhcf::kNTau; ++j)
-                          v.push_back(float(a[j]));
-                      };
-                      appendcf(cfresb.S.ms, cfbsmsv);
-                      appendcf(cfresb.S.del, cfbsdelv);
-                      appendcf(cfresb.S.ioRe, cfbsiorev);
-                      appendcf(cfresb.S.ioIm, cfbsioimv);
-                      appendcf(cfresb.S.radRe, cfbsradrev);
-                      appendcf(cfresb.S.radIm, cfbsradimv);
-                      if (exportCfGroupExponents_) {
-                        std::vector<short> gtmpv;
-                        std::vector<float> gms, gdel, giore, gioim, gradre, gradim, gvqms, gvqio;
-                        float gclos = 0.f;
-                        storeCfGroupsTo(cfresb, gtmpv, gms, gdel, giore, gioim, gradre, gradim,
-                                        gclos, false, &gvqms, &gvqio);
-                        cfbsgrpclosure[k] = gclos;
-                        for (std::size_t ig = 0; ig < gtmpv.size(); ++ig) {
-                          cfbsgrpv.push_back(gtmpv[ig]);
-                          cfbsgrpcompv.push_back(static_cast<short>(k));
-                          cfbsgrpvqmsv.push_back(gvqms[ig]);
-                          cfbsgrpvqiov.push_back(gvqio[ig]);
-                          for (int j = 0; j < cvhcf::kNTau; ++j) {
-                            cfbsgrpmsv.push_back(gms[ig*cvhcf::kNTau + j]);
-                            cfbsgrpiorev.push_back(giore[ig*cvhcf::kNTau + j]);
-                            cfbsgrpioimv.push_back(gioim[ig*cvhcf::kNTau + j]);
-                            cfbsgrpradrev.push_back(gradre[ig*cvhcf::kNTau + j]);
-                            cfbsgrpradimv.push_back(gradim[ig*cvhcf::kNTau + j]);
-                          }
-                        }
-                      }
-                      Jpsi_bssgnchk[k] = cfresb.ok ? 1.f : 0.f;
+                      cfslotbs[k] = cfRegister(vabsbs[k].data(), int(vabsbs[k].size()), sgnbs[k].data(),
+                                               std::sqrt(ckk), 1.);
                     }
                   }
                   Jpsi_bsvchk = float(vchkmax);
@@ -5899,6 +5825,102 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                   for (unsigned int j = 0; j < 3; ++j) {
                     Jpsi_bsmeanvtx[j] = float(-wvtxinf(bsr0 + j));
                   }
+                }
+              }
+
+              // ========= ONE EVALUATOR PASS FOR EVERY FUNCTIONAL ==========
+              // Every functional registered above is evaluated here together,
+              // on the concatenated argument list { w_{b,k} tau_j }, and its
+              // results are written to exactly the branches its own call used
+              // to write, in the same order and layout.
+              if (!cfins.empty()) {
+                cfress.resize(cfins.size());
+                cvhcf::trackExponents(cfins.data(), int(cfins.size()), cfress.data());
+
+                auto storecf = [](const std::array<double, cvhcf::kNTau> &a, std::vector<float> &v) {
+                  v.resize(cvhcf::kNTau);
+                  for (int j = 0; j < cvhcf::kNTau; ++j)
+                    v[j] = float(a[j]);
+                };
+
+                if (cfslotmass >= 0) {
+                  const cvhcf::TrackResult &cfres = cfress[cfslotmass];
+                  cfok = cfres.ok;
+                  cfnblock = cfres.nblockms + cfres.nblockioni;
+                  cfnpooled = cfres.npooled;
+                  storecf(cfres.S.ms, cfmsv);
+                  storecf(cfres.S.del, cfdelv);
+                  storecf(cfres.S.ioRe, cfiorev);
+                  storecf(cfres.S.ioIm, cfioimv);
+                  storecf(cfres.S.radRe, cfradrev);
+                  storecf(cfres.S.radIm, cfradimv);
+                  storeCfGroups(cfres);
+                }
+
+                if (cfslotvtx >= 0) {
+                  const cvhcf::TrackResult &cfresv = cfress[cfslotvtx];
+                  Jpsi_vtxok = cfresv.ok;
+                  storecf(cfresv.S.ms, cfvtxmsv);
+                  storecf(cfresv.S.del, cfvtxdelv);
+                  storecf(cfresv.S.ioRe, cfvtxiorev);
+                  storecf(cfresv.S.ioIm, cfvtxioimv);
+                  storecf(cfresv.S.radRe, cfvtxradrev);
+                  storecf(cfresv.S.radIm, cfvtxradimv);
+                  if (exportCfGroupExponents_) {
+                    storeCfGroupsTo(cfresv,
+                                    cfvtxgrpv,
+                                    cfvtxgrpmsv,
+                                    cfvtxgrpdelv,
+                                    cfvtxgrpiorev,
+                                    cfvtxgrpioimv,
+                                    cfvtxgrpradrev,
+                                    cfvtxgrpradimv,
+                                    cfvtxgrpclosure,
+                                    false,
+                                    &cfvtxgrpvqmsv,
+                                    &cfvtxgrpvqiov);
+                  }
+                }
+
+                // the two beam components APPEND, so component 0 must be
+                // written before component 1 exactly as the loop did
+                for (unsigned int k = 0; k < 2; ++k) {
+                  if (cfslotbs[k] < 0) {
+                    continue;
+                  }
+                  const cvhcf::TrackResult &cfresb = cfress[cfslotbs[k]];
+                  auto appendcf = [](const std::array<double, cvhcf::kNTau> &a, std::vector<float> &v) {
+                    for (int j = 0; j < cvhcf::kNTau; ++j)
+                      v.push_back(float(a[j]));
+                  };
+                  appendcf(cfresb.S.ms, cfbsmsv);
+                  appendcf(cfresb.S.del, cfbsdelv);
+                  appendcf(cfresb.S.ioRe, cfbsiorev);
+                  appendcf(cfresb.S.ioIm, cfbsioimv);
+                  appendcf(cfresb.S.radRe, cfbsradrev);
+                  appendcf(cfresb.S.radIm, cfbsradimv);
+                  if (exportCfGroupExponents_) {
+                    std::vector<short> gtmpv;
+                    std::vector<float> gms, gdel, giore, gioim, gradre, gradim, gvqms, gvqio;
+                    float gclos = 0.f;
+                    storeCfGroupsTo(cfresb, gtmpv, gms, gdel, giore, gioim, gradre, gradim,
+                                    gclos, false, &gvqms, &gvqio);
+                    cfbsgrpclosure[k] = gclos;
+                    for (std::size_t ig = 0; ig < gtmpv.size(); ++ig) {
+                      cfbsgrpv.push_back(gtmpv[ig]);
+                      cfbsgrpcompv.push_back(static_cast<short>(k));
+                      cfbsgrpvqmsv.push_back(gvqms[ig]);
+                      cfbsgrpvqiov.push_back(gvqio[ig]);
+                      for (int j = 0; j < cvhcf::kNTau; ++j) {
+                        cfbsgrpmsv.push_back(gms[ig*cvhcf::kNTau + j]);
+                        cfbsgrpiorev.push_back(giore[ig*cvhcf::kNTau + j]);
+                        cfbsgrpioimv.push_back(gioim[ig*cvhcf::kNTau + j]);
+                        cfbsgrpradrev.push_back(gradre[ig*cvhcf::kNTau + j]);
+                        cfbsgrpradimv.push_back(gradim[ig*cvhcf::kNTau + j]);
+                      }
+                    }
+                  }
+                  Jpsi_bssgnchk[k] = cfresb.ok ? 1.f : 0.f;
                 }
               }
             }

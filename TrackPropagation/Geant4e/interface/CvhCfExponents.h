@@ -228,6 +228,43 @@ namespace cvhcf {
   // `cf_track_resolution.extract` does and accumulates the four families.
   void trackExponents(const TrackInput &in, TrackResult &out);
 
+  // THE MULTI-FUNCTIONAL ENTRY POINT: `nfunc` functionals of the SAME fit in
+  // ONE pass over the step records.
+  //
+  // The two-track maker forms four linear functionals of one converged fit --
+  // the candidate MASS, the vertex DCA, and the two whitened BEAM-LINE pulls.
+  // They share every block and every step record and differ only in the
+  // per-block scalar weight they give it,
+  //
+  //     w_{b,k} = s_{b,k} sqrt(v_{b,k}/sq2_b) / sigma_k ,
+  //
+  // and in the ionization sign they carry. EVERY exponent primitive here
+  // depends on (weight, tau) ONLY through the product w tau -- the Moliere
+  // shape is read at `sqrt(chi_a^2) w tau`, the delta and ionization channels
+  // at `gs w tau`, the radiative one at `cs w tau` -- so the k functionals are
+  // the SAME primitive evaluated on the CONCATENATED argument list
+  // { w_{b,k} tau_j }_{k,j}. Everything that does not depend on the weight --
+  // the pooling by global index, the block gather, `sq2`, the Moliere step
+  // parameters and the `gshape_elec` row they interpolate, the radiative
+  // spectra `makeRadSpectrum` builds, the per-group row selections -- is then
+  // done ONCE instead of `nfunc` times.
+  //
+  // This is EXACT, not an approximation: phi_{aU}(tau) = phi_U(a tau) is an
+  // identity, and the products `w_{b,k} tau_j` are formed by the same
+  // expression, in the same association, that the single-functional path forms
+  // them with. Each functional's exponents are therefore BITWISE what one call
+  // per functional would have produced; the concatenation changes WHICH points
+  // are evaluated, never how.
+  //
+  // `in[k]` may differ in `resvarv`, `ressgn`, `nres`, `sigma`, `ioniSign`,
+  // `wantDelta`, `wantGroups` and `wantGroupDelta`. The STEP RECORDS (`ms`,
+  // `ioni`, `qsc`, `rad`, `radspec`, `radvgrid`, `radnv`) and the
+  // (`resglobidx`, `resfamily`) arrays are shared and are read from the first
+  // usable entry; passing entries that disagree on them is a caller error.
+  // `out` must have `nfunc` elements. `nfunc == 1` is bit-identical to the
+  // single-functional entry point, which is implemented as exactly that call.
+  void trackExponents(const TrackInput *in, int nfunc, TrackResult *out);
+
   //------------------------------------------------------------------------
   // THE PER-BLOCK PRIMITIVES.
   //

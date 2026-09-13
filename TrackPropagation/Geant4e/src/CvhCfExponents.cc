@@ -302,8 +302,15 @@ namespace cvhcf {
     // not an optimization the reference happens to make -- the rounding to
     // 1e-3 in ln CHANGES the ceiling that `gshape_elec` is called with, so it
     // is part of the model and has to be reproduced, not improved on.
-    void msExponentImpl(const std::vector<MsStep> &st, double wstd, const double *tau, int nt, double *S) {
-      if (st.empty())
+    // `wstd` is now a LIST of `nk` weights and `S` is `nk * nt`, laid out
+    // functional-major: the concatenated argument list { wstd[k] tau[j] }.
+    // The per-row work above the k loop -- the `gshape_elec` row, the step
+    // grouping, `sqrt(chi_a^2)` -- is the part that is now done once instead
+    // of nk times; the argument itself is formed by the SAME expression, in
+    // the same association, so each k is bitwise the single-weight answer.
+    void msExponentImpl(
+        const std::vector<MsStep> &st, const double *wstd, int nk, const double *tau, int nt, double *S) {
+      if (st.empty() || nk <= 0)
         return;
       const ShapeTables &tb = T();
       std::vector<double> rows;
@@ -322,8 +329,12 @@ namespace cvhcf {
             continue;
           const double sq = std::sqrt(s.chia2);
           const double w = s.chic2 * s.fN / s.chia2;
-          for (int j = 0; j < nt; ++j)
-            S[j] += w * interpTau(tb, row.data(), sq * (wstd * tau[j]));
+          for (int k = 0; k < nk; ++k) {
+            const double wk = wstd[k];
+            double *Sk = S + static_cast<std::size_t>(k) * nt;
+            for (int j = 0; j < nt; ++j)
+              Sk[j] += w * interpTau(tb, row.data(), sq * (wk * tau[j]));
+          }
         }
         lyes.clear();
         for (const MsStep &s : st)
@@ -339,8 +350,12 @@ namespace cvhcf {
               continue;
             const double sq = std::sqrt(s.chia2);
             const double w = s.chic2 * s.fE / s.chia2;
-            for (int j = 0; j < nt; ++j)
-              S[j] += w * interpTau(tb, row.data(), sq * (wstd * tau[j]));
+            for (int k = 0; k < nk; ++k) {
+              const double wk = wstd[k];
+              double *Sk = S + static_cast<std::size_t>(k) * nt;
+              for (int j = 0; j < nt; ++j)
+                Sk[j] += w * interpTau(tb, row.data(), sq * (wk * tau[j]));
+            }
           }
         }
       }
@@ -377,8 +392,8 @@ namespace cvhcf {
     // The two halves of the delta family, so that a per-group split can reuse
     // the block's carve. `acc` may be null, in which case only vd/vms are
     // formed (the tau loop is the expensive part).
-    void delAccumImpl(const float *rows, int stride, int n, double wstd, const double *tau, int nt, double *acc,
-                      double &vd, double &vms) {
+    void delAccumImpl(const float *rows, int stride, int n, const double *wstd, int nk, const double *tau, int nt,
+                      double *acc, double &vd, double &vms) {
       const ShapeTables &tb = T();
       vd = 0.;
       vms = 0.;
@@ -395,28 +410,73 @@ namespace cvhcf {
         vd += xi * kDelME * std::log(tmx / kDelTcut) / (p * p);
         if (acc == nullptr)
           continue;
-        const double a0 = wstd * std::sqrt(2. * kDelME) / p;
         const double sc = std::sqrt(kDelTcut), sh = std::sqrt(tmx);
         // the (1 - beta^2 T/Tmax) spin-0 term of the PDG delta spectrum, as a
         // first-order variance correction
         const double spin = 1. - 0.5 * bt * bt / std::log(std::max(tmx / kDelTcut, 1.0001));
-        for (int j = 0; j < nt; ++j) {
-          const double a = a0 * tau[j];
-          acc[j] += xi * a * a * (phiTab(tb, a * sc) - phiTab(tb, a * sh)) * spin;
+        for (int k = 0; k < nk; ++k) {
+          const double a0 = wstd[k] * std::sqrt(2. * kDelME) / p;
+          double *ak = acc + static_cast<std::size_t>(k) * nt;
+          for (int j = 0; j < nt; ++j) {
+            const double a = a0 * tau[j];
+            ak[j] += xi * a * a * (phiTab(tb, a * sc) - phiTab(tb, a * sh)) * spin;
+          }
         }
       }
     }
 
-    void delExponentImpl(const float *rows, int stride, int n, double wstd, const double *tau, int nt,
+    // `Sms` and `S` are `nk * nt`. The carve is a property of the BLOCK and
+    // not of the weight (`vd` and `vms` do not depend on it), so it is formed
+    // once and applied to every functional.
+    void delExponentImpl(const float *rows, int stride, int n, const double *wstd, int nk, const double *tau, int nt,
                          const double *Sms, double *S) {
-      if (n <= 0)
+      if (n <= 0 || nk <= 0)
         return;
-      std::vector<double> acc(nt, 0.);
+      const std::size_t m = static_cast<std::size_t>(nk) * nt;
+      std::vector<double> acc(m, 0.);
       double vd = 0., vms = 0.;
-      delAccumImpl(rows, stride, n, wstd, tau, nt, acc.data(), vd, vms);
+      delAccumImpl(rows, stride, n, wstd, nk, tau, nt, acc.data(), vd, vms);
       const double carve = (vms > 0.) ? clipd(vd / vms, 0., 0.5) : 0.;
-      for (int j = 0; j < nt; ++j)
+      for (std::size_t j = 0; j < m; ++j)
         S[j] += acc[j] - carve * Sms[j];
+    }
+
+  }  // namespace
+
+  namespace {
+
+    // THE BLOCK PRIMITIVES ON THE CONCATENATED ARGUMENT LIST.  `wstd` holds
+    // `nk` weights; every output slab is `nk * kNTau`, functional-major. The
+    // public single-weight primitives below are these at `nk == 1` -- not
+    // merely equal to them, literally the same call.
+    void msBlockMulti(const float *rows, int stride, int n, const double *wstd, int nk, double *Sms, double *Sdel) {
+      if (rows == nullptr || n <= 0 || stride < 8 || nk <= 0)
+        return;
+      // `buildMsSteps` -- the Moliere parameters, the screening angles, the
+      // electron ceiling and their roundings -- is the weight-independent
+      // half of the block, and is now paid once for all `nk`.
+      std::vector<MsStep> st;
+      buildMsSteps(rows, stride, n, st);
+      const std::size_t m = static_cast<std::size_t>(nk) * kNTau;
+      std::vector<double> local(m, 0.);
+      msExponentImpl(st, wstd, nk, tauGrid(), kNTau, local.data());
+      if (Sms != nullptr)
+        for (std::size_t j = 0; j < m; ++j)
+          Sms[j] += local[j];
+      if (Sdel != nullptr)
+        delExponentImpl(rows, stride, n, wstd, nk, tauGrid(), kNTau, local.data(), Sdel);
+    }
+
+    void delBlockCarvedMulti(const float *rows, int stride, int n, const double *wstd, int nk, const double *Sms,
+                             double carve, double *Sdel) {
+      if (rows == nullptr || n <= 0 || stride < 8 || nk <= 0 || Sdel == nullptr || Sms == nullptr)
+        return;
+      const std::size_t m = static_cast<std::size_t>(nk) * kNTau;
+      std::vector<double> acc(m, 0.);
+      double vd = 0., vms = 0.;
+      delAccumImpl(rows, stride, n, wstd, nk, tauGrid(), kNTau, acc.data(), vd, vms);
+      for (std::size_t j = 0; j < m; ++j)
+        Sdel[j] += acc[j] - carve * Sms[j];
     }
 
   }  // namespace
@@ -425,33 +485,18 @@ namespace cvhcf {
     if (rows == nullptr || n <= 0 || stride < 8)
       return 0.;
     double vd = 0., vms = 0.;
-    delAccumImpl(rows, stride, n, 1., tauGrid(), kNTau, nullptr, vd, vms);
+    const double one = 1.;
+    delAccumImpl(rows, stride, n, &one, 1, tauGrid(), kNTau, nullptr, vd, vms);
     return (vms > 0.) ? clipd(vd / vms, 0., 0.5) : 0.;
   }
 
   void delBlockCarved(
       const float *rows, int stride, int n, double wstd, const double *Sms, double carve, double *Sdel) {
-    if (rows == nullptr || n <= 0 || stride < 8 || Sdel == nullptr || Sms == nullptr)
-      return;
-    std::vector<double> acc(kNTau, 0.);
-    double vd = 0., vms = 0.;
-    delAccumImpl(rows, stride, n, wstd, tauGrid(), kNTau, acc.data(), vd, vms);
-    for (int j = 0; j < kNTau; ++j)
-      Sdel[j] += acc[j] - carve * Sms[j];
+    delBlockCarvedMulti(rows, stride, n, &wstd, 1, Sms, carve, Sdel);
   }
 
   void msBlock(const float *rows, int stride, int n, double wstd, double *Sms, double *Sdel) {
-    if (rows == nullptr || n <= 0 || stride < 8)
-      return;
-    std::vector<MsStep> st;
-    buildMsSteps(rows, stride, n, st);
-    std::array<double, kNTau> local{};
-    msExponentImpl(st, wstd, tauGrid(), kNTau, local.data());
-    if (Sms != nullptr)
-      for (int j = 0; j < kNTau; ++j)
-        Sms[j] += local[j];
-    if (Sdel != nullptr)
-      delExponentImpl(rows, stride, n, wstd, tauGrid(), kNTau, local.data(), Sdel);
+    msBlockMulti(rows, stride, n, &wstd, 1, Sms, Sdel);
   }
 
   //==========================================================================
@@ -507,6 +552,119 @@ namespace cvhcf {
 
   }  // namespace
 
+  namespace {
+
+    // The ionization block on the concatenated argument list. `blockExponent`
+    // reads the weight only as `gs * t`, so the steps are PARSED ONCE at unit
+    // weight -- `gs` then holds the step's own dE -> residual map -- and each
+    // functional's weight is folded in by the same multiplication
+    // `buildIoniSteps` would have done (`1.0 * x == x` exactly, so the cached
+    // factor is bit-for-bit the record's own).
+    void ioniBlockMulti(
+        const float *rows, int stride, int n, const double *wstdSigned, int nk, double *Sre, double *Sim) {
+      if (rows == nullptr || n <= 0 || stride < 11 || stride > 14 || nk <= 0)
+        return;
+      cvhcgf::Block blk;
+      buildIoniSteps(rows, stride, n, 1.0, blk.ioni);
+      const std::size_t nst = blk.ioni.size();
+      std::vector<double> gsraw(nst);
+      for (std::size_t i = 0; i < nst; ++i)
+        gsraw[i] = blk.ioni[i].gs;
+      const double *tau = tauGrid();
+      for (int k = 0; k < nk; ++k) {
+        for (std::size_t i = 0; i < nst; ++i)
+          blk.ioni[i].gs = wstdSigned[k] * gsraw[i];
+        double *Rk = Sre + static_cast<std::size_t>(k) * kNTau;
+        double *Ik = Sim + static_cast<std::size_t>(k) * kNTau;
+        for (int j = 0; j < kNTau; ++j) {
+          const std::complex<double> s = cvhcgf::blockExponent(blk, tau[j]);
+          Rk[j] += s.real();
+          Ik[j] += s.imag();
+        }
+      }
+    }
+
+    // The radiative channel of the same block. `makeRadSpectrum` -- the
+    // expensive half, and the reason the radiative channel is two thirds of
+    // the CF cost -- knows nothing about the functional, so the spectrum of a
+    // step is built ONCE and every `k` reads it.
+    void radBlockMulti(const float *rows, int stride, int n, const float *spec, const float *vgridf, int nv,
+                       const double *wstdSigned, int nk, double *Sre, double *Sim) {
+      if (rows == nullptr || spec == nullptr || vgridf == nullptr || n <= 0 || nv < 2 || nk <= 0)
+        return;
+      std::vector<double> vgrid(nv), shapeB(nv), shapeP(nv), dNdv(nv), wtrap(nv, 0.);
+      for (int i = 0; i < nv; ++i)
+        vgrid[i] = vgridf[i];
+      for (int i = 0; i + 1 < nv; ++i) {
+        const double dv = 0.5 * (vgrid[i + 1] - vgrid[i]);
+        wtrap[i] += dv;
+        wtrap[i + 1] += dv;
+      }
+      const double *tau = tauGrid();
+      std::vector<double> a(kNTau), ve(nv);
+      for (int ir = 0; ir < n; ++ir) {
+        const float *r = rows + static_cast<std::size_t>(ir) * stride;
+        const float *sp = spec + static_cast<std::size_t>(ir) * 2 * nv;
+        for (int i = 0; i < nv; ++i) {
+          shapeB[i] = sp[i];
+          shapeP[i] = sp[nv + i];
+        }
+        const double etot = r[3];    // GeV
+        const double stepCm = r[6];  // cm
+        if (!(etot > 0.))
+          continue;
+        // GeV throughout, matching cf_brems_exact: dE/norm is unit-free, so
+        // the reference's own units are used rather than the propagator's MeV
+        // convention, and `gs` below carries no 1e-3 -- the radiative records
+        // store GeV where the Urban ones store MeV.
+        cvhcgf::makeRadSpectrum(vgrid.data(), shapeB.data(), shapeP.data(), r[8] * stepCm, r[9] * stepCm, etot, nv,
+                                dNdv.data());
+        bool any = false;
+        for (int i = 0; i < nv; ++i)
+          if (dNdv[i] > 0.) {
+            any = true;
+            break;
+          }
+        if (!any)
+          continue;
+        for (int i = 0; i < nv; ++i)
+          ve[i] = vgrid[i] * etot;
+        for (int k = 0; k < nk; ++k) {
+          const double gs = static_cast<double>(r[10]) * wstdSigned[k];
+          if (gs == 0.)
+            continue;
+          // The reference forms `a = tau * cs * w` and `x = outer(a, v * E)`.
+          // Keeping that association is what makes the two agree to the last
+          // bits rather than merely to 1e-16.
+          for (int j = 0; j < kNTau; ++j)
+            a[j] = tau[j] * gs;
+          double *Rk = Sre + static_cast<std::size_t>(k) * kNTau;
+          double *Ik = Sim + static_cast<std::size_t>(k) * kNTau;
+          for (int i = 0; i < nv; ++i) {
+            const double q = wtrap[i] * dNdv[i];
+            if (q == 0.)
+              continue;
+            for (int j = 0; j < kNTau; ++j) {
+              const double x = a[j] * ve[i];
+              if (std::fabs(x) < 1e-4) {
+                Rk[j] += q * (-0.5 * x * x);
+                Ik[j] += q * (x * x * x / 6.);
+              } else {
+                // cos x - 1 as -2 sin^2(x/2), the cancellation-free form; the
+                // same two sines cf_brems_exact and cvhcgf::blockExponent
+                // spend.
+                const double s2 = std::sin(0.5 * x);
+                Rk[j] += q * (-2.0 * s2 * s2);
+                Ik[j] += q * (std::sin(x) - x);
+              }
+            }
+          }
+        }
+      }
+    }
+
+  }  // namespace
+
   double ioniSq2(const float *rows, int stride, int n, const float *qsc, int nqsc) {
     if (rows == nullptr || n <= 0)
       return 0.;
@@ -555,88 +713,12 @@ namespace cvhcf {
     // than mis-parsed -- but note the guard SILENTLY returns, so a stride that
     // is not on this list zeroes the ionization exponent of every candidate;
     // keep the list in step with the writer.
-    if (rows == nullptr || n <= 0 || stride < 11 || stride > 14)
-      return;
-    std::vector<cvhcgf::IoniStep> st;
-    buildIoniSteps(rows, stride, n, wstdSigned, st);
-    cvhcgf::Block blk;
-    blk.ioni = st;
-    const double *tau = tauGrid();
-    for (int j = 0; j < kNTau; ++j) {
-      const std::complex<double> s = cvhcgf::blockExponent(blk, tau[j]);
-      Sre[j] += s.real();
-      Sim[j] += s.imag();
-    }
+    ioniBlockMulti(rows, stride, n, &wstdSigned, 1, Sre, Sim);
   }
 
   void radBlock(const float *rows, int stride, int n, const float *spec, const float *vgridf, int nv,
                 double wstdSigned, double *Sre, double *Sim) {
-    if (rows == nullptr || spec == nullptr || vgridf == nullptr || n <= 0 || nv < 2)
-      return;
-    std::vector<double> vgrid(nv), shapeB(nv), shapeP(nv), dNdv(nv), wtrap(nv, 0.);
-    for (int i = 0; i < nv; ++i)
-      vgrid[i] = vgridf[i];
-    for (int i = 0; i + 1 < nv; ++i) {
-      const double dv = 0.5 * (vgrid[i + 1] - vgrid[i]);
-      wtrap[i] += dv;
-      wtrap[i + 1] += dv;
-    }
-    const double *tau = tauGrid();
-    std::vector<double> a(kNTau), ve(nv);
-    for (int ir = 0; ir < n; ++ir) {
-      const float *r = rows + static_cast<std::size_t>(ir) * stride;
-      const float *sp = spec + static_cast<std::size_t>(ir) * 2 * nv;
-      for (int k = 0; k < nv; ++k) {
-        shapeB[k] = sp[k];
-        shapeP[k] = sp[nv + k];
-      }
-      const double etot = r[3];    // GeV
-      const double stepCm = r[6];  // cm
-      if (!(etot > 0.))
-        continue;
-      // GeV throughout, matching cf_brems_exact: dE/norm is unit-free, so the
-      // reference's own units are used rather than the propagator's MeV
-      // convention, and `gs` below carries no 1e-3 -- the radiative records
-      // store GeV where the Urban ones store MeV.
-      cvhcgf::makeRadSpectrum(vgrid.data(), shapeB.data(), shapeP.data(), r[8] * stepCm, r[9] * stepCm, etot, nv,
-                              dNdv.data());
-      bool any = false;
-      for (int k = 0; k < nv; ++k)
-        if (dNdv[k] > 0.) {
-          any = true;
-          break;
-        }
-      if (!any)
-        continue;
-      const double gs = static_cast<double>(r[10]) * wstdSigned;
-      if (gs == 0.)
-        continue;
-      // The reference forms `a = tau * cs * w` and `x = outer(a, v * E)`.
-      // Keeping that association is what makes the two agree to the last bits
-      // rather than merely to 1e-16.
-      for (int j = 0; j < kNTau; ++j)
-        a[j] = tau[j] * gs;
-      for (int i = 0; i < nv; ++i)
-        ve[i] = vgrid[i] * etot;
-      for (int i = 0; i < nv; ++i) {
-        const double q = wtrap[i] * dNdv[i];
-        if (q == 0.)
-          continue;
-        for (int j = 0; j < kNTau; ++j) {
-          const double x = a[j] * ve[i];
-          if (std::fabs(x) < 1e-4) {
-            Sre[j] += q * (-0.5 * x * x);
-            Sim[j] += q * (x * x * x / 6.);
-          } else {
-            // cos x - 1 as -2 sin^2(x/2), the cancellation-free form; the same
-            // two sines cf_brems_exact and cvhcgf::blockExponent spend.
-            const double s2 = std::sin(0.5 * x);
-            Sre[j] += q * (-2.0 * s2 * s2);
-            Sim[j] += q * (std::sin(x) - x);
-          }
-        }
-      }
-    }
+    radBlockMulti(rows, stride, n, spec, vgridf, nv, &wstdSigned, 1, Sre, Sim);
   }
 
   //==========================================================================
@@ -722,6 +804,38 @@ namespace cvhcf {
       }
     }
 
+    // THE SIX-FAMILY SCRATCH SLAB of the multi-functional pass: family-major,
+    // then functional, then tau, i.e. `buf[(f * nact + a) * kNTau + j]`, so
+    // each family's `nact * kNTau` block is contiguous and can be handed to a
+    // `*Multi` primitive directly.
+    enum SlabFam { kSlabMs = 0, kSlabDel, kSlabIoRe, kSlabIoIm, kSlabRadRe, kSlabRadIm, kNSlabFam };
+
+    inline double *slab(std::vector<double> &buf, int f, int nact) {
+      return buf.data() + static_cast<std::size_t>(f) * nact * kNTau;
+    }
+
+    // `addInto` for functional `a` of such a slab. `useDel` false adds a
+    // literal zero to the delta family, which is what the single-functional
+    // path does when it hands `addInto` a cleared `Exponents` -- the families
+    // a branch did not fill are added, not skipped.
+    void addIntoSlice(Exponents &dst, const std::vector<double> &buf, int a, int nact, bool useDel) {
+      const std::size_t o = static_cast<std::size_t>(a) * kNTau;
+      const double *ms = buf.data() + static_cast<std::size_t>(kSlabMs) * nact * kNTau + o;
+      const double *del = buf.data() + static_cast<std::size_t>(kSlabDel) * nact * kNTau + o;
+      const double *iore = buf.data() + static_cast<std::size_t>(kSlabIoRe) * nact * kNTau + o;
+      const double *ioim = buf.data() + static_cast<std::size_t>(kSlabIoIm) * nact * kNTau + o;
+      const double *radre = buf.data() + static_cast<std::size_t>(kSlabRadRe) * nact * kNTau + o;
+      const double *radim = buf.data() + static_cast<std::size_t>(kSlabRadIm) * nact * kNTau + o;
+      for (int j = 0; j < kNTau; ++j) {
+        dst.ms[j] += ms[j];
+        dst.del[j] += useDel ? del[j] : 0.;
+        dst.ioRe[j] += iore[j];
+        dst.ioIm[j] += ioim[j];
+        dst.radRe[j] += radre[j];
+        dst.radIm[j] += radim[j];
+      }
+    }
+
     // The distinct material groups of `rows`, ascending. `col < 0` (rows that
     // carry no group) collapses to the single group -1, which is also what a
     // job with no global material model produces.
@@ -758,262 +872,417 @@ namespace cvhcf {
 
   }  // namespace
 
-  void trackExponents(const TrackInput &in, TrackResult &out) {
-    out.ok = true;
-    out.vgauss = 0.;
-    out.nblockms = out.nblockioni = out.npooled = 0;
-    out.S.clear();
-    out.groups.clear();
-    if (!(in.sigma > 0.) || in.nres <= 0) {
-      out.ok = false;
-      return;
-    }
+  //==========================================================================
+  // 6. THE EVALUATOR PASS, ON THE CONCATENATED ARGUMENT LIST
+  //
+  // `nf` functionals of ONE converged fit -- in the two-track maker the
+  // candidate MASS, the vertex DCA and the two whitened BEAM-LINE pulls --
+  // share every block and every step record and differ only in the scalar
+  // weight they give a block,
+  //
+  //     w_{b,k} = s_{b,k} sqrt(v_{b,k}/sq2_b) / sigma_k ,
+  //
+  // and in the ionization sign they carry. Every primitive above reads the
+  // weight only through the PRODUCT `w tau`, so the `nf` functionals are the
+  // same primitive evaluated on the concatenated list { w_{b,k} tau_j }, and
+  // the weight-independent half of the block -- the pooling by global index,
+  // the row gather, `sq2`, the Moliere step parameters and the `gshape_elec`
+  // row they interpolate, `makeRadSpectrum`, the per-group row selections --
+  // is paid ONCE instead of `nf` times.
+  //
+  // EXACTNESS. `phi_{aU}(tau) = phi_U(a tau)` is an identity, and the products
+  // `w_{b,k} tau_j` are formed by the same expression, in the same
+  // association, that a single-functional call forms them with. Each
+  // functional's exponents are therefore BITWISE what one call per functional
+  // would have written -- there is no reference functional and no rescaled
+  // grid, only a longer list of arguments.
+  //
+  // THE POOLING is unchanged and is still `cf_track_resolution.extract`'s: for
+  // each material family in (10, 11), for each DISTINCT global parameter index
+  // among the resolution entries of that family, pool v_b over the entries,
+  // gather the step rows whose index VALUE matches, and form the block's
+  // scalar standardized weight. What is now per functional is only what was
+  // always per functional: the pooled variance and its sign, the
+  // standardization, and the `want*` flags.
+  //==========================================================================
+  namespace {
 
-    // The GAUSSIAN families. 8/9 are the hit blocks; 16 is the beam-line
-    // (luminous-region) block of the two-track maker, which is a Gaussian
-    // noise block of exactly the same kind -- a fixed covariance, no Landau
-    // channel -- so it belongs here and NOT with the material families.
-    // Counting it keeps the reader's closure
-    // `sum_g (vqms + vqio) + vgauss/sigma^2 == 1` exact with the beam rows
-    // on. No maker that does not register family 16 is affected.
-    for (int i = 0; i < in.nres; ++i)
-      if (in.resfamily[i] == 8 || in.resfamily[i] == 9 || in.resfamily[i] == 16)
-        out.vgauss += in.resvarv[i];
+    void trackExponentsImpl(const TrackInput *in, int nf, TrackResult *out) {
+      for (int k = 0; k < nf; ++k) {
+        out[k].ok = true;
+        out[k].vgauss = 0.;
+        out[k].nblockms = out[k].nblockioni = out[k].npooled = 0;
+        out[k].S.clear();
+        out[k].groups.clear();
+      }
+      if (nf <= 0)
+        return;
 
-    std::vector<unsigned int> gs;
-    std::vector<int> sel;
-    std::vector<float> blk;   // the block's step rows, contiguous
-    std::vector<float> qs;    // the block's [scale, nsteps] pairs
-    std::vector<float> rblk, rspec;
-    // per-group scratch (untouched unless `in.wantGroups`)
-    std::vector<int> gsteps;
-    std::vector<float> gblk, grblk, grspec;
-    Exponents gtmp;
-
-    for (int fam = 10; fam <= 11; ++fam) {
-      const StepRows &rows = (fam == 10) ? in.ms : in.ioni;
-      gs.clear();
-      for (int i = 0; i < in.nres; ++i)
-        if (in.resfamily[i] == fam)
-          gs.push_back(in.resglobidx[i]);
-      std::sort(gs.begin(), gs.end());
-      gs.erase(std::unique(gs.begin(), gs.end()), gs.end());
-
-      for (unsigned int g : gs) {
-        double vpool = 0.;
-        double vsig = 0.;
-        int nent = 0;
-        for (int i = 0; i < in.nres; ++i)
-          if (in.resfamily[i] == fam && in.resglobidx[i] == g) {
-            vpool += in.resvarv[i];
-            // variance-weighted sign of the block's influence; +1 everywhere
-            // when the caller supplies none, so `vsig == vpool > 0`.
-            vsig += (in.ressgn != nullptr ? double(in.ressgn[i]) : 1.) * in.resvarv[i];
-            ++nent;
-          }
-        if (!(vpool > 0.))
-          continue;
-        sel.clear();
-        for (int i = 0; i < rows.n; ++i)
-          if (rows.idx[i] == g)
-            sel.push_back(i);
-        if (sel.empty()) {
-          // A registered block with no step rows. The offline extractor drops
-          // the whole track (`ok = False`); say so rather than export a model
-          // that is missing a block.
-          out.ok = false;
-          return;
-        }
-        if (nent > 1)
-          ++out.npooled;
-        const int ns = static_cast<int>(sel.size());
-        blk.resize(static_cast<std::size_t>(ns) * rows.stride);
-        for (int i = 0; i < ns; ++i)
-          std::memcpy(&blk[static_cast<std::size_t>(i) * rows.stride],
-                      rows.v + static_cast<std::size_t>(sel[i]) * rows.stride, rows.stride * sizeof(float));
-
-        if (fam == 10) {
-          ++out.nblockms;
-          double sq2 = 0.;
-          for (int i = 0; i < ns; ++i)
-            sq2 += blk[static_cast<std::size_t>(i) * rows.stride + 5];
-          if (!(sq2 > 0.))
-            continue;
-          const double wstd = std::sqrt(vpool / sq2) / in.sigma;
-          // the block's share of the STANDARDIZED variance under the fit's Q
-          const double vqblk = vpool / (in.sigma * in.sigma);
-
-          rowGroups(blk.data(), rows.stride, ns, in.wantGroups ? in.ms.groupCol : -1, gsteps);
-          if (!in.wantGroups || gsteps.size() == 1) {
-            // ONE EVALUATION, TWO DESTINATIONS.  Whether or not the groups are
-            // wanted, a block whose steps are all one material (the common
-            // case: a block is one propagation surface) is computed exactly
-            // once.  Adding the same double to the flat accumulator and to the
-            // group slot is bitwise identical to accumulating it once -- `a +=
-            // x` is `a += x` -- so `sum_g` equals the flat exponent to the LAST
-            // BIT here, and the per-group export costs nothing but the copy.
-            gtmp.clear();
-            msBlock(blk.data(), rows.stride, ns, wstd, gtmp.ms.data(), in.wantDelta ? gtmp.del.data() : nullptr);
-            for (int j = 0; j < kNTau; ++j) {
-              out.S.ms[j] += gtmp.ms[j];
-              if (in.wantDelta)
-                out.S.del[j] += gtmp.del[j];
-            }
-            if (in.wantGroups) {
-              GroupExponents &ge = groupEntry(out.groups, gsteps[0]);
-              ge.vqms += vqblk;
-              for (int j = 0; j < kNTau; ++j) {
-                ge.S.ms[j] += gtmp.ms[j];
-                if (in.wantDelta && in.wantGroupDelta)
-                  ge.S.del[j] += gtmp.del[j];
-              }
-            }
-          } else {
-            // A block that straddles two materials: the flat exponent is
-            // formed over ALL its rows and the split is a second pass.  The
-            // carve is a RATIO over the WHOLE block (see
-            // delCarveFactor), so it is computed once and reused.
-            msBlock(blk.data(), rows.stride, ns, wstd, out.S.ms.data(), in.wantDelta ? out.S.del.data() : nullptr);
-            const double carve =
-                (in.wantDelta && in.wantGroupDelta) ? delCarveFactor(blk.data(), rows.stride, ns) : 0.;
-            for (int g : gsteps) {
-              const int mg = selectGroup(blk.data(), rows.stride, ns, in.ms.groupCol, g, gblk);
-              if (mg <= 0)
-                continue;
-              gtmp.clear();
-              msBlock(gblk.data(), rows.stride, mg, wstd, gtmp.ms.data(), nullptr);
-              if (in.wantDelta && in.wantGroupDelta)
-                delBlockCarved(gblk.data(), rows.stride, mg, wstd, gtmp.ms.data(), carve, gtmp.del.data());
-              // the group's share of the block's fit-Q variance is its share
-              // of `sq2`, which for multiple scattering is the `thp2` column.
-              double sq2g = 0.;
-              for (int i = 0; i < mg; ++i)
-                sq2g += gblk[static_cast<std::size_t>(i) * rows.stride + 5];
-              GroupExponents &ge = groupEntry(out.groups, g);
-              ge.vqms += vqblk * (sq2g / sq2);
-              addInto(ge.S, gtmp);
-            }
-          }
+      // A functional with no standardization or no resolution entries is
+      // dropped exactly as the single-functional path drops it; the others
+      // carry on. `alive` is what keeps that per functional rather than per
+      // call, here and at the missing-step-rows exit below.
+      std::vector<char> alive(nf, 1);
+      int nalive = 0, kref = -1;
+      for (int k = 0; k < nf; ++k) {
+        if (!(in[k].sigma > 0.) || in[k].nres <= 0) {
+          out[k].ok = false;
+          alive[k] = 0;
         } else {
-          ++out.nblockioni;
-          qs.clear();
-          for (int i = 0; i < in.qsc.n; ++i)
-            if (in.qsc.idx[i] == g) {
-              qs.push_back(in.qsc.v[static_cast<std::size_t>(i) * in.qsc.stride]);
-              qs.push_back(in.qsc.v[static_cast<std::size_t>(i) * in.qsc.stride + 1]);
-            }
-          const double sq2 =
-              ioniSq2(blk.data(), rows.stride, ns, qs.empty() ? nullptr : qs.data(), static_cast<int>(qs.size() / 2));
-          if (!(sq2 > 0.))
-            continue;
-          const double sgnblk = (vsig < 0.) ? -1. : 1.;
-          const double wstd = in.ioniSign * sgnblk * (std::sqrt(vpool / sq2) / in.sigma);
-          const double vqblk = vpool / (in.sigma * in.sigma);
+          if (kref < 0)
+            kref = k;
+          ++nalive;
+        }
+      }
+      if (nalive == 0)
+        return;
+      // The step records and the (global index, family) arrays are SHARED by
+      // contract; they are read from the first usable functional.
+      const TrackInput &sh = in[kref];
 
-          rowGroups(blk.data(), rows.stride, ns, in.wantGroups ? in.ioni.groupCol : -1, gsteps);
-          if (!in.wantGroups || gsteps.size() == 1) {
-            gtmp.clear();
-            ioniBlock(blk.data(), rows.stride, ns, wstd, gtmp.ioRe.data(), gtmp.ioIm.data());
-            for (int j = 0; j < kNTau; ++j) {
-              out.S.ioRe[j] += gtmp.ioRe[j];
-              out.S.ioIm[j] += gtmp.ioIm[j];
+      // The GAUSSIAN families. 8/9 are the hit blocks; 16 is the beam-line
+      // (luminous-region) block of the two-track maker, which is a Gaussian
+      // noise block of exactly the same kind -- a fixed covariance, no Landau
+      // channel -- so it belongs here and NOT with the material families.
+      // Counting it keeps the reader's closure
+      // `sum_g (vqms + vqio) + vgauss/sigma^2 == 1` exact with the beam rows
+      // on. No maker that does not register family 16 is affected.
+      for (int k = 0; k < nf; ++k) {
+        if (!alive[k])
+          continue;
+        for (int i = 0; i < in[k].nres; ++i)
+          if (in[k].resfamily[i] == 8 || in[k].resfamily[i] == 9 || in[k].resfamily[i] == 16)
+            out[k].vgauss += in[k].resvarv[i];
+      }
+
+      // The `want*` flags are per functional. Shared work is done when ANY
+      // functional asks for it and is scattered only to those that do; in the
+      // maker all four agree, so nothing extra is computed in practice.
+      bool anyGroups = false, anyDelta = false, anyGroupDelta = false;
+      int nresmax = 0;
+      for (int k = 0; k < nf; ++k) {
+        if (!alive[k])
+          continue;
+        anyGroups = anyGroups || in[k].wantGroups;
+        anyDelta = anyDelta || in[k].wantDelta;
+        anyGroupDelta = anyGroupDelta || (in[k].wantDelta && in[k].wantGroupDelta);
+        nresmax = std::max(nresmax, in[k].nres);
+      }
+
+      std::vector<unsigned int> gs;
+      std::vector<int> sel;
+      std::vector<float> blk;   // the block's step rows, contiguous
+      std::vector<float> qs;    // the block's [scale, nsteps] pairs
+      std::vector<float> rblk, rspec;
+      // per-group scratch (untouched unless some functional wants groups)
+      std::vector<int> gsteps;
+      std::vector<float> gblk, grblk, grspec;
+      std::vector<double> w2all;
+      // per-functional scratch
+      std::vector<double> vpool(nf, 0.), vsig(nf, 0.), vqblk(nf, 0.);
+      std::vector<int> nent(nf, 0);
+      std::vector<int> kact;     // the functionals ACTIVE on this block
+      std::vector<double> wact;  // their weights, packed to match `kact`
+      std::vector<double> bufA, bufB;
+
+      for (int fam = 10; fam <= 11; ++fam) {
+        const StepRows &rows = (fam == 10) ? sh.ms : sh.ioni;
+        gs.clear();
+        for (int i = 0; i < nresmax; ++i)
+          if (sh.resfamily[i] == fam)
+            gs.push_back(sh.resglobidx[i]);
+        std::sort(gs.begin(), gs.end());
+        gs.erase(std::unique(gs.begin(), gs.end()), gs.end());
+
+        for (unsigned int g : gs) {
+          kact.clear();
+          for (int k = 0; k < nf; ++k) {
+            vpool[k] = 0.;
+            vsig[k] = 0.;
+            nent[k] = 0;
+            if (!alive[k])
+              continue;
+            const TrackInput &I = in[k];
+            for (int i = 0; i < I.nres; ++i)
+              if (I.resfamily[i] == fam && I.resglobidx[i] == g) {
+                vpool[k] += I.resvarv[i];
+                // variance-weighted sign of the block's influence; +1
+                // everywhere when the caller supplies none, so
+                // `vsig == vpool > 0`.
+                vsig[k] += (I.ressgn != nullptr ? double(I.ressgn[i]) : 1.) * I.resvarv[i];
+                ++nent[k];
+              }
+            if (vpool[k] > 0.)
+              kact.push_back(k);
+          }
+          if (kact.empty())
+            continue;
+          sel.clear();
+          for (int i = 0; i < rows.n; ++i)
+            if (rows.idx[i] == g)
+              sel.push_back(i);
+          if (sel.empty()) {
+            // A registered block with no step rows. The offline extractor
+            // DROPS such a track (`ok = False`), so the flag is exported and
+            // the reader drops it identically rather than silently keeping a
+            // track whose model is missing a block. Only the functionals that
+            // HAVE this block are dropped: one pooling no variance here would
+            // never have seen it on its own.
+            for (int k : kact) {
+              out[k].ok = false;
+              alive[k] = 0;
+              --nalive;
             }
-            if (in.wantGroups) {
-              GroupExponents &ge = groupEntry(out.groups, gsteps[0]);
-              ge.vqio += vqblk;
+            if (nalive == 0)
+              return;
+            continue;
+          }
+          for (int k : kact)
+            if (nent[k] > 1)
+              ++out[k].npooled;
+          const int ns = static_cast<int>(sel.size());
+          blk.resize(static_cast<std::size_t>(ns) * rows.stride);
+          for (int i = 0; i < ns; ++i)
+            std::memcpy(&blk[static_cast<std::size_t>(i) * rows.stride],
+                        rows.v + static_cast<std::size_t>(sel[i]) * rows.stride, rows.stride * sizeof(float));
+          const int nact = static_cast<int>(kact.size());
+          const std::size_t nslab = static_cast<std::size_t>(kNSlabFam) * nact * kNTau;
+
+          if (fam == 10) {
+            for (int k : kact)
+              ++out[k].nblockms;
+            double sq2 = 0.;
+            for (int i = 0; i < ns; ++i)
+              sq2 += blk[static_cast<std::size_t>(i) * rows.stride + 5];
+            if (!(sq2 > 0.))
+              continue;
+            wact.resize(nact);
+            for (int a = 0; a < nact; ++a) {
+              const int k = kact[a];
+              wact[a] = std::sqrt(vpool[k] / sq2) / in[k].sigma;
+              // the block's share of the STANDARDIZED variance under the
+              // fit's Q
+              vqblk[k] = vpool[k] / (in[k].sigma * in[k].sigma);
+            }
+
+            rowGroups(blk.data(), rows.stride, ns, anyGroups ? sh.ms.groupCol : -1, gsteps);
+            // THE WHOLE BLOCK, ONCE, FOR EVERY FUNCTIONAL. The flat exponent
+            // is the same evaluation whether or not the block straddles two
+            // materials, so it is hoisted out of the split; a block that does
+            // not straddle then hands the SAME numbers to the group slot,
+            // which is what keeps `sum_g == flat` exact to the last bit.
+            bufA.assign(nslab, 0.);
+            msBlockMulti(blk.data(), rows.stride, ns, wact.data(), nact, slab(bufA, kSlabMs, nact),
+                         anyDelta ? slab(bufA, kSlabDel, nact) : nullptr);
+            for (int a = 0; a < nact; ++a) {
+              const int k = kact[a];
+              const double *Sm = slab(bufA, kSlabMs, nact) + static_cast<std::size_t>(a) * kNTau;
+              const double *Sd = slab(bufA, kSlabDel, nact) + static_cast<std::size_t>(a) * kNTau;
               for (int j = 0; j < kNTau; ++j) {
-                ge.S.ioRe[j] += gtmp.ioRe[j];
-                ge.S.ioIm[j] += gtmp.ioIm[j];
+                out[k].S.ms[j] += Sm[j];
+                if (in[k].wantDelta)
+                  out[k].S.del[j] += Sd[j];
+              }
+            }
+            if (anyGroups && gsteps.size() == 1) {
+              for (int a = 0; a < nact; ++a) {
+                const int k = kact[a];
+                if (!in[k].wantGroups)
+                  continue;
+                const double *Sm = slab(bufA, kSlabMs, nact) + static_cast<std::size_t>(a) * kNTau;
+                const double *Sd = slab(bufA, kSlabDel, nact) + static_cast<std::size_t>(a) * kNTau;
+                GroupExponents &ge = groupEntry(out[k].groups, gsteps[0]);
+                ge.vqms += vqblk[k];
+                for (int j = 0; j < kNTau; ++j) {
+                  ge.S.ms[j] += Sm[j];
+                  if (in[k].wantDelta && in[k].wantGroupDelta)
+                    ge.S.del[j] += Sd[j];
+                }
+              }
+            } else if (anyGroups) {
+              // A block that straddles two materials: the split is a second
+              // pass. The carve is a RATIO over the WHOLE block (see
+              // delCarveFactor) and does not depend on the weight, so it is
+              // computed once and reused by every group and every functional.
+              const double carve = anyGroupDelta ? delCarveFactor(blk.data(), rows.stride, ns) : 0.;
+              for (int gg : gsteps) {
+                const int mg = selectGroup(blk.data(), rows.stride, ns, sh.ms.groupCol, gg, gblk);
+                if (mg <= 0)
+                  continue;
+                bufB.assign(nslab, 0.);
+                msBlockMulti(gblk.data(), rows.stride, mg, wact.data(), nact, slab(bufB, kSlabMs, nact), nullptr);
+                if (anyGroupDelta)
+                  delBlockCarvedMulti(gblk.data(), rows.stride, mg, wact.data(), nact, slab(bufB, kSlabMs, nact),
+                                      carve, slab(bufB, kSlabDel, nact));
+                // the group's share of the block's fit-Q variance is its share
+                // of `sq2`, which for multiple scattering is the `thp2` column.
+                double sq2g = 0.;
+                for (int i = 0; i < mg; ++i)
+                  sq2g += gblk[static_cast<std::size_t>(i) * rows.stride + 5];
+                for (int a = 0; a < nact; ++a) {
+                  const int k = kact[a];
+                  if (!in[k].wantGroups)
+                    continue;
+                  GroupExponents &ge = groupEntry(out[k].groups, gg);
+                  ge.vqms += vqblk[k] * (sq2g / sq2);
+                  addIntoSlice(ge.S, bufB, a, nact, in[k].wantDelta && in[k].wantGroupDelta);
+                }
               }
             }
           } else {
-            ioniBlock(blk.data(), rows.stride, ns, wstd, out.S.ioRe.data(), out.S.ioIm.data());
-            // per-step variance, so a group's share of `sq2` is a plain sum
-            std::vector<double> w2all;
-            ioniStepVar(blk.data(), rows.stride, ns, qs.empty() ? nullptr : qs.data(),
-                        static_cast<int>(qs.size() / 2), w2all);
-            double w2tot = 0.;
-            for (double x : w2all)
-              w2tot += x;
-            for (int g : gsteps) {
-              const int mg = selectGroup(blk.data(), rows.stride, ns, in.ioni.groupCol, g, gblk);
-              if (mg <= 0)
-                continue;
-              gtmp.clear();
-              ioniBlock(gblk.data(), rows.stride, mg, wstd, gtmp.ioRe.data(), gtmp.ioIm.data());
-              double w2g = 0.;
-              if (in.ioni.groupCol >= 0) {
-                for (int i = 0; i < ns; ++i) {
-                  if (static_cast<int>(blk[static_cast<std::size_t>(i) * rows.stride +
-                                           in.ioni.groupCol]) == g)
-                    w2g += w2all[i];
+            for (int k : kact)
+              ++out[k].nblockioni;
+            qs.clear();
+            for (int i = 0; i < sh.qsc.n; ++i)
+              if (sh.qsc.idx[i] == g) {
+                qs.push_back(sh.qsc.v[static_cast<std::size_t>(i) * sh.qsc.stride]);
+                qs.push_back(sh.qsc.v[static_cast<std::size_t>(i) * sh.qsc.stride + 1]);
+              }
+            const double sq2 =
+                ioniSq2(blk.data(), rows.stride, ns, qs.empty() ? nullptr : qs.data(), static_cast<int>(qs.size() / 2));
+            if (!(sq2 > 0.))
+              continue;
+            wact.resize(nact);
+            for (int a = 0; a < nact; ++a) {
+              const int k = kact[a];
+              const double sgnblk = (vsig[k] < 0.) ? -1. : 1.;
+              wact[a] = in[k].ioniSign * sgnblk * (std::sqrt(vpool[k] / sq2) / in[k].sigma);
+              vqblk[k] = vpool[k] / (in[k].sigma * in[k].sigma);
+            }
+
+            rowGroups(blk.data(), rows.stride, ns, anyGroups ? sh.ioni.groupCol : -1, gsteps);
+            bufA.assign(nslab, 0.);
+            ioniBlockMulti(blk.data(), rows.stride, ns, wact.data(), nact, slab(bufA, kSlabIoRe, nact),
+                           slab(bufA, kSlabIoIm, nact));
+            for (int a = 0; a < nact; ++a) {
+              const int k = kact[a];
+              const double *Re = slab(bufA, kSlabIoRe, nact) + static_cast<std::size_t>(a) * kNTau;
+              const double *Im = slab(bufA, kSlabIoIm, nact) + static_cast<std::size_t>(a) * kNTau;
+              for (int j = 0; j < kNTau; ++j) {
+                out[k].S.ioRe[j] += Re[j];
+                out[k].S.ioIm[j] += Im[j];
+              }
+            }
+            if (anyGroups && gsteps.size() == 1) {
+              for (int a = 0; a < nact; ++a) {
+                const int k = kact[a];
+                if (!in[k].wantGroups)
+                  continue;
+                const double *Re = slab(bufA, kSlabIoRe, nact) + static_cast<std::size_t>(a) * kNTau;
+                const double *Im = slab(bufA, kSlabIoIm, nact) + static_cast<std::size_t>(a) * kNTau;
+                GroupExponents &ge = groupEntry(out[k].groups, gsteps[0]);
+                ge.vqio += vqblk[k];
+                for (int j = 0; j < kNTau; ++j) {
+                  ge.S.ioRe[j] += Re[j];
+                  ge.S.ioIm[j] += Im[j];
                 }
               }
-              GroupExponents &ge = groupEntry(out.groups, g);
-              ge.vqio += (w2tot > 0.) ? vqblk * (w2g / w2tot) : 0.;
-              addInto(ge.S, gtmp);
-            }
-          }
-
-          // The radiative channel of the SAME block: same weight, same sign.
-          // The join is on the global index VALUE and never on the row
-          // position -- the radiative rows are 1:1 with `msmoliv`, not with
-          // `ioniurbanv`.
-          if (in.rad.n > 0 && in.radspec != nullptr && in.radvgrid != nullptr && in.radnv > 1) {
-            rblk.clear();
-            rspec.clear();
-            for (int i = 0; i < in.rad.n; ++i) {
-              if (in.rad.idx[i] != g)
-                continue;
-              const float *r = in.rad.v + static_cast<std::size_t>(i) * in.rad.stride;
-              rblk.insert(rblk.end(), r, r + in.rad.stride);
-              const float *sp = in.radspec + static_cast<std::size_t>(i) * 2 * in.radnv;
-              rspec.insert(rspec.end(), sp, sp + 2 * in.radnv);
-            }
-            if (!rblk.empty()) {
-              const int nr = static_cast<int>(rblk.size() / in.rad.stride);
-              // The radiative channel is two thirds of the whole CF cost
-              // (`nsteps x nv x ntau` trigonometry), so the one-evaluation
-              // path matters most here.
-              rowGroups(rblk.data(), in.rad.stride, nr, in.wantGroups ? in.rad.groupCol : -1, gsteps);
-              if (!in.wantGroups || gsteps.size() == 1) {
-                gtmp.clear();
-                radBlock(rblk.data(), in.rad.stride, nr, rspec.data(), in.radvgrid, in.radnv, wstd,
-                         gtmp.radRe.data(), gtmp.radIm.data());
-                for (int j = 0; j < kNTau; ++j) {
-                  out.S.radRe[j] += gtmp.radRe[j];
-                  out.S.radIm[j] += gtmp.radIm[j];
-                }
-                if (in.wantGroups) {
-                  Exponents &gs = groupSlot(out.groups, gsteps[0]);
-                  for (int j = 0; j < kNTau; ++j) {
-                    gs.radRe[j] += gtmp.radRe[j];
-                    gs.radIm[j] += gtmp.radIm[j];
+            } else if (anyGroups) {
+              // per-step variance, so a group's share of `sq2` is a plain sum
+              ioniStepVar(blk.data(), rows.stride, ns, qs.empty() ? nullptr : qs.data(),
+                          static_cast<int>(qs.size() / 2), w2all);
+              double w2tot = 0.;
+              for (double x : w2all)
+                w2tot += x;
+              for (int gg : gsteps) {
+                const int mg = selectGroup(blk.data(), rows.stride, ns, sh.ioni.groupCol, gg, gblk);
+                if (mg <= 0)
+                  continue;
+                bufB.assign(nslab, 0.);
+                ioniBlockMulti(gblk.data(), rows.stride, mg, wact.data(), nact, slab(bufB, kSlabIoRe, nact),
+                               slab(bufB, kSlabIoIm, nact));
+                double w2g = 0.;
+                if (sh.ioni.groupCol >= 0) {
+                  for (int i = 0; i < ns; ++i) {
+                    if (static_cast<int>(blk[static_cast<std::size_t>(i) * rows.stride + sh.ioni.groupCol]) == gg)
+                      w2g += w2all[i];
                   }
                 }
-              } else {
-                radBlock(rblk.data(), in.rad.stride, nr, rspec.data(), in.radvgrid, in.radnv, wstd,
-                         out.S.radRe.data(), out.S.radIm.data());
-                {
+                for (int a = 0; a < nact; ++a) {
+                  const int k = kact[a];
+                  if (!in[k].wantGroups)
+                    continue;
+                  GroupExponents &ge = groupEntry(out[k].groups, gg);
+                  ge.vqio += (w2tot > 0.) ? vqblk[k] * (w2g / w2tot) : 0.;
+                  addIntoSlice(ge.S, bufB, a, nact, in[k].wantDelta && in[k].wantGroupDelta);
+                }
+              }
+            }
+
+            // The radiative channel of the SAME block: same weight, same sign.
+            // The join is on the global index VALUE and never on the row
+            // position -- the radiative rows are 1:1 with `msmoliv`, not with
+            // `ioniurbanv`.
+            if (sh.rad.n > 0 && sh.radspec != nullptr && sh.radvgrid != nullptr && sh.radnv > 1) {
+              rblk.clear();
+              rspec.clear();
+              for (int i = 0; i < sh.rad.n; ++i) {
+                if (sh.rad.idx[i] != g)
+                  continue;
+                const float *r = sh.rad.v + static_cast<std::size_t>(i) * sh.rad.stride;
+                rblk.insert(rblk.end(), r, r + sh.rad.stride);
+                const float *sp = sh.radspec + static_cast<std::size_t>(i) * 2 * sh.radnv;
+                rspec.insert(rspec.end(), sp, sp + 2 * sh.radnv);
+              }
+              if (!rblk.empty()) {
+                const int nr = static_cast<int>(rblk.size() / sh.rad.stride);
+                // The radiative channel is two thirds of the whole CF cost
+                // (`nsteps x nv x ntau` trigonometry on a spectrum that has to
+                // be built first), so sharing the spectrum across the
+                // functionals matters most here.
+                rowGroups(rblk.data(), sh.rad.stride, nr, anyGroups ? sh.rad.groupCol : -1, gsteps);
+                bufA.assign(nslab, 0.);
+                radBlockMulti(rblk.data(), sh.rad.stride, nr, rspec.data(), sh.radvgrid, sh.radnv, wact.data(), nact,
+                              slab(bufA, kSlabRadRe, nact), slab(bufA, kSlabRadIm, nact));
+                for (int a = 0; a < nact; ++a) {
+                  const int k = kact[a];
+                  const double *Re = slab(bufA, kSlabRadRe, nact) + static_cast<std::size_t>(a) * kNTau;
+                  const double *Im = slab(bufA, kSlabRadIm, nact) + static_cast<std::size_t>(a) * kNTau;
+                  for (int j = 0; j < kNTau; ++j) {
+                    out[k].S.radRe[j] += Re[j];
+                    out[k].S.radIm[j] += Im[j];
+                  }
+                }
+                if (anyGroups && gsteps.size() == 1) {
+                  for (int a = 0; a < nact; ++a) {
+                    const int k = kact[a];
+                    if (!in[k].wantGroups)
+                      continue;
+                    const double *Re = slab(bufA, kSlabRadRe, nact) + static_cast<std::size_t>(a) * kNTau;
+                    const double *Im = slab(bufA, kSlabRadIm, nact) + static_cast<std::size_t>(a) * kNTau;
+                    Exponents &gsl = groupSlot(out[k].groups, gsteps[0]);
+                    for (int j = 0; j < kNTau; ++j) {
+                      gsl.radRe[j] += Re[j];
+                      gsl.radIm[j] += Im[j];
+                    }
+                  }
+                } else if (anyGroups) {
                   // The spectra ride along with their rows, so the subset has
                   // to be taken on BOTH arrays with one index walk.
-                  for (int g : gsteps) {
+                  for (int gg : gsteps) {
                     grblk.clear();
                     grspec.clear();
                     for (int i = 0; i < nr; ++i) {
-                      const float *r = rblk.data() + static_cast<std::size_t>(i) * in.rad.stride;
-                      if (in.rad.groupCol >= 0 && static_cast<int>(r[in.rad.groupCol]) != g)
+                      const float *r = rblk.data() + static_cast<std::size_t>(i) * sh.rad.stride;
+                      if (sh.rad.groupCol >= 0 && static_cast<int>(r[sh.rad.groupCol]) != gg)
                         continue;
-                      grblk.insert(grblk.end(), r, r + in.rad.stride);
-                      const float *sp = rspec.data() + static_cast<std::size_t>(i) * 2 * in.radnv;
-                      grspec.insert(grspec.end(), sp, sp + 2 * in.radnv);
+                      grblk.insert(grblk.end(), r, r + sh.rad.stride);
+                      const float *sp = rspec.data() + static_cast<std::size_t>(i) * 2 * sh.radnv;
+                      grspec.insert(grspec.end(), sp, sp + 2 * sh.radnv);
                     }
                     if (grblk.empty())
                       continue;
-                    gtmp.clear();
-                    radBlock(grblk.data(), in.rad.stride, static_cast<int>(grblk.size() / in.rad.stride),
-                             grspec.data(), in.radvgrid, in.radnv, wstd, gtmp.radRe.data(), gtmp.radIm.data());
-                    addInto(groupSlot(out.groups, g), gtmp);
+                    bufB.assign(nslab, 0.);
+                    radBlockMulti(grblk.data(), sh.rad.stride, static_cast<int>(grblk.size() / sh.rad.stride),
+                                  grspec.data(), sh.radvgrid, sh.radnv, wact.data(), nact,
+                                  slab(bufB, kSlabRadRe, nact), slab(bufB, kSlabRadIm, nact));
+                    for (int a = 0; a < nact; ++a) {
+                      const int k = kact[a];
+                      if (!in[k].wantGroups)
+                        continue;
+                      addIntoSlice(groupSlot(out[k].groups, gg), bufB, a, nact,
+                                   in[k].wantDelta && in[k].wantGroupDelta);
+                    }
                   }
                 }
               }
@@ -1022,7 +1291,12 @@ namespace cvhcf {
         }
       }
     }
-  }
+
+  }  // namespace
+
+  void trackExponents(const TrackInput &in, TrackResult &out) { trackExponentsImpl(&in, 1, &out); }
+
+  void trackExponents(const TrackInput *in, int nfunc, TrackResult *out) { trackExponentsImpl(in, nfunc, out); }
 
   //==========================================================================
   const std::string &modelTag() {
