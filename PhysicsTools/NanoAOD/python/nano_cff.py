@@ -564,6 +564,71 @@ def nanoAOD_wmassContent(process):
     return process
 
 
+def nanoAOD_wmassLowPU(process):
+    """The 2017 low-PU run (2017H, 13 TeV, ~0 PU) on the UL re-reconstruction
+    (RunIILowPUSummer20UL17MiniAODv2 / Run2017H-UL2017_MiniAODv2). The 10_6
+    production ran on the 94X low-PU MiniAOD behind a run2_nanoAOD_LowPU era
+    modifier; on UL input the standard run2_nanoAOD_106Xv2 path applies and
+    only the low-PU-specific content of that era is left, as a customise
+    (Category H of the migration):
+
+    * trigger objects of the HI-style menu of the run: the Electron and Muon
+      selections carry the Ele20 / Ele17HI and Mu17 filters (the 10_6
+      selections_lowPU) instead of the standard-menu bits
+    * DeepMET re-run with the low-PU models (deepmet_lowPU[_Resp].pb, leptons
+      removed from the inputs and added back), replacing the stock
+      DeepMETResolutionTune / DeepMETResponseTune tables, which would carry
+      the standard-PU models' values stored in the MiniAOD
+
+    Left behind with the 94X era: the VID / scale-smearing source rewiring,
+    the puppiIsoId / softMva removal, the Run2017_LowPU_v2 electron
+    scale/smearing file and the ecalCorr column (a workaround of the 94X
+    MiniAODv2 E/p bug; the UL2017 file of the era applies), the lhcInfoTable
+    removal. As in 10_6 there is no CVH refit for low-PU: the production
+    scripts do not add nanoAOD_addCvhMuon.
+    """
+    from PhysicsTools.NanoAOD.triggerObjects_cff import mksel
+    process.triggerObjectTable.selections.Electron = cms.PSet(
+        doc = cms.string("PixelMatched e/gamma, low-PU 2017H menu"),  # this may also select photons!
+        id = cms.int32(11),
+        sel = cms.string("type(92) && pt > 7 && coll('hltEgammaCandidates') && filter('*PixelMatchFilter')"),
+        l1seed = cms.string("type(-98)"), l1deltaR = cms.double(0.3),
+        skipObjectsNotPassingQualityBits = cms.bool(True),
+        qualityBits = cms.VPSet(
+            mksel("filter('hltEle20WPLoose1GsfTrackIsoFilter*')", "Ele20"),
+            mksel("filter('hltEle17WPLoose1GsfTrackIsoFilterForHI')", "Ele17HI"),
+        ),
+    )
+    process.triggerObjectTable.selections.Muon = cms.PSet(
+        id = cms.int32(13),
+        sel = cms.string("type(83) && pt > 5 && (coll('hltIterL3MuonCandidates') || (pt > 45 && coll('hltHighPtTkMuonCands')) || (pt > 95 && coll('hltOldL3MuonCandidates')))"),
+        l1seed = cms.string("type(-81)"), l1deltaR = cms.double(0.5),
+        l2seed = cms.string("type(83) && coll('hltL2MuonCandidates')"), l2deltaR = cms.double(0.3),
+        skipObjectsNotPassingQualityBits = cms.bool(True),
+        qualityBits = cms.VPSet(
+            mksel("filter('hltL3fL1sMu10lqL1f0L2f10L3Filtered17')", "Mu17"),
+        ),
+    )
+
+    from RecoMET.METPUSubtraction.deepMETProducer_cfi import deepMETProducer
+    process.deepMETsResolutionTuneLowPU = deepMETProducer.clone(
+        graph_path = "PhysicsTools/NanoAOD/data/deepmetmodel/deepmet_lowPU.pb",
+        ignore_leptons = True,
+    )
+    process.deepMETsResponseTuneLowPU = deepMETProducer.clone(
+        graph_path = "PhysicsTools/NanoAOD/data/deepmetmodel/deepmet_lowPU_Resp.pb",
+        ignore_leptons = True,
+    )
+    for table, producer in (("deepMetResolutionTuneTable", "deepMETsResolutionTuneLowPU"),
+                            ("deepMetResponseTuneTable", "deepMETsResponseTuneLowPU")):
+        mod = getattr(process, table)
+        mod.src = cms.InputTag(producer)
+        mod.variables.pt = Var("pt", float, doc=mod.variables.pt.doc.value() + " (low-PU model, leptons excluded from the inputs)", precision=-1)
+        mod.variables.phi = Var("phi", float, doc=mod.variables.phi.doc.value() + " (low-PU model, leptons excluded from the inputs)", precision=12)
+    process.metTablesTask.add(process.deepMETsResolutionTuneLowPU, process.deepMETsResponseTuneLowPU)
+    return process
+
+
 def nanoAOD_wmassMuonVariables(process):
     """The Muon columns the 10_6 custom NanoAOD had on top of the stock table
     (muons_cff.py of WmassNanoProd_10_6_26; standalone* also exist in the MUO
