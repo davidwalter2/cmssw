@@ -72,6 +72,7 @@ public:
     std::vector<int> vals_spin;
     std::vector<int16_t> vals_firstMotherIdx;
     std::vector<int16_t> vals_lastMotherIdx;
+    // storeAllLHEInfo: the raw LHE record (WMass, ported from 10_6)
     std::vector<int> vals_col1;
     std::vector<int> vals_col2;
     std::vector<int> vals_mother1;
@@ -89,7 +90,7 @@ public:
       int status = hepeup.ISTUP[i];
       int idabs = std::abs(hepeup.IDUP[i]);
 
-      if (status == 1 || status == -1 || (status == 2 && (idabs >= 23 && idabs <= 25)) || storeAllLHEInfo_) {
+      if (storeAllLHEInfo_ || status == 1 || status == -1 || (status == 2 && (idabs >= 23 && idabs <= 25))) {
         newIdxs[i] = nOutPart;
 
         nOutPart += 1;
@@ -98,6 +99,10 @@ public:
         vals_spin.push_back(hepeup.SPINUP[i]);
         vals_status.push_back(status);
         if (storeAllLHEInfo_) {
+          // Raw record: colour flow, 1-based MOTHUP indices (0 = none) and
+          // lifetime, i.e. what regenerating the LHE event needs. The remapped
+          // firstMotherIdx/lastMotherIdx below are indices into LHEPart and
+          // are not a substitute.
           vals_col1.push_back(hepeup.ICOLUP[i].first);
           vals_col2.push_back(hepeup.ICOLUP[i].second);
           vals_mother1.push_back(hepeup.MOTHUP[i].first);
@@ -201,8 +206,10 @@ public:
     if (storeAllLHEInfo_) {
       outPart->addColumn<int>("color1", vals_col1, "First color index of LHE particles");
       outPart->addColumn<int>("color2", vals_col2, "Second color index of LHE particles");
-      outPart->addColumn<int>("mother1", vals_mother1, "First mother index of LHE particles");
-      outPart->addColumn<int>("mother2", vals_mother2, "Second mother index of LHE particles");
+      outPart->addColumn<int>(
+          "mother1", vals_mother1, "First mother index of LHE particles (1-based, as in the LHE record; 0 = none)");
+      outPart->addColumn<int>(
+          "mother2", vals_mother2, "Second mother index of LHE particles (1-based, as in the LHE record; 0 = none)");
       outPart->addColumn<float>("lifetime", vals_time, "Own lifetime of LHE particles", this->precision_);
     }
 
@@ -217,7 +224,9 @@ public:
     desc.add<bool>("storeLHEParticles", false)
         ->setComment("Whether we want to store the 4-momenta of the status 1 particles at LHE level");
     desc.add<bool>("storeAllLHEInfo", false)
-        ->setComment("Whether to store the whole set of intermediate LHE particles, not only the status +/-1 ones");
+        ->setComment(
+            "Whether to store the whole set of LHE particles (not only status +/-1 and the status-2 W/Z/H) together "
+            "with the raw LHE record: colour flow, 1-based mother indices, lifetime, per-event alphaQED/scale/process id");
     descriptions.add("lheInfoTable", desc);
   }
 
