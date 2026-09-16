@@ -1,28 +1,87 @@
-// system include files
-#include <memory>
-
-// user include files
-#include "FWCore/Framework/interface/Frameworkfwd.h"
-#include "FWCore/Framework/interface/EDProducer.h"
-#include "FWCore/Framework/interface/Event.h"
-#include "FWCore/Framework/interface/MakerMacros.h"
-#include "DataFormats/Common/interface/ValueMap.h"
-#include "FWCore/Framework/interface/ESHandle.h"
-#include "FWCore/Framework/interface/EventSetup.h"
-#include "FWCore/ParameterSet/interface/ParameterSet.h"
-#include "DataFormats/Common/interface/View.h"
+// WMass: PUPPI weights and impact parameters of the packed PF candidates with
+// respect to a "robust" primary vertex -- the reconstructed vertex closest in dz
+// to the leading loose muon (pt > muonPtMin), or, when no vertex is within
+// muonVertexDzMax, a pseudo-vertex at the beam spot with the muon's z. The
+// hard-scatter vertex of a W -> mu nu event is then never lost to a mis-ranked
+// PV. Ported from WmassNanoProd_10_6_26 (PR #33, PV-robust DeepMET): the 10_6
+// plugin was a copy of the PuppiProducer of its time with this choice added; this
+// one is the packed-candidate path of the 15_0 PuppiProducer with the same
+// additions, but it runs the 10_6 PuppiContainer (private copy, puppi106): the
+// PV-robust DeepMET models were trained on those weights, and the release
+// container computes different ones for the same inputs. Products:
+//   PVRobustIndex (int)                      the chosen vertex, -1 = beam-spot pseudo-vertex
+//   PVMuonIndex (int)                        the muon in the input collection, -1 = none
+//                                            (10_6 wrote the last index when no muon passed)
+//   ValueMap<float>                          PUPPI weight per input candidate
+//   pat::PackedCandidateCollection           the inputs with the new PUPPI weight (p4 untouched)
+//   PFPVRobustDxy, PFPVRobustDz (ValueMap<double>)  w.r.t. the robust vertex, 0 for neutrals
+//   PFPVRobustPuppiWeight (ValueMap<double>)
+#include "PuppiAlgo106.h"
+#include "PuppiContainer106.h"
+#include "RecoObj106.h"
+#include "DataFormats/BeamSpot/interface/BeamSpot.h"
 #include "DataFormats/Candidate/interface/Candidate.h"
 #include "DataFormats/Candidate/interface/CandidateFwd.h"
-#include "DataFormats/GsfTrackReco/interface/GsfTrack.h"
-#include "DataFormats/GsfTrackReco/interface/GsfTrackFwd.h"
-#include "DataFormats/Common/interface/Association.h"
-//Main File
-#include "CommonTools/PileupAlgos/plugins/PuppiPVRobustProducer.h"
-#include "CommonTools/PileupAlgos/interface/PuppiCandidate.h"
+#include "DataFormats/Common/interface/ValueMap.h"
+#include "DataFormats/Common/interface/View.h"
+#include "DataFormats/Math/interface/Point3D.h"
+#include "DataFormats/PatCandidates/interface/Muon.h"
+#include "DataFormats/PatCandidates/interface/PackedCandidate.h"
+#include "DataFormats/VertexReco/interface/Vertex.h"
+#include "DataFormats/VertexReco/interface/VertexFwd.h"
+#include "FWCore/Framework/interface/Event.h"
+#include "FWCore/Framework/interface/EventSetup.h"
+#include "FWCore/Framework/interface/MakerMacros.h"
+#include "FWCore/Framework/interface/stream/EDProducer.h"
+#include "FWCore/MessageLogger/interface/MessageLogger.h"
+#include "FWCore/ParameterSet/interface/ParameterSet.h"
+#include "FWCore/Utilities/interface/Exception.h"
+
+#include <memory>
+
+class PuppiPVRobustProducer : public edm::stream::EDProducer<> {
+public:
+  explicit PuppiPVRobustProducer(const edm::ParameterSet&);
+  static void fillDescriptions(edm::ConfigurationDescriptions& descriptions);
+  typedef reco::VertexCollection VertexCollection;
+  typedef edm::View<reco::Candidate> CandidateView;
+  typedef std::vector<pat::Muon> MuonCollection;
+
+private:
+  void produce(edm::Event&, const edm::EventSetup&) override;
+
+  edm::EDGetTokenT<CandidateView> tokenPFCandidates_;
+  edm::EDGetTokenT<VertexCollection> tokenVertices_;
+  edm::EDGetTokenT<MuonCollection> tokenMuons_;
+  edm::EDGetTokenT<reco::BeamSpot> tokenBeamSpot_;
+  edm::EDPutTokenT<int> ptokenPVIndex_;
+  edm::EDPutTokenT<int> ptokenMuonIndex_;
+  edm::EDPutTokenT<edm::ValueMap<float>> ptokenPupOut_;
+  edm::EDPutTokenT<pat::PackedCandidateCollection> ptokenPackedPuppiCandidates_;
+  edm::EDPutTokenT<edm::ValueMap<double>> ptokenDxy_;
+  edm::EDPutTokenT<edm::ValueMap<double>> ptokenDz_;
+  edm::EDPutTokenT<edm::ValueMap<double>> ptokenPuppiWeight_;
+
+  bool fPuppiNoLep;
+  bool fUseFromPVLooseTight;
+  bool fUseDZ;
+  double fDZCut;
+  double fEtaMinUseDZ;
+  double fPtMaxCharged;
+  double fEtaMaxCharged;
+  uint fNumOfPUVtxsForCharged;
+  double fDZCutForChargedFromPUVtxs;
+  double fMuonPtMin;
+  double fMuonVertexDzMax;
+  int fVtxNdofCut;
+  double fVtxZCut;
+  std::unique_ptr<puppi106::PuppiContainer> fPuppiContainer;
+};
 
 // ------------------------------------------------------------------------------------------
-PuppiPVRobustProducer::PuppiPVRobustProducer(const edm::ParameterSet& iConfig) {
-  fPuppiForLeptons = iConfig.getParameter<bool>("puppiForLeptons");
+PuppiPVRobustProducer::PuppiPVRobustProducer(const edm::ParameterSet& iConfig)
+    : fPuppiContainer(std::make_unique<puppi106::PuppiContainer>(iConfig)) {
+  fPuppiNoLep = iConfig.getParameter<bool>("puppiNoLep");
   fUseFromPVLooseTight = iConfig.getParameter<bool>("UseFromPVLooseTight");
   fUseDZ = iConfig.getParameter<bool>("UseDeltaZCut");
   fDZCut = iConfig.getParameter<double>("DeltaZCut");
@@ -31,336 +90,226 @@ PuppiPVRobustProducer::PuppiPVRobustProducer(const edm::ParameterSet& iConfig) {
   fEtaMaxCharged = iConfig.getParameter<double>("EtaMaxCharged");
   fNumOfPUVtxsForCharged = iConfig.getParameter<uint>("NumOfPUVtxsForCharged");
   fDZCutForChargedFromPUVtxs = iConfig.getParameter<double>("DeltaZCutForChargedFromPUVtxs");
-  fUseExistingWeights = iConfig.getParameter<bool>("useExistingWeights");
-  fUseWeightsNoLep = iConfig.getParameter<bool>("useWeightsNoLep");
-  fClonePackedCands = iConfig.getParameter<bool>("clonePackedCands");
+  fMuonPtMin = iConfig.getParameter<double>("muonPtMin");
+  fMuonVertexDzMax = iConfig.getParameter<double>("muonVertexDzMax");
   fVtxNdofCut = iConfig.getParameter<int>("vtxNdofCut");
   fVtxZCut = iConfig.getParameter<double>("vtxZCut");
-  fPuppiContainer = std::unique_ptr<PuppiContainer>(new PuppiContainer(iConfig));
 
   tokenPFCandidates_ = consumes<CandidateView>(iConfig.getParameter<edm::InputTag>("candName"));
   tokenVertices_ = consumes<VertexCollection>(iConfig.getParameter<edm::InputTag>("vertexName"));
   tokenMuons_ = consumes<MuonCollection>(iConfig.getParameter<edm::InputTag>("muonName"));
-  offlinebeamSpot_ = consumes<reco::BeamSpot>(edm::InputTag("offlineBeamSpot"));
+  tokenBeamSpot_ = consumes<reco::BeamSpot>(iConfig.getParameter<edm::InputTag>("beamSpotName"));
 
-  produces<int>("PVRobustIndex");
-  produces<int>("PVMuonIndex");
-  produces<edm::ValueMap<float>>();
-  produces<pat::PackedCandidateCollection>();
-
-  produces<edm::ValueMap<double>>("PFPVRobustDxy");
-  produces<edm::ValueMap<double>>("PFPVRobustDz");
-  produces<edm::ValueMap<double>>("PFPVRobustPuppiWeight");
+  ptokenPVIndex_ = produces<int>("PVRobustIndex");
+  ptokenMuonIndex_ = produces<int>("PVMuonIndex");
+  ptokenPupOut_ = produces<edm::ValueMap<float>>();
+  ptokenPackedPuppiCandidates_ = produces<pat::PackedCandidateCollection>();
+  ptokenDxy_ = produces<edm::ValueMap<double>>("PFPVRobustDxy");
+  ptokenDz_ = produces<edm::ValueMap<double>>("PFPVRobustDz");
+  ptokenPuppiWeight_ = produces<edm::ValueMap<double>>("PFPVRobustPuppiWeight");
 }
-// ------------------------------------------------------------------------------------------
-PuppiPVRobustProducer::~PuppiPVRobustProducer() {}
+
 // ------------------------------------------------------------------------------------------
 void PuppiPVRobustProducer::produce(edm::Event& iEvent, const edm::EventSetup& iSetup) {
-  // Get PFCandidate Collection
   edm::Handle<CandidateView> hPFProduct;
   iEvent.getByToken(tokenPFCandidates_, hPFProduct);
-  const CandidateView* pfCol = hPFProduct.product();
-
-  // Get vertex collection w/PV as the first entry?
-  edm::Handle<reco::VertexCollection> hVertexProduct;
-  iEvent.getByToken(tokenVertices_, hVertexProduct);
-  const reco::VertexCollection* pvCol = hVertexProduct.product();
-
-  // Get muon collection
-  edm::Handle<MuonCollection> hMuonProduct;
-  iEvent.getByToken(tokenMuons_, hMuonProduct);
-  const MuonCollection* muonCol = hMuonProduct.product();
-
-  // Get BeamSpot
-  reco::BeamSpot beamSpot;
-  edm::Handle<reco::BeamSpot> beamSpotHandle;
-  iEvent.getByToken(offlinebeamSpot_, beamSpotHandle);
-
-  if (beamSpotHandle.isValid()) {
-    beamSpot = *beamSpotHandle;
-  } else {
-    edm::LogError("PuppiPVRobustProducer") << "No beam spot available from EventSetup"
-                                           << "\n...skip event";
-    return;
-  }
+  const reco::VertexCollection& pvCol = iEvent.get(tokenVertices_);
+  const MuonCollection& muonCol = iEvent.get(tokenMuons_);
+  const reco::BeamSpot& beamSpot = iEvent.get(tokenBeamSpot_);
   const math::XYZPoint beamPoint(beamSpot.x0(), beamSpot.y0(), beamSpot.z0());
 
-  // leading vertex closest to the "leading" muon passing the loose ID
+  // the robust vertex: the one closest in dz to the leading loose muon;
+  // without such a muon the leading PV, as in the standard PUPPI
   int iLV = 0;
   int iMuon = -1;
   double muonz = 0;
-  double muonpt = 0;
-  double muoneta = 0;
-  for (auto const& muon : *muonCol) {
-    iMuon++;
-    if (muon.pt() < 10.0)
+  for (size_t im = 0; im < muonCol.size(); ++im) {
+    const pat::Muon& muon = muonCol[im];
+    if (muon.pt() < fMuonPtMin || !muon.isLooseMuon())
       continue;
-    if (!muon.isLooseMuon())
-      continue;
-
     int iVClosest = -1;
-    int iV = 0;
-    // minimum dz requirement for the closest vertex
-    double dzClosest = 0.2;
-    for (auto const& aV : *pvCol) {
-      // is this the best way to get the dz between the vertex and the leading muon?
-      if (fabs(muon.muonBestTrack()->dz(aV.position())) < dzClosest) {
-        dzClosest = fabs(muon.muonBestTrack()->dz(aV.position()));
-        iVClosest = iV;
+    double dzClosest = fMuonVertexDzMax;
+    for (size_t iv = 0; iv < pvCol.size(); ++iv) {
+      const double dz = std::abs(muon.muonBestTrack()->dz(pvCol[iv].position()));
+      if (dz < dzClosest) {
+        dzClosest = dz;
+        iVClosest = iv;
       }
-      iV++;
     }
     iLV = iVClosest;
-    // if the leading muon is not close to any vertex,
-    // use the beamspot and muon z position to make a "fake" vertex
-    //muonz = muon.vz();
+    iMuon = im;
+    // if the muon is not close to any vertex, a pseudo-vertex at the beam spot with the muon's z
     muonz = muon.muonBestTrack()->dz(beamPoint) + beamPoint.z();
-    muonpt = muon.pt();
-    muoneta = muon.eta();
     break;
   }
-
-  math::XYZPoint pvPoint;
-  if (iLV >= 0) {
-    auto const& aLV = pvCol->at(iLV);
-    pvPoint = math::XYZPoint(aLV.x(), aLV.y(), aLV.z());
-  } else {
-    // failed to find any vertex close to the leading muon within 0.2 cm
-    pvPoint = math::XYZPoint(beamSpot.x0(), beamSpot.y0(), muonz);
-  }
-
-  if (iLV != 0) {
-    std::cout << "PuppiPVRobustProducer: leading vertex closest to the leading muon passing the loose ID. Event "
-                 "coordinate run: "
-              << iEvent.run() << " lumi: " << iEvent.luminosityBlock() << " event " << iEvent.id().event()
-              << " closest PV " << iLV << " muonpt " << muonpt << " muoneta " << muoneta << " muonz " << muonz
-              << " pv_z " << pvPoint.z() << " pv0_z " << pvCol->at(0).z() << " pv size " << pvCol->size() << std::endl;
-  }
+  const math::XYZPoint pvPoint =
+      iLV >= 0 ? math::XYZPoint(pvCol[iLV].position()) : math::XYZPoint(beamSpot.x0(), beamSpot.y0(), muonz);
+  if (iLV != 0)
+    LogDebug("PuppiPVRobustProducer") << "run " << iEvent.run() << " lumi " << iEvent.luminosityBlock() << " event "
+                                      << iEvent.id().event() << ": robust PV " << iLV << " (muon " << iMuon << ", z "
+                                      << pvPoint.z() << ", PV0 z " << (pvCol.empty() ? 0. : pvCol[0].z()) << ")";
 
   int npv = 0;
-  const reco::VertexCollection::const_iterator vtxEnd = pvCol->end();
-  for (reco::VertexCollection::const_iterator vtxIter = pvCol->begin(); vtxEnd != vtxIter; ++vtxIter) {
-    if (!vtxIter->isFake() && vtxIter->ndof() >= fVtxNdofCut && std::abs(vtxIter->z()) <= fVtxZCut)
-      npv++;
+  for (auto const& vtx : pvCol) {
+    if (!vtx.isFake() && vtx.ndof() >= fVtxNdofCut && std::abs(vtx.z()) <= fVtxZCut)
+      ++npv;
   }
 
-  //Fill the reco objects
-  fRecoObjCollection.clear();
-  fRecoObjCollection.reserve(pfCol->size());
-  for (auto const& aPF : *pfCol) {
-    RecoObj pReco;
+  const size_t nCand = hPFProduct->size();
+  std::vector<puppi106::RecoObj> recoObjCollection;
+  recoObjCollection.reserve(nCand);
+  std::vector<double> dxyVals(nCand, 0.);
+  std::vector<double> dzVals(nCand, 0.);
+  for (size_t ic = 0; ic < nCand; ++ic) {
+    const reco::Candidate& aPF = (*hPFProduct)[ic];
+    const pat::PackedCandidate* lPack = dynamic_cast<const pat::PackedCandidate*>(&aPF);
+    if (lPack == nullptr)
+      throw edm::Exception(edm::errors::LogicError, "PuppiPVRobustProducer: inputs are not PackedCandidates");
+    puppi106::RecoObj pReco;
     pReco.pt = aPF.pt();
     pReco.eta = aPF.eta();
     pReco.phi = aPF.phi();
     pReco.m = aPF.mass();
     pReco.rapidity = aPF.rapidity();
     pReco.charge = aPF.charge();
+    pReco.id = 0;  // 0: to be calculated, 1: from PV, 2: from PU, 3: lepton left out
+    pReco.dZ = 0;
+    pReco.d0 = 0;
+    const bool isLepton = ((std::abs(aPF.pdgId()) == 11) || (std::abs(aPF.pdgId()) == 13));
 
-    // not sure why we need this "if" here
-    if (aPF.vertexRef().isNonnull()) {
-      // id: 0 to be calculated; 1: from PV; 2: from PU
-      pReco.id = 0;
+    if (lPack->vertexRef().isNonnull() && std::abs(pReco.charge) > 0) {
+      // impact parameters w.r.t. the robust vertex, not the candidate's own vertex
+      const double pDZ = lPack->dz(pvPoint);
+      const double pD0 = lPack->dxy(pvPoint);
+      pReco.dZ = pDZ;
+      pReco.d0 = pD0;
+      dzVals[ic] = pDZ;
+      dxyVals[ic] = pD0;
 
-      if (std::abs(pReco.charge) == 0) {
-        // for neutral particles, d0 and dZ are always 0
-        pReco.dZ = 0;
-        pReco.d0 = 0;
-      } else {
-        double pDZ = aPF.dz(pvPoint);
-        double pD0 = aPF.dxy(pvPoint);
-
-        pReco.dZ = pDZ;
-        // i dont think d0 is used anywhere though?
-        pReco.d0 = pD0;
-
-        if (iLV >= 0) {
-          // leading vertex closest to the leading muon exists/reconstructed
-          if (aPF.fromPV(iLV) == 0) {
-            pReco.id = 2;
-            if ((fNumOfPUVtxsForCharged > 0) and (std::abs(pDZ) < fDZCutForChargedFromPUVtxs)) {
-              // for vertex splitting case
-              for (size_t puVtx_idx = 0; puVtx_idx <= (fNumOfPUVtxsForCharged + 1) && puVtx_idx < pvCol->size();
-                   ++puVtx_idx) {
-                // loop from 0th now, since the iLV is not necessarily the 0th vertex
-                if (aPF.fromPV(puVtx_idx) >= 2) {
-                  pReco.id = 1;
-                  break;
-                }
+      if (fPuppiNoLep && isLepton) {
+        pReco.id = 3;
+      } else if (iLV >= 0) {
+        // the standard assignment, with the association to the robust vertex
+        const int fromPV = lPack->fromPV(iLV);
+        if (fromPV == 0) {
+          pReco.id = 2;
+          if ((fNumOfPUVtxsForCharged > 0) and (std::abs(pDZ) < fDZCutForChargedFromPUVtxs)) {
+            // vertex-splitting recovery; from vertex 0, the robust vertex need not be the leading one
+            for (size_t puVtx_idx = 0; puVtx_idx <= (fNumOfPUVtxsForCharged + 1) && puVtx_idx < pvCol.size();
+                 ++puVtx_idx) {
+              if (lPack->fromPV(puVtx_idx) >= 2) {
+                pReco.id = 1;
+                break;
               }
             }
-          } else if (aPF.fromPV(iLV) == (pat::PackedCandidate::PVUsedInFit)) {
-            pReco.id = 1;
-          } else if (aPF.fromPV(iLV) == (pat::PackedCandidate::PVTight) ||
-                     aPF.fromPV(iLV) == (pat::PackedCandidate::PVLoose)) {
-            pReco.id = 0;
-            if ((fPtMaxCharged > 0) and (pReco.pt > fPtMaxCharged))
-              pReco.id = 1;
-            else if (std::abs(pReco.eta) > fEtaMaxCharged)
-              pReco.id = 1;
-            else if ((fUseDZ) && (std::abs(pReco.eta) >= fEtaMinUseDZ))
-              pReco.id = (std::abs(pDZ) < fDZCut) ? 1 : 2;
-            else if (fUseFromPVLooseTight && aPF.fromPV(iLV) == (pat::PackedCandidate::PVLoose))
-              pReco.id = 2;
-            else if (fUseFromPVLooseTight && aPF.fromPV(iLV) == (pat::PackedCandidate::PVTight))
-              pReco.id = 1;
           }
-        } else {
-          // no PV closest to the leading muon within 0.2cm
-          // use dZ as the discriminator for determining LV or PU
-          // similar to the case where the particle is not associated with any vertex (fromPV = 1 PVLoose or 2 PVTight)
+        } else if (fromPV == pat::PackedCandidate::PVUsedInFit) {
+          pReco.id = 1;
+        } else if (fromPV == pat::PackedCandidate::PVTight || fromPV == pat::PackedCandidate::PVLoose) {
+          pReco.id = 0;
           if ((fPtMaxCharged > 0) and (pReco.pt > fPtMaxCharged))
             pReco.id = 1;
           else if (std::abs(pReco.eta) > fEtaMaxCharged)
             pReco.id = 1;
-          else
+          else if ((fUseDZ) && (std::abs(pReco.eta) >= fEtaMinUseDZ))
             pReco.id = (std::abs(pDZ) < fDZCut) ? 1 : 2;
+          else if (fUseFromPVLooseTight && fromPV == pat::PackedCandidate::PVLoose)
+            pReco.id = 2;
+          else if (fUseFromPVLooseTight && fromPV == pat::PackedCandidate::PVTight)
+            pReco.id = 1;
         }
+      } else {
+        // pseudo-vertex: no vertex association to use, dz alone decides
+        if ((fPtMaxCharged > 0) and (pReco.pt > fPtMaxCharged))
+          pReco.id = 1;
+        else if (std::abs(pReco.eta) > fEtaMaxCharged)
+          pReco.id = 1;
+        else
+          pReco.id = (std::abs(pDZ) < fDZCut) ? 1 : 2;
       }
-
-      //std::cout << "PF pt " << aPF.pt() << " eta " << aPF.eta() << " phi " << aPF.phi() << " charge " << aPF.charge()
-      //          << " pdgId " << aPF.pdgId() << " d0 " << aPF.dxy() << " d0_BS " << aPF.dxy(beamPoint) << " d0_PV "
-      //          << aPF.dxy(pvPoint) << " dz " << aPF.dz() << " dz_BS " << aPF.dz(beamPoint) << " dz_PV "
-      //          << aPF.dz(pvPoint) << " id " << pReco.id << std::endl;
     }
-
-    fRecoObjCollection.push_back(pReco);
+    recoObjCollection.push_back(pReco);
   }
 
-  assert(fRecoObjCollection.size() == pfCol->size());
-
-  fPuppiContainer->initialize(fRecoObjCollection);
+  fPuppiContainer->initialize(recoObjCollection);
   fPuppiContainer->setNPV(npv);
+  const std::vector<double> lWeights = fPuppiContainer->puppiWeights();  // one per input candidate
+  const std::vector<int>& recoToPup = fPuppiContainer->recoToPup();      // -1: not a puppi particle
 
-  //Compute the weights and get the particles
-  std::vector<double> lWeights = fPuppiContainer->puppiWeights();
-  std::vector<PuppiCandidate> lCandidates = fPuppiContainer->puppiParticles();
-
-  //Fill it into the event
-  std::unique_ptr<edm::ValueMap<float>> lPupOut(new edm::ValueMap<float>());
-  edm::ValueMap<float>::Filler lPupFiller(*lPupOut);
+  edm::ValueMap<float> lPupOut;
+  edm::ValueMap<float>::Filler lPupFiller(lPupOut);
   lPupFiller.insert(hPFProduct, lWeights.begin(), lWeights.end());
   lPupFiller.fill();
 
-  // Fill a new PF/Packed Candidate Collection and write out the ValueMap of the new p4s.
-  // Since the size of the ValueMap must be equal to the input collection, we need
-  // to search the "puppi" particles to find a match for each input. If none is found,
-  // the input is set to have a four-vector of 0,0,0,0
-  fPackedPuppiCandidates.reset(new PackedOutputCollection);
-
-  std::vector<double> dxyVals(hPFProduct->size());
-  std::vector<double> dzVals(hPFProduct->size());
-  std::vector<double> puppiWeights(hPFProduct->size());
-
-  int val = -1;
-  for (auto const& aCand : *hPFProduct) {
-    val++;
-    std::unique_ptr<pat::PackedCandidate> pCand;
-    std::unique_ptr<reco::PFCandidate> pfCand;
-    const pat::PackedCandidate* cand = dynamic_cast<const pat::PackedCandidate*>(&aCand);
-    if (!cand)
-      throw edm::Exception(edm::errors::LogicError, "PuppiPVRobustProducer: inputs are not PackedCandidates");
-    pCand.reset(new pat::PackedCandidate(*cand));
-
-    LorentzVector pVec;
-
-    //get an index to a pup in lCandidates: either fUseExistingWeights with no skips or get from fPuppiContainer
-    int iPuppiMatched = fUseExistingWeights ? val : fPuppiContainer->recoToPup()[val];
-    if (val != iPuppiMatched) {
-      // how could they be different here?
-      // pCand is a copy of aCand, so there is a mismatch between the input and the output
-      // this would be a huge problem later on
-      std::cout << "PuppiPVRobustProducer matching difference: val " << val << " iPuppiMatched " << iPuppiMatched
-                << std::endl;
-    }
-    if (iPuppiMatched >= 0) {
-      auto const& puppiMatched = lCandidates[iPuppiMatched];
-      pVec.SetPxPyPzE(puppiMatched.px, puppiMatched.py, puppiMatched.pz, puppiMatched.e);
-      if (fClonePackedCands && (!fUseExistingWeights)) {
-        if (fPuppiForLeptons)
-          pCand->setPuppiWeight(pCand->puppiWeight(), lWeights[val]);
-        else
-          pCand->setPuppiWeight(lWeights[val], pCand->puppiWeightNoLep());
-      }
-    } else {
-      pVec.SetPxPyPzE(0, 0, 0, 0);
-      if (fClonePackedCands && (!fUseExistingWeights)) {
-        pCand->setPuppiWeight(0, 0);
-      }
-    }
-
-    // fill the dxy, dz, and puppiWeight
-    dxyVals[val] = fRecoObjCollection[val].d0;
-    dzVals[val] = fRecoObjCollection[val].dZ;
-    puppiWeights[val] = iPuppiMatched >= 0 ? lWeights[val] : 0;
-
-    // already have PUPPI weight, do not reset kinematic
-    //pCand->setP4(pVec);
-    pCand->setSourceCandidatePtr(aCand.sourceCandidatePtr(0));
-    fPackedPuppiCandidates->push_back(*pCand);
+  // the inputs with the new PUPPI weight; the four-momenta are left as they are
+  pat::PackedCandidateCollection packedPuppiCandidates;
+  packedPuppiCandidates.reserve(nCand);
+  for (size_t ic = 0; ic < nCand; ++ic) {
+    const reco::Candidate& aCand = (*hPFProduct)[ic];
+    pat::PackedCandidate pCand(*dynamic_cast<const pat::PackedCandidate*>(&aCand));
+    if (fPuppiNoLep)
+      pCand.setPuppiWeight(pCand.puppiWeight(), lWeights[ic]);
+    else
+      pCand.setPuppiWeight(lWeights[ic], pCand.puppiWeightNoLep());
+    pCand.setSourceCandidatePtr(aCand.sourceCandidatePtr(0));
+    packedPuppiCandidates.push_back(pCand);
   }
 
-  std::unique_ptr<int> lV(new int(iLV));
-  iEvent.put(std::move(lV), "PVRobustIndex");
+  auto fillDouble = [&](const std::vector<double>& vals) {
+    edm::ValueMap<double> map;
+    edm::ValueMap<double>::Filler filler(map);
+    filler.insert(hPFProduct, vals.begin(), vals.end());
+    filler.fill();
+    return map;
+  };
+  // as in 10_6: the DeepMET input map carries 0 for candidates the container dropped
+  std::vector<double> puppiWeights(nCand, 0.);
+  for (size_t ic = 0; ic < nCand; ++ic)
+    puppiWeights[ic] = recoToPup[ic] >= 0 ? lWeights[ic] : 0.;
 
-  std::unique_ptr<int> lMuon(new int(iMuon));
-  iEvent.put(std::move(lMuon), "PVMuonIndex");
-
-  //Compute the modified p4s
-  iEvent.put(std::move(lPupOut));
-  iEvent.put(std::move(fPackedPuppiCandidates));
-
-  std::unique_ptr<edm::ValueMap<double>> dxyMap_p(new edm::ValueMap<double>());
-  edm::ValueMap<double>::Filler dxyFiller(*dxyMap_p);
-  dxyFiller.insert(hPFProduct, dxyVals.begin(), dxyVals.end());
-  dxyFiller.fill();
-  iEvent.put(std::move(dxyMap_p), "PFPVRobustDxy");
-
-  std::unique_ptr<edm::ValueMap<double>> dzMap_p(new edm::ValueMap<double>());
-  edm::ValueMap<double>::Filler dzFiller(*dzMap_p);
-  dzFiller.insert(hPFProduct, dzVals.begin(), dzVals.end());
-  dzFiller.fill();
-  iEvent.put(std::move(dzMap_p), "PFPVRobustDz");
-
-  std::unique_ptr<edm::ValueMap<double>> puppiWeightMap_p(new edm::ValueMap<double>());
-  edm::ValueMap<double>::Filler puppiWeightFiller(*puppiWeightMap_p);
-  puppiWeightFiller.insert(hPFProduct, puppiWeights.begin(), puppiWeights.end());
-  puppiWeightFiller.fill();
-  iEvent.put(std::move(puppiWeightMap_p), "PFPVRobustPuppiWeight");
+  iEvent.emplace(ptokenPVIndex_, iLV);
+  iEvent.emplace(ptokenMuonIndex_, iMuon);
+  iEvent.emplace(ptokenPupOut_, std::move(lPupOut));
+  iEvent.emplace(ptokenPackedPuppiCandidates_, std::move(packedPuppiCandidates));
+  iEvent.emplace(ptokenDxy_, fillDouble(dxyVals));
+  iEvent.emplace(ptokenDz_, fillDouble(dzVals));
+  iEvent.emplace(ptokenPuppiWeight_, fillDouble(puppiWeights));
 }
 
 // ------------------------------------------------------------------------------------------
-void PuppiPVRobustProducer::beginJob() {}
-// ------------------------------------------------------------------------------------------
-void PuppiPVRobustProducer::endJob() {}
-// ------------------------------------------------------------------------------------------
 void PuppiPVRobustProducer::fillDescriptions(edm::ConfigurationDescriptions& descriptions) {
   edm::ParameterSetDescription desc;
+  // the PuppiProducer / PuppiContainer parameters
   desc.add<bool>("puppiDiagnostics", false);
-  desc.add<bool>("puppiForLeptons", false);
+  desc.add<bool>("puppiNoLep", false);
   desc.add<bool>("UseFromPVLooseTight", false);
   desc.add<bool>("UseDeltaZCut", true);
   desc.add<double>("DeltaZCut", 0.3);
   desc.add<double>("EtaMinUseDeltaZ", 0.);
-  desc.add<double>("PtMaxCharged", 0.);
+  desc.add<double>("PtMaxCharged", -1.);
   desc.add<double>("EtaMaxCharged", 99999.);
+  desc.add<double>("PtMaxPhotons", -1.);
+  desc.add<double>("EtaMaxPhotons", 2.5);
   desc.add<double>("PtMaxNeutrals", 200.);
   desc.add<double>("PtMaxNeutralsStartSlope", 0.);
   desc.add<uint>("NumOfPUVtxsForCharged", 0);
   desc.add<double>("DeltaZCutForChargedFromPUVtxs", 0.2);
-  desc.add<bool>("useExistingWeights", false);
-  desc.add<bool>("useWeightsNoLep", false);
-  desc.add<bool>("clonePackedCands", false);
   desc.add<int>("vtxNdofCut", 4);
   desc.add<double>("vtxZCut", 24);
-  desc.add<edm::InputTag>("candName", edm::InputTag("particleFlow"));
-  desc.add<edm::InputTag>("vertexName", edm::InputTag("offlinePrimaryVertices"));
-  desc.add<edm::InputTag>("muonName", edm::InputTag("slimmedMuons"));
+  desc.add<edm::InputTag>("candName", edm::InputTag("packedPFCandidates"));
+  desc.add<edm::InputTag>("vertexName", edm::InputTag("offlineSlimmedPrimaryVertices"));
   desc.add<bool>("applyCHS", true);
   desc.add<bool>("invertPuppi", false);
   desc.add<bool>("useExp", false);
   desc.add<double>("MinPuppiWeight", .01);
+  // the robust vertex
+  desc.add<edm::InputTag>("muonName", edm::InputTag("slimmedMuons"));
+  desc.add<edm::InputTag>("beamSpotName", edm::InputTag("offlineBeamSpot"));
+  desc.add<double>("muonPtMin", 10.)->setComment("the leading loose muon above this pt chooses the vertex");
+  desc.add<double>("muonVertexDzMax", 0.2)
+      ->setComment("max |dz(muon, vertex)| in cm; beyond it a pseudo-vertex at the beam spot with the muon's z");
 
-  PuppiAlgo::fillDescriptionsPuppiAlgo(desc);
+  puppi106::PuppiAlgo::fillDescriptionsPuppiAlgo(desc);
 
   descriptions.add("PuppiPVRobustProducer", desc);
 }

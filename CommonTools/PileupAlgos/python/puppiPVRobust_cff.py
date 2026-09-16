@@ -1,68 +1,63 @@
 import FWCore.ParameterSet.Config as cms
 from CommonTools.PileupAlgos.Puppi_cff import puppiCentral, puppiForward
 
+# WMass: PUPPI on MiniAOD with the primary vertex chosen by the leading loose
+# muon (see plugins/PuppiPVRobustProducer.cc). The parameters are the ones of
+# the 10_6 PRODUCTION (provenance of the NanoV9MCPostVFP_TrackFitV722_NanoProdv6
+# files), not of the 10_6 Puppi_cff.py: there the MET recalibration's PUPPI v15
+# tune (UpdatePuppiTuneV15: PtMaxCharged 20, EtaMinUseDeltaZ 2.4,
+# PtMaxNeutralsStartSlope 20, NumOfPUVtxsForCharged 2, central etaMin -0.01)
+# also reached puppiPVRobust, and the PV-robust DeepMET values of the
+# production nano are only reproduced with these values.
 puppiPVRobust = cms.EDProducer("PuppiPVRobustProducer",
-                       puppiDiagnostics = cms.bool(False),
-                       puppiForLeptons = cms.bool(False),
-                       UseFromPVLooseTight = cms.bool(False),
-                       UseDeltaZCut   = cms.bool(True),
-                       EtaMinUseDeltaZ = cms.double(0.),
-                       DeltaZCut      = cms.double(0.3),
-                       NumOfPUVtxsForCharged = cms.uint32(0),
-                       DeltaZCutForChargedFromPUVtxs = cms.double(0.2),
-		       PtMaxCharged   = cms.double(0.),
-		       EtaMaxCharged   = cms.double(99999.),
-		       PtMaxNeutrals  = cms.double(200.),
-		       PtMaxNeutralsStartSlope = cms.double(0.),
-                       #candName       = cms.InputTag('particleFlow'),
-                       #vertexName     = cms.InputTag('offlinePrimaryVertices'),
-                       candName      = cms.InputTag('packedPFCandidates'),
-                       vertexName     = cms.InputTag('offlineSlimmedPrimaryVertices'),
-                       applyCHS       = cms.bool  (True),
-                       invertPuppi    = cms.bool  (False),
-                       useExp         = cms.bool  (False),
-                       MinPuppiWeight = cms.double(0.01),
-                       useExistingWeights = cms.bool(False),
-                       useWeightsNoLep    = cms.bool(False),
-                       #clonePackedCands   = cms.bool(False), # should only be set to True for MiniAOD
-                       clonePackedCands   = cms.bool(True), # always run on MiniAOD, so set to True
-                       vtxNdofCut     = cms.int32(4),
-                       vtxZCut        = cms.double(24),
-                       algos          = cms.VPSet( 
-                        cms.PSet( 
-                         etaMin = cms.vdouble(0.),
-                         etaMax = cms.vdouble(2.5),
-                         ptMin  = cms.vdouble(0.),
-                         MinNeutralPt   = cms.vdouble(0.2),
-                         MinNeutralPtSlope   = cms.vdouble(0.015),
-                         RMSEtaSF = cms.vdouble(1.0),
-                         MedEtaSF = cms.vdouble(1.0),
-                         EtaMaxExtrap = cms.double(2.0),
-                         puppiAlgos = puppiCentral
-                        ),
-                        cms.PSet( 
-                         etaMin              = cms.vdouble( 2.5,  3.0),
-                         etaMax              = cms.vdouble( 3.0, 10.0),
-                         ptMin               = cms.vdouble( 0.0,  0.0),
-                         MinNeutralPt        = cms.vdouble( 1.7,  2.0),
-                         MinNeutralPtSlope   = cms.vdouble(0.08, 0.08),
-                         RMSEtaSF            = cms.vdouble(1.20, 0.95),
-                         MedEtaSF            = cms.vdouble(0.90, 0.75),
-                         EtaMaxExtrap        = cms.double( 2.0),
-                         puppiAlgos = puppiForward
-                        ),
-                       #  cms.PSet( 
-                       #   etaMin = cms.double(3.0),
-                       #   etaMax = cms.double(10.0),
-                       #   ptMin  = cms.double(0.0),
-                       #   MinNeutralPt        = cms.double(2.0),
-                       #   MinNeutralPtSlope   = cms.double(0.07),
-                       #   # RMSEtaSF = cms.double(1.18),
-                       #   # MedEtaSF = cms.double(0.4397),                         
-                       #   RMSEtaSF = cms.double(1.10),
-                       #   MedEtaSF = cms.double(0.90),
-                       #   EtaMaxExtrap = cms.double(2.0),
-                       #   puppiAlgos = puppiForward
-                       # )
-                      )
+    puppiDiagnostics = cms.bool(False),
+    puppiNoLep = cms.bool(False),
+    UseFromPVLooseTight = cms.bool(False),
+    UseDeltaZCut = cms.bool(True),
+    EtaMinUseDeltaZ = cms.double(2.4),
+    DeltaZCut = cms.double(0.3),
+    NumOfPUVtxsForCharged = cms.uint32(2),
+    DeltaZCutForChargedFromPUVtxs = cms.double(0.2),
+    PtMaxCharged = cms.double(20.),
+    EtaMaxCharged = cms.double(99999.),
+    PtMaxPhotons = cms.double(-1.),
+    EtaMaxPhotons = cms.double(2.5),
+    PtMaxNeutrals = cms.double(200.),
+    PtMaxNeutralsStartSlope = cms.double(20.),
+    candName = cms.InputTag('packedPFCandidates'),
+    vertexName = cms.InputTag('offlineSlimmedPrimaryVertices'),
+    muonName = cms.InputTag('slimmedMuons'),
+    beamSpotName = cms.InputTag('offlineBeamSpot'),
+    muonPtMin = cms.double(10.),
+    muonVertexDzMax = cms.double(0.2),
+    applyCHS = cms.bool(True),
+    invertPuppi = cms.bool(False),
+    useExp = cms.bool(False),
+    MinPuppiWeight = cms.double(0.01),
+    vtxNdofCut = cms.int32(4),
+    vtxZCut = cms.double(24),
+    algos = cms.VPSet(
+        cms.PSet(
+            etaMin = cms.vdouble(-0.01),
+            etaMax = cms.vdouble(2.5),
+            ptMin = cms.vdouble(0.),
+            MinNeutralPt = cms.vdouble(0.2),
+            MinNeutralPtSlope = cms.vdouble(0.015),
+            RMSEtaSF = cms.vdouble(1.0),
+            MedEtaSF = cms.vdouble(1.0),
+            EtaMaxExtrap = cms.double(2.0),
+            puppiAlgos = puppiCentral
+        ),
+        cms.PSet(
+            etaMin = cms.vdouble( 2.5,  3.0),
+            etaMax = cms.vdouble( 3.0, 10.0),
+            ptMin = cms.vdouble( 0.0,  0.0),
+            MinNeutralPt = cms.vdouble( 1.7,  2.0),
+            MinNeutralPtSlope = cms.vdouble(0.08, 0.08),
+            RMSEtaSF = cms.vdouble(1.20, 0.95),
+            MedEtaSF = cms.vdouble(0.90, 0.75),
+            EtaMaxExtrap = cms.double( 2.0),
+            puppiAlgos = puppiForward
+        ),
+    )
 )
