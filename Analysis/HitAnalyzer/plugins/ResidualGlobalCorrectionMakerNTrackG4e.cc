@@ -537,6 +537,9 @@ private:
   // the (large) global-fit payload (globalIdxs / jacRef / jacMass / factored
   // Hessian) is emitted additionally only when fillGradsFactored_ is set.
   bool produceValueMaps_ = false;
+  // Emit the reference-point jacobian payload (globalIdxs + jacRefLeg{i} +
+  // jacRefVtx) WITHOUT the calibration payload. See the produces() block.
+  bool emitRefJacobian_ = false;
   edm::EDPutTokenT<edm::ValueMap<float>> vmCorMass_, vmCorMassErr_, vmCorPt_, vmCorEta_, vmCorPhi_;
   edm::EDPutTokenT<edm::ValueMap<float>> vmMuPlusPt_, vmMuPlusEta_, vmMuPlusPhi_;
   edm::EDPutTokenT<edm::ValueMap<float>> vmMuMinusPt_, vmMuMinusEta_, vmMuMinusPhi_;
@@ -553,7 +556,23 @@ private:
   edm::EDPutTokenT<edm::ValueMap<float>> vmChisq_, vmNdof_, vmEdmvalRef_;
   edm::EDPutTokenT<edm::ValueMap<int>> vmNiter_, vmFitOk_;
   edm::EDPutTokenT<edm::ValueMap<std::vector<int>>> vmGlobalIdxs_;
-  edm::EDPutTokenT<edm::ValueMap<std::vector<float>>> vmJacRefMuPlus_, vmJacRefMuMinus_, vmJacMass_, vmHessFactor_;
+  edm::EDPutTokenT<edm::ValueMap<std::vector<float>>> vmJacMass_, vmHessFactor_;
+  // Reference-point jacobians, d(state)/d(global params).
+  //
+  // This fit's state is 3 momentum params PER LEG plus ONE SHARED 3-vector
+  // vertex (nstateparms = 3N + 3 + 5*nhits) -- the common vertex is imposed
+  // by the parameterization, not by a constraint row. There is therefore no
+  // 5-parameter per-leg reference state here, unlike the single-track maker
+  // where nstateparms = 5*(nhits+1) and jacRef is genuinely 5 x nparms.
+  // Emitting 5 rows from this fit would be padding rows that do not exist.
+  //
+  // So: 3 rows per leg (momentum), plus one shared 3-row vertex jacobian per
+  // candidate. Together these are the complete derivative of the fitted state.
+  // Replaces jacRefMuPlus/jacRefMuMinus, which were hard-coded to legs 0/1 by
+  // charge and left the bachelor -- where the B mass lever arm sits -- with no
+  // jacobian at all.
+  edm::EDPutTokenT<edm::ValueMap<std::vector<float>>> vmJacRefLeg_[4];
+  edm::EDPutTokenT<edm::ValueMap<std::vector<float>>> vmJacRefVtx_;
   // the map formerly called `jacMass` carried the DIMUON jacobian.
   // The mother's is the calibration observable, so both are now named
   // explicitly and the ambiguous `jacMass` is gone.
@@ -729,6 +748,11 @@ private:
   std::vector<float> Muplus_jacRef;
   std::vector<float> Muminus_jacRef;
   std::vector<float> Jpsi_jacMass;
+  // Per-leg (3 x nparsfinal, leaf order) and shared-vertex (3 x nparsfinal)
+  // reference-point jacobians. See the produces() block for why 3 rows and
+  // not 5.
+  std::vector<std::vector<float>> Leg_jacRef;
+  std::vector<float> Vtx_jacRef;
   
   unsigned int Muplus_nhits;
   unsigned int Muplus_nvalid;
@@ -904,6 +928,8 @@ ResidualGlobalCorrectionMakerNTrackG4e::ResidualGlobalCorrectionMakerNTrackG4e(
   // payload additionally when fillGradsFactored_ is set.
   produceValueMaps_ = iConfig.existsAs<bool>("produceValueMaps")
       ? iConfig.getParameter<bool>("produceValueMaps") : false;
+  emitRefJacobian_ = iConfig.existsAs<bool>("emitRefJacobian")
+      ? iConfig.getParameter<bool>("emitRefJacobian") : false;
   if (produceValueMaps_) {
     vmCorMass_    = produces<edm::ValueMap<float>>("corMass");
     vmCorMassErr_ = produces<edm::ValueMap<float>>("corMassErr");
@@ -953,10 +979,28 @@ ResidualGlobalCorrectionMakerNTrackG4e::ResidualGlobalCorrectionMakerNTrackG4e(
       vmLegEtaN_[i] = produces<edm::ValueMap<float>>("leg" + n + "Eta");
       vmLegPhiN_[i] = produces<edm::ValueMap<float>>("leg" + n + "Phi");
     }
+    // Two independent payloads, two independent gates.
+    //
+    //   emitRefJacobian_    -> globalIdxs + jacRefLeg{i} + jacRefVtx.
+    //                          Small, and the thing an analysis needs to
+    //                          re-apply updated global corrections without
+    //                          reproducing the NanoAOD (AN2021_131 420-433).
+    //   fillGradsFactored_  -> the calibration payload: mass jacobians and the
+    //                          factored Hessian. Large, and only the
+    //                          grads->aggregate->solve pipeline consumes it.
+    //
+    // These used to share one gate, so asking for the jacobian dragged in the
+    // Hessian. globalIdxs belongs to both -- the jacobian is meaningless
+    // without the indices telling you which globals its columns are.
+    if (fillGradsFactored_ || emitRefJacobian_) {
+      vmGlobalIdxs_ = produces<edm::ValueMap<std::vector<int>>>("globalIdxs");
+      for (unsigned int i = 0; i < kMaxLegs; ++i) {
+        vmJacRefLeg_[i] =
+            produces<edm::ValueMap<std::vector<float>>>("jacRefLeg" + std::to_string(i));
+      }
+      vmJacRefVtx_ = produces<edm::ValueMap<std::vector<float>>>("jacRefVtx");
+    }
     if (fillGradsFactored_) {
-      vmGlobalIdxs_    = produces<edm::ValueMap<std::vector<int>>>("globalIdxs");
-      vmJacRefMuPlus_  = produces<edm::ValueMap<std::vector<float>>>("jacRefMuPlus");
-      vmJacRefMuMinus_ = produces<edm::ValueMap<std::vector<float>>>("jacRefMuMinus");
       vmMotherJacMass_ = produces<edm::ValueMap<std::vector<float>>>("motherJacMass");
       vmJpsiJacMass_   = produces<edm::ValueMap<std::vector<float>>>("jpsiJacMass");
       vmHessFactor_    = produces<edm::ValueMap<std::vector<float>>>("hessFactor");
@@ -1747,8 +1791,14 @@ void ResidualGlobalCorrectionMakerNTrackG4e::produce(edm::Event &iEvent, const e
       vmEdmvalRefV(nVMCand, -99.f);
   std::vector<int> vmNiterV(nVMCand, -99), vmFitOkV(nVMCand, 0);
   std::vector<std::vector<int>> vmGlobalIdxsV(nVMCand);
-  std::vector<std::vector<float>> vmJacRefMuPlusV(nVMCand), vmJacRefMuMinusV(nVMCand),
+  std::vector<std::vector<float>>
       vmMotherJacMassV(nVMCand), vmJpsiJacMassV(nVMCand), vmHessFactorV(nVMCand);
+  // Reference-point jacobians: one accumulator per leg slot plus the shared
+  // vertex. A candidate with fewer than kMaxLegs legs leaves the unused slots
+  // empty, which the flat-table producer skips.
+  std::vector<std::vector<float>> vmJacRefLegV[kMaxLegs];
+  for (unsigned int i = 0; i < kMaxLegs; ++i) vmJacRefLegV[i].resize(nVMCand);
+  std::vector<std::vector<float>> vmJacRefVtxV(nVMCand);
   std::vector<std::vector<float>> vmLegPtV(nVMCand), vmLegEtaV(nVMCand),
       vmLegPhiV(nVMCand);
   std::vector<std::vector<float>> vmLegPtN(kMaxLegs, std::vector<float>(nVMCand, -99.f)),
@@ -4164,8 +4214,15 @@ void ResidualGlobalCorrectionMakerNTrackG4e::produce(edm::Event &iEvent, const e
             
             
             
+            // Mass jacobian of the CONSTRAINED SUBSYSTEM. covrefmom above is
+            // already gathered from massconstrainttracks, so this must be too
+            // -- refftsarr[0]/[1] happens to coincide for a B+ (legs 0,1 are
+            // the muons) but is wrong for any channel whose constrained
+            // subsystem is not the first two legs.
             const Matrix<double, 1, 6> mjacalt =
-                massJacobianAltD(refftsarr[0], refftsarr[1], massForConstraintHelpers);
+                massJacobianAltD(refftsarr[massconstrainttracks[0]],
+                                 refftsarr[massconstrainttracks[1]],
+                                 massForConstraintHelpers);
 
             
             Jpsi_sigmamass = std::sqrt((mjacalt*covrefmom*mjacalt.transpose())[0]);
@@ -4188,7 +4245,12 @@ void ResidualGlobalCorrectionMakerNTrackG4e::produce(edm::Event &iEvent, const e
   // Muminus_jacRef.resize(5*npars);
   // Map<Matrix<float, 5, Dynamic, RowMajor>>(Muminus_jacRef.data(), 5, npars) = (jacarr[idxminus].topLeftCorner(5, nstateparms)*dxdparms.transpose() + jacarr[idxminus].topRightCorner(5, npars)).cast<float>();
           
-          auto const jpsimom = muarr[0] + muarr[1];
+          // Constrained-subsystem four-momentum (the J/psi for a B+). Summed
+          // over massconstrainttracks, not legs {0,1}: those coincide for a
+          // B+ but not in general, and this is what the jointCvhJpsi* nano
+          // columns report.
+          auto const jpsimom =
+              muarr[massconstrainttracks[0]] + muarr[massconstrainttracks[1]];
 
           // Mother over ALL N legs -- this is m(mumuK) for a 3-body B+.
           // muarr already carries each leg's own mass hypothesis from the
@@ -4662,8 +4724,39 @@ void ResidualGlobalCorrectionMakerNTrackG4e::produce(edm::Event &iEvent, const e
           Muminus_jacRef.resize(3*nparsfinal);
           Map<Matrix<float, 3, Dynamic, RowMajor>>(Muminus_jacRef.data(), 3, nparsfinal) = dxdparms.block(0, trackstateidxminus, nparsfinal, 3).transpose().cast<float>();
 
+          // ---- Reference-point jacobians, generic over N legs --------------
+          // Per leg: d(leg momentum)/d(global params), row-major 3 x
+          // nparsfinal, in DECOMPOSITION LEAF ORDER -- the same order as
+          // legPt/legEta/legPhi and the nano's mu0/mu1/kaon cross-links.
+          // The Muplus/Muminus pair above is charge-keyed and covers only legs
+          // 0 and 1, so for a 3-body B+ the bachelor -- where the mass lever
+          // arm sits -- had no jacobian at all. Those two stay for the N=2
+          // calibration closure that reads them off the tree; the ValueMap
+          // payload is these.
+          Leg_jacRef.assign(ntracks, std::vector<float>());
+          for (unsigned int id = 0; id < ntracks; ++id) {
+            Leg_jacRef[id].assign(3*nparsfinal, 0.f);
+            Map<Matrix<float, 3, Dynamic, RowMajor>>(Leg_jacRef[id].data(), 3, nparsfinal) =
+                dxdparms.block(0, 3*id, nparsfinal, 3).transpose().cast<float>();
+          }
+
+          // Shared common-vertex jacobian, d(vertex xyz)/d(global params),
+          // 3 x nparsfinal. ONE per candidate, not one per leg: the common
+          // vertex is a single 3-vector in this parameterization, occupying
+          // columns 3N..3N+2 (it is last in the layout). This is the piece
+          // that makes the per-leg 3-row jacobians a complete description of
+          // the fitted state -- there is no 5-parameter per-leg reference
+          // state in a fit whose vertex is shared by construction.
+          Vtx_jacRef.assign(3*nparsfinal, 0.f);
+          Map<Matrix<float, 3, Dynamic, RowMajor>>(Vtx_jacRef.data(), 3, nparsfinal) =
+              dxdparms.block(0, 3*ntracks, nparsfinal, 3).transpose().cast<float>();
+
+          // Subsystem mass jacobian: gathered from massconstrainttracks like
+          // covrefmom, not from legs {0,1}, which coincide only for a B+.
           const Matrix<double, 1, 6> mjacalt =
-              massJacobianAltD(refftsarr[0], refftsarr[1], massForConstraintHelpers);
+              massJacobianAltD(refftsarr[massconstrainttracks[0]],
+                               refftsarr[massconstrainttracks[1]],
+                               massForConstraintHelpers);
 
           // Mother jacMass: d m(all N) / d(global params). Uses the generic
           // N-track gradient over the full 3N momentum block -- the object
@@ -4954,10 +5047,17 @@ void ResidualGlobalCorrectionMakerNTrackG4e::produce(edm::Event &iEvent, const e
           vmLegEtaN[i][candCollIdx] = Leg_eta[i];
           vmLegPhiN[i][candCollIdx] = Leg_phi[i];
         }
-        if (fillGradsFactored_) {
+        // Reference-point jacobian payload. globalIdxs is shared with the
+        // calibration payload -- the jacobian columns are meaningless without
+        // the indices saying which globals they belong to.
+        if (fillGradsFactored_ || emitRefJacobian_) {
           vmGlobalIdxsV[candCollIdx].assign(globalidxvfinal.begin(), globalidxvfinal.end());
-          vmJacRefMuPlusV[candCollIdx]  = Muplus_jacRef;
-          vmJacRefMuMinusV[candCollIdx] = Muminus_jacRef;
+          for (unsigned int i = 0; i < kMaxLegs && i < Leg_jacRef.size(); ++i) {
+            vmJacRefLegV[i][candCollIdx] = Leg_jacRef[i];
+          }
+          vmJacRefVtxV[candCollIdx] = Vtx_jacRef;
+        }
+        if (fillGradsFactored_) {
           // Emit BOTH, explicitly named. The mother's is the
           // calibration observable; the dimuon's is kept for the N=2 closure.
           vmMotherJacMassV[candCollIdx] = Mother_jacMass;
@@ -5112,7 +5212,19 @@ void ResidualGlobalCorrectionMakerNTrackG4e::produce(edm::Event &iEvent, const e
         putF(vmLegPhiN_[i], vmLegPhiN[i]);
       }
     }
-    if (fillGradsFactored_) {
+    auto putVF = [&](edm::EDPutTokenT<edm::ValueMap<std::vector<float>>>& tok,
+                     std::vector<std::vector<float>>& v) {
+      edm::ValueMap<std::vector<float>> m;
+      if (doVM) {
+        edm::ValueMap<std::vector<float>>::Filler f(m);
+        f.insert(vmCandH, v.begin(), v.end());
+        f.fill();
+      }
+      iEvent.emplace(tok, std::move(m));
+    };
+    // Reference-point jacobian payload (see the produces() block for the gate
+    // split). globalIdxs is emitted by either gate.
+    if (fillGradsFactored_ || emitRefJacobian_) {
       {
         edm::ValueMap<std::vector<int>> m;
         if (doVM) {
@@ -5122,18 +5234,13 @@ void ResidualGlobalCorrectionMakerNTrackG4e::produce(edm::Event &iEvent, const e
         }
         iEvent.emplace(vmGlobalIdxs_, std::move(m));
       }
-      auto putVF = [&](edm::EDPutTokenT<edm::ValueMap<std::vector<float>>>& tok,
-                       std::vector<std::vector<float>>& v) {
-        edm::ValueMap<std::vector<float>> m;
-        if (doVM) {
-          edm::ValueMap<std::vector<float>>::Filler f(m);
-          f.insert(vmCandH, v.begin(), v.end());
-          f.fill();
-        }
-        iEvent.emplace(tok, std::move(m));
-      };
-      putVF(vmJacRefMuPlus_, vmJacRefMuPlusV);
-      putVF(vmJacRefMuMinus_, vmJacRefMuMinusV);
+      for (unsigned int i = 0; i < kMaxLegs; ++i) {
+        putVF(vmJacRefLeg_[i], vmJacRefLegV[i]);
+      }
+      putVF(vmJacRefVtx_, vmJacRefVtxV);
+    }
+    // Calibration payload.
+    if (fillGradsFactored_) {
       putVF(vmMotherJacMass_, vmMotherJacMassV);
       putVF(vmJpsiJacMass_, vmJpsiJacMassV);
       putVF(vmHessFactor_, vmHessFactorV);

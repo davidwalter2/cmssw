@@ -91,6 +91,15 @@ opts.register('jointCvh', True, VarParsing.VarParsing.multiplicity.singleton,
               'schedule the joint N-body CVH arm (jointCvh* columns). '
               'Measured: adds ~0.87 s/event to a ~3.4 s/event job, i.e. '
               'about +50%%. False drops the arm and its columns entirely.')
+opts.register('emitRefJacobian', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'store the reference-point jacobian d(track state)/d(global '
+              'params) and the global-parameter indices, flattened into '
+              'companion tables. Lets updated global corrections be applied '
+              'downstream by a linearised update WITHOUT reproducing the '
+              'NanoAOD (AN2021_131 sec. 420-433). This is NOT the calibration '
+              'payload -- no Hessian, no mass jacobians; those stay behind '
+              'fillGradsFactored. Costs ~3-4x the nano size.')
 opts.register('timing', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'enable the Timing service with per-module breakdown for '
@@ -474,6 +483,12 @@ process.globalCorJpsiKKaon = globalCorJpsiKKaon.clone(
     trackParticleName=cms.string('mu' if opts.kaonAsMuon else 'kaon'),
     emitRefitTracks=cms.bool(bool(opts.emitRefitTracks)),
     refitMaxRelPtErr=cms.double(float(opts.refitMaxRelPtErr)),
+    # Track-keyed reference-point jacobian (5 x nParms) + global indices. The
+    # muon-keyed jacRef map this maker has always produced is written inside an
+    # `if (muonref.isNonnull())` gate and is therefore EMPTY here -- the
+    # bachelor and J/psi-leg makers run on bare track collections with no muon
+    # association at all.
+    emitRefJacobian=cms.bool(bool(opts.emitRefJacobian)),
     CvhMaster=CvhMasterPSet.clone(
         Particles=cms.vstring('mu+', 'mu-', 'kaon+', 'kaon-')),
     **_calib_pset,
@@ -504,6 +519,7 @@ if opts.emitRefitTracks:
         trackParticleName=cms.string('mu'),
         emitRefitTracks=cms.bool(True),
         refitMaxRelPtErr=cms.double(float(opts.refitMaxRelPtErr)),
+        emitRefJacobian=cms.bool(bool(opts.emitRefJacobian)),
         CvhMaster=CvhMasterPSet.clone(
             Particles=cms.vstring('mu+', 'mu-', 'kaon+', 'kaon-')),
         **_calib_pset,
@@ -954,6 +970,9 @@ if opts.nanoOut:
             fillTrackTree=cms.bool(False),
             fillJac=cms.bool(False),
             produceValueMaps=cms.bool(True),
+            # Reference-point jacobian WITHOUT the calibration payload: this
+            # emits globalIdxs + jacRefLeg{i} + jacRefVtx and no Hessian.
+            emitRefJacobian=cms.bool(bool(opts.emitRefJacobian)),
             outprefix=cms.untracked.string('jointcvh'),
             scalarPotentialInitFile=cms.string(opts.scalarPot3DInitFile),
             CvhMaster=CvhMasterPSet.clone(
@@ -1061,6 +1080,84 @@ if opts.nanoOut:
             ),
         )
         _extra_tables += [process.genTable, process.genWeightTable]
+
+    # ---- Reference-point jacobian tables ---------------------------------
+    # A nano flat-table column must be scalar, and these jacobians are
+    # 5 (or 3) rows x nParms with nParms varying per track. The stock NanoAOD
+    # FlattenedValueMapVectorTableProducer is the mechanism for exactly this --
+    # muons_cff.py already uses it to store cvhJacRef/cvhmergedGlobalIdxs on
+    # the Muon table. It emits per-object counts plus one concatenated values
+    # table, which is the standard jagged-nano idiom and far more compact than
+    # one row per matrix element.
+    #
+    # Constraint: within a table, all vector maps of the SAME TYPE must have
+    # equal length per object, or the producer throws. int and float lengths
+    # are tracked separately, so globalIdxs (nParms, int) rides along with the
+    # float jacobians. momCov (9 floats) gets its own table for that reason.
+    #
+    # Two keying schemes, because the two fits differ:
+    #   BuJpsiKJac  joint N-body arm, keyed to the CANDIDATE. Every float map
+    #               is 3*nParms: 3 momentum rows per leg, plus the shared
+    #               vertex jacobian. There is no 5-parameter per-leg state in
+    #               a fit whose vertex is imposed by the parameterisation.
+    #   *TrackJac   single-track arms, keyed to the input TRACK collection.
+    #               5*nParms -- the full (qop, lambda, phi, dxy, dsz)
+    #               reference state, i.e. the AN's dxref.
+    if opts.emitRefJacobian:
+        _JPREC = 12   # matches muons_cff.py's cvhJacRef
+        _IPREC = 16   # global indices need 16 bits today
+        if opts.jointCvh:
+            _jvars = cms.PSet(
+                cvhGlobalIdxs=ExtVar(cms.InputTag('jointCvhBu', 'globalIdxs'),
+                                     'std::vector<int>',
+                                     doc='global correction-parameter indices', precision=_IPREC),
+                cvhJacRefVtx=ExtVar(cms.InputTag('jointCvhBu', 'jacRefVtx'),
+                                    'std::vector<float>',
+                                    doc='d(common vertex xyz)/d(globalparms), 3 x nParms row-major',
+                                    precision=_JPREC),
+            )
+            for _i in range(3):
+                setattr(_jvars, 'cvhJacRefLeg%d' % _i,
+                        ExtVar(cms.InputTag('jointCvhBu', 'jacRefLeg%d' % _i),
+                               'std::vector<float>',
+                               doc='d(leg %d momentum)/d(globalparms), 3 x nParms row-major' % _i,
+                               precision=_JPREC))
+            process.bplusJacTable = cms.EDProducer(
+                'FlattenedCandValueMapVectorTableProducer',
+                name=cms.string('BuJpsiKJac'),
+                src=_src_cands,
+                cut=cms.string(''),
+                doc=cms.string('joint N-body CVH reference-point jacobian'),
+                variables=_jvars,
+            )
+            _extra_tables.append(process.bplusJacTable)
+
+        def _trackJacTable(src, maker, name, doc):
+            return cms.EDProducer(
+                'FlattenedTrackValueMapVectorTableProducer',
+                name=cms.string(name), src=src, cut=cms.string(''),
+                doc=cms.string(doc),
+                variables=cms.PSet(
+                    cvhGlobalIdxs=ExtVar(cms.InputTag(maker, 'trackGlobalIdxs'),
+                                         'std::vector<int>',
+                                         doc='global correction-parameter indices',
+                                         precision=_IPREC),
+                    cvhJacRef=ExtVar(cms.InputTag(maker, 'trackJacRef'),
+                                     'std::vector<float>',
+                                     doc='d(qop,lambda,phi,dxy,dsz)/d(globalparms), '
+                                         '5 x nParms row-major',
+                                     precision=_JPREC),
+                ),
+            )
+        process.kaonJacTable = _trackJacTable(
+            _bach_src, 'globalCorJpsiKKaon', 'KaonTrackJac',
+            'bachelor single-track CVH reference-point jacobian')
+        _extra_tables.append(process.kaonJacTable)
+        if opts.emitRefitTracks:
+            process.muJacTable = _trackJacTable(
+                cms.InputTag('bplusJpsiMuonTracks'), 'globalCorJpsiKMuon',
+                'MuTrackJac', 'J/psi muon single-track CVH reference-point jacobian')
+            _extra_tables.append(process.muJacTable)
 
     process.nanoTables = cms.Task(
         process.bplusTable, process.trackTable, process.muonTable,
