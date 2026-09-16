@@ -505,3 +505,28 @@ def nanoGenWmassCustomize(process):
 
     return process
 
+def nanoAOD_wmassContent(process):
+    """WMass content trim for the 15_0 NanoAOD on UL2016 MiniAOD (data and MC):
+    drop the boosted-tau chain.
+
+    On run2_nanoAOD_106Xv2 the stock 15_0 nano re-runs the boosted-tau MVA
+    isolation, which needs GBRForest payloads (RecoTauTag_tauIdMVAIsoDBnewDMwLT)
+    that the UL16 global tags (106X_mcRun2_asymptotic_v17, 106X_dataRun2_v35) do
+    not carry. The CVH refit has to keep those global tags (sim-consistent
+    alignment and field for MC), and boosted taus play no role in the W/Z
+    analyses -- the 10_6 fork already excluded them for the other 106X eras.
+    Safe to call before nanoAOD_customizeCommon (which is appended by cmsDriver
+    last): it only unschedules the tasks; PATObjectCrossLinker accepts an empty
+    boostedTaus tag.
+    """
+    for taskName, members in (("nanoTableTaskCommon", ("boostedTauTask", "boostedTauTablesTask")),
+                              ("nanoTableTaskFS", ("boostedTauMCTask",))):
+        task = getattr(process, taskName, None)
+        if task is None:
+            continue
+        for m in members:
+            if hasattr(process, m) and task.contains(getattr(process, m)):
+                task.remove(getattr(process, m))
+    process.linkedObjects.boostedTaus = cms.InputTag("")
+    return process
+
