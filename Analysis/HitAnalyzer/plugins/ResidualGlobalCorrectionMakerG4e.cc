@@ -112,6 +112,19 @@ private:
   bool emitRefitTracks_ = false;
   edm::EDPutTokenT<reco::TrackCollection> outputRefitTracks_;
   edm::EDPutTokenT<edm::ValueMap<int>> outputRefitOk_;
+  // TRACK-keyed twins of globalIdxs/jacRef/momCov.
+  //
+  // The maps above are keyed to the pat::Muon association and are written
+  // inside an `if (muonref.isNonnull())` gate, so they are empty whenever the
+  // maker runs on a bare track collection -- which is exactly how the B+
+  // bachelor and J/psi-leg makers run. The same comment already exists above
+  // the refit-track block, which was moved out of that gate for the same
+  // reason; these maps were not. Keyed to the INPUT track collection, so
+  // trackJacRef[i] describes input track i.
+  bool emitRefJacobian_ = false;
+  edm::EDPutTokenT<edm::ValueMap<std::vector<int>>> outputTrkGlobalIdxs_;
+  edm::EDPutTokenT<edm::ValueMap<std::vector<float>>> outputTrkJacRef_;
+  edm::EDPutTokenT<edm::ValueMap<std::vector<float>>> outputTrkMomCov_;
 
   // Optional sanity cut on the refit momentum uncertainty. The NaN guard
   // below still lets through a finite-but-absurd tail (worst seen: ptErr of
@@ -512,6 +525,14 @@ ResidualGlobalCorrectionMakerG4e::ResidualGlobalCorrectionMakerG4e(const edm::Pa
 
   outputJacRef_ = produces<edm::ValueMap<std::vector<float>>>("jacRef");
   outputMomCov_ = produces<edm::ValueMap<std::vector<float>>>("momCov");
+
+  emitRefJacobian_ = iConfig.existsAs<bool>("emitRefJacobian")
+      ? iConfig.getParameter<bool>("emitRefJacobian") : false;
+  if (emitRefJacobian_) {
+    outputTrkGlobalIdxs_ = produces<edm::ValueMap<std::vector<int>>>("trackGlobalIdxs");
+    outputTrkJacRef_ = produces<edm::ValueMap<std::vector<float>>>("trackJacRef");
+    outputTrkMomCov_ = produces<edm::ValueMap<std::vector<float>>>("trackMomCov");
+  }
 
   emitRefitTracks_ = iConfig.existsAs<bool>("emitRefitTracks")
       ? iConfig.getParameter<bool>("emitRefitTracks") : false;
@@ -945,6 +966,18 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   if (emitRefitTracks_) {
     refitTracksV.assign(trackOrigH->begin(), trackOrigH->end());
     refitOkV.assign(trackOrigH->size(), 0);
+  }
+
+  // Track-keyed jacobian payload, positionally aligned with the input tracks.
+  // A track whose fit failed keeps an empty entry, which the flattening table
+  // producer skips.
+  std::vector<std::vector<int>> trkGlobalidxsV;
+  std::vector<std::vector<float>> trkJacRefV;
+  std::vector<std::vector<float>> trkMomCovV;
+  if (emitRefJacobian_) {
+    trkGlobalidxsV.assign(trackOrigH->size(), std::vector<int>());
+    trkJacRefV.assign(trackOrigH->size(), std::vector<float>());
+    trkMomCovV.assign(trackOrigH->size(), std::vector<float>());
   }
 
   if (doMuonAssoc_) {
@@ -5882,6 +5915,30 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       }
     }
 
+    // Track-keyed jacobian payload. Outside the muonref gate below, for the
+    // same reason the refit-track block above is: the bachelor-track use case
+    // has no muon association, so the muon-keyed maps stay empty there.
+    //
+    // jacRef is d(track state at reference point)/d(global params), row-major
+    // 5 x nparsfinal in the (qop, lambda, phi, dxy, dsz) basis -- AN2021_131
+    // sec. 420-433's dxref. With the accompanying global-parameter indices it
+    // lets updated corrections be applied downstream by a linearised update,
+    // without reproducing the NanoAOD.
+    if (emitRefJacobian_) {
+      auto &tgi = trkGlobalidxsV[itrack];
+      tgi.assign(globalidxvfinal.begin(), globalidxvfinal.end());
+
+      auto &tjac = trkJacRefV[itrack];
+      tjac.assign(5*nparsfinal, 0.f);
+      Map<Matrix<float, 5, Dynamic, RowMajor>>(tjac.data(), 5, nparsfinal) =
+          ((dxdparms).leftCols<5>().transpose()).cast<float>();
+
+      auto &tcov = trkMomCovV[itrack];
+      tcov.assign(3*3, 0.f);
+      Map<Matrix<float, 3, 3, RowMajor>>(tcov.data(), 3, 3) =
+          covfull.topLeftCorner<3, 3>().cast<float>();
+    }
+
     // Muon-association outputs (written per attempt; the winning attempt's
     // values persist since the fit is re-run to restore the nominal if the
     // opposite loses). Inert for cosmics/single-track (muonref null).
@@ -5913,11 +5970,22 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         iglobalidxv.push_back(val);
       }
 
+      // Reference-point jacobian, d(track state at reference point)/d(global
+      // parameters), row-major 5 x nparsfinal: (qop, lambda, phi, dxy, dsz).
+      // This is AN2021_131 sec. 420-433's dxref -- stored so the track
+      // parameters can be updated by a linearised application of updated
+      // global corrections downstream, without reproducing the NanoAOD.
+      //
+      // The ValueMap used to carry leftCols<3>() (momentum only), which is
+      // enough for mass and pT but NOT for dxy/dz -- and the B+ selection cuts
+      // on sl3d/alphaBS, which are displacement quantities. The TTree branch
+      // (`jacrefv`, see above) has always been the full 5 rows; only this path
+      // was reduced. Keep the two identical -- task 3.4 cross-checks them.
       auto &ijacrefv = jacRefV[muonref.key()];
-      ijacrefv.assign(3*nparsfinal, 0.);
+      ijacrefv.assign(5*nparsfinal, 0.);
       //eigen representation of the underlying vector storage
-      Map<Matrix<float, 3, Dynamic, RowMajor> > momjacrefout(ijacrefv.data(), 3, nparsfinal);
-      momjacrefout = ( (dxdparms).leftCols<3>().transpose() ).cast<float>();
+      Map<Matrix<float, 5, Dynamic, RowMajor> > refjacrefout(ijacrefv.data(), 5, nparsfinal);
+      refjacrefout = ( (dxdparms).leftCols<5>().transpose() ).cast<float>();
 
       auto &imomCov = momCovV[muonref.key()];
       imomCov.assign(3*3, 0.);
@@ -6053,6 +6121,33 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
   iEvent.emplace(outputJacRef_, std::move(jacRefMap));
   iEvent.emplace(outputMomCov_, std::move(momCovMap));
+
+  // Track-keyed jacobian payload, keyed to the INPUT track collection so
+  // trackJacRef[i] describes input track i (and refit track i, which is
+  // positionally aligned with it).
+  if (emitRefJacobian_) {
+    auto putTrkVI = [&](edm::EDPutTokenT<edm::ValueMap<std::vector<int>>>& tok,
+                        std::vector<std::vector<int>>& v) {
+      edm::ValueMap<std::vector<int>> m;
+      edm::ValueMap<std::vector<int>>::Filler f(m);
+      f.insert(trackOrigH, std::make_move_iterator(v.begin()),
+               std::make_move_iterator(v.end()));
+      f.fill();
+      iEvent.emplace(tok, std::move(m));
+    };
+    auto putTrkVF = [&](edm::EDPutTokenT<edm::ValueMap<std::vector<float>>>& tok,
+                        std::vector<std::vector<float>>& v) {
+      edm::ValueMap<std::vector<float>> m;
+      edm::ValueMap<std::vector<float>>::Filler f(m);
+      f.insert(trackOrigH, std::make_move_iterator(v.begin()),
+               std::make_move_iterator(v.end()));
+      f.fill();
+      iEvent.emplace(tok, std::move(m));
+    };
+    putTrkVI(outputTrkGlobalIdxs_, trkGlobalidxsV);
+    putTrkVF(outputTrkJacRef_, trkJacRefV);
+    putTrkVF(outputTrkMomCov_, trkMomCovV);
+  }
 
 }
 
