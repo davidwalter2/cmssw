@@ -122,6 +122,12 @@ private:
   // reason; these maps were not. Keyed to the INPUT track collection, so
   // trackJacRef[i] describes input track i.
   bool emitRefJacobian_ = false;
+  // Rows of the MUON-keyed jacRef ValueMap (Muon_cvhJacRef in the W-mass
+  // nano): 3 = momentum rows only (qop, lambda, phi), what the single-track
+  // refit needs downstream (WRemnants CVHCorrectorSingle<3>); 5 = the full
+  // reference state incl. dxy, dsz, needed when displacement quantities are
+  // corrected (B+ -> J/psi K selection). Default follows emitRefJacobian.
+  int jacRefRows_ = 3;
   edm::EDPutTokenT<edm::ValueMap<std::vector<int>>> outputTrkGlobalIdxs_;
   edm::EDPutTokenT<edm::ValueMap<std::vector<float>>> outputTrkJacRef_;
   edm::EDPutTokenT<edm::ValueMap<std::vector<float>>> outputTrkMomCov_;
@@ -528,6 +534,13 @@ ResidualGlobalCorrectionMakerG4e::ResidualGlobalCorrectionMakerG4e(const edm::Pa
 
   emitRefJacobian_ = iConfig.existsAs<bool>("emitRefJacobian")
       ? iConfig.getParameter<bool>("emitRefJacobian") : false;
+  jacRefRows_ = iConfig.existsAs<int>("jacRefRows")
+      ? iConfig.getParameter<int>("jacRefRows") : (emitRefJacobian_ ? 5 : 3);
+  if (jacRefRows_ != 3 && jacRefRows_ != 5) {
+    throw cms::Exception("Configuration")
+        << "ResidualGlobalCorrectionMakerG4e: jacRefRows must be 3 or 5, got "
+        << jacRefRows_;
+  }
   if (emitRefJacobian_) {
     outputTrkGlobalIdxs_ = produces<edm::ValueMap<std::vector<int>>>("trackGlobalIdxs");
     outputTrkJacRef_ = produces<edm::ValueMap<std::vector<float>>>("trackJacRef");
@@ -5976,16 +5989,18 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       // parameters can be updated by a linearised application of updated
       // global corrections downstream, without reproducing the NanoAOD.
       //
-      // The ValueMap used to carry leftCols<3>() (momentum only), which is
-      // enough for mass and pT but NOT for dxy/dz -- and the B+ selection cuts
-      // on sl3d/alphaBS, which are displacement quantities. The TTree branch
-      // (`jacrefv`, see above) has always been the full 5 rows; only this path
-      // was reduced. Keep the two identical -- task 3.4 cross-checks them.
+      // The ValueMap carries the leading jacRefRows_ rows: 3 (momentum only,
+      // enough for mass and pT -- the single-track W-mass refit, where the
+      // payload is already ~2/3 of the nano) or 5 (adds dxy/dsz, needed when
+      // the B+ selection cuts on sl3d/alphaBS, which are displacement
+      // quantities). The TTree branch (`jacrefv`, see above) has always been
+      // the full 5 rows; with jacRefRows=5 the two are identical (task 3.4
+      // cross-checks them).
       auto &ijacrefv = jacRefV[muonref.key()];
-      ijacrefv.assign(5*nparsfinal, 0.);
+      ijacrefv.assign(jacRefRows_*nparsfinal, 0.);
       //eigen representation of the underlying vector storage
-      Map<Matrix<float, 5, Dynamic, RowMajor> > refjacrefout(ijacrefv.data(), 5, nparsfinal);
-      refjacrefout = ( (dxdparms).leftCols<5>().transpose() ).cast<float>();
+      Map<Matrix<float, Dynamic, Dynamic, RowMajor> > refjacrefout(ijacrefv.data(), jacRefRows_, nparsfinal);
+      refjacrefout = ( (dxdparms).leftCols(jacRefRows_).transpose() ).cast<float>();
 
       auto &imomCov = momCovV[muonref.key()];
       imomCov.assign(3*3, 0.);
