@@ -505,18 +505,26 @@ def nanoGenWmassCustomize(process):
     return process
 
 def nanoAOD_wmassContent(process):
-    """WMass content trim for the 15_0 NanoAOD on UL2016 MiniAOD (data and MC):
-    drop the boosted-tau chain.
+    """WMass content of the 15_0 NanoAOD on UL2016 MiniAOD (data and MC), the
+    non-CVH customisations of WmassNanoProd_10_6_26 that are not upstream:
 
-    On run2_nanoAOD_106Xv2 the stock 15_0 nano re-runs the boosted-tau MVA
-    isolation, which needs GBRForest payloads (RecoTauTag_tauIdMVAIsoDBnewDMwLT)
-    that the UL16 global tags (106X_mcRun2_asymptotic_v17, 106X_dataRun2_v35) do
-    not carry. The CVH refit has to keep those global tags (sim-consistent
-    alignment and field for MC), and boosted taus play no role in the W/Z
-    analyses -- the 10_6 fork already excluded them for the other 106X eras.
-    Safe to call before nanoAOD_customizeCommon (which is appended by cmsDriver
-    last): it only unschedules the tasks; PATObjectCrossLinker accepts an empty
-    boostedTaus tag.
+    * drop the boosted-tau chain. On run2_nanoAOD_106Xv2 the stock 15_0 nano
+      re-runs the boosted-tau MVA isolation, which needs GBRForest payloads
+      (RecoTauTag_tauIdMVAIsoDBnewDMwLT) that the UL16 global tags
+      (106X_mcRun2_asymptotic_v17, 106X_dataRun2_v35) do not carry. The CVH
+      refit has to keep those global tags (sim-consistent alignment and field
+      for MC), and boosted taus play no role in the W/Z analyses -- the 10_6
+      fork already excluded them for the other 106X eras. Only unschedules the
+      tasks; PATObjectCrossLinker accepts an empty boostedTaus tag.
+    * the vertex-agnostic muon isolation (muonvtxagnosticiso_cff, 10_6 PR #31)
+    * the extra Muon columns of the 10_6 table: inner-track algo, kink finder,
+      tracker/pixel hit counts, the pfRelIso04 components, the standalone track
+    * IsoTrack: no impact-parameter requirement (10_6 1230c724004)
+
+    Already upstream in 15_0, nothing to do: the pt > 15 muon pass-through,
+    Muon_isStandalone, Muon_svIdx, the SV matching of jets/taus, the string
+    precision fix of SimpleFlatTableProducer, GenVtx_*.
+    Safe to call before nanoAOD_customizeCommon (appended by cmsDriver last).
     """
     for taskName, members in (("nanoTableTaskCommon", ("boostedTauTask", "boostedTauTablesTask")),
                               ("nanoTableTaskFS", ("boostedTauMCTask",))):
@@ -527,5 +535,38 @@ def nanoAOD_wmassContent(process):
             if hasattr(process, m) and task.contains(getattr(process, m)):
                 task.remove(getattr(process, m))
     process.linkedObjects.boostedTaus = cms.InputTag("")
+
+    from PhysicsTools.NanoAOD.muonvtxagnosticiso_cff import nanoAOD_addVtxAgnosticIso
+    process = nanoAOD_addVtxAgnosticIso(process)
+
+    process = nanoAOD_wmassMuonVariables(process)
+
+    # 10_6: no |dxy| < 0.2 && |dz| < 0.1 requirement on the isolated tracks
+    # (stock 15_0 keeps it below pt 15)
+    process.finalIsolatedTracks.cut = cms.string(
+        "((pt>5 && (abs(pdgId) == 11 || abs(pdgId) == 13)) || pt > 10) && (abs(pdgId) < 15 || abs(eta) < 2.5) && "
+        "((pfIsolationDR03().chargedHadronIso < 5 && pt < 25) || pfIsolationDR03().chargedHadronIso/pt < 0.2)")
+    return process
+
+
+def nanoAOD_wmassMuonVariables(process):
+    """The Muon columns the 10_6 custom NanoAOD had on top of the stock table
+    (muons_cff.py of WmassNanoProd_10_6_26; standalone* also exist in the MUO
+    POG custom_muon_cff with the same definitions)."""
+    v = process.muonTable.variables
+    v.innerTrackAlgo = Var('? innerTrack().isNonnull() ? innerTrack().algo() : -99', 'int', precision=-1, doc='Track algo enum, check DataFormats/TrackReco/interface/TrackBase.h for details.')
+    v.innerTrackOriginalAlgo = Var('? innerTrack().isNonnull() ? innerTrack().originalAlgo() : -99', 'int', precision=-1, doc='Track original algo enum')
+    v.trkKink = Var("combinedQuality().trkKink", float, doc="kink finder output")
+    v.nTrackerValidHits = Var("?track.isNonnull?innerTrack().hitPattern().numberOfValidHits():0", int, doc="number of valid hits in the tracker")
+    v.nPixelValidHits = Var("?track.isNonnull?innerTrack().hitPattern().numberOfValidPixelHits():0", int, doc="number of valid hits in the pixel detector")
+    v.pfRelIso04_chg = Var("pfIsolationR04().sumChargedHadronPt/pt", float, doc="PF relative isolation dR=0.4, charged component")
+    v.pfRelIso04_neu = Var("pfIsolationR04().sumNeutralHadronEt/pt", float, doc="PF relative isolation dR=0.4, neutral component")
+    v.pfRelIso04_pho = Var("pfIsolationR04().sumPhotonEt/pt", float, doc="PF relative isolation dR=0.4, photon component")
+    v.pfRelIso04_pu = Var("pfIsolationR04().sumPUPt/pt", float, doc="PF relative isolation dR=0.4, PU component")
+    v.standalonePt = Var("? standAloneMuon().isNonnull() ? standAloneMuon().pt() : -1", float, doc="pt of the standalone muon", precision=14)
+    v.standaloneEta = Var("? standAloneMuon().isNonnull() ? standAloneMuon().eta() : -99", float, doc="eta of the standalone muon", precision=14)
+    v.standalonePhi = Var("? standAloneMuon().isNonnull() ? standAloneMuon().phi() : -99", float, doc="phi of the standalone muon", precision=14)
+    v.standaloneCharge = Var("? standAloneMuon().isNonnull() ? standAloneMuon().charge() : -99", float, doc="charge of the standalone muon", precision=14)
+    v.standaloneNumberOfValidHits = Var('? standAloneMuon().isNonnull() ? standAloneMuon().numberOfValidHits() : -1', 'int', precision=-1, doc='Number of valid hits in track (standalone chambers)')
     return process
 
