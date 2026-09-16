@@ -765,11 +765,13 @@ if opts.nanoOut:
             kvfRawSxy=ExtVar(cms.InputTag('vtxGeomKvfRaw', 'sxy'), float, doc='B Lxy significance, KVF raw'),
             kvfRawL3d=ExtVar(cms.InputTag('vtxGeomKvfRaw', 'l3d'), float, doc='B 3D flight from closest-z PV, KVF raw'),
             kvfRawSl3d=ExtVar(cms.InputTag('vtxGeomKvfRaw', 'sl3d'), float, doc='B 3D flight significance, KVF raw'),
+            kvfRawAlpha3dPV=ExtVar(cms.InputTag('vtxGeomKvfRaw', 'alpha3dPV'), float, doc='B 3D pointing angle wrt PV, KVF raw'),
             kvfCvhAlphaBS=ExtVar(cms.InputTag('vtxGeomKvfCvh', 'alphaBS'), float, doc='B XY pointing angle wrt BS, KVF CVH'),
             kvfCvhLxy=ExtVar(cms.InputTag('vtxGeomKvfCvh', 'lxy'), float, doc='B transverse flight from BS, KVF CVH'),
             kvfCvhSxy=ExtVar(cms.InputTag('vtxGeomKvfCvh', 'sxy'), float, doc='B Lxy significance, KVF CVH'),
             kvfCvhL3d=ExtVar(cms.InputTag('vtxGeomKvfCvh', 'l3d'), float, doc='B 3D flight from closest-z PV, KVF CVH'),
             kvfCvhSl3d=ExtVar(cms.InputTag('vtxGeomKvfCvh', 'sl3d'), float, doc='B 3D flight significance, KVF CVH'),
+            kvfCvhAlpha3dPV=ExtVar(cms.InputTag('vtxGeomKvfCvh', 'alpha3dPV'), float, doc='B 3D pointing angle wrt PV, KVF CVH'),
             # Cross-links into the Track table (-1 = no match). Enables e.g.
             # Track_dedxHarmonic2[BuJpsiK_kaonTrackIdx[i]] downstream.
             mu0TrackIdx=ExtVar(cms.InputTag('bplusLeafIdx', 'mu0TrackIdx'), int, doc='J/psi mu0 row in Track'),
@@ -808,6 +810,7 @@ if opts.nanoOut:
         _ev.jointCvhSxy = ExtVar(cms.InputTag(_jg, 'sxy'), float, doc='B Lxy significance, joint CVH')
         _ev.jointCvhL3d = ExtVar(cms.InputTag(_jg, 'l3d'), float, doc='B 3D flight from closest-z PV, joint CVH')
         _ev.jointCvhSl3d = ExtVar(cms.InputTag(_jg, 'sl3d'), float, doc='B 3D flight significance, joint CVH')
+        _ev.jointCvhAlpha3dPV = ExtVar(cms.InputTag(_jg, 'alpha3dPV'), float, doc='B 3D pointing angle wrt PV, joint CVH')
         # Per-leg FITTED momenta, decomposition leaf order (mu-, mu+, K for a
         # B+). Fixed-index scalar columns because a nano flat table cannot hold
         # a variable-length ValueMap<vector<float>>; absent legs are -99.
@@ -891,6 +894,16 @@ if opts.nanoOut:
         originalIndex=cms.InputTag(opts.srcTracks, 'originalIndex'),
         pvSrc=cms.InputTag('offlinePrimaryVertices'))
 
+    # Impact parameters w.r.t. the associated primary vertex. reco::Track's own
+    # dxy/dz are measured from the origin, so the stored columns are unusable as
+    # impact parameters; this producer supplies the corrected ones.
+    process.trackImpactParameter = cms.EDProducer(
+        'TrackImpactParameterProducer',
+        trackSrc=cms.InputTag(opts.srcTracks),
+        pvSrc=cms.InputTag('offlinePrimaryVertices'),
+        pvIdx=cms.InputTag('trackPvIdx'),
+        sentinel=cms.double(-99.))
+
     process.trackTable = cms.EDProducer(
         'SimpleTrackFlatTableProducer',
         src=cms.InputTag(opts.srcTracks),
@@ -900,11 +913,37 @@ if opts.nanoOut:
         variables=cms.PSet(
             P3Vars,
             charge=Var('charge', 'int16', doc='charge'),
-            dxy=Var('dxy', float, doc='dxy'), dz=Var('dz', float, doc='dz'),
+            # dxy/dz here are reco::Track's own accessors, measured from the
+            # ORIGIN (0,0,0), not from the primary vertex. They are kept so the
+            # defect stays visible; d0/dzPV below are the ones to use.
+            dxy=Var('dxy', float, doc='dxy w.r.t. the ORIGIN, not the PV'),
+            dz=Var('dz', float, doc='dz w.r.t. the ORIGIN, not the PV'),
             normChi2=Var('normalizedChi2', float, doc='chi2/ndof'),
             nValidHits=Var('numberOfValidHits', 'int16', doc='n valid hits'),
+            # Quality block. Verified present on the cloned alignment tracks:
+            # the covariance survived cloning (ptError/dxyError/dzError finite
+            # and positive for 100% of 752 tracks over 40 events) and so did the
+            # hit pattern (pixel hits > 0 for 99.3%, tracker layers for 100%).
+            ptErr=Var('ptError', float, doc='pt uncertainty'),
+            dxyErr=Var('dxyError', float, doc='dxy uncertainty'),
+            dzErr=Var('dzError', float, doc='dz uncertainty'),
+            nValidPixelHits=Var('hitPattern().numberOfValidPixelHits()', 'int16',
+                                doc='n valid pixel hits'),
+            trackerLayers=Var('hitPattern().trackerLayersWithMeasurement()', 'int16',
+                              doc='tracker layers with measurement'),
+            pixelLayers=Var('hitPattern().pixelLayersWithMeasurement()', 'int16',
+                            doc='pixel layers with measurement'),
+            highPurity=Var('quality("highPurity")', bool, doc='highPurity quality flag'),
         ),
         externalVariables=cms.PSet(
+            d0=ExtVar(cms.InputTag('trackImpactParameter', 'd0'), float,
+                      doc='transverse impact parameter w.r.t. the associated PV'),
+            dzPV=ExtVar(cms.InputTag('trackImpactParameter', 'dzPV'), float,
+                        doc='longitudinal impact parameter w.r.t. the associated PV'),
+            d0Err=ExtVar(cms.InputTag('trackImpactParameter', 'd0Err'), float,
+                         doc='uncertainty on d0, track and PV contributions'),
+            dzPVErr=ExtVar(cms.InputTag('trackImpactParameter', 'dzPVErr'), float,
+                           doc='uncertainty on dzPV, track and PV contributions'),
             dedxHarmonic2=ExtVar(cms.InputTag(opts.srcTracks + 'DeDxHarmonic2'), float, doc='dE/dx harmonic2'),
             dedxPixelHarmonic2=ExtVar(cms.InputTag(opts.srcTracks + 'DeDxPixelHarmonic2'), float, doc='dE/dx pixel harmonic2'),
             originalIndex=ExtVar(cms.InputTag(opts.srcTracks, 'originalIndex'), 'uint', doc='index into generalTracks'),
@@ -1261,6 +1300,7 @@ if opts.nanoOut:
         process.bplusTable, process.trackTable, process.muonTable,
         process.pvTable, process.dcsTable, process.l1Table, process.bplusFit,
         process.bplusLeafIdx, process.trackMuonIdx, process.trackPvIdx,
+        process.trackImpactParameter,
         process.vtxGeomKvfRaw, process.vtxGeomKvfCvh,
         *( [process.jointCvhBu, process.vtxGeomJointCvh] if opts.jointCvh else [] ),
         *_extra_tables)
