@@ -93,6 +93,7 @@ class CandidateVertexGeometryProducer : public edm::global::EDProducer<> {
 
   edm::EDPutTokenT<edm::ValueMap<float>> oAlphaBS_, oLxy_, oSxy_, oL3d_, oSl3d_;
   edm::EDPutTokenT<edm::ValueMap<int>> oPvIdx_;
+  edm::EDPutTokenT<edm::ValueMap<float>> oAlpha3dPV_;
 };
 
 CandidateVertexGeometryProducer::CandidateVertexGeometryProducer(
@@ -138,6 +139,7 @@ CandidateVertexGeometryProducer::CandidateVertexGeometryProducer(
   oL3d_ = produces<edm::ValueMap<float>>("l3d");
   oSl3d_ = produces<edm::ValueMap<float>>("sl3d");
   oPvIdx_ = produces<edm::ValueMap<int>>("pvIdx");
+  oAlpha3dPV_ = produces<edm::ValueMap<float>>("alpha3dPV");
 }
 
 void CandidateVertexGeometryProducer::produce(edm::StreamID, edm::Event& iEvent,
@@ -149,6 +151,7 @@ void CandidateVertexGeometryProducer::produce(edm::StreamID, edm::Event& iEvent,
   std::vector<float> alphaBS(n, kSentinel), lxy(n, kSentinel), sxy(n, kSentinel),
       l3d(n, kSentinel), sl3d(n, kSentinel);
   std::vector<int> pvIdx(n, -1);
+  std::vector<float> alpha3dPV(n, kSentinel);
 
   edm::Handle<reco::BeamSpot> bsH;
   iEvent.getByToken(bsToken_, bsH);
@@ -261,6 +264,14 @@ void CandidateVertexGeometryProducer::produce(edm::StreamID, edm::Event& iEvent,
           for (int a = 0; a < 3; ++a)
             for (int b = 0; b < 3; ++b) var += u[a] * pv.covariance(a, b) * u[b];
           if (var > 0.) sl3d[i] = L / std::sqrt(var);
+          // 3D pointing angle: the angle between the PV->vertex flight vector
+          // and the fitted momentum. The transverse alphaBS above is the
+          // beamspot-referenced 2D analogue; this is the 3D, PV-referenced one,
+          // which is what a displaced-vertex selection actually wants.
+          if (pmag > 0.) {
+            const double ct = (dx * px + dy * py + dz * pz) / (L * pmag);
+            alpha3dPV[i] = static_cast<float>(std::acos(std::max(-1.0, std::min(1.0, ct))));
+          }
         }
       }
     }
@@ -278,6 +289,7 @@ void CandidateVertexGeometryProducer::produce(edm::StreamID, edm::Event& iEvent,
   };
   putF(oAlphaBS_, alphaBS);
   putF(oLxy_, lxy);
+  putF(oAlpha3dPV_, alpha3dPV);
   putF(oSxy_, sxy);
   putF(oL3d_, l3d);
   putF(oSl3d_, sl3d);
