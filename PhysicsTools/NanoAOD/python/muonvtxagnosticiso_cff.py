@@ -1,6 +1,12 @@
 import FWCore.ParameterSet.Config as cms
 from PhysicsTools.NanoAOD.common_cff import ExtVar
 
+# WMass (from WmassNanoProd_10_6_26, PR #31): PF isolation of the muon computed
+# from the packed PF candidates without any primary-vertex association -- the
+# charged component takes every charged candidate within |dz(muon, cand)| <
+# maxdeltaz, the PU component the rest; neutral/photon components are taken from
+# the standard pfIsolationR0{3,4} unless calculateNeutralPhoton != 0.
+
 muonvtxagniso04 = cms.EDProducer("MuonVtxAgnosticIsoProducer",
     muonInputTag = cms.InputTag("linkedObjects","muons"),
     pfCandidateInputTag = cms.InputTag("packedPFCandidates"),
@@ -31,3 +37,18 @@ vtxAgnIsoVariables = cms.PSet(
     vtxAgnPfRelIso03_pu = ExtVar(cms.InputTag("muonvtxagniso03:vtxAgnosticPUIso"), float, doc="Manually computed PF relative isolation to avoid vertex selection (DR=0.3, PU component)"),
     vtxAgnPfRelIso03_all = ExtVar(cms.InputTag("muonvtxagniso03:vtxAgnosticTotalIso"), float, doc="Manually computed PF relative isolation to avoid vertex selection (DR=0.3, combination with delta beta corrections)"),
 )
+
+muonVtxAgnosticIsoTask = cms.Task(muonvtxagniso04, muonvtxagniso03)
+
+
+def nanoAOD_addVtxAgnosticIso(process):
+    """Run the two isolation producers on the muons of the Muon table and add
+    the ten vtxAgnPfRelIso0{3,4}_* columns (data and MC)."""
+    process.muonvtxagniso04 = muonvtxagniso04
+    process.muonvtxagniso03 = muonvtxagniso03
+    process.muonvtxagniso04.muonInputTag = process.muonTable.src
+    process.muonvtxagniso03.muonInputTag = process.muonTable.src
+    process.muonTablesTask.add(process.muonvtxagniso04, process.muonvtxagniso03)
+    for name in vtxAgnIsoVariables.parameterNames_():
+        setattr(process.muonTable.externalVariables, name, getattr(vtxAgnIsoVariables, name))
+    return process
