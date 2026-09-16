@@ -465,12 +465,17 @@ def nanoWmassGenCustomize(process):
     return process
 
 
-###Customizations needed for Wmass analysis                                                                                                              
-###increasing the precision of selected GenParticles.                                                                                                             
+### WMass customizations (ported from WmassNanoProd_10_6_26)
+### Full precision for the GenParticles the W/Z analyses fit on.
 def customizeGenLeptonPrecision(process):
+    """Store pt/eta/phi at full precision (mantissa bits = -1) for leptons,
+    neutrinos, top, W, Z and Higgs; everything else keeps the genParticleTable
+    default. The stock nanoWmassGenCustomize above is NOT equivalent: it uses
+    the CandVars precision (12 bits for eta/phi) and omits top and Higgs.
+    """
     pdgSelection="?(abs(pdgId) == 11|| abs(pdgId)==13 || abs(pdgId)==15 ||abs(pdgId)== 12 || abs(pdgId)== 14 || abs(pdgId)== 16|| abs(pdgId)== 6|| abs(pdgId)== 24|| pdgId== 23|| pdgId== 25)"
 
-    # Keep full precision for selected particles                                                                                       
+    # Keep full precision for selected particles
     ptPrecision="{}?{}:{}".format(pdgSelection, -1, genParticleTable.variables.pt.precision.value())
     process.genParticleTable.variables.pt.precision=cms.string(ptPrecision)
     phiPrecision="{} ? {} : {}".format(pdgSelection, -1, genParticleTable.variables.phi.precision.value())
@@ -481,11 +486,22 @@ def customizeGenLeptonPrecision(process):
     return process
 
 def nanoGenWmassCustomize(process):
-    process = customizeGenLeptonPrecision(process)
-    
-    process.lheInfoTable.storeAllLHEInfo = True
+    """The 10_6 production entry point for MC (WMassNanoProduction makeNanoV9MC*.sh):
+      cmsDriver.py ... --customise PhysicsTools/NanoAOD/nano_cff.nanoGenWmassCustomize
 
-    process.genWeightsTable.weightgroups = ['scale', 'PDF', 'matrix element', 'unknown', 'parton shower']
-    process.genWeightsTable.maxGroupsPerType = [-1, -1, -1, -1, 1]
+    Gen precision + the full LHE record. The grouped-weights parameters of the
+    10_6 genWeightsTable (weightgroups / maxGroupsPerType) do not exist on the
+    stock 15_0 GenWeightsTableProducer; they are set only if the grouped
+    producer has been ported (pending decision), so this stays configurable
+    either way.
+    """
+    process = customizeGenLeptonPrecision(process)
+
+    process.lheInfoTable.storeAllLHEInfo = cms.bool(True)
+
+    if hasattr(process.genWeightsTable, "weightgroups"):
+        process.genWeightsTable.weightgroups = ['scale', 'PDF', 'matrix element', 'unknown', 'parton shower']
+        process.genWeightsTable.maxGroupsPerType = [-1, -1, -1, -1, 1]
 
     return process
+
