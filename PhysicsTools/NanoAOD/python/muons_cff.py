@@ -394,7 +394,7 @@ muonExternalVecVarsTable = cms.EDProducer("FlattenedCandValueMapVectorTableProdu
         # can you declare a max number of bits here?  technically for the moment this needs 16 bits, but might eventually need 17 or 18
         cvhmergedGlobalIdxs = ExtVar(cms.InputTag("trackrefit:globalIdxs"), "std::vector<int>", doc="Indices for correction parameters", precision = 16),
         # optimal precision tbd, but presumably can work the same way as for scalar floats
-        cvhJacRef = ExtVar(cms.InputTag("trackrefit:jacRef"), "std::vector<float>", doc="jacobian for corrections", precision = 12),
+        cvhJacRef = ExtVar(cms.InputTag("trackrefit:jacRef"), "std::vector<float>", doc="jacobian for corrections: d(qop,lambda,phi)/d(globalparms), 3 x nParms row-major (jacRefRows)", precision = 12),
         # optimal precision tbd, but presumably can work the same way as for scalar floats
         cvhMomCov = ExtVar(cms.InputTag("trackrefit:momCov"), "std::vector<float>", doc="covariance matrix for qop, lambda, phi", precision = 12),
     )
