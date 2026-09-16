@@ -321,11 +321,21 @@ def nanoAOD_customizeCommon(process):
 import os
 
 # Default scalar-potential coefficient dump for the CVH refit field model.
-# Override with the CVH_SCALARPOT_INITFILE env var (cmsDriver --customise
-# cannot pass function arguments).
-_DEFAULT_SCALARPOT_INITFILE = (
-    "/work/submit/david_w/ZMass/mfs/data/fitresults/"
-    "polyfit3d_full_coeffs_lmax18_cmsswnorm.txt")
+# The scalar-potential coefficient dump for the CVH refit. Shipped in the CMSSW
+# area as MagneticField/ParametrizedEngine/data/... so that a CRAB sandbox
+# carries it (CRAB packs the data/ directories); resolved through CMSSW_BASE,
+# then CMSSW_RELEASE_BASE, the way edm::FileInPath does. Override with the
+# CVH_SCALARPOT_INITFILE env var (cmsDriver --customise cannot pass function
+# arguments).
+_SCALARPOT_INITFILE_REL = "MagneticField/ParametrizedEngine/data/polyfit3d_full_coeffs_lmax18_cmsswnorm.txt"
+
+def _resolveInPath(rel):
+    for base in (os.environ.get("CMSSW_BASE"), os.environ.get("CMSSW_RELEASE_BASE")):
+        if base and os.path.isfile(os.path.join(base, "src", rel)):
+            return os.path.join(base, "src", rel)
+    return rel
+
+_DEFAULT_SCALARPOT_INITFILE = _resolveInPath(_SCALARPOT_INITFILE_REL)
 
 
 def setup3DFieldForRefit(process, initFile=None, useScalarPot3D=True):
