@@ -520,6 +520,8 @@ def nanoAOD_wmassContent(process):
     * the extra Muon columns of the 10_6 table: inner-track algo, kink finder,
       tracker/pixel hit counts, the pfRelIso04 components, the standalone track
     * IsoTrack: no impact-parameter requirement (10_6 1230c724004)
+    * the PV-robust PUPPI + DeepMET (deepMETPVRobust_cff, 10_6 PR #33):
+      DeepMETPVRobust[NoPUPPI]_pt/phi, PVRobustIndex, PVMuonIndex
 
     Already upstream in 15_0, nothing to do: the pt > 15 muon pass-through,
     Muon_isStandalone, Muon_svIdx, the SV matching of jets/taus, the string
@@ -540,6 +542,9 @@ def nanoAOD_wmassContent(process):
     process = nanoAOD_addVtxAgnosticIso(process)
 
     process = nanoAOD_wmassMuonVariables(process)
+
+    from PhysicsTools.NanoAOD.deepMETPVRobust_cff import nanoAOD_addDeepMETPVRobust
+    process = nanoAOD_addDeepMETPVRobust(process)
 
     # 10_6: no |dxy| < 0.2 && |dz| < 0.1 requirement on the isolated tracks
     # (stock 15_0 keeps it below pt 15)
