@@ -91,6 +91,17 @@ opts.register('jointCvh', True, VarParsing.VarParsing.multiplicity.singleton,
               'schedule the joint N-body CVH arm (jointCvh* columns). '
               'Measured: adds ~0.87 s/event to a ~3.4 s/event job, i.e. '
               'about +50%%. False drops the arm and its columns entirely.')
+opts.register('twoTrackArm', True, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'schedule the TWO-TRACK dimuon CVH maker (globalCorJpsiK) and '
+              'its cor* columns -- the J/psi-mass-constrained dimuon refit. '
+              'This is the single biggest cost in the job: it issues ~254 '
+              'Geant4e propagations per fit against ~31 for a single track, '
+              'about 89%% of the propagation work. Production sets False: the '
+              'three arms that are wanted are kvfRaw*, kvfCvh* and jointCvh*, '
+              'and the joint maker applies its own J/psi constraint anyway. '
+              'True (default) keeps the historical four-arm output for A/B '
+              'work.')
 opts.register('emitRefJacobian', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'store the reference-point jacobian d(track state)/d(global '
@@ -543,7 +554,9 @@ if opts.useScalarPot3D:
     fieldlabel = 'ScalarPot3DMf'
     process.ScalarPot3DMagneticFieldProducer.label = fieldlabel
     process.Geant4ePropagator.MagneticFieldLabel = fieldlabel
-    _field_makers = [process.globalCorJpsiK, process.globalCorJpsiKKaon]
+    _field_makers = [process.globalCorJpsiKKaon]
+    if opts.twoTrackArm:
+        _field_makers.append(process.globalCorJpsiK)
     if opts.emitRefitTracks:
         _field_makers.append(process.globalCorJpsiKMuon)
     for m in _field_makers:
@@ -587,7 +600,15 @@ elif opts.mode in ('both', 'kaon'):
     _seq = _seq * process.bplusBachelorTracks
 if opts.emitRefitTracks:
     _seq = _seq * process.bplusJpsiMuonTracks
-if opts.mode in ('both', 'dimuon'):
+# twoTrackArm=False drops the dimuon TWO-TRACK maker. It is ~89% of the
+# Geant4e propagation work, and the three arms production wants (kvfRaw*,
+# kvfCvh*, jointCvh*) do not consume it -- the joint maker applies its own
+# J/psi constraint, and the KVF arm applies jpsiConstraint=inFit.
+_two_track = opts.twoTrackArm and opts.mode in ('both', 'dimuon')
+if opts.mode == 'dimuon' and not opts.twoTrackArm:
+    raise ValueError('mode="dimuon" with twoTrackArm=False schedules no maker '
+                     'at all -- pick one.')
+if _two_track:
     _seq = _seq * process.globalCorJpsiK
 if opts.mode in ('both', 'kaon'):
     _seq = _seq * process.globalCorJpsiKKaon
@@ -700,16 +721,6 @@ if opts.nanoOut:
             kaonPdgId=Var('daughter(1).pdgId', int, doc='bachelor signed pdgId'),
         ),
         externalVariables=cms.PSet(
-            corMass=ExtVar(cms.InputTag(_cor, 'corMass'), float, doc='CVH-refit dimuon mass'),
-            corMassErr=ExtVar(cms.InputTag(_cor, 'corMassErr'), float, doc='CVH-refit mass error'),
-            corPt=ExtVar(cms.InputTag(_cor, 'corPt'), float, doc='CVH-refit dimuon pt'),
-            corEta=ExtVar(cms.InputTag(_cor, 'corEta'), float, doc='CVH-refit dimuon eta'),
-            corPhi=ExtVar(cms.InputTag(_cor, 'corPhi'), float, doc='CVH-refit dimuon phi'),
-            corMuPlusPt=ExtVar(cms.InputTag(_cor, 'muPlusPt'), float, doc='CVH-refit mu+ pt'),
-            corMuMinusPt=ExtVar(cms.InputTag(_cor, 'muMinusPt'), float, doc='CVH-refit mu- pt'),
-            # edmval < 0 marks a candidate whose dimuon leg did not converge:
-            # the orphan flag that used to live in the offline join.
-            corEdmval=ExtVar(cms.InputTag(_cor, 'edmval'), float, doc='CVH fit EDM (<0 = not refit)'),
             # ---- Fitted mother, three arms (naming per proposal 2026-07-28) ----
             # METHOD first, track source second:
             #   kvfRaw*    KVF on the raw stage-1 tracks
@@ -780,6 +791,23 @@ if opts.nanoOut:
         ),
     )
 
+    # Two-track dimuon CVH arm (cor*). Added here rather than inline so the arm
+    # can be switched off without leaving dangling InputTags -- production runs
+    # with twoTrackArm=False, and an ExtVar pointing at an unscheduled module
+    # is a configuration error, not a missing column.
+    if opts.twoTrackArm:
+        _ev = process.bplusTable.externalVariables
+        _ev.corMass = ExtVar(cms.InputTag(_cor, 'corMass'), float, doc='CVH-refit dimuon mass')
+        _ev.corMassErr = ExtVar(cms.InputTag(_cor, 'corMassErr'), float, doc='CVH-refit mass error')
+        _ev.corPt = ExtVar(cms.InputTag(_cor, 'corPt'), float, doc='CVH-refit dimuon pt')
+        _ev.corEta = ExtVar(cms.InputTag(_cor, 'corEta'), float, doc='CVH-refit dimuon eta')
+        _ev.corPhi = ExtVar(cms.InputTag(_cor, 'corPhi'), float, doc='CVH-refit dimuon phi')
+        _ev.corMuPlusPt = ExtVar(cms.InputTag(_cor, 'muPlusPt'), float, doc='CVH-refit mu+ pt')
+        _ev.corMuMinusPt = ExtVar(cms.InputTag(_cor, 'muMinusPt'), float, doc='CVH-refit mu- pt')
+        # edmval < 0 marks a candidate whose dimuon leg did not converge:
+        # the orphan flag that used to live in the offline join.
+        _ev.corEdmval = ExtVar(cms.InputTag(_cor, 'edmval'), float, doc='CVH fit EDM (<0 = not refit)')
+
     # Joint-CVH arm columns. Added here rather than inline so the arm can be
     # switched off without leaving dangling InputTags.
     if opts.jointCvh:
@@ -802,6 +830,19 @@ if opts.nanoOut:
         # 1 = the fit COMPLETED. NOT a physics-quality flag:
         # a runaway fit can complete. Cut on chisq/ndof and edmRef.
         _ev.jointCvhOk = ExtVar(cms.InputTag(_j, 'fitOk'), int, doc='1 = joint CVH fit completed (NOT a quality flag)')
+        # CONSTRAINED-SUBSYSTEM (J/psi) quantities from the SAME joint fit that
+        # produced the mother. The maker computes these already and puts them
+        # on its corMass/corPt/... maps -- they were simply never consumed,
+        # because the cor* columns were wired to the two-track maker instead.
+        # Summed over massconstrainttracks, so this is the J/psi for a B+ and
+        # whatever subsystem carries the constraint for another channel.
+        # Unlike jointCvhConsMass, this is a MEASUREMENT: it comes from the
+        # unconstrained (icons==0) pass, so the J/psi mass is not forced.
+        _ev.jointCvhJpsiMass = ExtVar(cms.InputTag(_j, 'corMass'), float, doc='m(mumu) from the joint N-body CVH fit (unconstrained pass)')
+        _ev.jointCvhJpsiMassErr = ExtVar(cms.InputTag(_j, 'corMassErr'), float, doc='mass error on m(mumu), joint N-body CVH')
+        _ev.jointCvhJpsiPt = ExtVar(cms.InputTag(_j, 'corPt'), float, doc='pt of the mumu subsystem, joint N-body CVH')
+        _ev.jointCvhJpsiEta = ExtVar(cms.InputTag(_j, 'corEta'), float, doc='eta of the mumu subsystem, joint N-body CVH')
+        _ev.jointCvhJpsiPhi = ExtVar(cms.InputTag(_j, 'corPhi'), float, doc='phi of the mumu subsystem, joint N-body CVH')
         _ev.jointCvhVtxX = ExtVar(cms.InputTag(_j, 'vtxX'), float, doc='joint CVH common vertex x')
         _ev.jointCvhVtxY = ExtVar(cms.InputTag(_j, 'vtxY'), float, doc='joint CVH common vertex y')
         _ev.jointCvhVtxZ = ExtVar(cms.InputTag(_j, 'vtxZ'), float, doc='joint CVH common vertex z')
@@ -1093,6 +1134,15 @@ if opts.nanoOut:
             # Reference-point jacobian WITHOUT the calibration payload: this
             # emits globalIdxs + jacRefLeg{i} + jacRefVtx and no Hessian.
             emitRefJacobian=cms.bool(bool(opts.emitRefJacobian)),
+            # The clone source carries fillGradsFactored from _calib_pset,
+            # whose driver default is True -- so this arm was running a
+            # SelfAdjointEigenSolver over the full ~nParms x nParms Hessian for
+            # EVERY candidate and emitting motherJacMass/jpsiJacMass/hessFactor
+            # that nothing in this config reads. Off here. The calibration path
+            # is mode="joint", which forces nanoOut off and builds its own
+            # maker; it is unaffected.
+            fillGradsFactored=cms.untracked.bool(False),
+            fillGrads=cms.bool(False),
             outprefix=cms.untracked.string('jointcvh'),
             scalarPotentialInitFile=cms.string(opts.scalarPot3DInitFile),
             CvhMaster=CvhMasterPSet.clone(
@@ -1216,7 +1266,18 @@ if opts.nanoOut:
                 weight=Var('weight', float, doc='generator event weight'),
             ),
         )
-        _extra_tables += [process.genTable, process.genWeightTable]
+        # Pileup. `PileupSummaryInfos_addPileupInfo` is persisted in the MC
+        # AlCaReco (via the keepPileupSummaryInfo customise), and CMSSW's own
+        # NPUTablesProducer consumes vector<PileupSummaryInfo> directly, so no
+        # new plugin is needed. Data carries no such product and gets no table.
+        process.puTable = cms.EDProducer(
+            'NPUTablesProducer',
+            src=cms.InputTag('addPileupInfo'),
+            pvsrc=cms.InputTag('offlinePrimaryVertices'),
+            zbins=cms.vdouble([0.0, 1.7, 2.6, 3.0, 3.5, 4.2, 5.2, 6.0, 7.5, 9.0, 12.0]),
+            savePtHatMax=cms.bool(False),
+        )
+        _extra_tables += [process.genTable, process.genWeightTable, process.puTable]
 
     # ---- Reference-point jacobian tables ---------------------------------
     # A nano flat-table column must be scalar, and these jacobians are
