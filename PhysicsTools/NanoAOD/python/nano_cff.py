@@ -564,6 +564,32 @@ def nanoAOD_wmassContent(process):
     return process
 
 
+def nanoAOD_wmassLowPU(process):
+    """The 2017 low-PU run (2017H, 13 TeV, ~0 PU) on the UL re-reconstruction
+    (RunIILowPUSummer20UL17MiniAODv2 / Run2017H-UL2017_MiniAODv2). The 10_6
+    production ran on the 94X low-PU MiniAOD behind a run2_nanoAOD_LowPU era
+    modifier; on UL input the standard run2_nanoAOD_106Xv2 path applies and
+    only the low-PU-specific content of that era is left, as a customise
+    (Category H of the migration):
+
+    * trigger objects of the HI-style menu of the run: the Electron and Muon
+      selections carry the Ele20 / Ele17HI and Mu17 filters (the 10_6
+      selections_lowPU) instead of the standard-menu bits
+    * DeepMET re-run with the low-PU models (deepmet_lowPU[_Resp].pb, leptons
+      removed from the inputs and added back), replacing the stock
+      DeepMETResolutionTune / DeepMETResponseTune tables, which would carry
+      the standard-PU models' values stored in the MiniAOD
+
+    Left behind with the 94X era: the VID / scale-smearing source rewiring,
+    the puppiIsoId / softMva removal, the Run2017_LowPU_v2 electron
+    scale/smearing file and the ecalCorr column (a workaround of the 94X
+    MiniAODv2 E/p bug; the UL2017 file of the era applies), the lhcInfoTable
+    removal. As in 10_6 there is no CVH refit for low-PU: the production
+    scripts do not add nanoAOD_addCvhMuon.
+    """
+    return process
+
+
 def nanoAOD_wmassMuonVariables(process):
     """The Muon columns the 10_6 custom NanoAOD had on top of the stock table
     (muons_cff.py of WmassNanoProd_10_6_26; standalone* also exist in the MUO
