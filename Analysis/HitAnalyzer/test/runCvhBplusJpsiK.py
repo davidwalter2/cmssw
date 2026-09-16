@@ -746,6 +746,16 @@ if opts.nanoOut:
             kvfCvhDimuonAlphaBS=ExtVar(cms.InputTag('bplusFit', 'refDimuonAlphaBS'), float, doc='dimuon XY pointing angle wrt BS, CVH-refit tracks'),
             kvfCvhDimuonSxy=ExtVar(cms.InputTag('bplusFit', 'refDimuonSxy'), float, doc='dimuon 2D Lxy significance wrt BS, CVH-refit tracks'),
             kvfCvhDimuonSl3d=ExtVar(cms.InputTag('bplusFit', 'refDimuonSl3d'), float, doc='dimuon 3D flight significance wrt closest-z PV, CVH-refit tracks'),
+            # UNCONSTRAINED dimuon mass (gap G11). The dimuon fit above applies
+            # no mass constraint, so this is a free J/psi mass -- the natural
+            # cross-check on the muon momentum scale, and the quantity tying
+            # this channel to the J/psi calibration. Not to be confused with
+            # jointCvhJpsiMass, which is the joint fit's CONSTRAINED parameter
+            # and is pinned to the PDG value for every candidate.
+            kvfRawDimuonMass=ExtVar(cms.InputTag('bplusFit', 'rawDimuonMass'), float, doc='UNCONSTRAINED dimuon mass, raw tracks'),
+            kvfRawDimuonMassErr=ExtVar(cms.InputTag('bplusFit', 'rawDimuonMassErr'), float, doc='uncertainty on the unconstrained dimuon mass, raw tracks'),
+            kvfCvhDimuonMass=ExtVar(cms.InputTag('bplusFit', 'refDimuonMass'), float, doc='UNCONSTRAINED dimuon mass, CVH-refit tracks'),
+            kvfCvhDimuonMassErr=ExtVar(cms.InputTag('bplusFit', 'refDimuonMassErr'), float, doc='uncertainty on the unconstrained dimuon mass, CVH-refit tracks'),
 
             # ---- B-vertex geometry, one geometry module per arm ----------
             # Same implementation for every arm: pure
@@ -821,6 +831,45 @@ if opts.nanoOut:
         process.bplusTable.externalVariables.genBDR = ExtVar(cms.InputTag(_gf, 'genBDR'), float, doc='dR(candidate, matched gen b-hadron)')
         process.bplusTable.externalVariables.genBPdgId = ExtVar(cms.InputTag(_gf, 'genBPdgId'), int, doc='matched gen b-hadron pdgId (0 = none)')
         process.bplusTable.externalVariables.genPartIdx = ExtVar(cms.InputTag(_gf, 'genBIdx'), int, doc='row in Gen of the matched b-hadron (-1 = none)')
+
+        # Per-leg generator match (leg 0/1 = muons, leg 2 = bachelor), plus the
+        # common ancestor of the three matched legs. The ancestor's species is
+        # the truth category: a B+ is signal, another b-hadron is a
+        # mis-reconstructed b, none found is genuine combinatorial.
+        #
+        # Matching follows Bmm5: dR < 0.02 AND |dpt|/pt_gen < 0.1, both
+        # required. An unmatched leg keeps -1 and is never assigned a nearest
+        # neighbour, because a wrong match mislabels the very categories this
+        # exists to separate.
+        for _l in (0, 1, 2):
+            setattr(process.bplusTable.externalVariables, f'leg{_l}GenIdx',
+                    ExtVar(cms.InputTag(_gf, f'leg{_l}GenIdx'), int,
+                           doc=f'row in Gen matched to leg {_l} (-1 = none)'))
+            setattr(process.bplusTable.externalVariables, f'leg{_l}GenPdgId',
+                    ExtVar(cms.InputTag(_gf, f'leg{_l}GenPdgId'), int,
+                           doc=f'pdgId of the Gen particle matched to leg {_l} (0 = none)'))
+            setattr(process.bplusTable.externalVariables, f'leg{_l}GenMotherPdgId',
+                    ExtVar(cms.InputTag(_gf, f'leg{_l}GenMotherPdgId'), int,
+                           doc=f'pdgId of that particle\'s mother (0 = none)'))
+            setattr(process.bplusTable.externalVariables, f'leg{_l}GenPt',
+                    ExtVar(cms.InputTag(_gf, f'leg{_l}GenPt'), float,
+                           doc=f'generated pt of the particle matched to leg {_l}'))
+            setattr(process.bplusTable.externalVariables, f'leg{_l}GenDR',
+                    ExtVar(cms.InputTag(_gf, f'leg{_l}GenDR'), float,
+                           doc=f'dR(leg {_l}, its Gen match)'))
+        process.bplusTable.externalVariables.genAncestorPdgId = ExtVar(
+            cms.InputTag(_gf, 'genAncestorPdgId'), int,
+            doc='pdgId of the common ancestor of all matched legs (0 = none found)')
+        process.bplusTable.externalVariables.genAncestorIdx = ExtVar(
+            cms.InputTag(_gf, 'genAncestorIdx'), int,
+            doc='row in Gen of that common ancestor (-1 = none)')
+        process.bplusTable.externalVariables.genAncestorPt = ExtVar(
+            cms.InputTag(_gf, 'genAncestorPt'), float, doc='common ancestor pt')
+        process.bplusTable.externalVariables.genAncestorMass = ExtVar(
+            cms.InputTag(_gf, 'genAncestorMass'), float, doc='common ancestor mass')
+        process.bplusTable.externalVariables.nLegsGenMatched = ExtVar(
+            cms.InputTag(_gf, 'nLegsGenMatched'), int,
+            doc='number of legs with a Gen match (ancestor requires all three)')
 
     # Track -> Muon / Track -> PV cross-links, inverting the persisted
     # associations into row indices (-1 = none) on the Track table.
@@ -941,6 +990,38 @@ if opts.nanoOut:
         'JpsiXKinematicFitProducer',
         src=_src_cands,
         refitLegs=_refit_legs,
+        # Per-leg gen matching thresholds. Bmm5 (GenBmmProducer.cc:74) requires
+        # dR < 0.02 AND |dpt|/pt < 0.1 together, and that is what this produced
+        # until 2026-08-18.
+        #
+        # The pT window is now DISABLED, deliberately, because it biases the one
+        # quantity this analysis measures. A badly measured kaon fails the window,
+        # so its candidate loses its common ancestor and leaves the signal
+        # category: measured, 3.6% of B+-like candidates lose their bachelor leg
+        # that way, and those are the broad ones -- p16-p84 of 5.126-5.411 against
+        # 5.250-5.298 for the matched. The signal template's mass tails were being
+        # cut by the truth definition rather than by the detector, and the kaon
+        # momentum response was hard-truncated at |resp - 1| = 0.0999.
+        #
+        # dR is tightened 0.02 -> 0.01 to pay for it. Track direction is measured
+        # orders of magnitude better than momentum, so a dR-only match biases a
+        # variable the calibration never uses. The Bmm5 warning still stands in
+        # principle -- dR alone can match the wrong track in a dense b jet -- so
+        # the wrong-match rate is measured rather than assumed: the bachelor's
+        # matched gen particle must be a daughter of the same ancestor as the
+        # muons, and the fraction that is not is the contamination this buys.
+        # dR back to 0.02, having measured that 0.01 was too aggressive: at 0.01
+        # the three-leg match rate fell 78.5% -> 69.4%, which cost more than
+        # dropping the pT window gained. And the wrong-match rate -- the
+        # bachelor's matched particle not traceable to the ancestor -- was
+        # **0.4% either way**, so tightening dR bought nothing it was meant to.
+        genLegMaxDR=cms.untracked.double(0.02),
+        genLegMaxRelDPt=cms.untracked.double(1e9),
+        # Depth budget for the common-ancestor search. 10 and 30 were compared
+        # on 1068 candidates and give byte-identical results, so the residual
+        # ~13% of three-leg-matched signal that finds no ancestor is NOT the
+        # budget running out. Kept at 10; raising it only costs permutations.
+        genAncestorMaxDepth=cms.untracked.uint32(10),
         jpsiConstraint=cms.string(str(opts.jpsiConstraint)),
         jpsiMass=cms.double(3.0969),
         maxChi2=cms.double(-1.),
@@ -1055,11 +1136,23 @@ if opts.nanoOut:
     if opts.isMC:
         # Full genParticles as a browsable Gen table; BuJpsiK_genPartIdx indexes
         # into it. Plus the per-event generator weight (GenEventInfoProduct).
+        # DO NOT ADD A `cut` HERE.
+        #
+        # `cut=''` is what makes table row i equal genParticles[i]. Both
+        # `genPartIdxMother` below and `BuJpsiK_genPartIdx` (the candidate's
+        # matched b-hadron row) are raw indices into this collection. A cut
+        # would renumber the rows while leaving both columns pointing at the
+        # old numbering -- wrong answers, no error, nothing to notice.
+        #
+        # If the table ever must be slimmed, use a GenParticlePruner (as
+        # standard NanoAOD does via `finalGenParticles`), which fixes up the
+        # mother references to point within its own output. A `cut` on this
+        # producer does not.
         process.genTable = cms.EDProducer(
             'SimpleGenParticleFlatTableProducer',
             src=cms.InputTag('genParticles'),
             cut=cms.string(''), name=cms.string('Gen'),
-            doc=cms.string('generator particles (full genParticles)'),
+            doc=cms.string('generator particles (full genParticles, unpruned)'),
             singleton=cms.bool(False), extension=cms.bool(False),
             variables=cms.PSet(
                 P3Vars,
@@ -1067,6 +1160,11 @@ if opts.nanoOut:
                 pdgId=Var('pdgId', int, doc='PDG id'),
                 status=Var('status', 'int16', doc='status'),
                 charge=Var('charge', 'int16', doc='charge'),
+                # Row index of the first mother, -1 at the record's roots. Valid
+                # only because cut='' keeps rows 1:1 with genParticles.
+                genPartIdxMother=Var('?numberOfMothers>0?motherRef(0).key():-1',
+                                     'int16', doc='row in Gen of the first mother '
+                                                  '(-1 = none)'),
             ),
         )
         process.genWeightTable = cms.EDProducer(

@@ -34,8 +34,12 @@
 //   "cascade"  -- fit+mass-constrain the dimuon, collapse it, then fit vs the
 //                 bachelor with the vertex floating.
 
+#include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstdlib>
 #include <memory>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -120,6 +124,91 @@ inline bool isBHadron(int pdgId) {
   return (p / 100) % 10 == 5 || (p / 1000) % 10 == 5;
 }
 
+// ---------------------------------------------------------------------------
+// Per-leg generator matching and the common-ancestor search.
+//
+// Ported from Bmm5/NanoAOD, which solved this for the same channel:
+//   dr_match             <- GenBmmProducer.cc:74
+//   is_acceptable        <- src/CommonTools.cc:105
+//   get_mother           <- src/CommonTools.cc:117
+//   find_common_ancestor <- src/CommonTools.cc:132
+//
+// Two details are load-bearing and are the reason this is ported rather than
+// written fresh:
+//
+//  * the ancestor search permutes the generation DEPTH assigned to each leg.
+//    In B+ -> J/psi(-> mu mu) K+ the muons sit two generations below the B and
+//    the kaon one, so any fixed-depth comparison never finds the B.
+//  * is_acceptable skips quarks, gluons and protons. Without it the search
+//    always succeeds -- every pair of particles in the event shares the beam
+//    proton as an ancestor -- and the whole truth test silently becomes
+//    vacuous while continuing to look like it works.
+// ---------------------------------------------------------------------------
+
+// A match needs BOTH angular and momentum agreement. dR alone picks the wrong
+// track routinely inside a b jet.
+inline bool genDrMatch(const reco::Candidate& reco, const reco::Candidate& gen,
+                       double maxDR, double maxRelDPt) {
+  if (gen.pt() <= 0.) return false;
+  return std::abs(reco.pt() - gen.pt()) / gen.pt() < maxRelDPt &&
+         reco::deltaR(reco, gen) < maxDR;
+}
+
+inline bool isAcceptableAncestor(const reco::Candidate* c) {
+  if (c == nullptr) return false;
+  const int p = std::abs(c->pdgId());
+  if (p < 10) return false;     // quarks and leptons-as-partons
+  if (p == 2212) return false;  // beam protons
+  if (p == 21) return false;    // gluons
+  return true;
+}
+
+// depth 0 = the immediate mother
+inline const reco::Candidate* genMotherAtDepth(const reco::Candidate* c, unsigned depth) {
+  if (c == nullptr) return nullptr;
+  const reco::Candidate* m = c->mother();
+  unsigned i = 0;
+  while (isAcceptableAncestor(m) && i < depth) {
+    ++i;
+    m = m->mother();
+  }
+  return isAcceptableAncestor(m) ? m : nullptr;
+}
+
+inline std::vector<unsigned> depthsFromPermutation(const std::vector<unsigned>& elements) {
+  std::vector<unsigned> out;
+  unsigned counter = 0;
+  for (unsigned e : elements) {
+    if (e == 0) ++counter;
+    else { out.push_back(counter); counter = 0; }
+  }
+  out.push_back(counter);
+  return out;
+}
+
+const reco::Candidate* findCommonAncestor(const std::vector<const reco::Candidate*>& parts,
+                                          unsigned maxDepth = 10) {
+  const size_t n = parts.size();
+  if (n == 0) return nullptr;
+  for (unsigned depth = 0; depth < maxDepth; ++depth) {
+    std::vector<unsigned> elements;
+    for (unsigned i = 0; i < depth; ++i) elements.push_back(0);
+    for (size_t i = 0; i + 1 < n; ++i) elements.push_back(1);
+    do {
+      const auto depths = depthsFromPermutation(elements);
+      const reco::Candidate* common = nullptr;
+      for (size_t i = 0; i < n; ++i) {
+        const reco::Candidate* m = genMotherAtDepth(parts[i], depths[i]);
+        if (m == nullptr) { common = nullptr; break; }
+        if (common == nullptr) common = m;
+        if (common != m) { common = nullptr; break; }
+      }
+      if (common != nullptr) return common;
+    } while (std::next_permutation(elements.begin(), elements.end()));
+  }
+  return nullptr;
+}
+
 // One refit "leg" source: a single-track maker's refit collection + refitOk map,
 // keyed back to (candidate, leaf) via the input-track producer's index vectors.
 struct RefitLegTokens {
@@ -135,6 +224,12 @@ struct ArmOut {
   float vchi2 = -99.f, vndof = -99.f, vprob = -99.f;
   int ok = 0;
   float mmVtxProb = -99.f, mmAlphaBS = -99.f, mmSl3d = -99.f, mmSl3dPV = -99.f;
+  // UNCONSTRAINED dimuon mass from the same fit (gap G11). The dimuon fit
+  // below applies no mass constraint, so this is a genuine free J/psi mass
+  // -- the natural cross-check on the muon momentum scale. It was being
+  // computed and thrown away; the only J/psi mass reaching the NanoAOD was
+  // the mother fit's CONSTRAINED parameter, pinned to the PDG value.
+  float mmMass = -99.f, mmMassErr = -99.f;
   // Vertex block, consumed by CandidateVertexGeometryProducer. The same
   // fixed set every fitter emits, so CandidateVertexGeometryProducer can be
   // instantiated per arm instead of each fitter deriving its own geometry.
@@ -187,6 +282,7 @@ private:
     edm::EDPutTokenT<edm::ValueMap<float>> mass, massErr, pt, eta, phi, vchi2, vndof, vprob;
     edm::EDPutTokenT<edm::ValueMap<int>> ok;
     edm::EDPutTokenT<edm::ValueMap<float>> mmVtxProb, mmAlphaBS, mmSl3d, mmSl3dPV;
+    edm::EDPutTokenT<edm::ValueMap<float>> mmMass, mmMassErr;
     // vertex block
     edm::EDPutTokenT<edm::ValueMap<float>> vtxX, vtxY, vtxZ,
         cXX, cXY, cXZ, cYY, cYZ, cZZ, mPt, mEta, mPhi;
@@ -196,6 +292,15 @@ private:
   edm::EDPutTokenT<edm::ValueMap<float>> outGenBMass_, outGenBPt_, outGenBEta_,
       outGenBPhi_, outGenBDR_;
   edm::EDPutTokenT<edm::ValueMap<int>> outGenBPdgId_, outGenBIdx_;
+  // Per-leg generator match (leg 0/1 = muons, leg 2 = bachelor) and the common
+  // ancestor of the matched legs. The ancestor's species IS the truth category.
+  std::array<edm::EDPutTokenT<edm::ValueMap<int>>, 3> outLegGenIdx_, outLegGenPdgId_,
+      outLegGenMotherPdgId_;
+  std::array<edm::EDPutTokenT<edm::ValueMap<float>>, 3> outLegGenPt_, outLegGenDR_;
+  edm::EDPutTokenT<edm::ValueMap<int>> outAncPdgId_, outAncIdx_, outNLegsMatched_;
+  edm::EDPutTokenT<edm::ValueMap<float>> outAncPt_, outAncMass_;
+  const double genLegMaxDR_, genLegMaxRelDPt_;
+  const unsigned genAncestorMaxDepth_;
 
   ArmTokens declareArm(const std::string& prefix);
 };
@@ -216,6 +321,8 @@ JpsiXKinematicFitProducer::declareArm(const std::string& p) {
   t.mmAlphaBS = produces<edm::ValueMap<float>>(p + "DimuonAlphaBS");
   t.mmSl3d = produces<edm::ValueMap<float>>(p + "DimuonSxy");
   t.mmSl3dPV = produces<edm::ValueMap<float>>(p + "DimuonSl3d");
+  t.mmMass = produces<edm::ValueMap<float>>(p + "DimuonMass");
+  t.mmMassErr = produces<edm::ValueMap<float>>(p + "DimuonMassErr");
   // Vertex block, prefixed per arm (rawVtxX / refVtxX ...). The geometry
   // module takes the prefix as configuration, so one implementation serves
   // every arm and every channel.
@@ -244,7 +351,11 @@ JpsiXKinematicFitProducer::JpsiXKinematicFitProducer(const edm::ParameterSet& cf
       haveGen_(!cfg.getParameter<edm::InputTag>("genParticles").label().empty()),
       mode_(cfg.getParameter<std::string>("jpsiConstraint")),
       jpsiMass_(cfg.getParameter<double>("jpsiMass")),
-      maxChi2_(cfg.getParameter<double>("maxChi2")) {
+      maxChi2_(cfg.getParameter<double>("maxChi2")),
+      genLegMaxDR_(cfg.getUntrackedParameter<double>("genLegMaxDR", 0.02)),
+      genLegMaxRelDPt_(cfg.getUntrackedParameter<double>("genLegMaxRelDPt", 0.1)),
+      genAncestorMaxDepth_(
+          cfg.getUntrackedParameter<unsigned>("genAncestorMaxDepth", 10u)) {
   if (mode_ != "inFit" && mode_ != "upstream" && mode_ != "cascade")
     throw cms::Exception("Configuration")
         << "jpsiConstraint must be inFit|upstream|cascade, got '" << mode_ << "'";
@@ -270,6 +381,19 @@ JpsiXKinematicFitProducer::JpsiXKinematicFitProducer(const edm::ParameterSet& cf
   outGenBDR_ = produces<edm::ValueMap<float>>("genBDR");
   outGenBPdgId_ = produces<edm::ValueMap<int>>("genBPdgId");
   outGenBIdx_ = produces<edm::ValueMap<int>>("genBIdx");
+  for (int i = 0; i < 3; ++i) {
+    const std::string L = "leg" + std::to_string(i);
+    outLegGenIdx_[i] = produces<edm::ValueMap<int>>(L + "GenIdx");
+    outLegGenPdgId_[i] = produces<edm::ValueMap<int>>(L + "GenPdgId");
+    outLegGenMotherPdgId_[i] = produces<edm::ValueMap<int>>(L + "GenMotherPdgId");
+    outLegGenPt_[i] = produces<edm::ValueMap<float>>(L + "GenPt");
+    outLegGenDR_[i] = produces<edm::ValueMap<float>>(L + "GenDR");
+  }
+  outAncPdgId_ = produces<edm::ValueMap<int>>("genAncestorPdgId");
+  outAncIdx_ = produces<edm::ValueMap<int>>("genAncestorIdx");
+  outNLegsMatched_ = produces<edm::ValueMap<int>>("nLegsGenMatched");
+  outAncPt_ = produces<edm::ValueMap<float>>("genAncestorPt");
+  outAncMass_ = produces<edm::ValueMap<float>>("genAncestorMass");
   outNLegsRefit_ = produces<edm::ValueMap<int>>("nLegsRefit");
   raw_ = declareArm("raw");
   ref_ = declareArm("ref");
@@ -326,17 +450,30 @@ void JpsiXKinematicFitProducer::produce(edm::Event& iEvent, const edm::EventSetu
       rPhi(n, -99.f), rVchi2(n, -99.f), rVndof(n, -99.f), rVprob(n, -99.f);
   std::vector<int> rOk(n, 0);
   std::vector<float> rMmVtxProb(n, -99.f), rMmAlphaBS(n, -99.f), rMmSl3d(n, -99.f),
-      rMmSl3dPV(n, -99.f);
+      rMmSl3dPV(n, -99.f), rMmMass(n, -99.f), rMmMassErr(n, -99.f);
   std::vector<float> fMass(n, -99.f), fMassErr(n, -99.f), fPt(n, -99.f), fEta(n, -99.f),
       fPhi(n, -99.f), fVchi2(n, -99.f), fVndof(n, -99.f), fVprob(n, -99.f);
   std::vector<int> fOk(n, 0);
   std::vector<float> fMmVtxProb(n, -99.f), fMmAlphaBS(n, -99.f), fMmSl3d(n, -99.f),
-      fMmSl3dPV(n, -99.f);
+      fMmSl3dPV(n, -99.f), fMmMass(n, -99.f), fMmMassErr(n, -99.f);
   BlockVecs rBlock(n), fBlock(n);
   std::vector<int> nLegsRefit(n, 0);
   std::vector<float> genBMass(n, -99.f), genBPt(n, -99.f), genBEta(n, -99.f),
       genBPhi(n, -99.f), genBDR(n, 9.9f);
   std::vector<int> genBPdgId(n, 0), genBIdx(n, -1);
+  // Per-leg generator match. Leg order is the canonical collectLeaves order,
+  // i.e. the same ordering that fills mu0/mu1/kaon TrackIdx downstream.
+  std::array<std::vector<int>, 3> legGenIdx, legGenPdgId, legGenMotherPdgId;
+  std::array<std::vector<float>, 3> legGenPt, legGenDR;
+  for (int i = 0; i < 3; ++i) {
+    legGenIdx[i].assign(n, -1);
+    legGenPdgId[i].assign(n, 0);
+    legGenMotherPdgId[i].assign(n, 0);
+    legGenPt[i].assign(n, -99.f);
+    legGenDR[i].assign(n, -99.f);
+  }
+  std::vector<int> ancPdgId(n, 0), ancIdx(n, -1), nLegsMatched(n, 0);
+  std::vector<float> ancPt(n, -99.f), ancMass(n, -99.f);
 
   KinematicParticleFactoryFromTransientTrack factory;
 
@@ -367,6 +504,13 @@ void JpsiXKinematicFitProducer::produce(edm::Event& iEvent, const edm::EventSetu
         auto mmPart = mmTree->currentParticle();
         auto mmVtx = mmTree->currentDecayVertex();
         if (mmPart->currentState().isValid() && mmVtx->vertexIsValid()) {
+          // Free dimuon mass -- no constraint was applied in this fit.
+          a.mmMass = static_cast<float>(mmPart->currentState().mass());
+          {
+            const double mErr2 = mmPart->currentState().kinematicParametersError()
+                                     .matrix()(6, 6);
+            if (mErr2 > 0.) a.mmMassErr = static_cast<float>(std::sqrt(mErr2));
+          }
           const double c2 = mmVtx->chiSquared();
           const double nd = mmVtx->degreesOfFreedom();
           if (nd > 0.)
@@ -560,6 +704,51 @@ void JpsiXKinematicFitProducer::produce(edm::Event& iEvent, const edm::EventSetu
     if (badleg) continue;
     nLegsRefit[ic] = nRefit;
 
+    // ---- per-leg generator match + common ancestor (MC only) --------------
+    if (haveGen && genH.isValid()) {
+      std::vector<const reco::Candidate*> matched;
+      matched.reserve(3);
+      const size_t nLeg = std::min<size_t>(3, leaves.size());
+      for (size_t il = 0; il < nLeg; ++il) {
+        const reco::RecoChargedCandidate& leg = *leaves[il];
+        const reco::GenParticle* best = nullptr;
+        int bestIdx = -1;
+        double bestDR = 1e9;
+        for (size_t ig = 0; ig < genH->size(); ++ig) {
+          const auto& g = (*genH)[ig];
+          if (g.status() != 1) continue;             // final state only
+          if (g.charge() != leg.charge()) continue;  // charge must agree
+          if (!genDrMatch(leg, g, genLegMaxDR_, genLegMaxRelDPt_)) continue;
+          const double dr = reco::deltaR(leg, g);
+          if (dr < bestDR) { bestDR = dr; best = &g; bestIdx = static_cast<int>(ig); }
+        }
+        if (best == nullptr) continue;  // stays -1; never a forced nearest neighbour
+        legGenIdx[il][ic] = bestIdx;
+        legGenPdgId[il][ic] = best->pdgId();
+        legGenPt[il][ic] = best->pt();
+        legGenDR[il][ic] = static_cast<float>(bestDR);
+        if (best->mother() != nullptr)
+          legGenMotherPdgId[il][ic] = best->mother()->pdgId();
+        matched.push_back(best);
+      }
+      nLegsMatched[ic] = static_cast<int>(matched.size());
+      // Only ask for an ancestor when every leg matched; a common ancestor of
+      // two legs out of three says nothing about what the candidate is.
+      if (matched.size() == nLeg && nLeg >= 3) {
+        const reco::Candidate* anc = findCommonAncestor(matched, genAncestorMaxDepth_);
+        if (anc != nullptr) {
+          ancPdgId[ic] = anc->pdgId();
+          ancPt[ic] = anc->pt();
+          ancMass[ic] = anc->mass();
+          // Row in the Gen table, which is 1:1 with genParticles (the table is
+          // produced with cut=''), found by identity against the same view.
+          for (size_t ig = 0; ig < genH->size(); ++ig) {
+            if (&(*genH)[ig] == anc) { ancIdx[ic] = static_cast<int>(ig); break; }
+          }
+        }
+      }
+    }
+
     ArmOut raw = runArm(rawTrk, masses);
     ArmOut ref = useRefitTracks_ ? runArm(refTrk, masses) : raw;
 
@@ -568,15 +757,17 @@ void JpsiXKinematicFitProducer::produce(edm::Event& iEvent, const edm::EventSetu
                      std::vector<float>& E, std::vector<float>& PH, std::vector<float>& VC,
                      std::vector<float>& VN, std::vector<float>& VP, std::vector<int>& OK,
                      std::vector<float>& MV, std::vector<float>& MA, std::vector<float>& MS,
-                     std::vector<float>& MSP) {
+                     std::vector<float>& MSP, std::vector<float>& MM,
+                     std::vector<float>& MME) {
       M[i] = a.mass; ME[i] = a.massErr; P[i] = a.pt; E[i] = a.eta; PH[i] = a.phi;
       VC[i] = a.vchi2; VN[i] = a.vndof; VP[i] = a.vprob; OK[i] = a.ok;
       MV[i] = a.mmVtxProb; MA[i] = a.mmAlphaBS; MS[i] = a.mmSl3d; MSP[i] = a.mmSl3dPV;
+      MM[i] = a.mmMass; MME[i] = a.mmMassErr;
     };
     store(raw, ic, rMass, rMassErr, rPt, rEta, rPhi, rVchi2, rVndof, rVprob, rOk,
-          rMmVtxProb, rMmAlphaBS, rMmSl3d, rMmSl3dPV);
+          rMmVtxProb, rMmAlphaBS, rMmSl3d, rMmSl3dPV, rMmMass, rMmMassErr);
     store(ref, ic, fMass, fMassErr, fPt, fEta, fPhi, fVchi2, fVndof, fVprob, fOk,
-          fMmVtxProb, fMmAlphaBS, fMmSl3d, fMmSl3dPV);
+          fMmVtxProb, fMmAlphaBS, fMmSl3d, fMmSl3dPV, fMmMass, fMmMassErr);
     rBlock.store(ic, raw);
     fBlock.store(ic, ref);
   }
@@ -596,15 +787,17 @@ void JpsiXKinematicFitProducer::produce(edm::Event& iEvent, const edm::EventSetu
                     const std::vector<float>& VN, const std::vector<float>& VP,
                     const std::vector<int>& OK, const std::vector<float>& MV,
                     const std::vector<float>& MA, const std::vector<float>& MS,
-                    const std::vector<float>& MSP) {
+                    const std::vector<float>& MSP, const std::vector<float>& MM,
+                    const std::vector<float>& MME) {
     put(t.mass, M); put(t.massErr, ME); put(t.pt, P); put(t.eta, E); put(t.phi, PH);
     put(t.vchi2, VC); put(t.vndof, VN); put(t.vprob, VP); put(t.ok, OK);
     put(t.mmVtxProb, MV); put(t.mmAlphaBS, MA); put(t.mmSl3d, MS); put(t.mmSl3dPV, MSP);
+    put(t.mmMass, MM); put(t.mmMassErr, MME);
   };
   putArm(raw_, rMass, rMassErr, rPt, rEta, rPhi, rVchi2, rVndof, rVprob, rOk,
-         rMmVtxProb, rMmAlphaBS, rMmSl3d, rMmSl3dPV);
+         rMmVtxProb, rMmAlphaBS, rMmSl3d, rMmSl3dPV, rMmMass, rMmMassErr);
   putArm(ref_, fMass, fMassErr, fPt, fEta, fPhi, fVchi2, fVndof, fVprob, fOk,
-         fMmVtxProb, fMmAlphaBS, fMmSl3d, fMmSl3dPV);
+         fMmVtxProb, fMmAlphaBS, fMmSl3d, fMmSl3dPV, fMmMass, fMmMassErr);
   auto putBlock = [&](const ArmTokens& t, const BlockVecs& b) {
     put(t.vtxX, b.x); put(t.vtxY, b.y); put(t.vtxZ, b.z);
     put(t.cXX, b.cxx); put(t.cXY, b.cxy); put(t.cXZ, b.cxz);
@@ -621,6 +814,18 @@ void JpsiXKinematicFitProducer::produce(edm::Event& iEvent, const edm::EventSetu
   put(outGenBDR_, genBDR);
   put(outGenBPdgId_, genBPdgId);
   put(outGenBIdx_, genBIdx);
+  for (int i = 0; i < 3; ++i) {
+    put(outLegGenIdx_[i], legGenIdx[i]);
+    put(outLegGenPdgId_[i], legGenPdgId[i]);
+    put(outLegGenMotherPdgId_[i], legGenMotherPdgId[i]);
+    put(outLegGenPt_[i], legGenPt[i]);
+    put(outLegGenDR_[i], legGenDR[i]);
+  }
+  put(outAncPdgId_, ancPdgId);
+  put(outAncIdx_, ancIdx);
+  put(outNLegsMatched_, nLegsMatched);
+  put(outAncPt_, ancPt);
+  put(outAncMass_, ancMass);
 }
 
 }  // namespace ana_hitanalyzer
