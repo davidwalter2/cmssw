@@ -619,6 +619,13 @@ def nanoAOD_wmassLowPU(process):
         graph_path = "PhysicsTools/NanoAOD/data/deepmetmodel/deepmet_lowPU_Resp.pb",
         ignore_leptons = True,
     )
+    for table, producer in (("deepMetResolutionTuneTable", "deepMETsResolutionTuneLowPU"),
+                            ("deepMetResponseTuneTable", "deepMETsResponseTuneLowPU")):
+        mod = getattr(process, table)
+        mod.src = cms.InputTag(producer)
+        mod.variables.pt = Var("pt", float, doc=mod.variables.pt.doc.value() + " (low-PU model, leptons excluded from the inputs)", precision=-1)
+        mod.variables.phi = Var("phi", float, doc=mod.variables.phi.doc.value() + " (low-PU model, leptons excluded from the inputs)", precision=12)
+    process.metTablesTask.add(process.deepMETsResolutionTuneLowPU, process.deepMETsResponseTuneLowPU)
     return process
 
 
