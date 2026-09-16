@@ -489,19 +489,18 @@ def nanoGenWmassCustomize(process):
     """The 10_6 production entry point for MC (WMassNanoProduction makeNanoV9MC*.sh):
       cmsDriver.py ... --customise PhysicsTools/NanoAOD/nano_cff.nanoGenWmassCustomize
 
-    Gen precision + the full LHE record. The grouped-weights parameters of the
-    10_6 genWeightsTable (weightgroups / maxGroupsPerType) do not exist on the
-    stock 15_0 GenWeightsTableProducer; they are set only if the grouped
-    producer has been ported (pending decision), so this stays configurable
-    either way.
+    Gen precision, the full LHE record, and the LHE weight tables in the grouped
+    10_6 layout (LHEPdfWeightAltSetN, MEParamWeight[AltSetN], ...) that the
+    analysis code reads; the stock LHEScaleWeight/LHEPdfWeight tables are
+    replaced by the grouped ones, genWeight / PSWeight / LHEReweightingWeight
+    stay from the stock producer.
     """
     process = customizeGenLeptonPrecision(process)
 
     process.lheInfoTable.storeAllLHEInfo = cms.bool(True)
 
-    if hasattr(process.genWeightsTable, "weightgroups"):
-        process.genWeightsTable.weightgroups = ['scale', 'PDF', 'matrix element', 'unknown', 'parton shower']
-        process.genWeightsTable.maxGroupsPerType = [-1, -1, -1, -1, 1]
+    from PhysicsTools.NanoAOD.lheWeightGroups_cff import nanoAOD_addLHEWeightGroups
+    process = nanoAOD_addLHEWeightGroups(process)
 
     return process
 
