@@ -127,7 +127,11 @@ HTXSCategoryTable = simpleHTXSFlatTableProducer.clone(
 lheInfoTable = cms.EDProducer("LHETablesProducer",
      lheInfo = cms.VInputTag(cms.InputTag("externalLHEProducer"), cms.InputTag("source")),
      precision = cms.int32(14),
-     storeLHEParticles = cms.bool(True)
+     storeLHEParticles = cms.bool(True),
+     # WMass: the full LHE record (all particles, colour flow, raw mother
+     # indices, lifetime, alphaQED/scale/process id); switched on for the
+     # W/Z MC by nano_cff.nanoGenWmassCustomize
+     storeAllLHEInfo = cms.bool(False),
  )
 
 particleLevelTask = cms.Task(mergedGenParticles,genParticles2HepMC,particleLevel,tautagger,genParticles2HepMCHiggsVtx,rivetProducerHTXS)
