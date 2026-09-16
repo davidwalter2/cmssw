@@ -527,5 +527,15 @@ def nanoAOD_wmassContent(process):
             if hasattr(process, m) and task.contains(getattr(process, m)):
                 task.remove(getattr(process, m))
     process.linkedObjects.boostedTaus = cms.InputTag("")
+
+    process = nanoAOD_wmassMuonVariables(process)
+    return process
+
+
+def nanoAOD_wmassMuonVariables(process):
+    """The Muon columns the 10_6 custom NanoAOD had on top of the stock table
+    (muons_cff.py of WmassNanoProd_10_6_26; standalone* also exist in the MUO
+    POG custom_muon_cff with the same definitions)."""
+    v = process.muonTable.variables
     return process
 
