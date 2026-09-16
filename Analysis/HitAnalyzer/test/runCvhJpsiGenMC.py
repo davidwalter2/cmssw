@@ -17,6 +17,11 @@ from Configuration.Eras.Era_Run2_2016_cff import Run2_2016
 from Configuration.AlCa.GlobalTag import GlobalTag
 
 opts = VarParsing.VarParsing('analysis')
+opts.register('tightG4eStepper', True, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'tighten the Geant4e field-integration tolerances in the FIT to '
+              'match the simulation (see the block after geantRefit_cff). '
+              'False reproduces every result before 2026-08-08.')
 opts.register('input', '', VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string,
               'comma-separated absolute paths or root:// URLs of ALCARECO files')
@@ -96,9 +101,45 @@ opts.register('fillGradsFactored', False, VarParsing.VarParsing.multiplicity.sin
 opts.register('doTrigger', True, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'read TriggerResults::HLT (off for private samples without HLT)')
-opts.register('doVtxConstraint', False, VarParsing.VarParsing.multiplicity.singleton,
+opts.register('doVtxConstraint', True, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
-              'apply the common-vertex constraint in the two-track fit')
+              'apply the common-vertex constraint in the two-track fit: state '
+              'index 6, the signed track-track PCA distance, is frozen at zero '
+              'and the fitted mass is the vertex-constrained one. Jpsi_mass_unc '
+              'carries the unconstrained mass, so either can be formed offline. '
+              'False leaves index 6 free (a plain two-track fit through the PCA)')
+opts.register('minLegHits', 8, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.int,
+              'minimum valid hits on the WEAKER leg. Default 8, 0 = off: a '
+              'thin leg is BACKGROUND -- by gen truth on DY, 82-93 % of what '
+              'this removes is a duplicate or unmatched pairing '
+              '(0.885 +- 0.026) at 0.9983 +- 0.0004 signal efficiency -- and '
+              'every candidate with a non-finite exported mass resolution in '
+              'dy_vtxon has a leg of one or two hits while its PAIR total is '
+              '13-23, so a pair-sum cut cannot see them and this can.')
+opts.register('minNdof', 1, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.int,
+              'minimum degrees of freedom of the two-track fit, required '
+              'BEFORE the fit. ndof = nvalid + nvalidpixel - 10 (+3 beamspot, '
+              '+1 pointing, +1 vertex constraint), i.e. one coordinate per '
+              'strip hit and two per pixel hit against the ten state '
+              'parameters the common vertex costs. The default 1 means more '
+              'than nine measurement coordinates with the vertex constraint '
+              'on and more than ten with it off: at ndof == 0 the fit is '
+              'exactly determined (chi2 identically zero, chi2/ndof 0/0) and '
+              'the factored-Hessian export aborts the process. 0 disables.')
+opts.register('minPairHits', -1, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.int,
+              'minimum number of VALID HITS summed over the two legs (pixel '
+              'hits counted once). -1 = auto = 10 with the vertex constraint '
+              'on, 11 with it off -- the same requirement as minNdof read on '
+              'hits rather than on measurement coordinates. 0 disables.')
+opts.register('exportVtxResidual', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'export the VERTEX-CONSTRAINT RESIDUAL (the track-track PCA '
+              'distance of the two-track fit, state index 6) as a CF '
+              'resolution term: Jpsi_vtxres/vtxsig/vtxz, the per-block '
+              'influence resinfvtxv and the cfvtx_* exponents')
 opts.register('doSimHits', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'read tracker PSimHits (input must retain them)')
@@ -109,17 +150,162 @@ opts.register('fitSimHitPositions', False, VarParsing.VarParsing.multiplicity.si
 opts.register('propagationPtotLimit', 0.2, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.float,
               'G4e propagation momentum floor [GeV]; cfi default was 1.0')
+opts.register('maxMomentumStepFactor', 2.0, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'RELATIVE Gauss-Newton step damping: the max factor by which a '
+              'track momentum may change in one iteration (default 2 = p may '
+              'at most halve or double). Implemented as the effective floor '
+              'max(clampMomentumFloor, p_ref/f) and the symmetric cap p_ref*f, '
+              'so the bound is ALWAYS strictly inside p_ref -- unlike the bare '
+              'absolute floor it can neither pin a genuinely soft track at a '
+              'fixed momentum nor scale the step to exactly zero. Set <=1 to '
+              'switch it off and leave clampMomentumFloor as the only bound.')
+opts.register('stepBacktracking', True, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'chi2-based (Armijo) retroactive step backtracking. The chi2 '
+              'assembled in iteration k is the realized chi2 of the step taken '
+              'at k-1; if it fails the sufficient-decrease test the previous '
+              'linearization is restored, that step is halved and the iteration '
+              'redone. Costs no extra propagation on the accept path.')
+opts.register('stepBacktrackFromIter', 2, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.int,
+              'first Gauss-Newton iteration at which the chi2 backtracking test '
+              'may fire (default 2). NOT 1: at iteration 0 the GBL '
+              'propagation/kink residuals are identically zero by construction, '
+              'so the iteration-0 chi2 is a different objective from every later '
+              'one and comparing across that boundary would backtrack every '
+              'candidate.')
+opts.register('maxChi2Backtrack', 4, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.int,
+              'max chi2-backtracking halvings per accepted step (default 4). '
+              'NOTE: distinct from the two/N-track maxBacktracks, which is the '
+              'failed-propagation-leg retry budget.')
+opts.register('armijoC', 1.e-4, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'Armijo sufficient-decrease coefficient c1 (default 1e-4).')
+opts.register('armijoSlack', 1.0, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'relative chi2 slack in the Armijo test (default 1.0 = the chi2 may '
+              'not more than DOUBLE in one iteration). This is a DIVERGENCE TRAP, '
+              'not a line-search tolerance: the CVH/GBL iteration does NOT '
+              'monotonically decrease r^T Vinv r (it drifts up ~0.3-0.5 per '
+              'iteration even at 1/16 step), so a textbook 1e-4..1e-3 makes it '
+              'halve the step forever -- 57 % of gun candidates, 15.6 halvings '
+              'each, 6x the propagation cost, no change in the result.')
+opts.register('clampMomentumFloor', -1.0, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'Gauss-Newton momentum floor [GeV] for the refit step clamp. '
+              '<0 (default) = derive it from propagationPtotLimit as '
+              '1.25*plimit. THE FLOOR MUST STAY ABOVE THE PROPAGATION LIMIT: '
+              'the clamp exists only to keep the Gauss-Newton state out of '
+              'the propagator refusal region, so it has to bracket that limit '
+              'from above with a small margin. It must NOT be set any higher '
+              'than that -- a floor above the physical momentum spectrum pins '
+              'soft tracks at the floor (momentum-high, chi2/ndof >> 1) and, '
+              'where p_ref is already below it, scales the step to zero and '
+              'freezes the fit at its seed, which biases the fitted momentum '
+              'and the mass scale built from it.')
 opts.register('doRes', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'register resolution families and export the per-candidate '
               'mass-CF ingredients (dV blocks, step records, mass-projected '
               'influence weights)')
+opts.register('exportStepRecords', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'write the RAW per-step resolution export (ioniurbanv, msmoliv, '
+              'radstepv/radstepspecv, reseigv, resinfv, resinfbv). It is 430 kB '
+              'per candidate -- 16 TB over the 40M candidates of the full '
+              'calibration -- while the exponents it feeds are written '
+              'directly by the in-maker cfqop_*/cfmass_* export, so it is off '
+              'by default; set True to re-derive the exponents under a '
+              'different model')
+opts.register('exportMaterialNoise', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'register the parmtype-15 MATERIAL-GROUP process noise as a '
+              'resolution family, so the quadratic term differentiates a '
+              "group's WIDTH (its MS covariance and ionization variance, both "
+              'scaled by exp(k_g)) as well as its mean loss. It CHANGES the '
+              'exported gradient and Hessian of the parmtype-15 columns -- not '
+              'the track fit -- so it is off by default')
+opts.register('exportVarianceGrads', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'add the VARIANCE (log-det) part of the profiled -2lnL to the '
+              'exported global gradient and Hessian: '
+              '-r^T V^-1 dV V^-1 r + tr(V^-1 dV) and the expected curvature '
+              'tr(dV R dV R). Two-track maker only. With it OFF a parameter '
+              'that moves the covariance (parmtype 15 through exp(k_g), and '
+              '8/9/10/11 entirely) enters the quadratic hit-chi2 term only '
+              'through the MEAN')
+opts.register('varianceGradFamilies', [], VarParsing.VarParsing.multiplicity.list,
+              VarParsing.VarParsing.varType.int,
+              'which parmtypes exportVarianceGrads covers; empty = '
+              '{8,9,10,11,15}. 15 alone is LAYOUT-PRESERVING: the '
+              'material-group globals are already columns of globalidxv, so '
+              'only their VALUES change. 8/9/10/11 are per-module and APPEND '
+              'columns to globalidxv and to every array indexed by it')
+opts.register('exportObjective', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'write objval/objchisq/objlogdetv/objlogdetc, the marginal '
+              'objective r^T R r + ln|V| + ln|C| in double precision. '
+              'Validation only -- it costs an ncons x ncons LDLT per '
+              'candidate -- and exists so the gradient can be '
+              'finite-differenced against what it claims to differentiate')
+opts.register('varianceFDGlobalIdx', -1, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.int,
+              'IN-MAKER finite difference of the variance gradient at FIXED '
+              'linearization: >=0 does that one global index, -2 does every '
+              'enabled variance column of families 10/11/15. Perturbs '
+              'V -> V + s dV_i with r/F/J held fixed and re-does the profile, '
+              'so it tests the assembly (traces, projector, sign, ln|C|) to '
+              'O(s^2). Prints VARFD lines')
+opts.register('varianceFDEps', 1e-3, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'the s of varianceFDGlobalIdx')
+opts.register('exportHitResBlocks', True, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'register the parmtype-8/9 HIT-RESOLUTION dV blocks in the '
+              'influence export (reseigidx/resinfvarv/reshitcls + the '
+              'cf*_hitcls/cf*_hitv per-class shares); they are what the '
+              'per-hit-class resolution parameters are fitted from. Export '
+              'only -- it cannot move the fit. Set False to leave them out of '
+              'the tree')
+opts.register('exportCfGroupExponents', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'additionally split the CF exponents by parmtype-15 MATERIAL '
+              'GROUP (cf*_grp, cf*_grp_ms, ...). This is what lets the fit '
+              'float the material amount per group instead of four per-family '
+              'k knobs. ~27 kB/candidate against 1.4 kB for the flat '
+              'exponents, so it is off unless the output feeds the joint '
+              'material+field fit')
+opts.register('exportCfExponents', True, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'compute the resolution-CF exponents in the maker and write them '
+              'on the 64-point tau grid (cfqop_* single-track, cfmass_* '
+              'two-track). Default True')
+opts.register('globalTag', '106X_mcRun2_asymptotic_v17',
+              VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.string,
+              'conditions. MUST match the sample: the 106X UL16 default is right '
+              'for the UL16 ALCARECO, but a 15_0-native simprod sample needs '
+              '150X_mcRun2_asymptotic_v1. Getting this wrong is not cosmetic -- '
+              'the single-track closure was biased by a 131X GT supplying '
+              '2010-2011 pixel templates against a UL16 simulation, one of the '
+              'two conditions mismatches found on 2026-08-07.')
 opts.register('trackSrc', 'ALCARECOTkAlJpsiX', VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string,
               'input track collection (ALCARECOTkAlJpsiMuMu for the standard '
               'TkAl ALCARECO of the JPsiToMuMu MC; pair with useLegacyPairLoop=True)')
 opts.register('doMassConstraint', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool, 'apply J/psi mass constraint in the two-track fit')
+opts.register('bsConstraint', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'constrain the common vertex to the LUMINOUS REGION: three '
+              'Gaussian rows with the beam-width covariance, one per PAIR. '
+              'DEFAULT OFF for a J/psi: a charmonium sample is NOT prompt -- '
+              'the B -> J/psi X fraction has c*tau ~ 460 um, a few hundred '
+              'microns of transverse flight against an ~11 um constraint '
+              '(20-30 sigma), and the fit would drag the vertex onto the beam '
+              'line and mis-measure both momenta. On for the Z and the Upsilon.')
 opts.register('useIdealGeometry', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'Default False (btojpsik option (B), aligned geometry from GT). Set True '
@@ -134,6 +320,18 @@ opts.register('useOpera3D', False, VarParsing.VarParsing.multiplicity.singleton,
               'use the full 3D TOSCA volumetric grid (160812) as the baseline '
               'field for the propagator + geopro + globalCor; takes precedence '
               'over useScalarPot3D when True.')
+opts.register('useDefaultField', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'use the UNLABELLED default CMSSW field, i.e. what MagneticField_cff '
+              'already loaded: VolumeBasedMagneticField 160812 with '
+              'useParametrizedTrackerField=True -> the OAE_1103l_071212 tracker '
+              'parametrization. REQUIRED for a gen-matched RESOLUTION closure on '
+              'standard MC: the SIM propagates through OAE, so refitting with the '
+              'full 3D grid instead leaks an eta/phi-coherent shift into the pull '
+              'width (measured 2026-08-07: dp/p ~ 8e-4 across eta, 0.155% of unit '
+              'variance, and phi is where OAE is structurally blind). Also matches '
+              'the stated MC practice in CLAUDE.md. Takes precedence over '
+              'useOpera3D and useScalarPot3D.')
 opts.register('scalarPot3DInitFile', '', VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string,
               'coefficient dump file produced by mfs/dump_coeffs_for_cmssw.py. '
@@ -158,6 +356,15 @@ opts.register('eventsToProcess', '', VarParsing.VarParsing.multiplicity.singleto
               VarParsing.VarParsing.varType.string,
               'comma-separated run:event list to select specific events '
               '(e.g. 278769:15462343,278769:16101980); empty = all')
+opts.register('skipEvents', 0, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.int,
+              'skip the first N events of the input (PoolSource skipEvents). '
+              'Combined with nEvents this splits ONE input file across several '
+              'batch tasks -- a 50k-event ALCARECO file is 7-12 h of CVH in a '
+              'single job, so production chunks it into quarters '
+              '(skipEvents=k*C nEvents=C). NOTE: PoolSource counts the skip '
+              'across the WHOLE fileNames list, so chunking is only '
+              'well-defined with a single input file per task.')
 opts.register('nIters', 10, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.int,
               'Gauss-Newton iteration cap per constraint phase (default 10 = baseline)')
@@ -206,7 +413,28 @@ opts.register('propagationDirection', 'anyDirection', VarParsing.VarParsing.mult
               'state (runaway-leg failure mode); "alongMomentum" is the '
               'legacy forward-only behaviour (bit-identical for all fits '
               'that do not fail with it).')
+# The CVH physics/estimator switches (CgfQoPMode, IoniExactDelta, ...) as
+# command-line options, so the two-track driver pins the estimator explicitly
+# instead of inheriting the cfi default.
+# NOTE: the two-track maker has no CGF override hooks, so the propagator never
+# substitutes the weight here; CgfQoPMode=1 only pays for computing the block.
+import TrackPropagation.Geant4e.cvhSwitches as cvhSwitches
+cvhSwitches.register(opts)
+
 opts.parseArguments()
+# TWO-TRACK DEFAULT IS THE Q-MATRIX ESTIMATOR. Under CgfQoPMode >= 1 the
+# fluctuation model returns the UNTRUNCATED ionization second cumulant as the
+# leg's q/p variance (G4UniversalFluctuationForExtrapolator.cc, the
+# `cgfQoPMode() == 0 ? truncated : blockKappa2` branch) on the assumption that
+# the maker substitutes the Fisher weight through setCgfOverride. Only the
+# single-track maker does; this maker has no hooks, so the cfi default (1)
+# would run the fit with a ~1e3-1e4x inflated ionization variance and pay
+# ~10x for a block it never uses: on a 40-event smoke the masses differ by up
+# to 13 MeV between the modes, at 8 min against 47 s.
+if opts.CgfQoPMode < 0:
+    opts.CgfQoPMode = 0
+    print('[cvh] two-track driver: CgfQoPMode not given, defaulting to 0 '
+          '(legacy truncated-Q); the two-track maker has no CGF override hooks')
 if not opts.scalarPot3DInitFile:
     raise SystemExit(
         "scalarPot3DInitFile=<path> is required (coefficient dump file): "
@@ -246,7 +474,7 @@ process.load("Configuration.StandardSequences.GeometrySimDB_cff")
 # Conditions the MC was produced with (CMSSW_10_6_20_patch1 production
 # chain) -- alignment/CPE/beamspot consistent with the simulated detector,
 # which is what a gen-closure fit must use.
-process.GlobalTag = GlobalTag(process.GlobalTag, "106X_mcRun2_asymptotic_v17", "")
+process.GlobalTag = GlobalTag(process.GlobalTag, opts.globalTag, "")
 process.GlobalTag.toGet = cms.VPSet(
     cms.PSet(
         record=cms.string("GeometryFileRcd"),
@@ -257,6 +485,29 @@ process.GlobalTag.toGet = cms.VPSet(
 process.XMLFromDBSource.label = cms.string("Extended")
 
 process.load("TrackPropagation.Geant4e.geantRefit_cff")
+
+# --- Geant4e field-integration precision in the FIT --------------------------
+# Josh: "really really really important" for the CVH momentum scale -- and it
+# was only ever applied to the SIMULATION. geantRefit_cff builds geopro with
+#     MagneticField = _g4SimHits.MagneticField.clone()
+# i.e. the CFI DEFAULTS, which nothing here overrode. Measured 2026-08-08:
+#     DeltaOneStepTracker      1e-4   (our SIM: 1e-5)   10x looser
+#     DeltaIntersectionTracker 1e-6   (our SIM: 1e-6)   same
+#     DeltaOneStep             1e-3   (our SIM: 1e-5)  100x looser
+#     DeltaIntersection        1e-4   (our SIM: 1e-6)  100x looser
+# So every CVH refit propagated at 10-100x looser precision than the simulation
+# it is compared against. A chord error is a COHERENT trajectory displacement,
+# not a random one, so it biases the momentum rather than broadening it -- the
+# signature of the unexplained ~1e-4 single-track scale offset and the +4.5e-4
+# J/psi two-track mass bias.
+# Default True: matching the SIM is the physically defensible choice, and the
+# flag exists so the change can be measured rather than assumed.
+if opts.tightG4eStepper:
+    _fsp = process.geopro.MagneticField.ConfGlobalMFM.OCMS.StepperParam
+    _fsp.DeltaOneStepTracker = 1e-5
+    _fsp.DeltaIntersectionTracker = 1e-6
+    _fsp.DeltaOneStep = 1e-5
+    _fsp.DeltaIntersection = 1e-6
 from TrackPropagation.Geant4e.cvhMaster_cfi import CvhMasterPSet
 
 process.maxEvents = cms.untracked.PSet(input=cms.untracked.int32(opts.nEvents))
@@ -284,6 +535,13 @@ process.source = cms.Source(
     # the default duplicate check silently drops most of the sample.
     duplicateCheckMode=cms.untracked.string('noDuplicateCheck'),
 )
+
+if int(opts.skipEvents) > 0:
+    assert len(_urls) == 1, (
+        "skipEvents is only well-defined with exactly one input file per job "
+        "(PoolSource skips across the concatenated fileNames list); got %d"
+        % len(_urls))
+    process.source.skipEvents = cms.untracked.uint32(int(opts.skipEvents))
 
 if opts.eventsToProcess:
     process.source.eventsToProcess = cms.untracked.VEventRange(
@@ -348,8 +606,19 @@ process.globalCor = cms.EDProducer(
     doMuonAssoc=cms.bool(False),
     doTrigger=cms.bool(bool(opts.doTrigger)),
     doRes=cms.bool(bool(opts.doRes)),
+    exportStepRecords=cms.bool(bool(opts.exportStepRecords)),
+    exportCfExponents=cms.bool(bool(opts.exportCfExponents)),
+    exportCfGroupExponents=cms.bool(bool(opts.exportCfGroupExponents)),
+    exportHitResBlocks=cms.bool(bool(opts.exportHitResBlocks)),
+    exportMaterialNoise=cms.bool(bool(opts.exportMaterialNoise)),
+    exportVarianceGrads=cms.bool(bool(opts.exportVarianceGrads)),
+    varianceGradFamilies=cms.vuint32(*[int(x) for x in opts.varianceGradFamilies]),
+    exportObjective=cms.bool(bool(opts.exportObjective)),
+    varianceFDGlobalIdx=cms.int32(int(opts.varianceFDGlobalIdx)),
+    varianceFDEps=cms.double(float(opts.varianceFDEps)),
+
     useIdealGeometry=cms.bool(bool(opts.useIdealGeometry)),
-    bsConstraint=cms.bool(False),
+    bsConstraint=cms.bool(bool(opts.bsConstraint)),
     applyHitQuality=cms.bool(True),
     keepPixelEdgeHits=cms.bool(bool(opts.keepPixelEdgeHits)),
     pixelMinSizeX=cms.int32(int(opts.pixelMinSizeX)),
@@ -363,6 +632,10 @@ process.globalCor = cms.EDProducer(
     injectLorentzTan=cms.double(float(opts.injectLorentzTan)),
     injectLorentzWclean=cms.double(float(opts.injectLorentzWclean)),
     doVtxConstraint=cms.bool(bool(opts.doVtxConstraint)),
+    minNdof=cms.int32(int(opts.minNdof)),
+    minPairHits=cms.int32(int(opts.minPairHits)),
+    minLegHits=cms.int32(int(opts.minLegHits)),
+    exportVtxResidual=cms.bool(bool(opts.exportVtxResidual)),
     doMassConstraint=cms.bool(bool(opts.doMassConstraint)),
     massConstraint=cms.double(3.0969),
     massConstraintWidth=cms.double(1e-5),
@@ -414,7 +687,15 @@ if not opts.useLegacyPairLoop:
 # from scalar-potential field model. Independent from
 # nano_cff.setup3DFieldForRefit (which assumes the full set of seven
 # CVH-side consumers from the NanoAOD configuration).
-if opts.useOpera3D:
+if opts.useDefaultField:
+    # Consume the unlabelled field MagneticField_cff already put in the
+    # EventSetup -- VolumeBasedMagneticField 160812 with
+    # useParametrizedTrackerField=True, i.e. OAE_1103l_071212 inside the
+    # tracker. Nothing to instantiate: the empty label IS the default
+    # producer's label. The CPEs likewise keep their default (empty) label,
+    # so the Lorentz drift uses the same field as everything else.
+    fieldlabel = ""
+elif opts.useOpera3D:
     # Use the full 3D TOSCA volumetric grid (160812) as the baseline field
     # for the propagator / geopro / globalCor instead of the scalar-potential
     # ScalarPot3D model. Provided as an alternative field-model option for
@@ -466,6 +747,36 @@ process.cvhMasterESProducer.MagneticFieldLabel = cms.string(fieldlabel)
 process.Geant4ePropagator.ForCVH = cms.bool(True)
 process.Geant4ePropagator.PropagationDirection = cms.string(opts.propagationDirection)
 process.Geant4ePropagator.PropagationPtotLimit = cms.double(float(opts.propagationPtotLimit))
+# Gauss-Newton momentum floor for the refit step clamp, derived from the
+# propagation limit unless given explicitly (see the option's help). The pair
+# is echoed because the two are only correct together.
+_clampFloor = (float(opts.clampMomentumFloor) if float(opts.clampMomentumFloor) > 0.
+               else 1.25 * float(opts.propagationPtotLimit))
+if _clampFloor <= float(opts.propagationPtotLimit):
+    raise RuntimeError(
+        "clampMomentumFloor (%g GeV) must be ABOVE propagationPtotLimit (%g GeV): "
+        "the Gauss-Newton clamp exists to keep the state out of the propagator's "
+        "refusal region." % (_clampFloor, float(opts.propagationPtotLimit)))
+process.globalCor.clampMomentumFloor = cms.double(_clampFloor)
+print("[cvh] effective: PropagationPtotLimit=%g GeV, clampMomentumFloor=%g GeV"
+      % (float(opts.propagationPtotLimit), _clampFloor))
+# Relative step damping + chi2 backtracking on top of the absolute momentum
+# floor; see the option help. maxMomentumStepFactor<=1 together with
+# stepBacktracking=False leaves the floor as the only bound.
+process.globalCor.maxMomentumStepFactor = cms.double(float(opts.maxMomentumStepFactor))
+process.globalCor.stepBacktracking = cms.bool(bool(opts.stepBacktracking))
+process.globalCor.maxChi2Backtrack = cms.uint32(int(opts.maxChi2Backtrack))
+process.globalCor.stepBacktrackFromIter = cms.uint32(int(opts.stepBacktrackFromIter))
+process.globalCor.armijoC = cms.double(float(opts.armijoC))
+process.globalCor.armijoSlack = cms.double(float(opts.armijoSlack))
+print("[cvh] effective: maxMomentumStepFactor=%g, stepBacktracking=%s "
+      "(fromIter=%d, maxChi2Backtrack=%d, armijoC=%g, armijoSlack=%g)"
+      % (float(opts.maxMomentumStepFactor), bool(opts.stepBacktracking),
+         int(opts.stepBacktrackFromIter), int(opts.maxChi2Backtrack),
+         float(opts.armijoC), float(opts.armijoSlack)))
+# After every explicit propagator assignment above, so a command-line switch
+# wins over the driver's own defaults and the effective state is echoed once.
+cvhSwitches.apply(process, opts)
 process.globalCor.MagneticFieldLabel = cms.string(fieldlabel)
 
 # geopro is removed: CvhMasterThread (residual-maker GlobalCache) now

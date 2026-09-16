@@ -46,6 +46,7 @@
 #include "TrackingTools/GeomPropagators/interface/Propagator.h"
 
 #include "TrackPropagation/Geant4e/interface/Geant4ePropagator.h"
+#include "TrackPropagation/Geant4e/interface/G4UniversalFluctuationForExtrapolator.hh"
 #include "TrackPropagation/Geant4e/interface/CvhMasterThread.h"
 #include "TrackPropagation/Geant4e/interface/CvhMasterRecord.h"
 #include "TrackPropagation/Geant4e/interface/CvhWorker.h"
@@ -90,6 +91,9 @@ private:
   std::string particleName_;
   std::vector<unsigned int> targetDetIds_;
   std::vector<double> targetLocalZ_;
+  std::vector<double> planeOrigin_, planeNormal_, planeU_;
+  bool usePlanes_ = false;
+  GloballyPositioned<double> makePlaneTarget(size_t k) const;
 
   bool done_ = false;
 
@@ -107,6 +111,9 @@ private:
   // per-step physics records (same layout as the maker's exports)
   std::vector<double> msmoliv_;
   std::vector<double> ioniurbanv_;
+  std::vector<double> radv_;  // 9 doubles/step, aligned with msmoliv
+  std::vector<double> radspecv_;  // 2*kNRadV doubles/step: dN/dv brem then pair
+  std::vector<double> radvgrid_;  // the shared v grid (kNRadV), written once
   // per-step cumulative transport (25 doubles) + log-size markers
   std::vector<double> stepjacc_;
   std::vector<int> stepnms_, stepnioni_;
@@ -124,13 +131,36 @@ G4ePropagationExport::G4ePropagationExport(const edm::ParameterSet &iConfig)
       charge_(iConfig.getParameter<double>("charge")),
       particleName_(iConfig.getParameter<std::string>("particleName")),
       targetDetIds_(iConfig.getParameter<std::vector<unsigned int>>("targetDetIds")),
-      targetLocalZ_(iConfig.getParameter<std::vector<double>>("targetLocalZ")) {
+      targetLocalZ_(iConfig.getParameter<std::vector<double>>("targetLocalZ")),
+      planeOrigin_(iConfig.getParameter<std::vector<double>>("targetPlaneOrigin")),
+      planeNormal_(iConfig.getParameter<std::vector<double>>("targetPlaneNormal")),
+      planeU_(iConfig.getParameter<std::vector<double>>("targetPlaneU")) {
   usesResource("TFileService");
   if (initPos_.size() != 3 || initMom_.size() != 3) {
     throw cms::Exception("Configuration") << "initialPosition and initialMomentum must have 3 entries";
   }
   if (targetDetIds_.size() != targetLocalZ_.size()) {
     throw cms::Exception("Configuration") << "targetDetIds and targetLocalZ must have the same length";
+  }
+  // EXPLICIT-PLANE MODE. Targets are normally DetIds resolved through the
+  // TrackerGeometry, which throws for anything not in the tracker. The
+  // homogeneous toy (Analysis/HitAnalyzer/data/tracker.xml) has no tracker and
+  // no DetIds at all, so the surfaces have to be given directly. Supplying
+  // targetPlaneOrigin/Normal/U selects that mode; the tracker geometry is then
+  // never requested, which matters because the toy job deletes the tracker
+  // numbering producer entirely.
+  usePlanes_ = !planeOrigin_.empty();
+  if (usePlanes_) {
+    if (!targetDetIds_.empty()) {
+      throw cms::Exception("Configuration") << "give either targetDetIds or targetPlane*, not both";
+    }
+    if (planeOrigin_.size() % 3 || planeNormal_.size() != planeOrigin_.size() ||
+        planeU_.size() != planeOrigin_.size()) {
+      throw cms::Exception("Configuration")
+          << "targetPlaneOrigin/Normal/U must all have the same length and be a multiple of 3";
+    }
+  } else if (targetDetIds_.empty()) {
+    throw cms::Exception("Configuration") << "no targets: give targetDetIds or targetPlane*";
   }
   worker_ = std::make_unique<CvhWorker>();
 
@@ -157,6 +187,9 @@ G4ePropagationExport::G4ePropagationExport(const edm::ParameterSet &iConfig)
   tree_->Branch("dQI", &dQI_);
   tree_->Branch("msmoliv", &msmoliv_);
   tree_->Branch("ioniurbanv", &ioniurbanv_);
+  tree_->Branch("radv", &radv_);
+  tree_->Branch("radspecv", &radspecv_);
+  tree_->Branch("radvgrid", &radvgrid_);
   tree_->Branch("stepjacc", &stepjacc_);
   tree_->Branch("stepnms", &stepnms_);
   tree_->Branch("stepnioni", &stepnioni_);
@@ -173,6 +206,26 @@ GloballyPositioned<double> G4ePropagationExport::surfaceToDouble(const Surface &
   const Eigen::Matrix<double, 3, 1> uy = uz.cross(ux);
   const TkRotation<double> tkrot(ux[0], ux[1], ux[2], uy[0], uy[1], uy[2], uz[0], uz[1], uz[2]);
   return GloballyPositioned<double>(pos, tkrot);
+}
+
+// Build a target surface from explicit numbers. The rotation rows are the
+// local axes in global coordinates, matching surfaceToDouble: ux = local x,
+// uy = local y, uz = local z (the normal). u is orthogonalized against the
+// normal so the caller need not supply an exactly orthogonal pair.
+GloballyPositioned<double> G4ePropagationExport::makePlaneTarget(size_t k) const {
+  const size_t i = 3 * k;
+  const Eigen::Vector3d o(planeOrigin_[i], planeOrigin_[i + 1], planeOrigin_[i + 2]);
+  const Eigen::Vector3d n(planeNormal_[i], planeNormal_[i + 1], planeNormal_[i + 2]);
+  Eigen::Vector3d u(planeU_[i], planeU_[i + 1], planeU_[i + 2]);
+  const Eigen::Vector3d uz = n.normalized();
+  u -= uz * uz.dot(u);
+  if (u.norm() <= 0.) {
+    throw cms::Exception("Configuration") << "targetPlaneU is parallel to the normal for plane " << k;
+  }
+  const Eigen::Vector3d ux = u.normalized();
+  const Eigen::Vector3d uy = uz.cross(ux);
+  const TkRotation<double> tkrot(ux[0], ux[1], ux[2], uy[0], uy[1], uy[2], uz[0], uz[1], uz[2]);
+  return GloballyPositioned<double>(Point3DBase<double, GlobalTag>(o[0], o[1], o[2]), tkrot);
 }
 
 void G4ePropagationExport::analyze(const edm::Event &iEvent, const edm::EventSetup &iSetup) {
@@ -208,8 +261,12 @@ void G4ePropagationExport::analyze(const edm::Event &iEvent, const edm::EventSet
     prop_->setStepTransportLogging(true);
   }
 
-  const TrackerGeometry *geom =
-      useIdealGeometry_ ? &iSetup.getData(geomIdealToken_) : &iSetup.getData(geomToken_);
+  // In plane mode the tracker geometry is never fetched: the toy job has no
+  // tracker geometry producer at all, so requesting the record would throw.
+  const TrackerGeometry *geom = nullptr;
+  if (!usePlanes_) {
+    geom = useIdealGeometry_ ? &iSetup.getData(geomIdealToken_) : &iSetup.getData(geomToken_);
+  }
 
   Eigen::Matrix<double, 7, 1> state;
   state << initPos_[0], initPos_[1], initPos_[2], initMom_[0], initMom_[1], initMom_[2], charge_;
@@ -217,27 +274,39 @@ void G4ePropagationExport::analyze(const edm::Event &iEvent, const edm::EventSet
   edm::LogPrint("G4ePropagationExport")
       << "start state: x=(" << state[0] << "," << state[1] << "," << state[2] << ") cm  p=(" << state[3] << ","
       << state[4] << "," << state[5] << ") GeV  q=" << state[6] << "  particle=" << particleName_ << "  targets="
-      << targetDetIds_.size();
+      << (usePlanes_ ? planeOrigin_.size() / 3 : targetDetIds_.size());
 
-  for (size_t k = 0; k < targetDetIds_.size(); ++k) {
-    const DetId did(targetDetIds_[k]);
-    const GeomDet *det = geom->idToDet(did);
-    if (det == nullptr) {
-      throw cms::Exception("Configuration") << "detid " << targetDetIds_[k] << " not in the tracker geometry";
+  const size_t nTargets = usePlanes_ ? planeOrigin_.size() / 3 : targetDetIds_.size();
+  for (size_t k = 0; k < nTargets; ++k) {
+    double zoff = 0.;
+    // `base` is the frame the reference state is reported in further below. In
+    // plane mode that is the plane itself (there is no sensor to offset from,
+    // so zoff stays 0 and target == base).
+    GloballyPositioned<double> base = usePlanes_ ? makePlaneTarget(k)
+                                                 : GloballyPositioned<double>(
+                                                       Point3DBase<double, GlobalTag>(0., 0., 0.),
+                                                       TkRotation<double>());
+    GloballyPositioned<double> target = base;
+    if (!usePlanes_) {
+      const DetId did(targetDetIds_[k]);
+      const GeomDet *det = geom->idToDet(did);
+      if (det == nullptr) {
+        throw cms::Exception("Configuration") << "detid " << targetDetIds_[k] << " not in the tracker geometry";
+      }
+      // reference frame = the DetUnit frame (the frame PSimHit local coordinates
+      // live in); the propagation TARGET is that plane displaced along local z
+      // to the sensor entry face, so the leg stops just before the silicon.
+      base = surfaceToDouble(det->surface());
+      zoff = targetLocalZ_[k];
+      target = GloballyPositioned<double>(base.toGlobal(GloballyPositioned<double>::LocalPoint(0., 0., zoff)),
+                                          base.rotation());
     }
-    // reference frame = the DetUnit frame (the frame PSimHit local coordinates
-    // live in); the propagation TARGET is that plane displaced along local z
-    // to the sensor entry face, so the leg stops just before the silicon.
-    const GloballyPositioned<double> base = surfaceToDouble(det->surface());
-    const double zoff = targetLocalZ_[k];
-    const GloballyPositioned<double> target(base.toGlobal(GloballyPositioned<double>::LocalPoint(0., 0., zoff)),
-                                            base.rotation());
 
     auto const &res = prop_->propagateGenericWithJacobianAltD(state, target, Eigen::Vector3d::Zero(), 0., 0., 0., -1.,
                                                               particleName_);
 
     ileg_ = k;
-    detid_ = targetDetIds_[k];
+    detid_ = usePlanes_ ? k : targetDetIds_[k];
     ok_ = std::get<0>(res);
     zoff_ = zoff;
 
@@ -247,6 +316,9 @@ void G4ePropagationExport::analyze(const edm::Event &iEvent, const edm::EventSet
     dQI_.assign(25, 0.);
     msmoliv_.clear();
     ioniurbanv_.clear();
+    radv_.clear();
+    radspecv_.clear();
+    radvgrid_.clear();
     stepjacc_.clear();
     stepnms_.clear();
     stepnioni_.clear();
@@ -300,7 +372,37 @@ void G4ePropagationExport::analyze(const edm::Event &iEvent, const edm::EventSet
       msmoliv_.push_back(ms.beta);
       msmoliv_.push_back(ms.thp2);
       msmoliv_.push_back(ms.dOverX0);
+      // per-element Moliere sums (2026-08-08): effZ/effA are mass
+      // averages and both parameters are non-linear in Z
+      msmoliv_.push_back(ms.zzp1OverA);
+      msmoliv_.push_back(ms.lnScreenW);
       msmoliv_.push_back(ms.stepGroup);
+    }
+    // radiative (brems + pair) per-step records; same ordering as msmoliv so
+    // the two zip step-for-step offline
+    for (auto const &rs : prop_->radStepLog()) {
+      radv_.push_back(rs.effZ);
+      radv_.push_back(rs.effA);
+      radv_.push_back(rs.xg);
+      radv_.push_back(rs.etotGeV);
+      radv_.push_back(rs.pGeV);
+      radv_.push_back(rs.dOverX0);
+      radv_.push_back(rs.stepCm);
+      radv_.push_back(rs.dedxRad);
+      radv_.push_back(rs.dedxBrem);
+      radv_.push_back(rs.dedxPair);
+      radv_.push_back(rs.cs);
+      for (int i = 0; i < Geant4ePropagator::kNRadV; ++i) {
+        radspecv_.push_back(rs.dNdvBrem[i]);
+      }
+      for (int i = 0; i < Geant4ePropagator::kNRadV; ++i) {
+        radspecv_.push_back(rs.dNdvPair[i]);
+      }
+    }
+    if (radvgrid_.empty()) {
+      double vg[Geant4ePropagator::kNRadV];
+      Geant4ePropagator::radVGrid(vg);
+      radvgrid_.assign(vg, vg + Geant4ePropagator::kNRadV);
     }
     for (auto const &us : prop_->ioniStepLog()) {
       ioniurbanv_.push_back(us.rec.regime);
@@ -314,6 +416,13 @@ void G4ePropagationExport::analyze(const edm::Event &iEvent, const edm::EventSet
       ioniurbanv_.push_back(us.rec.tmaxr);
       ioniurbanv_.push_back(us.rec.scaling);
       ioniurbanv_.push_back(us.cs);
+      // regime 2/3 (CVH_IONI_EXACTDELTA): two extra columns AFTER cs, so
+      // every existing column index is unchanged and the stride is 11
+      // exactly when the switch is off.
+      if (G4UniversalFluctuationForExtrapolator::exactDeltaEnabled()) {
+        ioniurbanv_.push_back(us.rec.beta2);
+        ioniurbanv_.push_back(us.rec.etot);
+      }
     }
     for (auto const &st : prop_->stepTransportLog()) {
       for (int i = 0; i < 25; ++i) {

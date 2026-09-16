@@ -122,15 +122,42 @@ static void SendMonitoringInfo(XrdCl::File &file) {
 }
 
 namespace {
+  // A transport query is answered out of the CONNECTION's own state. The one
+  // situation this whole traceroute block exists to describe -- a redirect
+  // chain that ended badly -- is exactly the situation in which some hop of
+  // that chain no longer has a connection to query: XrdCl logs
+  //   "Unable to initiate the connection: [ERROR] Socket error: network is
+  //    unreachable"  /  "Redirect limit has been reached for message kXR_open"
+  // and QueryTransport then fails, leaving the AnyObject empty. AnyObject::Get
+  // sets the pointer to 0 in that case (XrdClAnyObject.hh:78-86), and every
+  // call site formats the result unconditionally (`auth_method->empty()`,
+  // `*hostname_method`, ...) on the XrdCl JobManager thread -- i.e. outside
+  // any CMSSW module, so a null pointer there takes the job down with a crash
+  // report that names no module and whose visible stack frames belong to the
+  // *paused* worker threads.
+  //
+  // Hence two guards:
+  //   * the PostMaster can be gone during shutdown -> check it;
+  //   * a failed query yields an EMPTY string, never a null pointer.
   std::unique_ptr<std::string> getQueryTransport(const XrdCl::URL &url, uint16_t query) {
-    XrdCl::AnyObject result;
-    XrdCl::DefaultEnv::GetPostMaster()->QueryTransport(url, query, result);
-    std::string *tmp;
-    result.Get(tmp);
-    return std::unique_ptr<std::string>(tmp);
+    std::string *tmp = nullptr;
+    if (XrdCl::PostMaster *pm = XrdCl::DefaultEnv::GetPostMaster()) {
+      XrdCl::AnyObject result;
+      if (pm->QueryTransport(url, query, result).IsOK()) {
+        result.Get(tmp);
+      }
+    }
+    return tmp ? std::unique_ptr<std::string>(tmp) : std::make_unique<std::string>();
   }
 
   void tracerouteRedirections(const XrdCl::HostList *hostList) {
+    // XrdCl hands the handler a null host list when the open never got far
+    // enough to collect one; the loop below would dereference it.
+    // Source::determineHostExcludeString, the very next call at both call
+    // sites, guards the same way.
+    if (hostList == nullptr) {
+      return;
+    }
     edm::LogInfo("XrdAdaptorLvl2").log([hostList](auto &li) {
       int idx_redirection = 1;
       li << "-------------------------------\nTraceroute:\n";

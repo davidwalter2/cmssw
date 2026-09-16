@@ -37,10 +37,13 @@ opts.register('useIdealGeometry', True, VarParsing.VarParsing.multiplicity.singl
               VarParsing.VarParsing.varType.bool, 'use the ideal tracker geometry (must be True to match PSimHits)')
 opts.register('useOpera3D', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool, 'use the raw 160812 grid field instead of the default')
-opts.register('ioniTruncationAlpha', 0.999, VarParsing.VarParsing.multiplicity.singleton,
-              VarParsing.VarParsing.varType.float, 'ionization variance truncation alpha')
 opts.register('output', 'model.root', VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string, 'output ntuple')
+opts.register('stepLength', 10.0, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'Geant4e max step [mm]; formerly hard-coded in Geant4ePropagator.cc')
+import TrackPropagation.Geant4e.cvhSwitches as cvhSwitches
+cvhSwitches.register(opts)
 opts.parseArguments()
 
 assert opts.targets, 'must pass targets=<file>'
@@ -106,23 +109,42 @@ if opts.useOpera3D:
 process.geopro.MagneticFieldLabel = fieldlabel
 process.Geant4ePropagator.MagneticFieldLabel = fieldlabel
 process.Geant4ePropagator.ForCVH = cms.bool(True)
+# CVH energy-loss switches: PSet parameters, not CVH_* env vars
+cvhSwitches.apply(process, opts)
 process.Geant4ePropagator.PropagationDirection = "anyDirection"
-process.Geant4ePropagator.IoniTruncationAlpha = cms.double(float(opts.ioniTruncationAlpha))
+process.Geant4ePropagator.StepLengthLimit = cms.double(float(opts.stepLength))
+
+# PDG id -> (G4 particle name, charge). NOTE the sign conventions differ by
+# species class and getting this wrong is silent: leptons carry charge
+# -sign(pdg) (mu- is +13), while mesons and baryons carry +sign(pdg)
+# (pi+ is +211, K+ is +321). The old lepton-only rule gave K-/pi- a POSITIVE
+# charge, i.e. a reference trajectory bending the wrong way.
+_SPECIES = {
+      13: ('mu-', -1.),      -13: ('mu+', +1.),
+     211: ('pi+', +1.),     -211: ('pi-', -1.),
+     321: ('kaon+', +1.),   -321: ('kaon-', -1.),
+    2212: ('proton', +1.), -2212: ('anti_proton', -1.),
+}
+_pdg = int(opts.partId)
+if _pdg not in _SPECIES:
+    raise ValueError(f'partId={_pdg} not supported; known: {sorted(_SPECIES)}')
+_g4name, _charge = _SPECIES[_pdg]
 
 from TrackPropagation.Geant4e.cvhMasterESProducer_cfi import cvhMasterESProducer
 process.cvhMasterESProducer = cvhMasterESProducer.clone()
 process.cvhMasterESProducer.MagneticFieldLabel = cms.string(fieldlabel)
-process.cvhMasterESProducer.Particles = cms.vstring("mu+", "mu-")
+# the species pair on top of the always-on mandatory set (gamma/e+/e-/mu+/mu-/
+# proton are registered regardless; see cvhMaster_cfi)
+_pair = {13: ('mu+', 'mu-'), 211: ('pi+', 'pi-'),
+         321: ('kaon+', 'kaon-'), 2212: ('proton', 'anti_proton')}[abs(_pdg)]
+process.cvhMasterESProducer.Particles = cms.vstring(
+    *dict.fromkeys(('gamma', 'e+', 'e-', 'mu+', 'mu-', 'proton') + _pair))
 
 _theta = 2. * math.atan(math.exp(-float(opts.eta)))
 _pt = float(opts.pt)
 _pz = _pt / math.tan(_theta)
 _px = _pt * math.cos(float(opts.phi))
 _py = _pt * math.sin(float(opts.phi))
-# leptons: charge = -sign(pdg); mu- is pdg +13
-_pdg = int(opts.partId)
-_charge = -1. if _pdg > 0 else 1.
-_g4name = 'mu-' if _pdg > 0 else 'mu+'
 
 process.propExport = cms.EDAnalyzer(
     'G4ePropagationExport',
@@ -132,6 +154,9 @@ process.propExport = cms.EDAnalyzer(
     particleName=cms.string(_g4name),
     targetDetIds=cms.vuint32(*_detids),
     targetLocalZ=cms.vdouble(*_zoff),
+    targetPlaneOrigin=cms.vdouble(),
+    targetPlaneNormal=cms.vdouble(),
+    targetPlaneU=cms.vdouble(),
     useIdealGeometry=cms.bool(bool(opts.useIdealGeometry)),
 )
 process.TFileService = cms.Service('TFileService', fileName=cms.string(opts.output))

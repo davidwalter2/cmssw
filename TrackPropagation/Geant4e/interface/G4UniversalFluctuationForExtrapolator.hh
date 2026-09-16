@@ -47,7 +47,9 @@
 #ifndef G4UniversalFluctuationForExtrapolator_h
 #define G4UniversalFluctuationForExtrapolator_h 1
 
+#include <atomic>
 #include "G4VEmFluctuationModel.hh"
+#include "TrackPropagation/Geant4e/interface/CGFQoPBlock.h"
 #include "G4ParticleDefinition.hh"
 #include "G4Poisson.hh"
 #include "G4Threading.hh"
@@ -59,13 +61,6 @@ public:
   explicit G4UniversalFluctuationForExtrapolator(const G4String& nam = "UniFluc");
 
   ~G4UniversalFluctuationForExtrapolator() override;
-
-  // CDF fraction of the delta-electron (1/E^2) spectrum kept when computing
-  // the truncated mean/variance of the ionization straggling (PANDA
-  // PV/01-07 eq. 68-69). The fitted "resolution" is convention-dependent
-  // through this cutoff (truncated sigma grows ~3x from alpha=0.99 to
-  // 0.999), so the resolution-closure diagnostic scans it.
-  void SetIoniTruncationAlpha(double a) { ioniTruncAlpha_ = a; }
 
   // Per-step Urban-model parameters recorded by the last SampleFluctuations
   // call. These are the exact ingredients of the analytic compound-Poisson
@@ -81,6 +76,34 @@ public:
   // Exported per resolution block by the CVH maker (doRes) so the offline
   // fit can use the untruncated non-Gaussian model -- unlike the truncated
   // variance, this has no convention dependence.
+  //   regime 2/3: as regime 1, EXCEPT that the delta-ray channel is the exact
+  //             knock-on cross section rather than a pure 1/E^2.  regime 2 is
+  //             the SPIN-1/2 form (mu, p), regime 3 the SPIN-0 form (pi, K),
+  //             mirroring G4BetheBlochModel's own `0.5 == spin` branch:
+  //                 spin 1/2:  1 - beta^2 T/tmaxr + T^2/(2 E^2)
+  //                 spin 0  :  1 - beta^2 T/tmaxr
+  //             The spin is taken from G4ParticleDefinition::GetPDGSpin(), not
+  //             from a PDG-id table.
+  //             Both regimes carry two EXTRA record fields (beta2, etot) and,
+  //             when the switch is on, two extra exported columns -- because
+  //             beta^2 and E cannot be recovered from tmaxr without knowing the
+  //             particle mass, and getting them wrong for a slow hadron is not
+  //             a small error (beta^2 is 0.976 for a 3 GeV kaon against
+  //             0.99999 for a 3 GeV muon, and it multiplies the whole
+  //             suppression term).  They are PHYSICAL values and carry no
+  //             `scaling` factor.
+  //             Enabled by the environment switch CVH_IONI_EXACTDELTA; see
+  //             the long comment in SampleFluctuations.  In this regime `a3`
+  //             is NOT a collision count but the spectrum's normalization
+  //             xi = 2 pi re^2 me c^2 n_e z^2 L / beta^2 (MeV), so that
+  //                 dN/dT = (xi/T^2) [1 - beta^2 T/tmaxr + T^2/(2 E^2)]
+  //             on [e0r, tmaxr], with E implied by tmaxr through the two-body
+  //             kinematics.  It scales like an energy, i.e. the consumer
+  //             multiplies it by `scaling` exactly as it does e1/e2/e0r/tmaxr.
+  //             The stride and the field list are UNCHANGED, so a consumer
+  //             that switches on `regime` needs no new columns; one that does
+  //             not switch on it must refuse regime 2 rather than read `a3`
+  //             as a count.
   struct UrbanFluctRecord {
     int regime = -1;
     double gsig2 = 0.;
@@ -88,9 +111,48 @@ public:
     double a2 = 0., e2 = 0.;
     double a3 = 0., e0r = 0., tmaxr = 0.;
     double scaling = 1.;
+    double beta2 = 0., etot = 0.;   // regime 2/3 only; physical, unscaled
   };
+  // The alpha quantile at which the delta-ray spectrum is truncated when this
+  // class forms a VARIANCE: the CDF fraction of the delta-electron (1/E^2)
+  // spectrum kept when computing the truncated mean/variance of the ionization
+  // straggling (PANDA PV/01-07 eq. 68-69). The fitted "resolution" is
+  // convention-dependent through this cutoff (truncated sigma grows ~3x from
+  // alpha=0.99 to 0.999), so the resolution-closure diagnostic scans it.
+  // Only reached with `CgfQoPMode == 0`, the legacy Gaussian weight -- the
+  // Fisher weight needs no cut and the setter is inert for it.
+  void SetIoniTruncationAlpha(double a) { ioniTruncAlpha_ = a; }
+
   const UrbanFluctRecord& lastRecord() const { return record_; }
+
+  // The record as a block step (gs = 1, energies scaled): the SINGLE mapping,
+  // used here for the variance this class returns and by Geant4ePropagator for
+  // the block CGF.
+  static cvhcgf::IoniStep toIoniStep(const UrbanFluctRecord& rec, int kokNbin);
   bool lastRecordValid() const { return recordValid_; }
+
+  // Is CVH_IONI_EXACTDELTA set?  The exporter branches on this to decide the
+  // ioniurbanv stride (11 when off -- byte-identical to the historical
+  // record -- 13 when on, with beta2 and etot appended AFTER cs so that every
+  // existing column index is unchanged).
+  static bool exactDeltaEnabled();
+
+  // CVH_IONI_KOKOULIN (read in exactly one place, cvhcgf::ioniKokoulinEnabled)
+  // adds Geant4's own Kokoulin radiative correction to the regime-2/3 delta
+  // channel's SECOND MOMENT, i.e. to the variance this class returns and hence
+  // to `gsig2` and to the track fit's Q(0,0).  It changes NO other record
+  // field: a1, e1, a2, e2, a3, e0r, tmaxr, scaling, beta2 and etot are
+  // bit-identical with it on, and no new column is needed offline because f_K
+  // depends only on T and E, both already carried.  The MEAN is deliberately
+  // untouched -- Geant4's dE/dx table already contains the correction, so
+  // `meanLoss` and the excitation rescale that pins the block to it are
+  // already right and must not move.
+  //
+  // Is CVH_IONI_URBAN2021 set?  Harmonizes the EXCITATION channels with stock
+  // Geant4 11.2.2's G4UniversalFluctuation (the 2021 Urban model, ONE channel
+  // at the mean excitation energy) instead of the pre-2021 two-channel form
+  // this class was forked from.  See the block comment in SampleFluctuations.
+  static bool urban2021Enabled();
 
   G4double SampleFluctuations(const G4MaterialCutsCouple*,
                               const G4DynamicParticle*,
@@ -135,11 +197,9 @@ protected:
 
   inline void SampleGauss2(CLHEP::HepRandomEngine* rndm, G4double eav, G4double esig2, G4double& eloss);
 
-  // delta-electron tail truncation of the ionization variance (see setter)
-  G4double ioniTruncAlpha_ = 0.999;
-
   // last-call Urban record (see lastRecord())
   UrbanFluctRecord record_;
+  G4double ioniTruncAlpha_ = 0.999;
   G4bool recordValid_ = false;
 
   // particle properties
@@ -184,14 +244,50 @@ protected:
   // multi-thread CVH refits do not allocate ~tens of MB of duplicate
   // material × particle dE/dx tables per stream. Mirrors the existing
   // static pattern in G4EnergyLossForExtrapolatorForCVH::tables.
-  static G4TablesForExtrapolatorForCVH* tables;
-#ifdef G4MULTITHREADED
-  static G4Mutex extrMutex;
-#endif
+  // ATOMIC + published under cvhExtrapolatorTablesMutex(), the SAME mutex
+  // G4EnergyLossForExtrapolatorForCVH's build takes. The two builds run the
+  // same Initialisation() body and write the same process-wide Geant4 EM
+  // statics; a mutex per class would not serialise them against each other.
+  static std::atomic<G4TablesForExtrapolatorForCVH*> tables;
 
   const G4PhysicsTable* table = nullptr;
   G4double massratio = 1.;
   G4double charge2ratio = 1.;
+
+  // SPECIES-DEPENDENT Tmax (cvhcgf::referenceIsSpeciesDedx, CVH_REF_SPECIESDEDX).
+  //
+  // `meanLoss = length * dedx` above reads the SAME scaled proton table as
+  // G4EnergyLossForExtrapolatorForCVH::ComputeDEDX and carries the same Tmax
+  // defect. It sets the Urban channel weights (a1, a2, a3) and, in the
+  // Gaussian regime, the returned loss itself, so the reference's mean and
+  // the noise model's mean have to move together -- a fix that left them
+  // disagreeing would be a new inconsistency in place of the old one.
+  //
+  // The effect on the VARIANCE is second order and tiny (the excitation
+  // channels carry 5.4e-6 of the block's ionisation variance, so a 1.6e-2
+  // change of e_exc moves the total by 8.6e-8 for a pion). It is done because
+  // "the two must read the same table", not because it is numerically large.
+  //
+  // `usesScaledProtonTable` is set in SetParticleAndCharge and is true exactly
+  // on the branch that does the mass scaling -- so electrons, positrons and
+  // both muons are untouched by construction, as they are in the extrapolator.
+  G4bool speciesDedx = false;
+  G4bool usesScaledProtonTable = false;
+  G4double speciesRefMass = 0.;
+
+  // CHARGE-AWARE mean loss (cvhcgf::referenceIsChargeAware, CVH_REF_CHARGEAWARE).
+  //
+  // Latched in SetParticleAndCharge from the SAME single reader the
+  // extrapolator's table build and dispatch use, so `meanLoss` here and the
+  // reference trajectory's mean cannot disagree about whether the correction
+  // is on -- which is precisely what they did, by the charge-odd 3.2e-3, from
+  // the day CVH_REF_CHARGEAWARE was written until 2026-08-16.
+  //
+  // It selects fDedxMuonMinus / fDedxAntiProton for a negative track, i.e. the
+  // tables G4TablesForExtrapolatorForCVH builds by calling ComputeMuonDEDX /
+  // ComputeProtonDEDX with the other particle. No physics term is transcribed
+  // here either.
+  G4bool chargeAware = false;
 };
 
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......

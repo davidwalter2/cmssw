@@ -45,8 +45,10 @@
 
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo....
 
+#include <cstdlib>
 #include "TrackPropagation/Geant4e/interface/G4TablesForExtrapolatorForCVH.h"
-#include "TrackPropagation/Geant4e/interface/Geant4ePropagator.h"
+
+#include <atomic>
 #include "G4PhysicalConstants.hh"
 #include "G4SystemOfUnits.hh"
 #include "G4LossTableManager.hh"
@@ -57,13 +59,20 @@
 #include "G4Electron.hh"
 #include "G4Positron.hh"
 #include "G4Proton.hh"
+#include "G4AntiProton.hh"
 #include "G4MuonPlus.hh"
 #include "G4MuonMinus.hh"
+#include "TrackPropagation/Geant4e/interface/CGFQoPBlock.h"
+#include "FWCore/Utilities/interface/Exception.h"
 #include "G4EmParameters.hh"
+#include "G4MscStepLimitType.hh"
 #include "G4MollerBhabhaModel.hh"
 #include "G4BetheBlochModel.hh"
 #include "G4eBremsstrahlungRelModel.hh"
 #include "G4MuPairProductionModel.hh"
+#include "G4hBremsstrahlungModel.hh"
+#include "G4hPairProductionModel.hh"
+#include <cmath>
 #include "G4MuBremsstrahlungModel.hh"
 #include "G4ProductionCuts.hh"
 #include "G4LossTableBuilder.hh"
@@ -81,8 +90,10 @@ G4TablesForExtrapolatorForCVH::G4TablesForExtrapolatorForCVH(
   electron = G4Electron::Electron();
   positron = G4Positron::Positron();
   proton = G4Proton::Proton();
+  antiProton = G4AntiProton::AntiProton();
   muonPlus = G4MuonPlus::MuonPlus();
   muonMinus = G4MuonMinus::MuonMinus();
+  chargeAware = cvhcgf::referenceIsChargeAware();
   Initialisation();
 }
 
@@ -141,6 +152,13 @@ G4TablesForExtrapolatorForCVH::~G4TablesForExtrapolatorForCVH() {
     mscElectron->clearAndDestroy();
     delete mscElectron;
   }
+  for (G4PhysicsTable* t : {dedxMuonMinus, rangeMuonMinus, invRangeMuonMinus,
+                            dedxAntiProton, rangeAntiProton, invRangeAntiProton}) {
+    if (nullptr != t) {
+      t->clearAndDestroy();
+      delete t;
+    }
+  }
   delete pcuts;
   delete builder;
 }
@@ -188,13 +206,51 @@ const G4PhysicsTable* G4TablesForExtrapolatorForCVH::GetPhysicsTable(ExtTableTyp
       break;
     case fMscElectron:
       table = mscElectron;
+      break;
+    case fDedxMuonMinus:
+      table = dedxMuonMinus;
+      break;
+    case fRangeMuonMinus:
+      table = rangeMuonMinus;
+      break;
+    case fInvRangeMuonMinus:
+      table = invRangeMuonMinus;
+      break;
+    case fDedxAntiProton:
+      table = dedxAntiProton;
+      break;
+    case fRangeAntiProton:
+      table = rangeAntiProton;
+      break;
+    case fInvRangeAntiProton:
+      table = invRangeAntiProton;
+      break;
   }
   return table;
 }
 
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo....
 
+std::mutex& cvhExtrapolatorTablesMutex() {
+  static std::mutex m;
+  return m;
+}
+
 void G4TablesForExtrapolatorForCVH::Initialisation() {
+
+  // see the twin dump in ProcessActivationWatcher: same singleton, different job
+  {
+    // atomic exchange: Initialisation() is reachable from both table-build
+    // paths, so two threads could otherwise both pass the test and interleave
+    // their StreamInfo output.
+    static std::atomic<bool> dumped{false};
+    if (cvhcgf::switches().dumpEmParameters && !dumped.exchange(true)) {
+      G4cout << "### CVH_EMPARAMS_BEGIN tag=MODEL" << G4endl;
+      G4EmParameters::Instance()->StreamInfo(G4cout);
+      G4cout << "### CVH_EMPARAMS_END" << G4endl;
+    }
+  }
+
   if (verbose > 1) {
     G4cout << "### G4TablesForExtrapolatorForCVH::Initialisation" << G4endl;
   }
@@ -267,6 +323,56 @@ void G4TablesForExtrapolatorForCVH::Initialisation() {
   ComputeProtonDEDX(proton, dedxProton);
   builder->BuildRangeTable(dedxProton, rangeProton);
   builder->BuildInverseRangeTable(rangeProton, invRangeProton);
+
+  // CHARGE-AWARE reference (CVH_REF_CHARGEAWARE, single reader
+  // cvhcgf::referenceIsChargeAware). Everything above builds the POSITIVE
+  // particle's tables and only the positive particle's: muonMinus has been a
+  // member of this class, assigned in the constructor and never used, since
+  // the file was written, and there has never been an antiproton at all.
+  //
+  // The whole fix is these six lines. It is deliberately NOT a hand-written
+  // charge-odd term added on top of the positive table: it is the SAME two
+  // functions called with the other G4ParticleDefinition, so what is added is
+  // by construction whatever Geant4's own G4MuBetheBlochModel /
+  // G4BetheBlochModel say a negative particle's stopping power is. That gets
+  // Barkas and Mott with their correct beta dependence at any beta (the two
+  // exchange dominance below beta*gamma ~ 1, which matters for V0 tracks), it
+  // correctly gets NOTHING from the even Bloch term, and it cannot drift out
+  // of step with Geant4 the way a transcribed formula would.
+  //
+  // Cost: six extra G4PhysicsTables built once per job, no per-step cost.
+  if (chargeAware) {
+    if (verbose > 1) {
+      G4cout << "### G4TablesForExtrapolatorForCVH Builds NEGATIVE muon and antiproton tables" << G4endl;
+    }
+    dedxMuonMinus = PrepareTable(dedxMuonMinus);
+    rangeMuonMinus = PrepareTable(rangeMuonMinus);
+    invRangeMuonMinus = PrepareTable(invRangeMuonMinus);
+    dedxAntiProton = PrepareTable(dedxAntiProton);
+    rangeAntiProton = PrepareTable(rangeAntiProton);
+    invRangeAntiProton = PrepareTable(invRangeAntiProton);
+
+    ComputeMuonDEDX(muonMinus, dedxMuonMinus);
+    builder->BuildRangeTable(dedxMuonMinus, rangeMuonMinus);
+    builder->BuildInverseRangeTable(rangeMuonMinus, invRangeMuonMinus);
+
+    ComputeProtonDEDX(antiProton, dedxAntiProton);
+    builder->BuildRangeTable(dedxAntiProton, rangeAntiProton);
+    builder->BuildInverseRangeTable(rangeAntiProton, invRangeAntiProton);
+
+    // A missing table is NOT allowed to be quiet. ComputeValue returns 0.0 for
+    // a null table, so a half-wired switch would give dE/dx = 0 for every
+    // negative track and the fit would still converge -- the exact silent
+    // failure mode this study has hit before with a weight.
+    for (const G4PhysicsTable* t : {dedxMuonMinus, rangeMuonMinus, invRangeMuonMinus,
+                                    dedxAntiProton, rangeAntiProton, invRangeAntiProton}) {
+      if (nullptr == t || (G4int)t->length() < nmat) {
+        throw cms::Exception("G4TablesForExtrapolatorForCVH")
+            << "CVH_REF_CHARGEAWARE is set but a negative-particle table is missing or short ("
+            << (nullptr == t ? -1 : (G4int)t->length()) << " of " << nmat << " materials)";
+      }
+    }
+  }
 
   ComputeTrasportXS(electron, mscElectron);
 }
@@ -352,11 +458,6 @@ void G4TablesForExtrapolatorForCVH::ComputeMuonDEDX(const G4ParticleDefinition* 
     G4cout << "G4TablesForExtrapolatorForCVH::ComputeMuonDEDX for " << part->GetParticleName() << G4endl;
   }
 
-  const double mass = 0.1056583745;
-  const double massev = mass * 1e9;
-  G4double eMass = 0.51099906 / GeV;
-  G4double massRatio = eMass / mass;
-
   for (G4int i = 0; i < nmat; ++i) {
     const G4Material* mat = (*mtable)[i];
     if (1 < verbose) {
@@ -364,58 +465,25 @@ void G4TablesForExtrapolatorForCVH::ComputeMuonDEDX(const G4ParticleDefinition* 
     }
     G4PhysicsVector* aVector = (*table)[i];
 
-    G4double effZ, effA;
-    Geant4ePropagator::CalculateEffectiveZandA(mat, effZ, effA);
-    G4double I = 16. * pow(effZ, 0.9);
-    const double f2 = effZ <= 2. ? 0. : 2. / effZ;
-    const double f1 = 1. - f2;
-    const double e2 = 10. * effZ * effZ;
-    const double e1 = pow(I / pow(e2, f2), 1. / f1);
-    const double r = 0.4;
-
     for (G4int j = 0; j <= nbins; ++j) {
       G4double e = aVector->Energy(j);
-      G4double pgev = e / GeV;
-      G4double Etot = sqrt(pgev * pgev + mass * mass);
-      G4double beta = pgev / Etot;
-      G4double gamma = Etot / mass;
-      G4double eta = beta * gamma;
-      G4double etasq = eta * eta;
-      G4double F1 = 2 * eMass * etasq;
-      G4double F2 = 1. + 2. * massRatio * gamma + massRatio * massRatio;
-      G4double Emax = 1.E+6 * F1 / F2;  // now in keV
-
-      const double emaxev = Emax * 1e3;  // keV -> eV
-
-      const double sigma1partial = f1 * (log(2. * massev * beta * beta * gamma * gamma / e1) - beta * beta) / e1 /
-                                   (log(2. * massev * beta * beta * gamma * gamma / I) - beta * beta) * (1. - r);
-
-      const double sigma2partial = f1 * (log(2. * massev * beta * beta * gamma * gamma / e2) - beta * beta) / e2 /
-                                   (log(2. * massev * beta * beta * gamma * gamma / I) - beta * beta) * (1. - r);
-
-      const double sigma3partial = emaxev / I / (emaxev + I) / log((emaxev + I) / I) * r;
-
-      const double e3med = I / (1. - 0.5 * emaxev / (emaxev + I));
-      const double e3mean = I * (emaxev + I) * log((emaxev + I) / I) / emaxev;
-      const double e3mode = I;
-
-      const double emed = sigma1partial * e1 + sigma2partial * e2 + sigma3partial * e3med;
-      const double emean = sigma1partial * e1 + sigma2partial * e2 + sigma3partial * e3mean;
-      const double emode = sigma1partial * e1 + sigma2partial * e2 + sigma3partial * e3mode;
-
-      const double dedxratio = emed / emean;
-      const double moderatio = emode / emean;
-      const double alpha = 0.996;
-
-      const double ealpha = I / (1. - alpha * emaxev / (emaxev + I));
-
       const double dedxioni =
           e > 1000 ? ionialt->ComputeDEDXPerVolume(mat, part, e, e) : ioni->ComputeDEDXPerVolume(mat, part, e, e);
 
       G4double dedx = ionOnly ? dedxioni
                               : dedxioni + pair->ComputeDEDXPerVolume(mat, part, e, e) +
                                     brem->ComputeDEDXPerVolume(mat, part, e, e);
-      aVector->PutValue(j, dedx);
+      // CVH_DEDX_SCALE -- DIAGNOSTIC ONLY, not a proposed fix.
+      // The table above is the unrestricted MEAN loss. The typical muon loses
+      // the MODE, so the reference over-corrects (2026-08-08/09). A uniform
+      // scale is NOT the right correction -- the median/mean ratio is
+      // step-size dependent (0.747 per step vs 0.887 summed over the tracker),
+      // i.e. it is an ESTIMATOR property masquerading as a material one. It is
+      // used here only to answer one question: does moving the central value
+      // actually remove the +1 MeV J/psi mass bias? The lever from dE/dx to
+      // fitted momentum measured ~1/3, so the mapping is not 1:1 and the
+      // mechanism could be partly something else.
+      aVector->PutValue(j, dedx * cvhcgf::switches().dedxScale);
       if (1 < verbose) {
         G4cout << "j= " << j << "  e(MeV)= " << e / MeV << " dedx(Mev/cm)= " << dedx * cm / MeV
                << " dedx(Mev/(g/cm2)= " << dedx / ((MeV * mat->GetDensity()) / (g / cm2)) << G4endl;
@@ -430,6 +498,74 @@ void G4TablesForExtrapolatorForCVH::ComputeMuonDEDX(const G4ParticleDefinition* 
 }
 
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo....
+
+const G4PhysicsTable* G4TablesForExtrapolatorForCVH::GetHadronRadiativeTable(const G4ParticleDefinition* part) {
+  if (!cvhcgf::referenceHasHadronRadiative() || part == nullptr) {
+    return nullptr;
+  }
+  // The muon already has brems + pair in its own table (ComputeMuonDEDX); the
+  // electron/positron tables are a different branch entirely. This is only for
+  // the species served by the proton table.
+  if (std::abs(part->GetPDGEncoding()) == 13 || part->GetPDGMass() <= 0.) {
+    return nullptr;
+  }
+  // `dedxHadRad` is mutated HERE, i.e. during event processing, on a
+  // PROCESS-SHARED object, and the miss path constructs and Initialise()s two
+  // more Geant4 EM models. Unlocked, that is a std::map data race plus a second
+  // concurrent entry into the same Geant4 element-data statics the build path
+  // touches. It is inert for the Z/J-psi productions -- the |PDG| == 13 test
+  // above returns before the map is reached -- but the multi-species tests do
+  // reach it. Same mutex as the build: the map has one entry per species, so it
+  // is contended only on the first steps of each new species.
+  std::lock_guard<std::mutex> lk(cvhExtrapolatorTablesMutex());
+  auto it = dedxHadRad.find(part);
+  if (it != dedxHadRad.end()) {
+    return it->second;
+  }
+  G4PhysicsTable* t = PrepareTable(nullptr);
+  ComputeHadronRadiativeDEDX(part, t);
+  dedxHadRad[part] = t;
+  return t;
+}
+
+void G4TablesForExtrapolatorForCVH::ComputeHadronRadiativeDEDX(const G4ParticleDefinition* part,
+                                                              G4PhysicsTable* table) {
+  // G4hBremsstrahlungModel / G4hPairProductionModel are what the SIMULATION
+  // runs for hadrons (hBrems / hPairProd); they are the mass-aware subclasses
+  // of the muon models and take the particle definition, so nothing here is a
+  // muon quantity in disguise.
+  G4hBremsstrahlungModel* brem = new G4hBremsstrahlungModel(part);
+  G4hPairProductionModel* pair = new G4hPairProductionModel(part);
+  brem->Initialise(part, cuts);
+  pair->Initialise(part, cuts);
+  brem->SetUseBaseMaterials(false);
+  pair->SetUseBaseMaterials(false);
+
+  const G4MaterialTable* mtable = G4Material::GetMaterialTable();
+  if (0 < verbose) {
+    G4cout << "G4TablesForExtrapolatorForCVH::ComputeHadronRadiativeDEDX for " << part->GetParticleName()
+           << " (CVH_REF_HADRAD)" << G4endl;
+  }
+  for (G4int i = 0; i < nmat; ++i) {
+    const G4Material* mat = (*mtable)[i];
+    G4PhysicsVector* aVector = (*table)[i];
+    for (G4int j = 0; j <= nbins; ++j) {
+      // NOTE: the particle's OWN kinetic energy. The proton table is looked up
+      // at e = ekin * m_p/m to hold beta*gamma fixed; radiative loss is not a
+      // function of beta*gamma, so applying that scaling here would hand every
+      // hadron the proton's radiative loss.
+      const G4double e = aVector->Energy(j);
+      // unrestricted (cut = e), matching how the ionization tables are built
+      const G4double d = brem->ComputeDEDXPerVolume(mat, part, e, e) + pair->ComputeDEDXPerVolume(mat, part, e, e);
+      aVector->PutValue(j, d);
+    }
+    if (splineFlag) {
+      aVector->FillSecondDerivatives();
+    }
+  }
+  delete brem;
+  delete pair;
+}
 
 void G4TablesForExtrapolatorForCVH::ComputeProtonDEDX(const G4ParticleDefinition* part, G4PhysicsTable* table) {
   G4BetheBlochModel* ioni = new G4BetheBlochModel();

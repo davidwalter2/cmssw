@@ -3,6 +3,7 @@
 #include <memory>
 
 #include "ResidualGlobalCorrectionMakerBase.h"
+#include "TrackPropagation/Geant4e/interface/G4UniversalFluctuationForExtrapolator.hh"
 
 // user include files
 #include "FWCore/Framework/interface/Frameworkfwd.h"
@@ -175,9 +176,24 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   doGen_ = iConfig.getParameter<bool>("doGen");
   requireGen_ = iConfig.getParameter<bool>("requireGen");
   doSim_ = iConfig.getParameter<bool>("doSim");
+  // existsAs-guarded so legacy cfis are untouched.
+  doSimDecayTruth_ = iConfig.existsAs<bool>("doSimDecayTruth")
+      ? iConfig.getParameter<bool>("doSimDecayTruth") : false;
   fitSimHitPositions_ = iConfig.getUntrackedParameter<bool>("fitSimHitPositions", false);
   bsConstraint_ = iConfig.getParameter<bool>("bsConstraint");
+  // The luminous-region width multiplier. 1.0 = the record as read; the gate
+  // for the beam rows runs at 1e6, where the rows are weightless and the fit
+  // must reproduce the rows-OFF fit on every export. existsAs-guarded so
+  // every legacy cfi is untouched.
+  beamWidthScale_ = iConfig.existsAs<double>("beamWidthScale")
+      ? iConfig.getParameter<double>("beamWidthScale") : 1.0;
+  exportBsResidual_ = iConfig.existsAs<bool>("exportBsResidual")
+      ? iConfig.getParameter<bool>("exportBsResidual") : false;
   applyHitQuality_ = iConfig.getParameter<bool>("applyHitQuality");
+  hitCovScalePixel_ = iConfig.existsAs<double>("hitCovScalePixel")
+      ? iConfig.getParameter<double>("hitCovScalePixel") : 1.0;
+  hitCovScaleStrip_ = iConfig.existsAs<double>("hitCovScaleStrip")
+      ? iConfig.getParameter<double>("hitCovScaleStrip") : 1.0;
   genMatchPdgId_ = iConfig.existsAs<int>("genMatchPdgId")
       ? iConfig.getParameter<int>("genMatchPdgId") : 13;
   // Relative pT window of the gen match (|pt_gen - pt_reco| < window * pt_gen).
@@ -186,10 +202,62 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   // 0.5 window silently removes decayed kaons from a requireGen sample.
   genMatchPtWindow_ = iConfig.existsAs<double>("genMatchPtWindow")
       ? iConfig.getParameter<double>("genMatchPtWindow") : 0.5;
+  genMatchPdgIds_ = iConfig.existsAs<std::vector<int>>("genMatchPdgIds")
+      ? iConfig.getParameter<std::vector<int>>("genMatchPdgIds") : std::vector<int>();
+  genMatchDR_ = iConfig.existsAs<double>("genMatchDR")
+      ? iConfig.getParameter<double>("genMatchDR") : 0.1;
+  // THE SLIMMING SWITCH.  `exportStepRecords` writes the raw per-step
+  // ionization / Moliere / radiative records the resolution-CF model is built
+  // from -- 430 kB and, offline, 2.2 s per candidate, which is 72 % of a
+  // two-track tree.  The in-maker exponents (`exportCfExponents`, cvhcf) carry
+  // the same information for the model in use, so the raw records are needed
+  // only to re-derive the exponents under a DIFFERENT model.  Hence the
+  // default False; set it True to re-derive.
+  exportStepRecords_ = iConfig.existsAs<bool>("exportStepRecords")
+                           ? iConfig.getParameter<bool>("exportStepRecords") : false;
+  exportCfExponents_ = iConfig.existsAs<bool>("exportCfExponents")
+                           ? iConfig.getParameter<bool>("exportCfExponents") : true;
+  // THE PER-GROUP SPLIT.  +26 kB/candidate on top of the 1.4 kB flat export,
+  // so it is opt-in: only the productions that will feed the joint
+  // material + field fit need it.
+  exportCfGroupExponents_ = iConfig.existsAs<bool>("exportCfGroupExponents")
+                           ? iConfig.getParameter<bool>("exportCfGroupExponents") : false;
+  exportHitResBlocks_ = iConfig.existsAs<bool>("exportHitResBlocks")
+                           ? iConfig.getParameter<bool>("exportHitResBlocks") : true;
+  // THE PER-HIT (COMPLEMENT) RESIDUAL BLOCK.  New export, off by default so
+  // that no existing configuration changes its output by a byte.
+  exportPerHitResidual_ = iConfig.existsAs<bool>("exportPerHitResidual")
+                           ? iConfig.getParameter<bool>("exportPerHitResidual") : false;
+  perHitCfGroups_ = iConfig.existsAs<bool>("perHitCfGroups")
+                           ? iConfig.getParameter<bool>("perHitCfGroups") : true;
+  perHitRefComponents_ = iConfig.existsAs<bool>("perHitRefComponents")
+                           ? iConfig.getParameter<bool>("perHitRefComponents") : true;
+  perHitInfluenceBlocks_ = iConfig.existsAs<bool>("perHitInfluenceBlocks")
+                           ? iConfig.getParameter<bool>("perHitInfluenceBlocks") : true;
+  perHitShareMin_ = iConfig.existsAs<double>("perHitShareMin")
+                           ? iConfig.getParameter<double>("perHitShareMin") : 0.;
+  exportMaterialNoise_ = iConfig.existsAs<bool>("exportMaterialNoise")
+                           ? iConfig.getParameter<bool>("exportMaterialNoise") : false;
+  // THE VARIANCE (log-det) TERM of the two-track maker's exported gradient
+  // and Hessian.  See the member docs; with it off the resolution and
+  // material parameters enter the exported gradient only through the mean.
+  exportVarianceGrads_ = iConfig.existsAs<bool>("exportVarianceGrads")
+                           ? iConfig.getParameter<bool>("exportVarianceGrads") : false;
+  varianceGradFamilies_ = iConfig.existsAs<std::vector<unsigned int>>("varianceGradFamilies")
+                           ? iConfig.getParameter<std::vector<unsigned int>>("varianceGradFamilies")
+                           : std::vector<unsigned int>();
+  exportObjective_ = iConfig.existsAs<bool>("exportObjective")
+                           ? iConfig.getParameter<bool>("exportObjective") : false;
+  varianceFDGlobalIdx_ = iConfig.existsAs<int>("varianceFDGlobalIdx")
+                           ? iConfig.getParameter<int>("varianceFDGlobalIdx") : -1;
+  varianceFDEps_ = iConfig.existsAs<double>("varianceFDEps")
+                           ? iConfig.getParameter<double>("varianceFDEps") : 1e-3;
   keepPixelEdgeHits_ = iConfig.existsAs<bool>("keepPixelEdgeHits")
       ? iConfig.getParameter<bool>("keepPixelEdgeHits") : false;
   pixelMinSizeX_ = iConfig.existsAs<int>("pixelMinSizeX")
       ? iConfig.getParameter<int>("pixelMinSizeX") : 2;
+  pixelMinSizeY_ = iConfig.existsAs<int>("pixelMinSizeY")
+      ? iConfig.getParameter<int>("pixelMinSizeY") : 1;
   // |pdgId| used by the single-track gen matching (doGen); default muon.
   pixelHitClassCorrections_ = iConfig.existsAs<bool>("pixelHitClassCorrections")
       ? iConfig.getParameter<bool>("pixelHitClassCorrections") : false;
@@ -321,7 +389,17 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
     
     inputSimTracks_ = consumes<std::vector<SimTrack>>(edm::InputTag("g4SimHits"));
   }
-  
+
+  // Decay truth needs only the barcode map + SimTracks + SimVertices (the
+  // PSimHit collections above are absent from the B->J/psi+X ALCARECO).
+  if (doSimDecayTruth_ && !doSim_) {
+    genParticlesBarcodeToken_ = consumes<std::vector<int>>(edm::InputTag("genParticles"));
+    inputSimTracks_ = consumes<std::vector<SimTrack>>(edm::InputTag("g4SimHits"));
+  }
+  if (doSimDecayTruth_) {
+    inputSimVertices_ = consumes<std::vector<SimVertex>>(edm::InputTag("g4SimHits"));
+  }
+
   if (doMuons_) {
 // inputMuons_ = consumes<reco::MuonCollection>(edm::InputTag(iConfig.getParameter<edm::InputTag>("muons")));
     inputMuons_ = consumes<edm::View<reco::Muon>>(edm::InputTag(iConfig.getParameter<edm::InputTag>("muons")));
@@ -337,6 +415,12 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   
   debugprintout_ = false;
 
+  doMuonTrackAssoc_ = iConfig.existsAs<bool>("doMuonTrackAssoc")
+      ? iConfig.getParameter<bool>("doMuonTrackAssoc") : false;
+  if (doMuonTrackAssoc_) {
+    inputMuons_ = consumes<edm::View<reco::Muon>>(
+        iConfig.getParameter<edm::InputTag>("muons"));
+  }
   doMuonAssoc_ = iConfig.getParameter<bool>("doMuonAssoc");
   if (doMuonAssoc_) {
     inputMuonAssoc_ = consumes<edm::Association<std::vector<pat::Muon>>>(iConfig.getParameter<edm::InputTag>("src"));
@@ -415,17 +499,291 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
       tree->Branch("gradchisqv", &gradchisqv);
       tree->Branch("gradllv", &gradllv);
     }
+    // The objective the log-det gradient is the derivative OF, in double.
+    // Debug/validation only (an ncons x ncons LDLT per candidate).
+    if (exportObjective_) {
+      tree->Branch("objval", &objval);
+      tree->Branch("objchisq", &objchisq);
+      tree->Branch("objlogdetv", &objlogdetv);
+      tree->Branch("objlogdetc", &objlogdetc);
+      tree->Branch("objnullv", &objnullv);
+    }
     if (doRes_ && (fillGrads_ || fillGradsFactored_)) {
-      tree->Branch("ioniurbanidx", &ioniurbanidx);
-      tree->Branch("ioniurbanv", &ioniurbanv);
-      tree->Branch("msmoliidx", &msmoliidx);
-      tree->Branch("msmoliv", &msmoliv);
+      // THE RAW PER-STEP EXPORT.  Everything in this block is what the
+      // resolution-CF exponents are BUILT from, and nothing else reads it; it
+      // is 430 kB/candidate, i.e. 16 TB over the 40M candidates of the full
+      // calibration.  With `exportCfExponents` on, the exponents themselves
+      // (6 x 64 floats) are in the tree and this is dead weight -- keep it
+      // only while a model change might have to be re-derived from the same
+      // files.  `resinfvarv` / `resinfcov` / `reshitidx` / `ioniqscale*` are
+      // NOT here: they are small, and they are what a reader still needs to
+      // reconstruct the per-block variance shares and the hit classes.
+      //
+      // `resinfbv` (the 5x5 B_b per block, ~6 kB/candidate) goes with the raw
+      // records: its only consumer is `cf_mass_likelihood.leg_exponents`, the
+      // single-track pairing route that the two-track maker's own `cfmass_*`
+      // export supersedes.
+      if (exportStepRecords_) {
+        tree->Branch("ioniurbanidx", &ioniurbanidx);
+        tree->Branch("ioniurbanv", &ioniurbanv);
+        // radiative (brems + pair) per-step export; strides and v grid are
+        // exported alongside so the reader never has to guess them.
+        tree->Branch("radstepidx", &radstepidx);
+        tree->Branch("radstepv", &radstepv, basketSize);
+        tree->Branch("radstepspecv", &radstepspecv, basketSize);
+      }
+      // per-leg CGF substitution factor for the ionization block, [sc, nstep]
+      // per leg -- 1.0 under CgfQoPMode=0. See the member docs.
+      tree->Branch("ioniqscaleidx", &ioniqscaleidx);
+      tree->Branch("ioniqscalev", &ioniqscalev);
+      tree->Branch("radvgrid", &radvgrid);
+      tree->Branch("radstepstride", &radstepstride);
+      tree->Branch("radstepnv", &radstepnv);
+      // `ioniurbanv`'s stride depends on a run-time switch, so it is written
+      // out rather than inferred. Set once, here, like radvgrid.
+      ioniurbanstride = G4UniversalFluctuationForExtrapolator::exactDeltaEnabled() ? 14 : 12;
+      tree->Branch("ioniurbanstride", &ioniurbanstride);
+      // Filled ONCE, here, and never cleared: the grid is a compile-time
+      // constant of the propagator, so every entry writes the same 48 floats
+      // and ROOT compresses them away. Doing it here rather than at the drain
+      // point also means the grid is present even on entries whose legs
+      // produced no radiative steps (non-muons).
+      {
+        double vg[RADSTEP_NV];
+        Geant4ePropagator::radVGrid(vg);
+        radvgrid.assign(vg, vg + RADSTEP_NV);
+      }
+      if (exportStepRecords_) {
+        tree->Branch("msmoliidx", &msmoliidx);
+        tree->Branch("msmoliv", &msmoliv);
+        tree->Branch("reseigv", &reseigv);
+        tree->Branch("resinfv", &resinfv);
+        tree->Branch("resinfbv", &resinfbv);
+      }
       tree->Branch("reseigidx", &reseigidx);
-      tree->Branch("reseigv", &reseigv);
-      tree->Branch("resinfv", &resinfv);
+      tree->Branch("reshitidx", &reshitidx);
       tree->Branch("resinfvarv", &resinfvarv);
       tree->Branch("resinfcov", &resinfcov);
-      tree->Branch("resinfbv", &resinfbv);
+      tree->Branch("reshitcls", &reshitcls);
+      tree->Branch("resinfcovhit", &resinfcovhit);
+      tree->Branch("resinfcovgrp", &resinfcovgrp);
+
+      // THE IN-MAKER RESOLUTION-CF EXPONENTS.  Six families of 64 floats on
+      // `cftau` (written into the runtree), plus the Gaussian share and the
+      // completeness flag: 1.6 kB/candidate against the 430 kB above.
+      if (exportCfExponents_) {
+        tree->Branch((cfprefix_ + "_ms").c_str(), &cfmsv);
+        tree->Branch((cfprefix_ + "_del").c_str(), &cfdelv);
+        tree->Branch((cfprefix_ + "_ioni_re").c_str(), &cfiorev);
+        tree->Branch((cfprefix_ + "_ioni_im").c_str(), &cfioimv);
+        tree->Branch((cfprefix_ + "_rad_re").c_str(), &cfradrev);
+        tree->Branch((cfprefix_ + "_rad_im").c_str(), &cfradimv);
+        tree->Branch((cfprefix_ + "_vgf").c_str(), &cfvgf);
+        tree->Branch((cfprefix_ + "_ok").c_str(), &cfok);
+        tree->Branch((cfprefix_ + "_nblock").c_str(), &cfnblock);
+        tree->Branch((cfprefix_ + "_npooled").c_str(), &cfnpooled);
+        if (exportCfGroupExponents_) {
+          tree->Branch((cfprefix_ + "_grp").c_str(), &cfgrpv);
+          tree->Branch((cfprefix_ + "_grp_ms").c_str(), &cfgrpmsv, basketSize);
+          tree->Branch((cfprefix_ + "_grp_ioni_re").c_str(), &cfgrpiorev, basketSize);
+          tree->Branch((cfprefix_ + "_grp_ioni_im").c_str(), &cfgrpioimv, basketSize);
+          tree->Branch((cfprefix_ + "_grp_rad_re").c_str(), &cfgrpradrev, basketSize);
+          tree->Branch((cfprefix_ + "_grp_rad_im").c_str(), &cfgrpradimv, basketSize);
+          if (cfGroupDelta_) {
+            tree->Branch((cfprefix_ + "_grp_del").c_str(), &cfgrpdelv, basketSize);
+          }
+          tree->Branch((cfprefix_ + "_grp_vqms").c_str(), &cfgrpvqmsv);
+          tree->Branch((cfprefix_ + "_grp_vqio").c_str(), &cfgrpvqiov);
+          tree->Branch((cfprefix_ + "_grp_closure").c_str(), &cfgrpclosure);
+        }
+        tree->Branch((cfprefix_ + "_hitcls").c_str(), &cfhitclsv);
+        tree->Branch((cfprefix_ + "_hitv").c_str(), &cfhitvv);
+      }
+
+      // THE VERTEX-CONSTRAINT RESIDUAL of the two-track fit. Same structure
+      // as the mass block above, evaluated at the VERTEX weights: one scalar
+      // residual `Jpsi_vtxres` with its own sigma, the per-block influence
+      // and variance shares aligned with `reseigidx`, and the CF exponents.
+      // The functional's mean is zero by construction, so the term needs no
+      // kernel -- it is the mass term with a delta kernel at zero.
+      if (exportVtxResidual_) {
+        tree->Branch("Jpsi_vtxres", &Jpsi_vtxres);
+        tree->Branch("Jpsi_vtxsig", &Jpsi_vtxsig);
+        tree->Branch("Jpsi_vtxz", &Jpsi_vtxz);
+        tree->Branch("Jpsi_vtxb6", &Jpsi_vtxb6);
+        tree->Branch("Jpsi_vtxdchi2", &Jpsi_vtxdchi2);
+        tree->Branch("Jpsi_vtxvchk", &Jpsi_vtxvchk);
+        tree->Branch("Jpsi_vtxvgf", &Jpsi_vtxvgf);
+        tree->Branch("Jpsi_vtxbfree", &Jpsi_vtxbfree);
+        tree->Branch("Jpsi_mass_unc", &Jpsi_mass_unc);
+        tree->Branch("Jpsi_covmassvtx", &Jpsi_covmassvtx);
+        tree->Branch("Jpsi_vtxfirstplus", &Jpsi_vtxfirstplus);
+        tree->Branch("Jpsi_vtxvhit", &Jpsi_vtxvhit);
+        tree->Branch("Jpsi_vtxvms", &Jpsi_vtxvms);
+        tree->Branch("Jpsi_vtxvioni", &Jpsi_vtxvioni);
+        tree->Branch("Jpsi_massvms", &Jpsi_massvms);
+        tree->Branch("Jpsi_massvioni", &Jpsi_massvioni);
+        tree->Branch("Jpsi_vtxfree", &Jpsi_vtxfree);
+        tree->Branch("Jpsi_vtxok", &Jpsi_vtxok);
+        tree->Branch("Jpsi_vtxsgnchk", &Jpsi_vtxsgnchk);
+        tree->Branch("vtxvarv", &vtxvarv);
+        tree->Branch("vtxsgnv", &vtxsgnv);
+        // The two functionals' per-block influence vectors
+        // `a_b = dV_b^{1/2} w_b` (5 floats/block, dof-padded), which is what
+        // the FOURTH CROSS CUMULANT between the vertex and the mass residual
+        // needs and which the variance shares alone cannot give. ~2 kB each,
+        // so they ride along with the vertex block rather than waiting for
+        // the 430 kB raw-record mode.
+        if (!exportStepRecords_) {
+          tree->Branch("resinfv", &resinfv, basketSize);
+        }
+        tree->Branch("resinfvtxv", &resinfvtxv, basketSize);
+        if (exportCfExponents_) {
+          tree->Branch("cfvtx_ms", &cfvtxmsv);
+          tree->Branch("cfvtx_del", &cfvtxdelv);
+          tree->Branch("cfvtx_ioni_re", &cfvtxiorev);
+          tree->Branch("cfvtx_ioni_im", &cfvtxioimv);
+          tree->Branch("cfvtx_rad_re", &cfvtxradrev);
+          tree->Branch("cfvtx_rad_im", &cfvtxradimv);
+          tree->Branch("cfvtx_hitcls", &vtxhitclsv);
+          tree->Branch("cfvtx_hitv", &vtxhitvv);
+          if (exportCfGroupExponents_) {
+            tree->Branch("cfvtx_grp", &cfvtxgrpv);
+            tree->Branch("cfvtx_grp_ms", &cfvtxgrpmsv, basketSize);
+            tree->Branch("cfvtx_grp_ioni_re", &cfvtxgrpiorev, basketSize);
+            tree->Branch("cfvtx_grp_ioni_im", &cfvtxgrpioimv, basketSize);
+            tree->Branch("cfvtx_grp_rad_re", &cfvtxgrpradrev, basketSize);
+            tree->Branch("cfvtx_grp_rad_im", &cfvtxgrpradimv, basketSize);
+            tree->Branch("cfvtx_grp_vqms", &cfvtxgrpvqmsv);
+            tree->Branch("cfvtx_grp_vqio", &cfvtxgrpvqiov);
+            tree->Branch("cfvtx_grp_closure", &cfvtxgrpclosure);
+          }
+        }
+        if (fillJac_) {
+          tree->Branch("Jpsi_jacVtx", &Jpsi_jacVtx);
+        }
+        tree->Branch("Jpsi_covvtx", Jpsi_covvtx.data(), "Jpsi_covvtx[6]/F");
+      }
+
+      // THE BEAM-LINE (LUMINOUS-REGION) RESIDUALS. Two constraint residuals
+      // of exactly the vertex-residual kind, in the transverse plane: the
+      // vertex the fit finds WITHOUT the beam rows, minus the beam line at
+      // that vertex's z, whitened by the covariance of that difference. See
+      // the member docs for the leave-one-out identity and the projector.
+      // Written only when the beam rows are actually on.
+      if (exportBsResidual_ && bsConstraint_) {
+        tree->Branch("Jpsi_bsres", Jpsi_bsres.data(), "Jpsi_bsres[2]/F");
+        tree->Branch("Jpsi_bscov", Jpsi_bscov.data(), "Jpsi_bscov[3]/F");
+        tree->Branch("Jpsi_bsz", Jpsi_bsz.data(), "Jpsi_bsz[2]/F");
+        tree->Branch("Jpsi_bschi2", &Jpsi_bschi2);
+        tree->Branch("Jpsi_bschi2fit", &Jpsi_bschi2fit);
+        tree->Branch("Jpsi_bschi20", &Jpsi_bschi20);
+        tree->Branch("Jpsi_bsvchk", &Jpsi_bsvchk);
+        tree->Branch("Jpsi_bsok", &Jpsi_bsok);
+        tree->Branch("Jpsi_bscovlo", Jpsi_bscovlo.data(), "Jpsi_bscovlo[6]/F");
+        tree->Branch("Jpsi_bslinv", Jpsi_bslinv.data(), "Jpsi_bslinv[3]/F");
+        tree->Branch("Jpsi_bsmeig", &Jpsi_bsmeig);
+        tree->Branch("Jpsi_bsvtx", Jpsi_bsvtx.data(), "Jpsi_bsvtx[3]/F");
+        tree->Branch("Jpsi_bsspot", Jpsi_bsspot.data(), "Jpsi_bsspot[3]/F");
+        tree->Branch("Jpsi_bsslope", Jpsi_bsslope.data(), "Jpsi_bsslope[2]/F");
+        tree->Branch("Jpsi_bswidth", Jpsi_bswidth.data(), "Jpsi_bswidth[3]/F");
+        tree->Branch("Jpsi_bsmeanmass", Jpsi_bsmeanmass.data(), "Jpsi_bsmeanmass[3]/F");
+        tree->Branch("Jpsi_bsmeanvtx", Jpsi_bsmeanvtx.data(), "Jpsi_bsmeanvtx[3]/F");
+        tree->Branch("Jpsi_bsmeanbs", Jpsi_bsmeanbs.data(), "Jpsi_bsmeanbs[6]/F");
+        tree->Branch("Jpsi_bsvbs", Jpsi_bsvbs.data(), "Jpsi_bsvbs[2]/F");
+        tree->Branch("Jpsi_bsvhit", Jpsi_bsvhit.data(), "Jpsi_bsvhit[2]/F");
+        tree->Branch("Jpsi_bsvms", Jpsi_bsvms.data(), "Jpsi_bsvms[2]/F");
+        tree->Branch("Jpsi_bsvioni", Jpsi_bsvioni.data(), "Jpsi_bsvioni[2]/F");
+        tree->Branch("Jpsi_bssgnchk", Jpsi_bssgnchk.data(), "Jpsi_bssgnchk[2]/F");
+        tree->Branch("Jpsi_massvbs", &Jpsi_massvbs);
+        tree->Branch("Jpsi_vtxvbs", &Jpsi_vtxvbs);
+        tree->Branch("Jpsi_massvbsx", &Jpsi_massvbsx);
+        tree->Branch("Jpsi_massvbsy", &Jpsi_massvbsy);
+        tree->Branch("Jpsi_vtxvbsx", &Jpsi_vtxvbsx);
+        tree->Branch("Jpsi_vtxvbsy", &Jpsi_vtxvbsy);
+        tree->Branch("Jpsi_bsvbsx", Jpsi_bsvbsx.data(), "Jpsi_bsvbsx[2]/F");
+        tree->Branch("Jpsi_bsvbsy", Jpsi_bsvbsy.data(), "Jpsi_bsvbsy[2]/F");
+        tree->Branch("Jpsi_bswidtherr", Jpsi_bswidtherr.data(), "Jpsi_bswidtherr[2]/F");
+        tree->Branch("bsvarv", &bsvarv);
+        tree->Branch("resinfbsv", &resinfbsv, basketSize);
+        if (exportCfExponents_) {
+          tree->Branch("cfbs_ms", &cfbsmsv);
+          tree->Branch("cfbs_del", &cfbsdelv);
+          tree->Branch("cfbs_ioni_re", &cfbsiorev);
+          tree->Branch("cfbs_ioni_im", &cfbsioimv);
+          tree->Branch("cfbs_rad_re", &cfbsradrev);
+          tree->Branch("cfbs_rad_im", &cfbsradimv);
+          tree->Branch("cfbs_hitcls", &cfbshitclsv);
+          tree->Branch("cfbs_hitcomp", &cfbshitcompv);
+          tree->Branch("cfbs_hitv", &cfbshitvv);
+          if (exportCfGroupExponents_) {
+            tree->Branch("cfbs_grp", &cfbsgrpv);
+            tree->Branch("cfbs_grpcomp", &cfbsgrpcompv);
+            tree->Branch("cfbs_grp_ms", &cfbsgrpmsv, basketSize);
+            tree->Branch("cfbs_grp_ioni_re", &cfbsgrpiorev, basketSize);
+            tree->Branch("cfbs_grp_ioni_im", &cfbsgrpioimv, basketSize);
+            tree->Branch("cfbs_grp_rad_re", &cfbsgrpradrev, basketSize);
+            tree->Branch("cfbs_grp_rad_im", &cfbsgrpradimv, basketSize);
+            tree->Branch("cfbs_grp_vqms", &cfbsgrpvqmsv);
+            tree->Branch("cfbs_grp_vqio", &cfbsgrpvqiov);
+            tree->Branch("cfbs_grp_closure", cfbsgrpclosure.data(), "cfbs_grp_closure[2]/F");
+          }
+        }
+      }
+
+      // THE PER-HIT (COMPLEMENT) RESIDUAL BLOCK.  See the member docs in the
+      // header for what each array is; the layout notes that matter to a
+      // reader are: `phresvarv` is COMPONENT MAJOR (`k*nres + b`) and signed,
+      // the `phcf*` exponents are [d * kNTau] on the same `cftau` grid as the
+      // `cf*` ones, and the per-group slots carry their (component, group)
+      // key in `phcfgrpcomp` / `phcfgrpv`.
+      if (exportPerHitResidual_) {
+        tree->Branch("phres_d", &phresd);
+        tree->Branch("phres_nmeas", &phresnmeas);
+        tree->Branch("phres_nfree", &phresnfree);
+        tree->Branch("phres_chi2", &phreschi2);
+        tree->Branch("phres_vchk", &phresvchk);
+        tree->Branch("phres_rankgap", &phresrankgap);
+        tree->Branch("phres_gchk", &phresgchk);
+        tree->Branch("phres_qrank", &phresqrank);
+        tree->Branch("phres_nref", &phresnref);
+        tree->Branch("phres_ok", &phresok);
+        tree->Branch("phresz", &phresz);
+        tree->Branch("phresraw", &phresraw);
+        tree->Branch("phresrow", &phresrow);
+        tree->Branch("phreshit", &phreshit);
+        tree->Branch("phresdim", &phresdim);
+        tree->Branch("phrescls", &phrescls);
+        tree->Branch("phrespiv", &phrespiv);
+        tree->Branch("phresinflat", &phresinflat);
+        tree->Branch("phresvarv", &phresvarv, basketSize);
+        tree->Branch("phresbv", &phresbv, basketSize);
+        tree->Branch("phcf_ms", &phcfmsv, basketSize);
+        tree->Branch("phcf_del", &phcfdelv, basketSize);
+        tree->Branch("phcf_ioni_re", &phcfiorev, basketSize);
+        tree->Branch("phcf_ioni_im", &phcfioimv, basketSize);
+        tree->Branch("phcf_rad_re", &phcfradrev, basketSize);
+        tree->Branch("phcf_rad_im", &phcfradimv, basketSize);
+        tree->Branch("phcf_vgf", &phcfvgf);
+        tree->Branch("phcf_nok", &phcfnok);
+        tree->Branch("phcf_msec", &phcfms);
+        if (perHitCfGroups_) {
+          tree->Branch("phcf_grpcomp", &phcfgrpcomp);
+          tree->Branch("phcf_grp", &phcfgrpv);
+          tree->Branch("phcf_grp_ms", &phcfgrpmsv, basketSize);
+          tree->Branch("phcf_grp_del", &phcfgrpdelv, basketSize);
+          tree->Branch("phcf_grp_ioni_re", &phcfgrpiorev, basketSize);
+          tree->Branch("phcf_grp_ioni_im", &phcfgrpioimv, basketSize);
+          tree->Branch("phcf_grp_rad_re", &phcfgrpradrev, basketSize);
+          tree->Branch("phcf_grp_rad_im", &phcfgrpradimv, basketSize);
+          tree->Branch("phcf_grp_vqms", &phcfgrpvqms);
+          tree->Branch("phcf_grp_vqio", &phcfgrpvqio);
+          tree->Branch("phcf_grp_closure", &phcfgrpclosure);
+        }
+        tree->Branch("phcf_hitcomp", &phcfhitcomp);
+        tree->Branch("phcf_hitcls", &phcfhitcls);
+        tree->Branch("phcf_hitv", &phcfhitv);
+      }
     }
 
     
@@ -449,6 +807,17 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
       tree->Branch("hessdroppedmass", &hessdroppedmass);
       tree->Branch("hessrankgap", &hessrankgap);
     }
+    // The variance (log-det) block of the Hessian, which `hessfactorv` does
+    // NOT contain.  See the member docs; written only when the log-det term
+    // is on, so its mere presence tells a reader which convention the file
+    // follows.
+    // ONLY on the factored path: `hesspackedv` is already complete, and a
+    // consumer that read both and added them would double-count.
+    if (exportVarianceGrads_ && fillGradsFactored_) {
+      tree->Branch("nHessVar", &nHessVar, basketSize);
+      tree->Branch("hessvaridxv", &hessvaridxv);
+      tree->Branch("hessvarpackedv", &hessvarpackedv);
+    }
     
     tree->Branch("run", &run);
     tree->Branch("lumi", &lumi);
@@ -466,6 +835,8 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
     tree->Branch("chargeHypFlipped", &chargeHypFlipped);
     
     tree->Branch("chisqval", &chisqval);
+    tree->Branch("dEref", &dEref);
+    tree->Branch("maxfracloss", &maxfracloss);
     tree->Branch("ndof", &ndof);
 
     tree->Branch("genweight", &genweight);
@@ -845,8 +1216,25 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       runtree->Branch("lyy", &lyy);
       runtree->Branch("lyz", &lyz);
 
+      // THE CF EXPORT GRID AND ITS MODEL, once per global parameter.
+      //
+      // They belong with the DATA, not in somebody's notes: the exponents are
+      // meaningless without the tau they were sampled at, and a file exported
+      // under a different switch configuration must not be silently mixed with
+      // one exported under this. Constant across entries, so ROOT compresses
+      // them to nothing -- the same argument `radvgrid` already rides on.
+      if (exportCfExponents_ || exportPerHitResidual_) {
+        runtree->Branch("cftau", &cftau);
+        runtree->Branch("cfmodel", &cfmodel);
+      }
     }
     
+    if (fillRunTree_ && (exportCfExponents_ || exportPerHitResidual_)) {
+      // (re)armed HERE and not only at branch creation, so a second beginRun
+      // does not write an empty grid.
+      cftau.assign(cvhcf::tauGrid(), cvhcf::tauGrid() + cvhcf::kNTau);
+      cfmodel = cvhcf::modelTag();
+    }
     unsigned int globalidx = 0;
     for (const auto& key: parmset) {
 // std::cout << "parmtype = " << key.first << " detid = " << key.second.rawId() << std::endl;
@@ -1063,6 +1451,15 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       
       if (fillRunTree_) {
         runtree->Fill();
+        // ONCE, not per parameter. The CF grid and model tag are constants of
+        // the job, and the runtree has one entry per GLOBAL PARAMETER -- 126452
+        // of them on the full tracker, which cost 1.9 MB per file when they
+        // were written on every entry (measured). Clearing after the first fill
+        // leaves entry 0 carrying them and the rest empty, so
+        // `runtree["cftau"].array()[0]` -- what every reader does -- is
+        // unchanged and the cost is 260 bytes.
+        cftau.clear();
+        cfmodel.clear();
       }
     }
     
@@ -1719,6 +2116,149 @@ Matrix<double, 7, 1> ResidualGlobalCorrectionMakerBase::localToGlobal(const Matr
 }
 
 // ------------ method fills 'descriptions' with the allowed parameters for the module ------------
+
+// ---------------------------------------------------------------------------
+// THE PER-MATERIAL-GROUP CF ARRAYS.
+//
+// Sparse over the groups the candidate touched, row-major in (group, tau),
+// ascending in group -- see the cfgrp* declarations in the header. The
+// closure figure is `max_j |sum_g S_g - S|` over the exported families,
+// normalized by `max_j |S|` of the largest family, and is float64 round-off
+// by construction: the two are the same per-step sums associated
+// differently. Exporting it makes a file auditable at 4 bytes.
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// THE CANONICAL HIT CLASS.  The C++ image of
+// `calibration_studies/resolution/hitres_classes.py:class_of`, kept in the
+// same enumeration order because the index -- not the name -- is what a file
+// stores.  Strips split on the cluster width N (clipped to 1..5) and on the
+// CPE's own uProj at 0.25; pixels on the template charge bin, separately for
+// the local-x and local-y blocks.  Those are the splits the pull study found
+// to move: the strip core runs +12 % to -13 % across uProj, the pixel core
+// 0.52 to 1.17 across the charge bin.
+// ---------------------------------------------------------------------------
+int ResidualGlobalCorrectionMakerBase::hitResClassIndex(int subdet, int sizeX, float uProj, int qBin, bool isY) {
+  if (subdet <= 2) {  // PixelBarrel = 1, PixelEndcap = 2
+    const int q = std::min(std::max(qBin, 0), 3);
+    return (isY ? 4 : 0) + q;
+  }
+  const int n = std::min(std::max(sizeX, 1), 5);
+  return 8 + 2 * (n - 1) + (uProj < 0.25f ? 0 : 1);
+}
+
+void ResidualGlobalCorrectionMakerBase::storeCfGroups(const cvhcf::TrackResult &res) {
+  if (!exportCfGroupExponents_) {
+    cfgrpvqmsv.clear();
+    cfgrpvqiov.clear();
+    cfgrpv.clear();
+    cfgrpmsv.clear();
+    cfgrpdelv.clear();
+    cfgrpiorev.clear();
+    cfgrpioimv.clear();
+    cfgrpradrev.clear();
+    cfgrpradimv.clear();
+    cfgrpclosure = 0.f;
+    return;
+  }
+  storeCfGroupsTo(res,
+                  cfgrpv,
+                  cfgrpmsv,
+                  cfgrpdelv,
+                  cfgrpiorev,
+                  cfgrpioimv,
+                  cfgrpradrev,
+                  cfgrpradimv,
+                  cfgrpclosure,
+                  cfGroupDelta_,
+                  &cfgrpvqmsv,
+                  &cfgrpvqiov);
+}
+
+void ResidualGlobalCorrectionMakerBase::storeCfGroupsTo(const cvhcf::TrackResult &res,
+                                                        std::vector<short> &grpv,
+                                                        std::vector<float> &msv,
+                                                        std::vector<float> &delv,
+                                                        std::vector<float> &iorev,
+                                                        std::vector<float> &ioimv,
+                                                        std::vector<float> &radrev,
+                                                        std::vector<float> &radimv,
+                                                        float &closure,
+                                                        bool wantDelta,
+                                                        std::vector<float> *vqms,
+                                                        std::vector<float> *vqio) {
+  grpv.clear();
+  msv.clear();
+  delv.clear();
+  iorev.clear();
+  ioimv.clear();
+  radrev.clear();
+  radimv.clear();
+  closure = 0.f;
+  const std::size_t ng = res.groups.size();
+  grpv.reserve(ng);
+  if (vqms) {
+    vqms->clear();
+    vqms->reserve(ng);
+  }
+  if (vqio) {
+    vqio->clear();
+    vqio->reserve(ng);
+  }
+  const std::size_t nf = ng * cvhcf::kNTau;
+  msv.reserve(nf);
+  iorev.reserve(nf);
+  ioimv.reserve(nf);
+  radrev.reserve(nf);
+  radimv.reserve(nf);
+  if (wantDelta) {
+    delv.reserve(nf);
+  }
+  // sum_g, in double, for the closure figure
+  std::array<double, cvhcf::kNTau> sms{}, sdel{}, siore{}, sioim{}, sradre{}, sradim{};
+  for (auto const &g : res.groups) {
+    grpv.push_back(static_cast<short>(g.group));
+    if (vqms) {
+      vqms->push_back(float(g.vqms));
+    }
+    if (vqio) {
+      vqio->push_back(float(g.vqio));
+    }
+    for (int j = 0; j < cvhcf::kNTau; ++j) {
+      msv.push_back(float(g.S.ms[j]));
+      iorev.push_back(float(g.S.ioRe[j]));
+      ioimv.push_back(float(g.S.ioIm[j]));
+      radrev.push_back(float(g.S.radRe[j]));
+      radimv.push_back(float(g.S.radIm[j]));
+      sms[j] += g.S.ms[j];
+      siore[j] += g.S.ioRe[j];
+      sioim[j] += g.S.ioIm[j];
+      sradre[j] += g.S.radRe[j];
+      sradim[j] += g.S.radIm[j];
+      if (wantDelta) {
+        delv.push_back(float(g.S.del[j]));
+        sdel[j] += g.S.del[j];
+      }
+    }
+  }
+  double dmax = 0., smax = 0.;
+  auto cmp = [&](const std::array<double, cvhcf::kNTau> &a, const std::array<double, cvhcf::kNTau> &b) {
+    for (int j = 0; j < cvhcf::kNTau; ++j) {
+      dmax = std::max(dmax, std::abs(a[j] - b[j]));
+      smax = std::max(smax, std::abs(b[j]));
+    }
+  };
+  cmp(sms, res.S.ms);
+  cmp(siore, res.S.ioRe);
+  cmp(sioim, res.S.ioIm);
+  cmp(sradre, res.S.radRe);
+  cmp(sradim, res.S.radIm);
+  if (wantDelta) {
+    cmp(sdel, res.S.del);
+  }
+  closure = (smax > 0.) ? float(dmax / smax) : 0.f;
+}
+
 void ResidualGlobalCorrectionMakerBase::fillDescriptions(edm::ConfigurationDescriptions &descriptions)
 {
   //The following says we do not know what parameters are allowed so do no validation

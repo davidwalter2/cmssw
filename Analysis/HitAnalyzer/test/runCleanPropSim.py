@@ -14,6 +14,7 @@
 # ideal geometry, DB grid field, era Run2_2016) so that the model side
 # (runCleanPropModel.py) propagates through identical geometry and field.
 
+import os
 import FWCore.ParameterSet.Config as cms
 import FWCore.ParameterSet.VarParsing as VarParsing
 from Configuration.Eras.Era_Run2_2016_cff import Run2_2016
@@ -46,6 +47,50 @@ process.load('Configuration.StandardSequences.GeometrySimDB_cff')
 process.load('Configuration.StandardSequences.MagneticField_cff')
 process.load('Configuration.StandardSequences.Generator_cff')
 process.load('Configuration.StandardSequences.SimIdeal_cff')
+
+# --- Geant4 field-integration precision -------------------------------------
+# NOT set here before 2026-08-08, so this ran at the CMSSW defaults
+# DeltaOneStep=1e-3 / DeltaIntersection=1e-4 -- 100x looser than the official
+# UL16 SIM and than resolution/simprod/step1_gensim.py.
+#
+# It is kept because 1e-3/1e-4 was simply wrong for the ground-truth sample the
+# whole transport-fluctuation model is validated against, and because it should
+# never have differed from the SIM it is compared with in the first place.
+#
+# CORRECTION 2026-08-08 -- THE SYMPTOM ORIGINALLY QUOTED HERE WAS NOT A CHORD
+# ERROR. This comment used to cite, as evidence, a residual mean <z> at pT=3
+# that grew with layer (0.00 -> 0.086 by layer 12), flipped sign between the
+# two members of each double-sided pair, and was absent at pT=40 -- read as a
+# coherent ~100-200 um displacement scaling with curvature.
+#
+# That pattern is entirely produced by the ANALYSIS-side acceptance cut, not by
+# the field integration. cf_propagation_test.load_sim kept only rays whose
+# whole (module, entry-face) sequence was the modal one; the reference does not
+# cross a module at its centre, so that cut is one-sided in local x, and the
+# two members of a stereo pair project it with opposite sign. Switching to
+# --acceptance perplane on the SAME events takes the mean from 0.068 to 0.001
+# sigma and the closure at u=1 from +0.0198 to +0.0014. See NOTES.md.
+#
+# The tolerances stay tightened; the justification above does not.
+# looseStepper=True reproduces the CMSSW DEFAULTS, so a matched loose/tight
+# pair can be produced on the SAME ray and the field-integration (chord) error
+# measured directly as the difference of the mean trajectories. Note the
+# tracker-specific values WIN inside the tracker (E > EnergyThTracker = 0.2 GeV,
+# r < RmaxTracker = 8 m), so the official UL16 SIM -- which sets only the
+# GLOBAL pair to 1e-5/1e-6 -- still runs the tracker at DeltaOneStepTracker
+# = 1e-4. Our samples at 1e-5 are therefore TIGHTER than official CMS.
+_sp = process.g4SimHits.MagneticField.ConfGlobalMFM.OCMS.StepperParam
+if os.environ.get("CLEANPROP_LOOSE_STEPPER"):
+    _sp.DeltaOneStepTracker = 1e-4
+    _sp.DeltaIntersectionTracker = 1e-6
+    _sp.DeltaOneStep = 1e-3
+    _sp.DeltaIntersection = 1e-4
+    print(">>> LOOSE stepper (CMSSW defaults):", _sp.DeltaOneStepTracker.value())
+else:
+    _sp.DeltaOneStepTracker = 1e-5
+    _sp.DeltaIntersectionTracker = 1e-6
+    _sp.DeltaOneStep = 1e-5
+    _sp.DeltaIntersection = 1e-6
 process.load('Configuration.StandardSequences.FrontierConditions_GlobalTag_cff')
 
 # Conditions/geometry pinned to exactly what the CVH refit drivers use

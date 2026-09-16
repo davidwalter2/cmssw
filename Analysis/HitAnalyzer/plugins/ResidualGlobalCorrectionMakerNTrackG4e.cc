@@ -399,7 +399,10 @@ public:
                 << "  skipped[samesign]=" << fitSkippedSameSign_
                 << "  skipped[fewhits]=" << fitSkippedFewHits_
                 << "  clamped[step]=" << fitStepClamped_
+                << "  clampevents[step]=" << stepClampEvents_
                 << "  backtracked[step]=" << fitStepBacktracked_
+                << "  btchi2[step]=" << fitStepBtChi2_
+                << "  btchi2events[step]=" << stepBtChi2Events_
                 << "  inflated[seed]=" << fitSeedInflated_
                 << std::endl;
       if (pixHitsSeen_ > 0ULL) {
@@ -413,6 +416,7 @@ public:
                   << " (" << (100. * pixHitsDemoted_ / pixHitsSeen_) << "%)"
                   << "  keepPixelEdgeHits=" << keepPixelEdgeHits_
                   << "  pixelMinSizeX=" << pixelMinSizeX_
+                  << "  pixelMinSizeY=" << pixelMinSizeY_
                   << std::endl;
       }
     }
@@ -506,12 +510,48 @@ private:
   mutable unsigned long long fitFailHitUpdate_ = 0ULL;   // CPE re-evaluation (cloner) invalid
   mutable unsigned long long fitFailChargeFlip_ = 0ULL;  // q/p sign flip in parameter update
   mutable unsigned long long fitStepClamped_ = 0ULL;     // fits with >=1 momentum-floor-clamped GN step
+  mutable unsigned long long stepClampEvents_ = 0ULL;    // individual clamped GN steps
   mutable unsigned long long fitStepBacktracked_ = 0ULL; // step halvings after a failed-leg iteration (retries)
+  mutable unsigned long long fitStepBtChi2_ = 0ULL;      // fits with >=1 chi2 (Armijo) backtrack
+  mutable unsigned long long stepBtChi2Events_ = 0ULL;   // individual chi2 step halvings
+  mutable unsigned long long stepPrints_ = 0ULL;         // printouts emitted (rate limit)
   mutable unsigned long long fitSeedInflated_ = 0ULL;    // iteration-0 seed-momentum inflations (retries)
   // Momentum floor for the Gauss-Newton step clamp (GeV). 2 GeV suits
   // J/psi muons (as in the single-track maker); V0 drivers lower it to
   // sit above the propagation floor but below the soft-daughter spectrum.
   double clampMomentumFloor_ = 2.0;
+  // Relative Gauss-Newton step damping. Per iteration a track's momentum may
+  // change by at most this factor (default 2). Effective floor
+  // max(clampMomentumFloor_, p_ref/f) plus the symmetric upward cap p_ref*f;
+  // the bound is always strictly inside p_ref, which supersedes the
+  // effFloor = min(floor, 0.5*p_ref) guard. <= 1 selects that absolute-floor
+  // guard instead, bit-identically.
+  double maxMomentumStepFactor_ = 2.0;
+  // chi2-based (Armijo) retroactive backtracking; see the two-track maker.
+  bool stepBacktracking_ = true;
+  unsigned int maxChi2Backtrack_ = 4;
+  // First iteration at which the Armijo test may fire. Default 2, and NOT 1:
+  // at iiter == 0 the GBL propagation/kink residuals are identically zero by
+  // construction (the layer states ARE the propagated states, dx0 = 0), so the
+  // chi2 at iteration 0 is a DIFFERENT objective from the one at every later
+  // iteration and comparing across that boundary would backtrack every
+  // candidate. From iteration 1 on the objective is the same function of the
+  // state, so the first meaningful comparison is chi2(2) against chi2(1).
+  unsigned int stepBacktrackFromIter_ = 2;
+  double armijoC_ = 1.e-4;
+  // Relative chi2 slack in the Armijo test. NOT a textbook line-search
+  // tolerance: measured, the CVH/GBL iteration does NOT
+  // monotonically decrease r^T Vinv r -- the realized chi2 drifts UP by
+  // ~0.3-0.5 per iteration even at 1/16 of the step (the model's predicted
+  // decrease is never realized because every iteration re-propagates and
+  // re-linearizes). A tolerance of 1e-3 therefore turns the test into a
+  // permanent step-halver: 57 % of gun candidates backtracked, 15.6 halvings
+  // each, 6x the propagation cost, for no change in the result. At 1.0
+  // (the chi2 may not more than DOUBLE in one iteration) the test becomes a
+  // pure DIVERGENCE TRAP: +0.5 % propagation on the gun ditrack smoke,
+  // +0.2 % single track, fit output at the noise level.
+  double armijoSlack_ = 1.0;
+  unsigned int stepPrintLimit_ = 200;
   // Per-candidate leg-failure retry budgets (see the recovery block).
   unsigned int maxBacktracks_ = 4;
   unsigned int maxSeedInflations_ = 2;
@@ -594,6 +634,10 @@ private:
   // Global material model: per-leg per-group dxi columns from the
   // propagator (reused buffer; see doc/global-material-model-plan.md).
   mutable std::vector<std::pair<int, Eigen::Matrix<double, 5, 1>>> groupJacs_;
+  // Per-group PROCESS NOISE of the last propagation (the width counterpart of
+  // groupJacs_'s mean). Filled only under doRes + the global material model;
+  // see the parmtype-15 dV registration.
+  mutable std::vector<std::pair<int, Eigen::Matrix<double, 5, 5>>> groupQs_;
   // per-step field-mode columns from the propagator (reused buffer)
   mutable std::vector<Eigen::Matrix<double, 5, 1>> modeJacs_;
 
@@ -648,7 +692,7 @@ private:
   float Mother_pt;
   float Mother_eta;
   float Mother_phi;
-  float Mothercons_mass;
+  float Mothercons_mass = -99.f;
   std::vector<float> Mother_jacMass;
   
   float Jpsi_sigmamass;
@@ -690,38 +734,38 @@ private:
   float Muminustrk_eta;
   float Muminustrk_phi;
   
-  float Jpsicons_d;
-  float Jpsicons_x;
-  float Jpsicons_y;
-  float Jpsicons_z;
-  float Jpsicons_pt;
-  float Jpsicons_eta;
-  float Jpsicons_phi;
-  float Jpsicons_mass;
+  float Jpsicons_d = -99.f;
+  float Jpsicons_x = -99.f;
+  float Jpsicons_y = -99.f;
+  float Jpsicons_z = -99.f;
+  float Jpsicons_pt = -99.f;
+  float Jpsicons_eta = -99.f;
+  float Jpsicons_phi = -99.f;
+  float Jpsicons_mass = -99.f;
   
-  float Mupluscons_pt;
-  float Mupluscons_eta;
-  float Mupluscons_phi;
+  float Mupluscons_pt = -99.f;
+  float Mupluscons_eta = -99.f;
+  float Mupluscons_phi = -99.f;
   
-  float Muminuscons_pt;
-  float Muminuscons_eta;
-  float Muminuscons_phi;
+  float Muminuscons_pt = -99.f;
+  float Muminuscons_eta = -99.f;
+  float Muminuscons_phi = -99.f;
   
-  float Jpsikincons_x;
-  float Jpsikincons_y;
-  float Jpsikincons_z;
-  float Jpsikincons_pt;
-  float Jpsikincons_eta;
-  float Jpsikincons_phi;
-  float Jpsikincons_mass;
+  float Jpsikincons_x = -99.f;
+  float Jpsikincons_y = -99.f;
+  float Jpsikincons_z = -99.f;
+  float Jpsikincons_pt = -99.f;
+  float Jpsikincons_eta = -99.f;
+  float Jpsikincons_phi = -99.f;
+  float Jpsikincons_mass = -99.f;
   
-  float Mupluskincons_pt;
-  float Mupluskincons_eta;
-  float Mupluskincons_phi;
+  float Mupluskincons_pt = -99.f;
+  float Mupluskincons_eta = -99.f;
+  float Mupluskincons_phi = -99.f;
   
-  float Muminuskincons_pt;
-  float Muminuskincons_eta;
-  float Muminuskincons_phi;
+  float Muminuskincons_pt = -99.f;
+  float Muminuskincons_eta = -99.f;
+  float Muminuskincons_phi = -99.f;
   
   float Jpsigen_x;
   float Jpsigen_y;
@@ -913,6 +957,27 @@ ResidualGlobalCorrectionMakerNTrackG4e::ResidualGlobalCorrectionMakerNTrackG4e(
       ? iConfig.getParameter<double>("edmConvergence") : 1.e-5;
   clampMomentumFloor_ = iConfig.existsAs<double>("clampMomentumFloor")
       ? iConfig.getParameter<double>("clampMomentumFloor") : 2.0;
+  maxMomentumStepFactor_ = iConfig.existsAs<double>("maxMomentumStepFactor")
+      ? iConfig.getParameter<double>("maxMomentumStepFactor") : 2.0;
+  stepBacktracking_ = iConfig.existsAs<bool>("stepBacktracking")
+      ? iConfig.getParameter<bool>("stepBacktracking") : true;
+  maxChi2Backtrack_ = iConfig.existsAs<unsigned int>("maxChi2Backtrack")
+      ? iConfig.getParameter<unsigned int>("maxChi2Backtrack") : 4u;
+  stepBacktrackFromIter_ = iConfig.existsAs<unsigned int>("stepBacktrackFromIter")
+      ? iConfig.getParameter<unsigned int>("stepBacktrackFromIter") : 2u;
+  armijoC_ = iConfig.existsAs<double>("armijoC")
+      ? iConfig.getParameter<double>("armijoC") : 1.e-4;
+  armijoSlack_ = iConfig.existsAs<double>("armijoSlack")
+      ? iConfig.getParameter<double>("armijoSlack") : 1.0;
+  stepPrintLimit_ = iConfig.existsAs<unsigned int>("stepPrintLimit")
+      ? iConfig.getParameter<unsigned int>("stepPrintLimit") : 200u;
+  edm::LogPrint("ResidualGlobalCorrectionMakerNTrackG4e")
+      << "[cvh] effective: clampMomentumFloor=" << clampMomentumFloor_ << " GeV"
+      << ", maxMomentumStepFactor=" << maxMomentumStepFactor_
+      << ", stepBacktracking=" << stepBacktracking_
+      << " (fromIter=" << stepBacktrackFromIter_
+      << ", maxChi2Backtrack=" << maxChi2Backtrack_
+      << ", armijoC=" << armijoC_ << ", armijoSlack=" << armijoSlack_ << ")";
   maxBacktracks_ = iConfig.existsAs<unsigned int>("maxBacktracks")
       ? iConfig.getParameter<unsigned int>("maxBacktracks") : 4u;
   maxSeedInflations_ = iConfig.existsAs<unsigned int>("maxSeedInflations")
@@ -2029,7 +2094,8 @@ void ResidualGlobalCorrectionMakerNTrackG4e::produce(edm::Event &iEvent, const e
                 if (cluster.sizeX() <= 1) ++pixHitsSizeX1_;
                 // Boundary veto configurable via keepPixelEdgeHits; sizeX
                 // threshold configurable via pixelMinSizeX (default 2 = legacy).
-                hitquality = (keepPixelEdgeHits_ || !onEdge) && cluster.sizeX() >= pixelMinSizeX_;
+                hitquality = (keepPixelEdgeHits_ || !onEdge) && cluster.sizeX() >= pixelMinSizeX_
+                          && cluster.sizeY() >= pixelMinSizeY_;
                 if (!hitquality) ++pixHitsDemoted_;
 // hitquality = !pixhit->isOnEdge() && cluster.sizeX() > 1 && pixhit->qBin() < 2;
 // hitquality = !pixhit->isOnEdge() && cluster.sizeX() > 1 && cluster.sizeY() > 1;
@@ -2261,6 +2327,13 @@ void ResidualGlobalCorrectionMakerNTrackG4e::produce(edm::Event &iEvent, const e
       // failures at iiter > 0, seed-momentum inflations at iiter == 0.
       unsigned int nBacktracks = 0;
       unsigned int nSeedInflations = 0;
+      // chi2-based (Armijo) backtracking bookkeeping (see the two-track maker)
+      bool stepBtChi2ThisFit = false;
+      unsigned int nChi2Bt = 0;
+      unsigned int nChi2BtTotal = 0;
+      double chisq0valPrev = std::numeric_limits<double>::quiet_NaN();
+      double predDecrPrev = 0.;
+      double stepScaleApplied = 1.;
       ++fitAttempted_;
       
       
@@ -2316,6 +2389,43 @@ void ResidualGlobalCorrectionMakerNTrackG4e::produce(edm::Event &iEvent, const e
         mu_qoverp_iter.clear();
         Jpsi_mass_iter.clear();
       }
+
+
+      // The *cons_* kinematics are written only by the icons != 0 (mass-
+      // constrained) pass. With doMassConstraint_ off, nicons == 1 and that
+      // pass never runs, so without this reset the branches would carry
+      // whatever was in the member from the previous candidate -- or, on the
+      // first candidate, uninitialised memory. Reset per candidate (one
+      // tree->Fill() per candidate, after the icons loop) so the value is
+      // always the -99 "not filled" sentinel used elsewhere in this maker.
+      Jpsicons_d = -99.f;
+      Jpsicons_x = -99.f;
+      Jpsicons_y = -99.f;
+      Jpsicons_z = -99.f;
+      Jpsicons_pt = -99.f;
+      Jpsicons_eta = -99.f;
+      Jpsicons_phi = -99.f;
+      Jpsicons_mass = -99.f;
+      Mupluscons_pt = -99.f;
+      Mupluscons_eta = -99.f;
+      Mupluscons_phi = -99.f;
+      Muminuscons_pt = -99.f;
+      Muminuscons_eta = -99.f;
+      Muminuscons_phi = -99.f;
+      Jpsikincons_x = -99.f;
+      Jpsikincons_y = -99.f;
+      Jpsikincons_z = -99.f;
+      Jpsikincons_pt = -99.f;
+      Jpsikincons_eta = -99.f;
+      Jpsikincons_phi = -99.f;
+      Jpsikincons_mass = -99.f;
+      Mupluskincons_pt = -99.f;
+      Mupluskincons_eta = -99.f;
+      Mupluskincons_phi = -99.f;
+      Muminuskincons_pt = -99.f;
+      Muminuskincons_eta = -99.f;
+      Muminuskincons_phi = -99.f;
+      Mothercons_mass = -99.f;
 
       for (unsigned int icons = 0; icons < nicons; ++icons) {
 
@@ -2480,6 +2590,11 @@ void ResidualGlobalCorrectionMakerNTrackG4e::produce(edm::Event &iEvent, const e
         
 
         double chisqvalold = std::numeric_limits<double>::max();
+        // The objective CHANGES between icons passes (icons 1 adds the mass
+        // constraint row), so the Armijo history must not cross that boundary.
+        chisq0valPrev = std::numeric_limits<double>::quiet_NaN();
+        predDecrPrev = 0.;
+        nChi2Bt = 0;
 
         std::vector<unsigned int> trackstateidxarr(ntracks);
         std::vector<int> muchargearr(ntracks, 0);
@@ -2518,6 +2633,7 @@ void ResidualGlobalCorrectionMakerNTrackG4e::produce(edm::Event &iEvent, const e
           const std::vector<std::vector<Matrix<double, 7, 1>>> layerStatesSnap = layerStatesarr;
           bool retryIter = false;
           int retryFailId = -1;
+          stepScaleApplied = 1.;
 
           // Sparse GBL assembly buffers (replaces dense gradfull/hessfull).
           // Ffull = d(residual)/d(state)  [ncons x nstateparms]
@@ -2919,6 +3035,7 @@ void ResidualGlobalCorrectionMakerNTrackG4e::produce(edm::Event &iEvent, const e
                                                                           0., 0., -1., g4PartName,
                                                                           matModel_.get(),
                                                                           matModel_ ? &groupJacs_ : nullptr,
+                                                                          (matModel_ && doRes_ && exportMaterialNoise_) ? &groupQs_ : nullptr,
                                                                           fieldModeProvider_.get(),
                                                                           fieldModeProvider_ ? &modeJacs_ : nullptr);
               if (!std::get<0>(propresult)) {
@@ -3737,6 +3854,41 @@ void ResidualGlobalCorrectionMakerNTrackG4e::produce(edm::Event &iEvent, const e
     // std::cout << "hessfull.diagonal():" << std::endl;
     // std::cout << hessfull.diagonal() << std::endl;
           
+          // ---- chi2-based (Armijo) retroactive backtracking ---------------
+          // See the two-track maker for the rationale. chisq0val is complete
+          // here and is the REALIZED chi2 of the previous iteration's step.
+          if (stepBacktracking_ && iiter >= stepBacktrackFromIter_ && std::isfinite(chisq0valPrev) &&
+              nChi2Bt < maxChi2Backtrack_ && nChi2BtTotal < maxChi2Backtrack_ * niters) {
+            const double thresh = chisq0valPrev + armijoC_ * predDecrPrev +
+                                  armijoSlack_ * std::max(1., std::abs(chisq0valPrev));
+            if (!(chisq0val <= thresh)) {
+              refftsarr = refftsarrSnap;
+              layerStatesarr = layerStatesSnap;
+              dxfull *= 0.5;
+              predDecrPrev *= 0.5;
+              ++nChi2Bt;
+              ++nChi2BtTotal;
+              ++stepBtChi2Events_;
+              if (!stepBtChi2ThisFit) {
+                stepBtChi2ThisFit = true;
+                ++fitStepBtChi2_;
+              }
+              if (stepPrints_ < stepPrintLimit_) {
+                ++stepPrints_;
+                std::cout << "GN step backtracked (n-track): icons = " << icons
+                          << " iiter = " << iiter
+                          << " chisq " << chisq0valPrev << " -> " << chisq0val
+                          << " (thresh " << thresh << ") nbt = " << nChi2Bt
+                          << std::endl;
+              }
+              iiter -= 1;  // loop ++ redoes the same iteration from the snapshot
+              continue;
+            }
+          }
+          // step accepted
+          nChi2Bt = 0;
+          chisq0valPrev = chisq0val;
+
           // Sparse GBL solve (replaces dense Cinvd=LDLT(2 Fs^T Vinv Fs);
           // dxfull=-Cinvd.solve(2 Fs^T Vinv r)). Mathematically identical:
           // the factor of 2 cancels in -(Fs^T Vinv Fs)^-1 Fs^T Vinv r.
@@ -3795,26 +3947,39 @@ void ResidualGlobalCorrectionMakerNTrackG4e::produce(edm::Event &iEvent, const e
               if (qopref == 0. || dqop == 0.) {
                 continue;
               }
-              const double qopupd = qopref + dqop;
-              // The floor must never sit ABOVE where the track already is.
-              // clampMomentumFloor_ (2 GeV) was written for muon channels
-              // where p_ref >> floor. A bachelor kaon starts at p ~ 0.5-1.5
-              // GeV, i.e. already under it -- the "scale back up to the floor"
-              // arithmetic then returns a negative s, which max(s, 0) turns
-              // into a HARD ZERO step, freezing the whole coupled system and
-              // leaving the fit at its seed linearization forever. Measured:
-              // 159/179 clamp events at scale = 0 exactly, 55/68 candidates.
-              // Per-track effective floor: never above half the reference
-              // momentum, so a soft leg can still move but cannot collapse.
-              const double pref = std::abs(1. / qopref);
-              const double effFloor = std::min(clampMomentumFloor_, 0.5 * pref);
               double s = 1.;
-              if (qopupd * qopref <= 0.) {
-                // sign flip: stop half-way toward q/p = 0
-                s = -0.5 * qopref / dqop;
-              } else if (std::abs(qopupd) > 1. / effFloor) {
-                // p_upd below the effective floor: land exactly on it, same charge
-                s = (std::copysign(1. / effFloor, qopref) - qopref) / dqop;
+              if (maxMomentumStepFactor_ > 1.) {
+                // Relative trust region in q/p (see the member comment).
+                // Supersedes the effFloor = min(floor, 0.5*p_ref)
+                // guard below: the bound max(floor, p_ref/f) is likewise always
+                // strictly below p_ref, but it also keeps the ABSOLUTE floor
+                // wherever the leg is above it, and it adds the symmetric
+                // upward cap p_ref*f.
+                s = cvhstep::legStepScaleRel(qopref, dqop, clampMomentumFloor_,
+                                             maxMomentumStepFactor_, 0., nullptr);
+              } else {
+                const double qopupd = qopref + dqop;
+                // ABSOLUTE-FLOOR GUARD (maxMomentumStepFactor_ <= 1). The
+                // floor must never sit ABOVE where the track already is.
+                // clampMomentumFloor_ (2 GeV) suits muon channels where
+                // p_ref >> floor. A bachelor kaon starts at
+                // p ~ 0.5-1.5 GeV, i.e. already under it -- the "scale back up
+                // to the floor" arithmetic then returns a negative s, which
+                // max(s, 0) turns into a HARD ZERO step, freezing the whole
+                // coupled system and leaving the fit at its seed linearization
+                // forever. Measured: 159/179 clamp events at scale = 0 exactly,
+                // 55/68 candidates. Per-track effective floor: never above half
+                // the reference momentum, so a soft leg can still move but
+                // cannot collapse.
+                const double pref = std::abs(1. / qopref);
+                const double effFloor = std::min(clampMomentumFloor_, 0.5 * pref);
+                if (qopupd * qopref <= 0.) {
+                  // sign flip: stop half-way toward q/p = 0
+                  s = -0.5 * qopref / dqop;
+                } else if (std::abs(qopupd) > 1. / effFloor) {
+                  // p_upd below the effective floor: land exactly on it, same charge
+                  s = (std::copysign(1. / effFloor, qopref) - qopref) / dqop;
+                }
               }
               if (s < stepscale) {
                 stepscale = s;
@@ -3824,16 +3989,18 @@ void ResidualGlobalCorrectionMakerNTrackG4e::produce(edm::Event &iEvent, const e
               stepscale = std::max(stepscale, 0.);
               dxfree *= stepscale;
               dxfull *= stepscale;
+              stepScaleApplied *= stepscale;
+              ++stepClampEvents_;
               if (!stepClampedThisFit) {
                 stepClampedThisFit = true;
                 ++fitStepClamped_;
               }
-              std::cout << "GN step clamped (two-track): icons = " << icons
-                        << " iiter = " << iiter << " scale = " << stepscale
-                        << " seed0(q,pt,eta)=(" << itrack->charge() << "," << itrack->pt()
-                        << "," << itrack->eta() << ")"
-                        << " seed1(q,pt,eta)=(" << jtrack->charge() << "," << jtrack->pt()
-                        << "," << jtrack->eta() << ")" << std::endl;
+              if (stepPrints_ < stepPrintLimit_) {
+                ++stepPrints_;
+                std::cout << "GN step clamped (n-track): icons = " << icons
+                          << " iiter = " << iiter << " scale = " << stepscale
+                          << " ntracks = " << ntracks << std::endl;
+              }
             }
           }
 
@@ -3864,6 +4031,10 @@ void ResidualGlobalCorrectionMakerNTrackG4e::produce(edm::Event &iEvent, const e
 // std::cout << es.eigenvalues().transpose() << std::endl;
 // std::cout << "condition: " << condition << std::endl;
           
+          // Quadratic-model chi2 change of the step actually applied
+          // (deltachisq = t*d, model change = deltachisq*(2 - t)).
+          predDecrPrev = deltachisq * (2. - stepScaleApplied);
+
           chisqval = chisq0val + deltachisq;
 
           deltachisqval = chisq0val + deltachisq - chisqvalold;

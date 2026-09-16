@@ -1,8 +1,10 @@
 #include "ResidualGlobalCorrectionMakerBase.h"
 #include "DataFormats/MuonReco/interface/Muon.h"
 #include "TrackPropagation/Geant4e/interface/Geant4ePropagator.h"
+#include "TrackPropagation/Geant4e/interface/G4UniversalFluctuationForExtrapolator.hh"
 #include "TrackPropagation/Geant4e/interface/MaterialGroupModel.h"
 #include "Analysis/HitAnalyzer/interface/ParticleProperties.h"
+#include "FWCore/MessageLogger/interface/MessageLogger.h"
 
 
 #include "DataFormats/PatCandidates/interface/Muon.h"
@@ -10,15 +12,29 @@
 #include "Math/Vector4Dfwd.h"
 #include "Math/Vector4D.h"
 
+#include <algorithm>
+#include <array>
 #include <Eigen/Sparse>
+#include <Eigen/Cholesky>
 
 #include <iomanip>
+#include <limits>
+#include <chrono>
 #include <iostream>
 
 #include "TRandom.h"
 
 #include "Geometry/CommonTopologies/interface/TrapezoidalStripTopology.h"
 #include "Geometry/CommonTopologies/interface/PixelTopology.h"
+
+// Hit-resolution study: the strip CPE is queried DIRECTLY (in addition to
+// going through the cloner) so its own independent variable -- the
+// drift-included projected path in strip-pitch units -- can be exported per
+// hit. Reconstructing it offline would need the per-module Lorentz drift.
+#include "RecoLocalTracker/SiStripRecHitConverter/interface/StripCPE.h"
+#include "RecoLocalTracker/Records/interface/TkStripCPERecord.h"
+#include "RecoLocalTracker/ClusterParameterEstimator/interface/StripClusterParameterEstimator.h"
+#include "Geometry/TrackerGeometryBuilder/interface/StripGeomDetUnit.h"
 
 
 
@@ -120,6 +136,7 @@ private:
 
   edm::ESGetToken<TransientTrackingRecHitBuilder, TransientRecHitRecord> ttrhToken_;
   edm::ESGetToken<Propagator, TrackingComponentsRecord> g4ePropToken_;
+  edm::ESGetToken<StripClusterParameterEstimator, TkStripCPERecord> stripCPEToken_;
 
   SiStripClusterInfo siStripClusterInfo_;
 
@@ -139,6 +156,10 @@ private:
   mutable unsigned long long fitFailHitUpdate_ = 0ULL;  // CPE re-evaluation (cloner) invalid
   mutable unsigned long long fitFailNaN_ = 0ULL;        // NaN/inf parameter update
   mutable unsigned long long fitStepClamped_ = 0ULL;    // fits with >=1 trust-region-clamped GN step
+  mutable unsigned long long stepClampEvents_ = 0ULL;   // individual clamped GN steps
+  mutable unsigned long long fitStepBacktracked_ = 0ULL;// fits with >=1 chi2 backtrack
+  mutable unsigned long long stepBacktrackEvents_ = 0ULL;// individual chi2 step halvings
+  mutable unsigned long long stepPrints_ = 0ULL;        // printouts emitted (rate limit)
   mutable unsigned long long fitChargeFlipAllowed_ = 0ULL;  // GN steps permitted to cross q/p=0 (high-p)
   mutable unsigned long long fitChargeHypTaken_ = 0ULL;  // tracks where the two-hyp fit kept the opposite charge
 
@@ -162,8 +183,58 @@ private:
   // (a genuine charge flip). Crossing q/p = 0 is p -> inf, harmless at high p
   // where the seed charge is ambiguous; the sign-flip clamp is only a
   // divergence guard for stiffer (lower-p) tracks. Default 1e9 GeV = never
-  // allow = legacy behaviour. The hard p >= 2 GeV momentum floor always applies.
+  // allow = legacy behaviour. The momentum floor below always applies.
   double allowChargeFlipAboveP_ = 1.e9;
+  // Gauss-Newton momentum floor [GeV]: the updated |p| a step is allowed to
+  // reach. Its ONLY job is to keep the state out of the propagator's
+  // refusal region (Geant4ePropagator.PropagationPtotLimit), so it must
+  // track that limit and nothing else: a floor set well above the
+  // propagation limit PINS every genuinely soft track at the floor
+  // (momentum-high, chi2/ndof >> 1).
+  // Configurable via the `clampMomentumFloor` cfi parameter, whose driver
+  // default is derived from the propagation limit. Same name/semantics as
+  // the two-track and N-track makers.
+  double clampMomentumFloor_ = 2.0;
+  // Relative Gauss-Newton step damping. Per iteration a track's
+  // momentum may change by at most this factor (default 2: p may at most halve
+  // or double). Implemented as the effective floor max(clampMomentumFloor_,
+  // p_ref/f) plus the symmetric upward cap p_ref*f, so the bound is ALWAYS
+  // strictly below/above p_ref and no track is ever pinned at a fixed
+  // momentum, whatever its true momentum is. <= 1 restores the legacy
+  // absolute-floor-only clamp bit-identically.
+  double maxMomentumStepFactor_ = 2.0;
+  // chi2-based (Armijo) retroactive backtracking. The chi2 assembled at the
+  // top of iteration k is the REALIZED chi2 of the step taken at k-1; if it
+  // fails the sufficient-decrease test the previous linearization is restored,
+  // that step is halved and the iteration is redone. Costs nothing when it
+  // does not fire (the chi2 is assembled anyway).
+  bool stepBacktracking_ = true;
+  unsigned int maxChi2Backtrack_ = 4;   // halvings per accepted step
+  // First iteration at which the Armijo test may fire. Default 2, and NOT 1:
+  // at iiter == 0 the GBL propagation/kink residuals are identically zero by
+  // construction (the layer states ARE the propagated states, dx0 = 0), so the
+  // chi2 at iteration 0 is a DIFFERENT objective from the one at every later
+  // iteration and comparing across that boundary would backtrack every
+  // candidate. From iteration 1 on the objective is the same function of the
+  // state, so the first meaningful comparison is chi2(2) against chi2(1).
+  unsigned int stepBacktrackFromIter_ = 2;
+  double armijoC_ = 1.e-4;              // sufficient-decrease coefficient
+  // Relative chi2 slack in the Armijo test. NOT a textbook line-search
+  // tolerance: the CVH/GBL iteration does NOT monotonically decrease
+  // r^T Vinv r -- the realized chi2 drifts UP by
+  // ~0.3-0.5 per iteration even at 1/16 of the step (the model's predicted
+  // decrease is never realized because every iteration re-propagates and
+  // re-linearizes). A tolerance of 1e-3 therefore turns the test into a
+  // permanent step-halver: 57 % of gun candidates backtracked, 15.6 halvings
+  // each, 6x the propagation cost, for no change in the result. At 1.0
+  // (the chi2 may not more than DOUBLE in one iteration) the test becomes a
+  // pure DIVERGENCE TRAP: +0.5 % propagation on the gun ditrack smoke,
+  // +0.2 % single track, fit output at the noise level.
+  double armijoSlack_ = 1.0;
+  // Cap on the per-job "GN step clamped/backtracked" printouts. The relative
+  // damping legitimately fires far more often than the absolute floor did, and
+  // an uncapped print would bury the log (and the counters are exact anyway).
+  unsigned int stepPrintLimit_ = 200;
   // Two-hypothesis charge resolution in one pass: when the nominal fit's clamp
   // catches a q/p sign crossing (nChargeFlipProtect>0), re-fit the opposite
   // charge and keep the lower-chi2 result. Inert for well-measured (low/mod p)
@@ -198,6 +269,10 @@ private:
   int materialFDGroup_ = -1;
   double materialFDEps_ = 1e-3;
   mutable std::vector<std::pair<int, Eigen::Matrix<double, 5, 1>>> groupJacs_;
+  // Per-group PROCESS NOISE of the last propagation (the width counterpart of
+  // groupJacs_'s mean). Filled only under doRes + the global material model;
+  // see the parmtype-15 dV registration.
+  mutable std::vector<std::pair<int, Eigen::Matrix<double, 5, 5>>> groupQs_;
   // per-step field-mode columns from the propagator (reused buffer)
   mutable std::vector<Eigen::Matrix<double, 5, 1>> modeJacs_;
   mutable double v2MaxRelDiff_ = 0.;
@@ -244,6 +319,33 @@ private:
   std::vector<unsigned int> kinkConsIdx;
   std::vector<float> kinkStepR;
   std::vector<float> kinkStepZ;
+
+  // Geant4 decay/interaction truth for the gen-matched particle
+  // (doSimDecayTruth_). Raw sim quantities only -- the physics
+  // classification (decay vs nuclear interaction vs delta ray, kink angle,
+  // daughter momentum fraction) is done offline, where the parent direction
+  // at the vertex can be obtained by helix propagation.
+  int simTrkFound = 0;
+  int simTrkPdgId = 0;
+  float simTrkP = -99.f;
+  float simTrkPt = -99.f;
+  float simTrkEta = -99.f;
+  float simTrkPhi = -99.f;
+  float simTrkVtxX = -99.f;
+  float simTrkVtxY = -99.f;
+  float simTrkVtxZ = -99.f;
+  // one entry per SimVertex whose parent is the matched SimTrack
+  std::vector<float> simVtxX;
+  std::vector<float> simVtxY;
+  std::vector<float> simVtxZ;
+  std::vector<int> simVtxProcType;
+  std::vector<int> simVtxNDau;
+  // daughters, flattened; simDauVtx indexes into the simVtx* vectors
+  std::vector<int> simDauVtx;
+  std::vector<int> simDauPdgId;
+  std::vector<float> simDauPx;
+  std::vector<float> simDauPy;
+  std::vector<float> simDauPz;
 };
 
 ResidualGlobalCorrectionMakerG4e::~ResidualGlobalCorrectionMakerG4e() {
@@ -258,6 +360,9 @@ ResidualGlobalCorrectionMakerG4e::~ResidualGlobalCorrectionMakerG4e() {
               << "  fail[hitupdate]=" << fitFailHitUpdate_
               << "  fail[nan]=" << fitFailNaN_
               << "  clamped[step]=" << fitStepClamped_
+              << "  clampevents[step]=" << stepClampEvents_
+              << "  backtracked[step]=" << fitStepBacktracked_
+              << "  backtrackevents[step]=" << stepBacktrackEvents_
               << "  chargeflip[allowed]=" << fitChargeFlipAllowed_
               << "  chargehyp[flipped]=" << fitChargeHypTaken_
               << std::endl;
@@ -272,6 +377,7 @@ ResidualGlobalCorrectionMakerG4e::~ResidualGlobalCorrectionMakerG4e() {
                 << " (" << (100. * pixHitsDemoted_ / pixHitsSeen_) << "%)"
                 << "  keepPixelEdgeHits=" << keepPixelEdgeHits_
                 << "  pixelMinSizeX=" << pixelMinSizeX_
+                  << "  pixelMinSizeY=" << pixelMinSizeY_
                 << std::endl;
       // Pathology-class combination table (only non-empty bins).
       for (unsigned int isub = 0; isub < 2; ++isub) {
@@ -306,6 +412,7 @@ ResidualGlobalCorrectionMakerG4e::ResidualGlobalCorrectionMakerG4e(const edm::Pa
     : ResidualGlobalCorrectionMakerBase(iConfig),
       ttrhToken_(esConsumes(edm::ESInputTag("", "WithAngleAndTemplate"))),
       g4ePropToken_(esConsumes(edm::ESInputTag("", "Geant4ePropagator"))),
+      stripCPEToken_(esConsumes(edm::ESInputTag("", "StripCPEfromTrackAngle"))),
       siStripClusterInfo_(consumesCollector())
 {
 
@@ -342,6 +449,36 @@ ResidualGlobalCorrectionMakerG4e::ResidualGlobalCorrectionMakerG4e(const edm::Pa
   // mis-identified track in a wrong-sign chi2 minimum.
   allowChargeFlipAboveP_ = iConfig.existsAs<double>("allowChargeFlipAboveP")
       ? iConfig.getParameter<double>("allowChargeFlipAboveP") : 1.e9;
+  // Gauss-Newton momentum floor (see member comment). existsAs-guarded so a
+  // cfi that does not set it keeps the default 2.0 GeV.
+  clampMomentumFloor_ = iConfig.existsAs<double>("clampMomentumFloor")
+      ? iConfig.getParameter<double>("clampMomentumFloor") : 2.0;
+  // Relative step damping and chi2 backtracking (see member comments).
+  // maxMomentumStepFactor <= 1 => legacy absolute-floor clamp, bit-identical.
+  maxMomentumStepFactor_ = iConfig.existsAs<double>("maxMomentumStepFactor")
+      ? iConfig.getParameter<double>("maxMomentumStepFactor") : 2.0;
+  stepBacktracking_ = iConfig.existsAs<bool>("stepBacktracking")
+      ? iConfig.getParameter<bool>("stepBacktracking") : true;
+  maxChi2Backtrack_ = iConfig.existsAs<unsigned int>("maxChi2Backtrack")
+      ? iConfig.getParameter<unsigned int>("maxChi2Backtrack") : 4u;
+  stepBacktrackFromIter_ = iConfig.existsAs<unsigned int>("stepBacktrackFromIter")
+      ? iConfig.getParameter<unsigned int>("stepBacktrackFromIter") : 2u;
+  armijoC_ = iConfig.existsAs<double>("armijoC")
+      ? iConfig.getParameter<double>("armijoC") : 1.e-4;
+  armijoSlack_ = iConfig.existsAs<double>("armijoSlack")
+      ? iConfig.getParameter<double>("armijoSlack") : 1.0;
+  stepPrintLimit_ = iConfig.existsAs<unsigned int>("stepPrintLimit")
+      ? iConfig.getParameter<unsigned int>("stepPrintLimit") : 200u;
+  // Echo it once per maker instance: the step control silently decides whether
+  // soft tracks are fitted or pinned, and a job log must record what was in force.
+  edm::LogPrint("ResidualGlobalCorrectionMakerG4e")
+      << "[cvh] effective: clampMomentumFloor=" << clampMomentumFloor_
+      << " GeV, allowChargeFlipAboveP=" << allowChargeFlipAboveP_ << " GeV"
+      << ", maxMomentumStepFactor=" << maxMomentumStepFactor_
+      << ", stepBacktracking=" << stepBacktracking_
+      << " (fromIter=" << stepBacktrackFromIter_
+      << ", maxChi2Backtrack=" << maxChi2Backtrack_
+      << ", armijoC=" << armijoC_ << ", armijoSlack=" << armijoSlack_ << ")";
   // Two-hypothesis charge test: +1 = nominal seed, -1 = opposite-charge seed.
   seedChargeSign_ = iConfig.existsAs<int>("seedChargeSign")
       ? iConfig.getParameter<int>("seedChargeSign") : 1;
@@ -476,22 +613,43 @@ void ResidualGlobalCorrectionMakerG4e::beginStream(edm::StreamID streamid)
     tree->Branch("genX", &genX, basketSize);
     tree->Branch("genY", &genY, basketSize);
     tree->Branch("genZ", &genZ, basketSize);
-    
+    tree->Branch("genPdgId", &genPdgId, basketSize);
+    tree->Branch("genDR", &genDR, basketSize);
+
+    // Geant4 decay/interaction truth of the gen-matched particle. simVtx*
+    // holds every SimVertex the matched SimTrack produced (decay, nuclear
+    // interaction, delta ray, ...) with its G4 process subtype
+    // (201 = Decay, 121 = hadronic inelastic, 111 = hadronic elastic,
+    // 2 = ionisation/delta ray); simDau* are the flattened daughters,
+    // simDauVtx pointing back into simVtx*.
+    if (doSimDecayTruth_) {
+      tree->Branch("simTrkFound", &simTrkFound, basketSize);
+      tree->Branch("simTrkPdgId", &simTrkPdgId, basketSize);
+      tree->Branch("simTrkP", &simTrkP, basketSize);
+      tree->Branch("simTrkPt", &simTrkPt, basketSize);
+      tree->Branch("simTrkEta", &simTrkEta, basketSize);
+      tree->Branch("simTrkPhi", &simTrkPhi, basketSize);
+      tree->Branch("simTrkVtxX", &simTrkVtxX, basketSize);
+      tree->Branch("simTrkVtxY", &simTrkVtxY, basketSize);
+      tree->Branch("simTrkVtxZ", &simTrkVtxZ, basketSize);
+      tree->Branch("simVtxX", &simVtxX);
+      tree->Branch("simVtxY", &simVtxY);
+      tree->Branch("simVtxZ", &simVtxZ);
+      tree->Branch("simVtxProcType", &simVtxProcType);
+      tree->Branch("simVtxNDau", &simVtxNDau);
+      tree->Branch("simDauVtx", &simDauVtx);
+      tree->Branch("simDauPdgId", &simDauPdgId);
+      tree->Branch("simDauPx", &simDauPx);
+      tree->Branch("simDauPy", &simDauPy);
+      tree->Branch("simDauPz", &simDauPz);
+    }
+
+
     tree->Branch("normalizedChi2", &normalizedChi2, basketSize);
     
     tree->Branch("nHits", &nHits, basketSize);
     tree->Branch("nValidHits", &nValidHits, basketSize);
     tree->Branch("nValidPixelHits", &nValidPixelHits, basketSize);
-
-    // openspec/improve-cvh-refit-convergence §2: the `nValidHitsFinal` and
-    // `nValidPixelHitsFinal` branches previously emitted here were declared,
-    // initialised to 0, and never incremented in this single-track producer
-    // (the per-hit loop has no `morehitquality` quality gate). The branches
-    // therefore wrote literal 0 for every event in the published Run2016H
-    // sample, falsely suggesting that 100% of kaon hits had been dropped by
-    // the refit (`Kbach_nValidHitsFinal=0` in the joined tree). Removed
-    // entirely until a real per-hit rejection mechanism lands and the
-    // counters can carry meaningful information.
 
     if (fillJac_) {
       tree->Branch("nJacRef", &nJacRef, basketSize);
@@ -526,6 +684,32 @@ void ResidualGlobalCorrectionMakerG4e::beginStream(edm::StreamID streamid)
 
     tree->Branch("trackExtraAssoc", &trackExtraAssoc);
     
+    // Per-hit CLASS variables, booked in BOTH fit modes. The offline CF
+    // (cf_track_resolution.py) reads NOMINAL-fit productions
+    // (fitFromGenParms=False) and needs to know which class each parmtype-8/9
+    // resolution block belongs to, otherwise the hit families can only be
+    // summed into one Gaussian -- which is exactly the term the hit-resolution
+    // model is meant to replace. The gen-anchored pull study uses the same
+    // branches, so there is one definition rather than two.
+    if (fillTrackTree_) {
+      tree->Branch("dxerr", &dxerr);
+      tree->Branch("dyerr", &dyerr);
+      tree->Branch("clusterSizeX", &clusterSizeX);
+      tree->Branch("clusterSizeY", &clusterSizeY);
+      tree->Branch("clusterCharge", &clusterCharge);
+      tree->Branch("clusterChargeBin", &clusterChargeBin);
+      tree->Branch("clusterOnEdge", &clusterOnEdge);
+      tree->Branch("hitDetId", &hitDetId);
+      tree->Branch("hitUProj", &hitUProj);
+      tree->Branch("hitStripRec", &hitStripRec);
+      tree->Branch("hitStripSim", &hitStripSim);
+      tree->Branch("hitFirstStrip", &hitFirstStrip);
+      tree->Branch("hitPitch", &hitPitch);
+      tree->Branch("hitThickness", &hitThickness);
+      tree->Branch("localdxdz", &localdxdz);
+      tree->Branch("localdydz", &localdydz);
+    }
+
     if (fitFromGenParms_) {
       tree->Branch("hitidxv", &hitidxv);
       tree->Branch("dxrecgen", &dxrecgen);
@@ -538,20 +722,15 @@ void ResidualGlobalCorrectionMakerG4e::beginStream(edm::StreamID streamid)
       tree->Branch("dysimgenlocal", &dysimgenlocal);
       tree->Branch("dxrecsim", &dxrecsim);
       tree->Branch("dyrecsim", &dyrecsim);
-      tree->Branch("dxerr", &dxerr);
-      tree->Branch("dyerr", &dyerr);
       
       tree->Branch("clusterSize", &clusterSize);
-      tree->Branch("clusterSizeX", &clusterSizeX);
-      tree->Branch("clusterSizeY", &clusterSizeY);
-      tree->Branch("clusterCharge", &clusterCharge);
-      tree->Branch("clusterChargeBin", &clusterChargeBin);
-      tree->Branch("clusterOnEdge", &clusterOnEdge);
       
       tree->Branch("clusterProbXY", &clusterProbXY);
       tree->Branch("clusterSN", &clusterSN);
 
       tree->Branch("stripsToEdge", &stripsToEdge);
+
+      tree->Branch("simHitNCand", &simHitNCand);
       
       tree->Branch("dxreccluster", &dxreccluster);
       tree->Branch("dyreccluster", &dyreccluster);
@@ -572,8 +751,6 @@ void ResidualGlobalCorrectionMakerG4e::beginStream(edm::StreamID streamid)
       tree->Branch("landauW", &landauW);
       
       tree->Branch("localqop", &localqop);
-      tree->Branch("localdxdz", &localdxdz);
-      tree->Branch("localdydz", &localdydz);
       tree->Branch("localx", &localx);
       tree->Branch("localy", &localy);
       
@@ -719,9 +896,18 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     }
     iEvent.getByToken(inputSimTracks_, simTracks);
   }
-  
+
+  edm::Handle<std::vector<SimVertex>> simVertices;
+  if (doSimDecayTruth_) {
+    if (!doSim_) {
+      iEvent.getByToken(genParticlesBarcodeToken_, genPartBarcodes);
+      iEvent.getByToken(inputSimTracks_, simTracks);
+    }
+    iEvent.getByToken(inputSimVertices_, simVertices);
+  }
+
   Handle<edm::View<reco::Muon> > muons;
-  if (doMuons_) {
+  if (doMuons_ || doMuonTrackAssoc_) {
     iEvent.getByToken(inputMuons_, muons);
   }
   
@@ -731,6 +917,18 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   }
   
   TkClonerImpl const& cloner = static_cast<TkTransientTrackingRecHitBuilder const *>(ttrh.product())->cloner();
+
+  // Same StripCPEfromTrackAngle instance the cloner uses (single ES
+  // product for the label), queried only for its AlgoParam so the
+  // hit-resolution export can record the CPE's own uProj.
+  // NOT gated on fitFromGenParms_: hitUProj is exactly the class variable the
+  // offline CF needs on the NOMINAL-fit productions; gating it there would
+  // leave every strip hit at -99, putting the whole strip tracker in one
+  // uProj bin.
+  const StripCPE *stripCPEForExport = nullptr;
+  if (fillTrackTree_) {
+    stripCPEForExport = dynamic_cast<const StripCPE*>(iSetup.getHandle(stripCPEToken_).product());
+  }
 
   run = iEvent.run();
   lumi = iEvent.luminosityBlock();
@@ -859,22 +1057,54 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     genZ = -99.;
     genParms.fill(0.);
     genl3d = -99.;
+    genPdgId = 0;
+    genDR = -99.f;
     simPabsFirst = -99.;
     simPabsLast = -99.;
+
+    if (doSimDecayTruth_) {
+      simTrkFound = 0;
+      simTrkPdgId = 0;
+      simTrkP = -99.f;
+      simTrkPt = -99.f;
+      simTrkEta = -99.f;
+      simTrkPhi = -99.f;
+      simTrkVtxX = -99.f;
+      simTrkVtxY = -99.f;
+      simTrkVtxZ = -99.f;
+      simVtxX.clear();
+      simVtxY.clear();
+      simVtxZ.clear();
+      simVtxProcType.clear();
+      simVtxNDau.clear();
+      simDauVtx.clear();
+      simDauPdgId.clear();
+      simDauPx.clear();
+      simDauPy.clear();
+      simDauPz.clear();
+    }
     
     int genBarcode = -99;
     
     
     if (doGen_) {
       
-      float drmin = 0.1;
-      
+      float drmin = genMatchDR_;
+
       for (auto g = genPartCollection->begin(); g != genPartCollection->end(); ++g)
       {
         if (g->status() != 1) {
           continue;
         }
-        if (std::abs(g->pdgId()) != genMatchPdgId_) {
+        // Species allowed into the dR competition (see genMatchPdgIds_).
+        const int abspdg = std::abs(g->pdgId());
+        if (genMatchPdgIds_.empty()) {
+          if (abspdg != genMatchPdgId_) {
+            continue;
+          }
+        }
+        else if (std::find(genMatchPdgIds_.begin(), genMatchPdgIds_.end(), abspdg)
+                 == genMatchPdgIds_.end()) {
           continue;
         }
         // Same-charge requirement as in the two-track maker. Pure-dR
@@ -902,7 +1132,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           
           genpart = &(*g);
           
-          if (doSim_) {
+          if (doSim_ || doSimDecayTruth_) {
             genBarcode = (*genPartBarcodes)[g - genPartCollection->begin()];
           }
           
@@ -910,6 +1140,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           genEta = g->eta();
           genPhi = g->phi();
           genCharge = g->charge();
+          genPdgId = g->pdgId();
+          genDR = dR;
           
           genX = g->vertex().x();
           genY = g->vertex().y();
@@ -917,30 +1149,54 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
           // genParticles:xyz0 (gen PV) is not kept in every ALCARECO
           // (the B->J/psi+X MC keeps only the recoGenParticles branch);
-          // fall back to the -99 sentinel rather than throwing. (This
-          // guard was originally a pixel-session working-tree fix that
-          // was lost in the 2026-07-25 session disentangling.)
+          // fall back to the -99 sentinel rather than throwing.
           genl3d = genXyz0.isValid()
               ? std::sqrt((g->vertex() - *genXyz0).mag2()) : -99.;
 
           auto const& vtx = g->vertex();
-          auto const& myBeamSpot = bsH->position(vtx.z());
-          
-          //q/|p|
-          genParms[0] = g->charge()/g->p();
-          //lambda
-          genParms[1] = M_PI_2 - g->momentum().theta();
-          //phi
-          genParms[2] = g->phi();
-          //dxy
-          genParms[3] = (-(vtx.x() - myBeamSpot.x()) * g->py() + (vtx.y() - myBeamSpot.y()) * g->px()) / g->pt();
-          //dsz
-          genParms[4] = (vtx.z() - myBeamSpot.z()) * g->pt() / g->p() -
-            ((vtx.x() - myBeamSpot.x()) * g->px() + (vtx.y() - myBeamSpot.y()) * g->py()) / g->pt() * g->pz() / g->p();
+
+          // GEN REFERENCE PARAMETERS IN THE FIT'S OWN CONVENTION.
+          //
+          // `cart2pca` is the same map that produces `refParms`, so gen and
+          // fitted are DEFINITIONALLY identical, which is what a residual
+          // needs.  The reco::TrackBase perigee convention would NOT do: it
+          // agrees on (q/p, lambda, phi, d0) but its fifth parameter is
+          // `dsz`, whereas `refParms[4]` is `cart2pca(...)[4]`, the ABSOLUTE
+          // z of the point of closest approach to the beamline -- a
+          // difference of centimetres against a sigma of microns.
+          {
+            Matrix<double, 7, 1> genstate;
+            genstate << vtx.x(), vtx.y(), vtx.z(), g->px(), g->py(), g->pz(),
+                double(g->charge());
+            const Matrix<double, 5, 1> genpca = cart2pca(genstate, *bsH);
+            for (unsigned int i = 0; i < 5; ++i) {
+              genParms[i] = float(genpca[i]);
+            }
+          }
         }
         else {
           continue;
         }
+      }
+
+      // Cross-species arbitration: the winner of the dR competition must be
+      // the species this pass is fitting, otherwise the track is treated as
+      // unmatched. This removes the mismatch background without a pT cut --
+      // a pT window would preferentially discard the genuine hard decays,
+      // which are the signal.
+      if (genpart != nullptr && !genMatchPdgIds_.empty()
+          && std::abs(genPdgId) != genMatchPdgId_) {
+        genpart = nullptr;
+        genBarcode = -99;
+        genPt = -99.;
+        genEta = -99.;
+        genPhi = -99.;
+        genCharge = -99;
+        genX = -99.;
+        genY = -99.;
+        genZ = -99.;
+        genParms.fill(0.);
+        genl3d = -99.;
       }
     }
     
@@ -951,15 +1207,63 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     }
     
     int simtrackid = -99;
-    if (genpart != nullptr && doSim_) {
+    if (genpart != nullptr && (doSim_ || doSimDecayTruth_)) {
       for (auto const& simTrack : *simTracks) {
         if (simTrack.genpartIndex() == genBarcode) {
           simtrackid = simTrack.trackId();
+          if (doSimDecayTruth_) {
+            simTrkFound = 1;
+            simTrkPdgId = simTrack.type();
+            simTrkP = simTrack.momentum().P();
+            simTrkPt = simTrack.momentum().pt();
+            simTrkEta = simTrack.momentum().eta();
+            simTrkPhi = simTrack.momentum().phi();
+            if (!simTrack.noVertex()) {
+              auto const& pv = (*simVertices)[simTrack.vertIndex()].position();
+              simTrkVtxX = pv.x();
+              simTrkVtxY = pv.y();
+              simTrkVtxZ = pv.z();
+            }
+          }
           break;
         }
       }
     }
-    
+
+    // Every Geant4 vertex produced by the matched SimTrack: the decay
+    // (processType 201) that this study targets, but also nuclear
+    // interactions (111/121) and delta rays (2), which are the physics
+    // backgrounds to the kink tag. Daughters are flattened with a back
+    // pointer so the offline classification can use the full final state.
+    if (doSimDecayTruth_ && simtrackid >= 0) {
+      for (unsigned int iv = 0; iv < simVertices->size(); ++iv) {
+        auto const& simVertex = (*simVertices)[iv];
+        if (simVertex.noParent() || int(simVertex.parentIndex()) != simtrackid) {
+          continue;
+        }
+        const int islot = int(simVtxX.size());
+        auto const& vpos = simVertex.position();
+        simVtxX.push_back(vpos.x());
+        simVtxY.push_back(vpos.y());
+        simVtxZ.push_back(vpos.z());
+        simVtxProcType.push_back(int(simVertex.processType()));
+        int ndau = 0;
+        for (auto const& simTrack : *simTracks) {
+          if (simTrack.noVertex() || simTrack.vertIndex() != int(iv)) {
+            continue;
+          }
+          ++ndau;
+          simDauVtx.push_back(islot);
+          simDauPdgId.push_back(simTrack.type());
+          simDauPx.push_back(simTrack.momentum().x());
+          simDauPy.push_back(simTrack.momentum().y());
+          simDauPz.push_back(simTrack.momentum().z());
+        }
+        simVtxNDau.push_back(ndau);
+      }
+    }
+
+
     
     muonPt = -99.;
     muonLoose = false;
@@ -967,6 +1271,10 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     muonTight = false;
     muonIsTracker = false;
     muonIsGlobal = false;
+    // muonIsPF was missing from this reset, so it carried over from the
+    // previous track in the event: on the B->J/psi+X ALCARECO that made it
+    // true for ~47% of hadron tracks that were never matched to a muon.
+    muonIsPF = false;
     muonIsStandalone = false;
     muonInnerTrackBest = false;
     trackExtraAssoc = false;
@@ -985,6 +1293,41 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             matchedmuon = &muon;
           }
         }
+      }
+    }
+
+    // Ref-safe muon match for ALCARECO inputs. The muon's bestTrack()/
+    // innerTrack() refs point into generalTracks, which the ALCARECO drops,
+    // so dereferencing them throws; and the shipped track->muon association
+    // is keyed on the unselected track collection, not the preselected copy
+    // this module runs on. Match on the muon's OWN four-momentum instead,
+    // and read only values stored directly on the muon.
+    if (doMuonTrackAssoc_ && muons.isValid()) {
+      const reco::Muon *best = nullptr;
+      double bestdr = 0.01;
+      for (auto const &muon : *muons) {
+        if (muon.charge() != track.charge()) {
+          continue;
+        }
+        if (std::abs(muon.pt() - track.pt()) > 0.05*track.pt()) {
+          continue;
+        }
+        const double dr = deltaR(muon, track);
+        if (dr < bestdr) {
+          bestdr = dr;
+          best = &muon;
+        }
+      }
+      if (best != nullptr) {
+        muonPt = best->pt();
+        muonLoose = best->passed(reco::Muon::CutBasedIdLoose);
+        muonMedium = best->passed(reco::Muon::CutBasedIdMedium);
+        muonTight = best->passed(reco::Muon::CutBasedIdTight);
+        muonIsPF = best->isPFMuon();
+        muonIsTracker = best->isTrackerMuon();
+        muonIsGlobal = best->isGlobalMuon();
+        muonIsStandalone = best->isStandAloneMuon();
+        muonInnerTrackBest = best->muonBestTrackType() == reco::Muon::InnerTrack;
       }
     }
 
@@ -1120,7 +1463,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             }
             // Boundary veto configurable via keepPixelEdgeHits; sizeX
             // threshold configurable via pixelMinSizeX (default 2 = legacy).
-            hitquality = (keepPixelEdgeHits_ || !onEdge) && cluster.sizeX() >= pixelMinSizeX_;
+            hitquality = (keepPixelEdgeHits_ || !onEdge) && cluster.sizeX() >= pixelMinSizeX_
+                          && cluster.sizeY() >= pixelMinSizeY_;
             if (!hitquality) ++pixHitsDemoted_;
 // hitquality = false;
           }
@@ -1452,6 +1796,20 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     
     bool valid = true;
     bool stepClampedThisFit = false;
+    // ---- chi2-based (Armijo) backtracking bookkeeping, per fit attempt ----
+    // chisq0valPrev is the chi2 at the linearization point of the PREVIOUS
+    // iteration; predDecrPrev is the quadratic model's predicted chi2 change
+    // for the step that was actually applied there (already including any
+    // clamp/damping scale). stepScaleApplied accumulates that scale within an
+    // iteration. nChi2Bt is the halving count since the last accepted step;
+    // nChi2BtTotal is a per-fit budget that guarantees termination (a backtrack
+    // redoes the same iteration index and so does not consume the niters budget).
+    bool stepBacktrackedThisFit = false;
+    unsigned int nChi2Bt = 0;
+    unsigned int nChi2BtTotal = 0;
+    double chisq0valPrev = std::numeric_limits<double>::quiet_NaN();
+    double predDecrPrev = 0.;
+    double stepScaleApplied = 1.;
     nChargeFlipProtect = 0;
     if (debugPerIterDump_) {
       chisqval_iter.clear();
@@ -1473,9 +1831,62 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     
     const unsigned int niters = (dogen && !dolocalupdate) || (dogen && fitFromSimParms_) ? 1 : nIters_;
     
+    // CGF IRLS (CVH_CGF_QOP=3): the realised q/p noise of each block from
+    // the PREVIOUS solve, r_b^(t) = (Ffull dxfull)_b. Persists across
+    // Gauss-Newton iterations; empty (hence r = 0) on the first, which is
+    // exactly the t = 0 case of the derivation. Sized on first use.
+    //
+    // Carrying it across iterations is legitimate even though the reference
+    // is regenerated every iteration: the reference update propagates a seed
+    // shift through all layers, and a noiseless shift has (F delta)_b = 0 by
+    // construction, so (F dx)_b is INVARIANT under it. It is precisely the
+    // part of dx the reference cannot absorb.
+    std::vector<double> cgfRprev;
+    std::vector<unsigned int> cgfBlkRow;
+    // Cached block weights and score tables (CVH_CGF_QOP_REFRESH). `I` and the
+    // score table are properties of the block's DISTRIBUTION, so freezing them
+    // after the first sweep is standard IRLS -- fixed weights, moving centre.
+    // At the fixed point the stationarity condition is
+    //     hit_grad + F^T psi(r) = 0
+    // which contains no `I` at all, so `I` is a PRECONDITIONER: freezing it
+    // changes the path and cannot change the fixed point. That makes
+    // cached-vs-uncached a genuine path-independence test rather than a
+    // model change (section 33).
+    std::vector<double> cgfCacheQ, cgfCacheSig;
+    std::vector<cvhcgf::Result> cgfCacheRes;
+
+    // per-iteration accumulators for the reference energy loss; the CONVERGED
+    // iteration's values are the ones exported (reset at the top of each)
+    double dErefIter = 0.;
+    double maxFracLossIter = 0.;
+
     for (unsigned int iiter=0; iiter<niters; ++iiter) {
+      dErefIter = 0.;
+      maxFracLossIter = 0.;
+      // Linearization snapshot taken BEFORE the reference/layer-state update
+      // below applies dxfull, so a failed sufficient-decrease test can restore
+      // it and redo the iteration with a halved step.
+      const Matrix<double, 7, 1> refFtsSnap = refFts;
+      std::vector<Matrix<double, 7, 1>> layerStatesSnap;
+      if (stepBacktracking_) {
+        layerStatesSnap = layerStates;
+      }
+      stepScaleApplied = 1.;
       if (debugprintout_) {
         std::cout<< "iter " << iiter << std::endl;
+      }
+
+      // Iteration marker for the CGF diagnostic stream (CVH_CGF_QOP >= 2).
+      // The propagator emits one `### CVHCGF` line per leg with no idea which
+      // track or iteration it belongs to; without this marker the only way to
+      // group them is to guess from the ordering, which breaks the moment a
+      // propagation fails or two tracks cross similar radii.
+      {
+        if (cvhcgf::cgfQoPMode() >= 2) {
+          std::cout << "### CVHITER iiter=" << iiter << " itrack=" << itrack
+                    << " pt=" << trackPt << " eta=" << trackEta << " q=" << track.charge()
+                    << std::endl;
+        }
       }
 
 // std::cout<< "iter " << iiter << std::endl;
@@ -1654,25 +2065,56 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         stripsToEdge.clear();
         stripsToEdge.reserve(nvalid);
 
+        simHitNCand.clear();
+        simHitNCand.reserve(nvalid);
+        hitDetId.clear();
+        hitDetId.reserve(nvalid);
+        hitUProj.clear();
+        hitUProj.reserve(nvalid);
+        hitStripRec.clear();
+        hitStripRec.reserve(nvalid);
+        hitStripSim.clear();
+        hitStripSim.reserve(nvalid);
+        hitFirstStrip.clear();
+        hitFirstStrip.reserve(nvalid);
+        hitPitch.clear();
+        hitPitch.reserve(nvalid);
+        hitThickness.clear();
+        hitThickness.reserve(nvalid);
+
       }      
       
       rfull = VectorXd::Zero(ncons);
       Ffull = MatrixXd::Zero(ncons, nstateparms);
+      cgfBlkRow.clear();
       Jfull = MatrixXd::Zero(ncons, npars);
       Vinvfull = MatrixXd::Zero(ncons, ncons);
       Vinvfullalt = MatrixXd::Zero(ncons, ncons);
       
       dVs.clear();
+      resvalidhit_.clear();
+      resfamily_.clear();
       residxs.clear();
       ioniurbanidx.clear();
       ioniurbanv.clear();
+      ioniqscaleidx.clear();
+      ioniqscalev.clear();
+      radstepidx.clear();
+      radstepv.clear();
+      radstepspecv.clear();
       msmoliidx.clear();
       msmoliv.clear();
       reseigidx.clear();
       reseigv.clear();
       resinfv.clear();
       resinfvarv.clear();
+      reshitidx.clear();
+      reshitcls.clear();
+      cfhitclsv.clear();
+      cfhitvv.clear();
       resinfcov = 0.;
+      resinfcovhit = 0.f;
+      resinfcovgrp = 0.f;
       resinfbv.clear();
       resblockrng.clear();
       resglobidx.clear();
@@ -1892,18 +2334,38 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         const double dionival = dores ? corparms_[ioniglobalidx] : dxival;
         
         const PSimHit *simhit = nullptr;
+        int simhitNCandVal = 0;
+        std::vector<const PSimHit*> simhitCands;
         
         if (doSim_) {
+          // The track can leave MORE THAN ONE PSimHit on a module -- a curling
+          // low-momentum hadron, or a re-entry after a large-angle nuclear
+          // elastic scatter. Taking the first candidate rather than the
+          // nearest one puts a 0.126 % population of proton strip hits at
+          // |(rec-sim)/sigma| > 10 with a median |rec - sim| of 1.35 mm,
+          // which would be read as a hit resolution tail; the kaon gun shows
+          // 40x less of it, so it is proton kinematics and not a defect of
+          // the hit. The CHOICE among candidates is deferred to the point
+          // where the propagated local position exists (see the simhitCands
+          // re-selection below); the first candidate is kept here so that the
+          // fitFromSimParms / simhitdebug paths, which run before that point,
+          // still see a sim hit.
+          //
+          // Species from the CONFIGURED gen-match hypothesis, not a hardcoded
+          // muon. With |particleType|==13 the sim-hit machinery silently
+          // no-ops on the kaon/pion/proton guns: simhit stays null, so
+          // dxrecsim/dyrecsim are -99 and fitSimHitPositions quietly falls
+          // back to reco positions (usesimpos is && simhit != nullptr).
           for (auto const& simhith : simHits) {
             for (const PSimHit& simHit : *simhith) {
-              if (simHit.detUnitId() == hit->geographicalId() && int(simHit.trackId()) == simtrackid && std::abs(simHit.particleType()) == 13) {
-                simhit = &simHit;
-                break;
+              if (simHit.detUnitId() == hit->geographicalId() && int(simHit.trackId()) == simtrackid && std::abs(simHit.particleType()) == genMatchPdgId_) {
+                simhitCands.push_back(&simHit);
               }
             }
-            if (simhit != nullptr) {
-              break;
-            }
+          }
+          simhitNCandVal = int(simhitCands.size());
+          if (!simhitCands.empty()) {
+            simhit = simhitCands.front();
           }
         }
 
@@ -1935,13 +2397,28 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         const Eigen::Matrix<double, 7, 1> propInputState =
             simhitdebug ? propfromtsos : updtsos;
 
+        // cached block weight for this leg, if we have one and are not
+        // refreshing on this iteration
+        {
+          // `cvhcgf` is the single reader; the maker must not carry its own
+          // copy of the schedule, or the propagator and the fit could disagree
+          // about which estimator is running.
+          const int cgfRefresh = cvhcgf::cgfQoPRefresh();
+          const bool refreshNow = (iiter == 0) ||
+                                  (cgfRefresh > 0 && (iiter % cgfRefresh) == 0);
+          if (!refreshNow && ihit < cgfCacheQ.size() && cgfCacheQ[ihit] > 0.) {
+            g4prop->setCgfOverride(cgfCacheQ[ihit]);
+          }
+        }
         auto const &propresult = simhitdebug
             ? g4prop->propagateGenericWithJacobianAltD(propfromtsos, surface, dB, dxival, dmsval, dionival, -1., g4PartName,
                                                        matModel_.get(), matModel_ ? &groupJacs_ : nullptr,
+                                                       (matModel_ && doRes_ && exportMaterialNoise_) ? &groupQs_ : nullptr,
                                                        fieldModeProvider_.get(),
                                                        fieldModeProvider_ ? &modeJacs_ : nullptr)
             : g4prop->propagateGenericWithJacobianAltD(updtsos,      surface, dB, dxival, dmsval, dionival, -1., g4PartName,
                                                        matModel_.get(), matModel_ ? &groupJacs_ : nullptr,
+                                                       (matModel_ && doRes_ && exportMaterialNoise_) ? &groupQs_ : nullptr,
                                                        fieldModeProvider_.get(),
                                                        fieldModeProvider_ ? &modeJacs_ : nullptr);
 
@@ -1982,7 +2459,37 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         }
         
         updtsos = std::get<1>(propresult);
+
+        // Reference energy loss of this propagation, and the running maximum
+        // of its fractional size. Taken from the propagator's input/output
+        // STATES rather than from any dE/dx model call, so it stays correct
+        // whatever scales the loss (CVH_DEDX_SCALE, the material model's k_g,
+        // the per-module dxi), and formed before any local state update, so
+        // only the propagation contributes. Same construction as the
+        // two-track maker's `dErefarr`.
+        {
+          const double m2 = trackmass * trackmass;
+          const double pIn = propInputState.segment<3>(3).norm();
+          const double eIn = std::sqrt(pIn * pIn + m2);
+          const double eOut = std::sqrt(updtsos.segment<3>(3).squaredNorm() + m2);
+          dErefIter += eIn - eOut;
+          if (pIn > 0.) {
+            maxFracLossIter = std::max(maxFracLossIter, (eIn - eOut) / pIn);
+          }
+        }
+
         const Matrix<double, 5, 5> Qcurv = std::get<2>(propresult);
+        // record the (possibly just-computed) block weight and score table
+        if (g4prop != nullptr && g4prop->cgfBlockValid()) {
+          if (cgfCacheQ.size() <= ihit) {
+            cgfCacheQ.resize(ihit + 1, -1.);
+            cgfCacheSig.resize(ihit + 1, 0.);
+            cgfCacheRes.resize(ihit + 1);
+          }
+          cgfCacheQ[ihit] = Qcurv(0, 0);
+          cgfCacheSig[ihit] = g4prop->cgfBlockSigma();
+          cgfCacheRes[ihit] = g4prop->cgfBlock();
+        }
         const Matrix<double, 5, 9> FdFmcurv = std::get<3>(propresult);
         const double dEdxlast = std::get<4>(propresult);
         const Matrix<double, 5, 5> dQMScurv = std::get<5>(propresult);
@@ -2032,6 +2539,42 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                           << " fd = " << fd
                           << " ratio fd/analytic = "
                           << (anacol[0] != 0. ? fd / anacol[0] : 0.) << std::endl;
+
+                // V3: THE PER-GROUP PROCESS NOISE, the width counterpart of
+                // V1's mean.  `setInjection(g, eps)` multiplies group g's
+                // `matStepFact` by e^eps, and that factor multiplies the
+                // step's MS covariance and ionization variance as well as its
+                // mean loss, so
+                //     Q(eps) - Q(0) = (e^eps - 1) dQ_g + O(eps^2)
+                // with dQ_g exactly the block this maker now registers as the
+                // parmtype-15 resolution family.  Comparing at the Q level
+                // rather than end-to-end on the chi2 is deliberate: the
+                // gradient/Hessian assembly downstream is the SAME code the
+                // parmtype-10/11 families already go through and is validated
+                // by them; what is new is only this matrix.
+                auto itq = std::find_if(groupQs_.begin(), groupQs_.end(),
+                                        [this](auto const &e) { return e.first == materialFDGroup_; });
+                if (itq != groupQs_.end()) {
+                  const Matrix<double, 5, 5> &anaQ = itq->second;
+                  const Matrix<double, 5, 5> qNom = std::get<2>(propresult);
+                  const Matrix<double, 5, 5> qPert = std::get<2>(pertres);
+                  const double scale = std::expm1(materialFDEps_);
+                  const Matrix<double, 5, 5> fdQ = (qPert - qNom) / scale;
+                  const double refn = anaQ.cwiseAbs().maxCoeff();
+                  const double relQ = refn > 0. ? (fdQ - anaQ).cwiseAbs().maxCoeff() / refn : -1.;
+                  // and the sum rule the split has to obey exactly
+                  Matrix<double, 5, 5> qsum = Matrix<double, 5, 5>::Zero();
+                  for (auto const &gq : groupQs_) {
+                    qsum += gq.second;
+                  }
+                  const Matrix<double, 5, 5> qmsi = dQMScurv + dQIcurv;
+                  const double refs = qmsi.cwiseAbs().maxCoeff();
+                  const double relS = refs > 0. ? (qsum - qmsi).cwiseAbs().maxCoeff() / refs : -1.;
+                  std::cout << "material FD closure (V3, process noise): group " << materialFDGroup_
+                            << " max|dQ_g| = " << refn
+                            << " max|fd - analytic|/max|dQ_g| = " << relQ
+                            << " ; sum rule max|sum_g dQ_g - (dQMS+dQI)|/max = " << relS << std::endl;
+                }
               }
             }
           }
@@ -2190,6 +2733,23 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           localparmsalignprop = globalToLocal(updtsosalign, surfacealign);
         }
 
+        // Now that the PROPAGATED local position exists, choose among the
+        // candidate sim hits on this module the one closest to it. The
+        // tie-break is measurement-independent, so it cannot pull rec - sim
+        // toward zero the way breaking it on the reco position would.
+        if (simhitCands.size() > 1) {
+          double bestd2 = std::numeric_limits<double>::max();
+          for (const PSimHit *cand : simhitCands) {
+            const double dxp = cand->localPosition().x() - localparmsalignprop[3];
+            const double dyp = cand->localPosition().y() - localparmsalignprop[4];
+            const double d2 = dxp*dxp + dyp*dyp;
+            if (d2 < bestd2) {
+              bestd2 = d2;
+              simhit = cand;
+            }
+          }
+        }
+
         //TODO optimize this without ternary functions
         
         Matrix<double, 5, 5> Hp = Hm;
@@ -2239,6 +2799,102 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               dx0[2] += kinkInjectDydz_;
             }
           }
+
+          // ------------------------------------------------------------------
+          // IRLS RE-CENTRING of the q/p process-noise row (CVH_CGF_QOP=3).
+          // OFF unless the mode is exactly 3; modes 0/1/2 leave dx0 untouched.
+          //
+          // The surrogate replaces the block's -ln p by
+          //     1/2 (r - mu)^T I (r - mu),   mu = r - psi(r)/I
+          // so the residual the least-squares sees is (r - mu) = psi(r)/I,
+          // evaluated at the current iterate. With the outer Gauss-Newton loop
+          // already iterating, taking `current` = this iterate is exactly
+          // FISHER SCORING (the increment solves I delta = psi), and at the
+          // fixed point the surrogate score equals the true score EXACTLY.
+          //
+          // In the propagator's standardized units z = r/sigma with
+          // sigma^2 = the leg's nominal Gaussian q/p variance:
+          //     r_used = sigma * (1/I_z) * psi_z(r / sigma)
+          // and the weight Q(0,0) = sigma^2 * (1/I_z) is already substituted.
+          //
+          // GAUSSIAN-LIMIT IDENTITY, and it is the wiring control: for a
+          // Gaussian block psi_z(z) = z / (1/I_z), so r_used = r identically.
+          // CVH_CGF_QOP_GAUSSPSI=1 substitutes exactly that psi and MUST
+          // reproduce mode 1 bit for bit -- which separates "are the units
+          // right" from "is the score right".
+          //
+          // Only component 0 is touched. dx0 is the local 5-parameter
+          // residual whose first component is q/p in both the local and the
+          // curvilinear bases, which is why the standardization by the
+          // CURVILINEAR sigma is the matching one.
+          const int cgfMode = cvhcgf::cgfQoPMode();
+          static const bool cgfGaussPsi = (getenv("CVH_CGF_QOP_GAUSSPSI") != nullptr);
+          if (cgfMode == 3) {
+            // Block index within this track, in layer order -- the same order
+            // every iteration, which is what makes cgfRprev addressable.
+            const unsigned int iblk = cgfBlkRow.size();
+            cgfBlkRow.push_back(icons);
+            const double rprev = (iblk < cgfRprev.size()) ? cgfRprev[iblk] : 0.;
+            if (ihit < cgfCacheRes.size() && cgfCacheRes[ihit].ok) {
+              const cvhcgf::Result &cgfb = cgfCacheRes[ihit];
+              const double csig = cgfCacheSig[ihit];
+              if (csig > 0. && cgfb.invFisher > 0.) {
+                // rfull_b = -mu_b = -( r^(t) - psi_r(r^(t))/I_r ), and in the
+                // propagator's standardized units
+                //     psi_r/I_r = sigma * (1/I_z) * psi_z(r/sigma)
+                // so           rfull_b = -r^(t) + sigma (1/I_z) psi_z(r/sigma).
+                //
+                // GAUSSIAN LIMIT: psi_z(z) = z/(1/I_z) gives
+                // sigma (1/I_z) (r/sigma)/(1/I_z) = r, hence rfull_b = 0
+                // IDENTICALLY, at every iteration and every r -- not merely at
+                // r = 0. That is the check that this matches the derivation,
+                // and CVH_CGF_QOP_GAUSSPSI=1 runs it.
+                const double z = rprev / csig;
+                double psiz;
+                if (cgfGaussPsi) {
+                  psiz = z / cgfb.invFisher;
+                } else {
+                  bool clamped = false;
+                  psiz = cvhcgf::scoreAt(cgfb, z, &clamped);
+                  if (clamped) {
+                    ++nCgfClamp_;
+                  }
+                }
+                // Written as the NON-GAUSSIAN part of the score, not as
+                // `-r + sigma (1/I) psi`. The two are algebraically identical,
+                // but the latter is a catastrophic cancellation: the Gaussian
+                // piece of psi reconstructs r, so the answer is the difference
+                // of two O(r) numbers and comes out at r * O(eps) instead of
+                // exactly zero. Measured: that residual is 1e-17 of r -- and
+                // the FIT AMPLIFIES IT TO 2.7e-5 on the fitted q/p, so the
+                // difference is not cosmetic (section 25.2).
+                //
+                // With d = psi_z(z) - z/(1/I_z) the Gaussian limit is
+                // bit-exactly zero, and the t = 0 case reduces to
+                // sigma (1/I_z) psi_z(0) as before.
+                const double dscore = psiz - z / cgfb.invFisher;
+                // SHRINKAGE. The re-centring is measured to be anti-correlated
+                // with the truth residual and to add scatter of a comparable
+                // size, so its variance-optimal scale is not 1.
+                // `CgfRecentreDamping` is that scale; 1.0 applies the
+                // re-centring undamped.
+                dx0[0] = cvhcgf::cgfRecentreDamping() * csig * cgfb.invFisher * dscore;
+                ++nCgfRecentre_;
+                if (getenv("CVH_CGF_QOP_DEBUG") != nullptr) {
+                  static int ndbg = 0;
+                  if (ndbg < 40 && rprev != 0.) {
+                    ++ndbg;
+                    std::cout << "### CGFDBG iiter=" << iiter << " iblk=" << iblk
+                              << " icons=" << icons
+                              << " rprev=" << rprev << " csig=" << csig
+                              << " invI=" << cgfb.invFisher << " psiz=" << psiz
+                              << " dx0out=" << dx0[0] << std::endl;
+                  }
+                }
+              }
+            }
+          }
+          // ------------------------------------------------------------------
 
           rfull.segment<nlocalcons>(icons) = dx0;
 
@@ -2331,7 +2987,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               fieldModeProvider_->setInjection(imode, eps);
               auto const &pertResult = g4prop->propagateGenericWithJacobianAltD(
                   propInputState, surface, dB, dxival, dmsval, dionival, -1., g4PartName,
-                  matModel_.get(), nullptr, fieldModeProvider_.get(), nullptr);
+                  matModel_.get(), nullptr, nullptr, fieldModeProvider_.get(), nullptr);
               fieldModeProvider_->setInjection(-1, 0.);
               if (!std::get<0>(pertResult)) {
                 std::cout << "  mode " << imode << ": perturbed propagation failed" << std::endl;
@@ -2430,6 +3086,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             residxs.push_back(iparm + nlocalbfield + nlocaleloss);
             resblockrng.push_back({{icons, nlocalcons}});
             resglobidx.push_back(msglobalidx);
+            resvalidhit_.push_back(-1);          // material block, not a hit
+            resfamily_.push_back(10);            // multiple scattering
 
             // Phase B export: Moliere raw step data of the same leg (log
             // sync argument as for the Urban export below).
@@ -2442,6 +3100,10 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               msmoliv.push_back(ms.beta);
               msmoliv.push_back(ms.thp2);
               msmoliv.push_back(ms.dOverX0);
+              // per-element Moliere sums: effZ/effA are mass
+              // averages and both parameters are non-linear in Z
+              msmoliv.push_back(ms.zzp1OverA);
+              msmoliv.push_back(ms.lnScreenW);
               msmoliv.push_back(ms.stepGroup);
             }
           }
@@ -2460,6 +3122,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             residxs.push_back(iparm + nlocalbfield + nlocaleloss + 1);
             resblockrng.push_back({{icons, nlocalcons}});
             resglobidx.push_back(ioniglobalidx);
+            resvalidhit_.push_back(-1);          // material block, not a hit
+            resfamily_.push_back(11);            // ionization
 
             // Physics-CF export: the propagator's Urban step log corresponds
             // to the leg propagation whose dQI was stored above (the log is
@@ -2478,9 +3142,101 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               ioniurbanv.push_back(us.rec.tmaxr);
               ioniurbanv.push_back(us.rec.scaling);
               ioniurbanv.push_back(us.cs);
+              // regime 2/3 (CVH_IONI_EXACTDELTA): two extra columns AFTER cs,
+              // so every existing column index is unchanged and the stride is
+              // 11 exactly when the switch is off.
+              if (G4UniversalFluctuationForExtrapolator::exactDeltaEnabled()) {
+                ioniurbanv.push_back(us.rec.beta2);
+                ioniurbanv.push_back(us.rec.etot);
+              }
+              // material group of the step, ALWAYS last so that neither the
+              // base nor the exact-delta column indices move (see
+              // UrbanIoniStep::stepGroup)
+              ioniurbanv.push_back(us.stepGroup);
+            }
+
+            // The scale the CGF substitution applied to THIS leg's ionization
+            // block, with the number of step rows just pushed so that pooled
+            // blocks (several legs under one global index) can be split back
+            // apart exactly. 1.0 under CgfQoPMode=0. See the member docs.
+            ioniqscaleidx.push_back(ioniglobalidx);
+            ioniqscalev.push_back(g4prop->cgfQScale());
+            ioniqscalev.push_back(static_cast<float>(g4prop->ioniStepLog().size()));
+
+            // Radiative steps of the same leg, one row per Geant4 step (the
+            // radiative log has an entry for every step, unlike the Urban log)
+            // plus the two per-process dN/dv shapes. Same log-sync argument as
+            // above: the propagator clears these at each propagate call.
+            for (auto const &rs : g4prop->radStepLog()) {
+              radstepidx.push_back(ioniglobalidx);
+              radstepv.push_back(rs.effZ);
+              radstepv.push_back(rs.effA);
+              radstepv.push_back(rs.xg);
+              radstepv.push_back(rs.etotGeV);
+              radstepv.push_back(rs.pGeV);
+              radstepv.push_back(rs.dOverX0);
+              radstepv.push_back(rs.stepCm);
+              radstepv.push_back(rs.dedxRad);
+              radstepv.push_back(rs.dedxBrem);
+              radstepv.push_back(rs.dedxPair);
+              radstepv.push_back(rs.cs);
+              radstepv.push_back(rs.stepGroup);   // column 11: material group
+              for (int iv = 0; iv < RADSTEP_NV; ++iv) {
+                radstepspecv.push_back(rs.dNdvBrem[iv]);
+              }
+              for (int iv = 0; iv < RADSTEP_NV; ++iv) {
+                radstepspecv.push_back(rs.dNdvPair[iv]);
+              }
             }
           }
 
+
+          // ---- PARMTYPE-15: THE MATERIAL GROUP'S OWN PROCESS NOISE ------
+          //
+          // `k_g` scales the step's MEAN loss AND, coherently, its MS
+          // covariance and ionization variance (`matStepFact` in the
+          // propagator's M1 block).  The mean dependence is the parmtype-15
+          // column of `transportJacobianBxByBzD`, whose only non-zero row is
+          // `dqopdxi`; the WIDTH dependence is this block.  Both are needed:
+          // with only the mean differentiated, the quadratic term measures a
+          // group's mean loss while the mass CF measures its width -- two
+          // functionals of one parameter, one of them blind, which is exactly
+          // the configuration in which a large unexplained group pull can
+          // sit.
+          //
+          // dV/dk_g is the same object the parmtype-10/11 blocks use, split by
+          // group: the propagator accumulates (errMS + errI) per group in
+          // `groupQs_`, transported by the same Jacobian as dQ/dQ2 and
+          // localized by the same `Hm`, so `sum_g dQ_g == dQMS + dQI` exactly.
+          if (dores && exportMaterialNoise_ && globalMaterialModel_) {
+            for (auto const &gq : groupQs_) {
+              if (gq.first < 0 || unsigned(gq.first) >= nMatGroups) {
+                continue;
+              }
+              Matrix<double, 5, 5> dQG = gq.second;
+              if (dolocalupdate) {
+                dQG = Hm * gq.second * Hm.transpose();
+              }
+              if (!(dQG.cwiseAbs().maxCoeff() > 0.)) {
+                continue;
+              }
+              std::vector<Triplet<double>> coeffs;
+              coeffs.reserve(nlocalcons * nlocalcons);
+              for (unsigned int irow = 0; irow < nlocalcons; ++irow) {
+                for (unsigned int icol = 0; icol < nlocalcons; ++icol) {
+                  coeffs.emplace_back(icons + irow, icons + icol, dQG(irow, icol));
+                }
+              }
+              SparseMatrix<double> &dV = dVs.emplace_back(ncons, ncons);
+              dV.setFromTriplets(coeffs.begin(), coeffs.end());
+              // this group's own column of THIS propagation's parameter block
+              residxs.push_back(iparm + nlocalbfield + gq.first);
+              resblockrng.push_back({{icons, nlocalcons}});
+              resglobidx.push_back(matGroupGlobalIdx_[gq.first]);
+              resvalidhit_.push_back(-1);
+              resfamily_.push_back(15);          // global material group
+            }
+          }
 
           icons += nlocalcons;
 
@@ -2744,6 +3500,17 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               }
             }
             
+            // Configurable multiplier on the ASSIGNED hit covariance. Applied
+            // here, where iV is finished and before anything reads it, so
+            // Vinvfull, the resolution dV blocks and the dxerr export are all
+            // consistent with one another. Defaults are 1.0 = no change.
+            {
+              const double covscale = ispixel ? hitCovScalePixel_ : hitCovScaleStrip_;
+              if (covscale != 1.0) {
+                iV *= covscale;
+              }
+            }
+
             rxfull.row(ivalidhit) = R.row(0).cast<float>();
             ryfull.row(ivalidhit) = R.row(1).cast<float>();
             
@@ -2836,6 +3603,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               residxs.push_back(iparm + nlocalalignment);
               resblockrng.push_back({{icons, ispixel ? 2u : 1u}});
               resglobidx.push_back(xresglobalidx);
+              resvalidhit_.push_back(int(ivalidhit));
+              resfamily_.push_back(8);           // hit resolution, local x
             }
             
             // local y resolution variation
@@ -2855,6 +3624,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               residxs.push_back(iparm + nlocalalignment + 1);
               resblockrng.push_back({{icons, 2u}});
               resglobidx.push_back(yresglobalidx);
+              resvalidhit_.push_back(int(ivalidhit));
+              resfamily_.push_back(9);           // hit resolution, local y
             }
 
             constexpr std::array<unsigned int, 6> alphaidxs = {{0, 2, 3, 4, 5, 1}};
@@ -2978,6 +3749,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
               const TrackerSingleRecHit* tkhit = dynamic_cast<const TrackerSingleRecHit*>(preciseHit.get());
               assert(tkhit != nullptr);
+
+              hitDetId.push_back(preciseHit->geographicalId().rawId());
+              hitThickness.push_back(tkhit->det()->surface().bounds().thickness());
               
               if (ispixel) {
                 const SiPixelCluster& cluster = *tkhit->cluster_pixel();
@@ -2999,6 +3773,17 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                 
                 clusterSN.push_back(-99.);
                 stripsToEdge.push_back(-99);
+
+                // uProj is a STRIP CPE concept; the pixel template is
+                // indexed by (angle, qbin) instead, and those are already
+                // exported as localdxdz/localdydz and clusterChargeBin.
+                hitUProj.push_back(-99.f);
+                hitStripRec.push_back(-99.f);
+                hitStripSim.push_back(-99.f);
+                hitFirstStrip.push_back(-99);
+                const PixelTopology *pixtopology =
+                    dynamic_cast<const PixelTopology*>(&(tkhit->det()->topology()));
+                hitPitch.push_back(pixtopology != nullptr ? pixtopology->pitch().first : -99.f);
               }
               else {
                 const StripTopology* striptopology = dynamic_cast<const StripTopology*>(&(tkhit->det()->topology()));
@@ -3017,6 +3802,31 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                 const uint16_t firstStrip = cluster.firstStrip();
                 const uint16_t lastStrip = cluster.firstStrip() + cluster.amplitudes().size() - 1;
                 stripsToEdge.push_back(std::min<int>(firstStrip, striptopology->nstrips() - 1 - lastStrip));
+
+                // The CPE's own independent variable. getAlgoParam is given
+                // the SAME LocalTrajectoryParameters the cloner passed, so
+                // this is the uProj that produced localPositionError() above,
+                // not a reconstruction of it.
+                float uProjVal = -99.f;
+                const StripGeomDetUnit *stripdu =
+                    dynamic_cast<const StripGeomDetUnit*>(tkhit->det());
+                if (stripCPEForExport != nullptr && stripdu != nullptr) {
+                  uProjVal = stripCPEForExport->getAlgoParam(*stripdu, locparm).afullProjection;
+                }
+                hitUProj.push_back(uProjVal);
+                hitPitch.push_back(striptopology->localPitch(preciseHit->localPosition()));
+
+                // Strip COORDINATES, so the true impact point can be expressed
+                // in the lattice frame of the cluster that measured it. The
+                // eta / S-curve is E[rec - sim | position within the cluster],
+                // and referring the phase to the ABSOLUTE lattice instead
+                // mixes the two possible strip assignments near a boundary:
+                // measured on the muon gun, that compresses the N=1 ramp from
+                // the geometric +-0.5 to +-0.29 and its slope from -1 to -0.49.
+                hitStripRec.push_back(striptopology->strip(preciseHit->localPosition()));
+                hitStripSim.push_back(simhit != nullptr
+                    ? striptopology->strip(simhit->localPosition()) : -99.f);
+                hitFirstStrip.push_back(int(cluster.firstStrip()));
               }
               
   // if (ispixel) {
@@ -3062,6 +3872,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
                   dxrecsim.push_back(dxrecsimval);
                   dyrecsim.push_back(dyrecsimval);
+                  simHitNCand.push_back(simhitNCandVal);
 
 
                   
@@ -3157,6 +3968,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                   dysimgenlocal.push_back(-99.);
                   dxrecsim.push_back(-99.);
                   dyrecsim.push_back(-99.);
+                  simHitNCand.push_back(simhitNCandVal);
                   dE.push_back(-99.);
                   
                   simlocalqop.push_back(-99.);
@@ -3193,7 +4005,51 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 // Fsparse = Ffull.rightCols(nstatefree).sparseView();
       Fsparse = Ffull(Eigen::placeholders::all, freestateidxs).sparseView();
       Vinvsparse = Vinvfull.sparseView();
-      
+
+      // ---- chi2-based (Armijo) retroactive backtracking -------------------
+      // rfull has just been assembled at the CURRENT linearization point, i.e.
+      // this is the REALIZED chi2 of the step taken at the end of the previous
+      // iteration. If it fails the sufficient-decrease test, restore the
+      // previous linearization, halve that step and redo the iteration. This
+      // costs no extra propagation on the accept path (the chi2 is assembled
+      // anyway) and one repeated iteration per halving on the reject path.
+      // The slack term absorbs the chi2 wobble from relinearization (the
+      // propagation/material model is re-evaluated at the new state), so only
+      // a genuine chi2 blow-up triggers a halving.
+      const double chisq0valNow = rfull.dot(Vinvsparse * rfull);
+      if (stepBacktracking_ && iiter >= stepBacktrackFromIter_ && std::isfinite(chisq0valPrev) &&
+          nChi2Bt < maxChi2Backtrack_ && nChi2BtTotal < maxChi2Backtrack_ * niters) {
+        const double thresh = chisq0valPrev + armijoC_ * predDecrPrev +
+                              armijoSlack_ * std::max(1., std::abs(chisq0valPrev));
+        if (!(chisq0valNow <= thresh)) {
+          refFts = refFtsSnap;
+          layerStates = layerStatesSnap;
+          dxfull *= 0.5;
+          predDecrPrev *= 0.5;  // conservative: the model decrease shrinks with t
+          ++nChi2Bt;
+          ++nChi2BtTotal;
+          ++stepBacktrackEvents_;
+          if (!stepBacktrackedThisFit) {
+            stepBacktrackedThisFit = true;
+            ++fitStepBacktracked_;
+          }
+          if (stepPrints_ < stepPrintLimit_) {
+            ++stepPrints_;
+            std::cout << "GN step backtracked: iiter = " << iiter
+                      << " chisq " << chisq0valPrev << " -> " << chisq0valNow
+                      << " (thresh " << thresh << ")"
+                      << " nbt = " << nChi2Bt
+                      << " seed(q,pt,eta)=(" << track.charge() << "," << track.pt() << "," << track.eta() << ")"
+                      << std::endl;
+          }
+          iiter -= 1;  // loop ++ redoes the same iteration from the snapshot
+          continue;
+        }
+      }
+      // step accepted
+      nChi2Bt = 0;
+      chisq0valPrev = chisq0valNow;
+
       VinvF = Vinvsparse*Fsparse;
 
 
@@ -3287,8 +4143,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       // O(100%) in the first iterations), so a generic step cap would bind
       // on healthy fits. Two update outcomes are guarded, by scaling the
       // whole step vector (direction preserved):
-      //  - the updated momentum drops below pFloor (2 GeV, safely above the
-      //    1 GeV propagation refusal that killed such fits) -- ALWAYS clamped;
+      //  - the updated momentum drops below clampMomentumFloor_ (which must
+      //    stay safely above the propagator's PropagationPtotLimit refusal
+      //    that would otherwise kill such fits) -- ALWAYS clamped;
       //  - q/p changes sign (charge flip). Crossing q/p = 0 is p -> inf, so a
       //    flip is only dangerous for a stiff track (where it signals a
       //    diverging step). For a high-p track (p > allowChargeFlipAboveP_)
@@ -3300,11 +4157,26 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         const double qopref = pref > 0. ? refFts[6] / pref : 0.;
         const double dqop = dxfull[0];
         const double qopupd = qopref + dqop;
-        constexpr double pFloor = 2.0;  // GeV
+        const double pFloor = clampMomentumFloor_;  // GeV
         // |q/p| threshold below which a sign flip is allowed (high p, stiff track)
         const double qopFlipAllow = 1. / std::max(allowChargeFlipAboveP_, pFloor);
         double stepscale = 1.;
-        if (qopref != 0. && dqop != 0.) {
+        if (maxMomentumStepFactor_ > 1.) {
+          // Relative trust region in q/p. The lower bound
+          // max(pFloor, p_ref/f) is always strictly below p_ref, so a track
+          // whose true momentum is below pFloor is not pinned there and the
+          // scale cannot be zero. The upward cap p_ref*f guards the
+          // opposite runaway (p -> inf / sign flip of a stiff track) and, at
+          // f = 2, reproduces the legacy half-way-to-zero flip rule exactly.
+          bool flipProtect = false;
+          stepscale = cvhstep::legStepScaleRel(qopref, dqop, pFloor,
+                                               maxMomentumStepFactor_,
+                                               qopFlipAllow, &flipProtect);
+          if (flipProtect) {
+            ++nChargeFlipProtect;
+          }
+        } else if (qopref != 0. && dqop != 0.) {
+          // LEGACY absolute-floor-only clamp (maxMomentumStepFactor <= 1)
           if (std::abs(qopupd) > 1. / pFloor) {
             // far-side momentum below the floor: land on p = pFloor, same
             // charge (catches diverging steps, incl. sign flips toward low p)
@@ -3326,15 +4198,20 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           stepscale = std::max(stepscale, 0.);
           dxfree *= stepscale;
           dxfull *= stepscale;
+          stepScaleApplied *= stepscale;
+          ++stepClampEvents_;
           if (!stepClampedThisFit) {
             stepClampedThisFit = true;
             ++fitStepClamped_;
           }
-          std::cout << "GN step clamped: iiter = " << iiter
-                    << " qopref = " << qopref << " dqop = " << dqop
-                    << " scale = " << stepscale
-                    << " seed(q,pt,eta)=(" << track.charge() << "," << track.pt() << "," << track.eta() << ")"
-                    << std::endl;
+          if (stepPrints_ < stepPrintLimit_) {
+            ++stepPrints_;
+            std::cout << "GN step clamped: iiter = " << iiter
+                      << " qopref = " << qopref << " dqop = " << dqop
+                      << " scale = " << stepscale
+                      << " seed(q,pt,eta)=(" << track.charge() << "," << track.pt() << "," << track.eta() << ")"
+                      << std::endl;
+          }
         }
       }
 
@@ -3344,20 +4221,37 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       if (gnDampAfter_ > 0 && iiter >= gnDampAfter_) {
         dxfree *= gnDampFactor_;
         dxfull *= gnDampFactor_;
+        stepScaleApplied *= gnDampFactor_;
+      }
+
+      // CGF IRLS: the realised block residual of the step just taken, for the
+      // next iteration's re-centring. Taken AFTER the momentum-floor clamp and
+      // the damping, so it refers to the step actually applied. One dot
+      // product per block; only the q/p row (icons + 0) is needed.
+      if (!cgfBlkRow.empty()) {
+        cgfRprev.assign(cgfBlkRow.size(), 0.);
+        for (unsigned int ib = 0; ib < cgfBlkRow.size(); ++ib) {
+          cgfRprev[ib] = Ffull.row(cgfBlkRow[ib]).dot(dxfull);
+        }
       }
 
       const double deltachisq = rfull.transpose()*VinvF*dxfree;
       edmval = -deltachisq;
 
-      // Realized chi2 tracking (this maker historically never filled the
-      // chisqval/deltachisqval members in-loop -- they were stale storage;
-      // the always-stored chisqval branch is still overwritten with the
-      // final residual-projector value after the loop as before). chi2 at
-      // the current linearization point plus the predicted change of this
-      // step, mirroring the two-track maker; deltachisqval is the realized
-      // iteration-to-iteration change (per-iteration debug dump).
+      // Quadratic-model chi2 change of the step ACTUALLY applied (dxfree has
+      // already been scaled by stepScaleApplied above, so deltachisq = t*d with
+      // d the full-step value; the model change is d*(2t - t^2) =
+      // deltachisq*(2 - t)). Consumed by the Armijo test at the top of the
+      // NEXT iteration, where the realized chi2 becomes available.
+      predDecrPrev = deltachisq * (2. - stepScaleApplied);
+
+      // Realized chi2 tracking: chi2 at the current linearization point plus
+      // the predicted change of this step, mirroring the two-track maker;
+      // deltachisqval is the realized iteration-to-iteration change
+      // (per-iteration debug dump). The always-stored chisqval branch is
+      // overwritten with the final residual-projector value after the loop.
       {
-        const double chisq0val = rfull.dot(Vinvsparse * rfull);
+        const double chisq0val = chisq0valNow;
         const double chisqcur = chisq0val + deltachisq;
         deltachisqval = chisqcur - chisqvalold;
         chisqvalold = chisqcur;
@@ -3425,10 +4319,22 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       // Position (impact) parameters at the PCA to the beamspot: d0 (=dxy) and
       // z0 (=dz). Reference value from the converged state (cart2pca of refFts)
       // plus the reference-block update, mirroring the momentum fill above.
-      // Resolves the longstanding "fill position parameters" TODO.
       const Matrix<double, 5, 1> statepcaRef = cart2pca(refFts, *bsH);
       refParms[3] = statepcaRef[3] + dxref[3];
       refParms[4] = statepcaRef[4] + dxref[4];
+
+      // PHI IS AN ANGLE AND THE RESIDUAL IS NOT.  `genParms[2]` comes out of
+      // `cart2pca` in (-pi, pi]; `refParms[2] = phi + dxref[2]` is the fitted
+      // value and is NOT wrapped, so a track sitting on the branch cut has
+      // `refParms[2] - genParms[2] = +-2pi`, i.e. ~4e4 sigma, on the ~0.04 %
+      // of tracks that sit there.  Put the gen value on the same branch as the
+      // fitted one HERE, once, rather than leaving every reader to remember.
+      if (genpart != nullptr) {
+        const double dphi = double(refParms[2]) - double(genParms[2]);
+        if (std::abs(dphi) > M_PI) {
+          genParms[2] = float(double(genParms[2]) + 2. * M_PI * std::round(dphi / (2. * M_PI)));
+        }
+      }
 
       refParmsMomD[0] = qbpupd;
       refParmsMomD[1] = lamupd;
@@ -3445,6 +4351,10 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         
       
       niter = iiter + 1;
+      // the CONVERGED iteration's reference energy loss is the exported one,
+      // for the same reason `niter` is written here
+      dEref = float(dErefIter);
+      maxfracloss = float(maxFracLossIter);
 
       // Per-iteration trajectory record (pushed before the convergence
       // break so the break-triggering iteration is included).
@@ -3726,6 +4636,54 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     // per resolution entry (leg). Small dense blocks (<= 5x5); descending,
     // zero-padded to 5 floats. Offline validation: sum over the legs of a
     // parameter of sum(lambda) reproduces its gradllv entry.
+    // The per-hit (complement) residual branches are reset for EVERY row,
+    // not only inside the block that fills them: a track that never reaches
+    // the export (a failed fit, a gen-frozen pass) must write empty arrays
+    // rather than the previous track's.
+    phresd = 0;
+    phresnmeas = 0;
+    phresnfree = 0;
+    phreschi2 = 0.f;
+    phresvchk = 0.f;
+    phresrankgap = 0.f;
+    phresgchk = 0.f;
+    phresqrank = 0;
+    phresnref = 0;
+    phresok = false;
+    phcfnok = 0;
+    phcfms = 0.f;
+    phcfgrpclosure = 0.f;
+    phresz.clear();
+    phresraw.clear();
+    phresrow.clear();
+    phreshit.clear();
+    phresdim.clear();
+    phrescls.clear();
+    phrespiv.clear();
+    phresinflat.clear();
+    phresvarv.clear();
+    phresbv.clear();
+    phcfmsv.clear();
+    phcfdelv.clear();
+    phcfiorev.clear();
+    phcfioimv.clear();
+    phcfradrev.clear();
+    phcfradimv.clear();
+    phcfvgf.clear();
+    phcfgrpcomp.clear();
+    phcfgrpv.clear();
+    phcfgrpmsv.clear();
+    phcfgrpdelv.clear();
+    phcfgrpiorev.clear();
+    phcfgrpioimv.clear();
+    phcfgrpradrev.clear();
+    phcfgrpradimv.clear();
+    phcfgrpvqms.clear();
+    phcfgrpvqio.clear();
+    phcfhitcomp.clear();
+    phcfhitcls.clear();
+    phcfhitv.clear();
+
     if (dores && fillTrackTree_ && (fillGrads_ || fillGradsFactored_)) {
       // Influence of the noise on the 5 reference parameters:
       // W5 = Vinv F C E5 (one solve with 5 RHS + one sparse matmul); zero
@@ -3758,6 +4716,29 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         const MatrixXd B = sqrtdV * R.block(r0, r0, nb, nb) * sqrtdV;
         SelfAdjointEigenSolver<MatrixXd> eigB(B);
         reseigidx.push_back(resglobidx[ires]);
+        // which valid hit this block belongs to (-1 = material). Without it
+        // the parmtype-8/9 blocks can only be matched to hits by guessing the
+        // ordering, which breaks the moment a propagation fails.
+        reshitidx.push_back(resvalidhit_[ires]);
+        // The hit's CLASS, from the per-hit variables this maker already
+        // exports (`hitres_classes.class_of`, index into the canonical
+        // 18-entry list). It is redundant here -- an offline reader can form
+        // it from `reshitidx` + hitDetId/clusterSizeX/hitUProj/
+        // clusterChargeBin -- but writing it means the two makers' trees
+        // carry the SAME quantity under the same name, and the two-track one
+        // has no per-hit variables to form it from.
+        {
+          const int fam = ires < resfamily_.size() ? resfamily_[ires] : -1;
+          const int ih = resvalidhit_[ires];
+          int cls = -1;
+          if ((fam == 8 || fam == 9) && ih >= 0 && std::size_t(ih) < hitDetId.size() &&
+              std::size_t(ih) < clusterSizeX.size() && std::size_t(ih) < hitUProj.size() &&
+              std::size_t(ih) < clusterChargeBin.size()) {
+            cls = hitResClassIndex(int((hitDetId[ih] >> 25) & 0x7), clusterSizeX[ih], hitUProj[ih],
+                                   clusterChargeBin[ih], fam == 9);
+          }
+          reshitcls.push_back(static_cast<short>(cls));
+        }
         for (unsigned int j = 0; j < 5; ++j) {
           reseigv.push_back(j < nb ? std::max(eigB.eigenvalues()(nb - 1 - j), 0.) : 0.f);
         }
@@ -3765,7 +4746,24 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         // and the block's variance contribution to the fitted q/p
         const double vb = wqop.segment(r0, nb).transpose() * dVb * wqop.segment(r0, nb);
         resinfvarv.push_back(vb);
-        resinfcov += vb;
+        {
+          const int fam = ires < resfamily_.size() ? resfamily_[ires] : -1;
+          // The parmtype-15 blocks are a RE-PARTITION of the parmtype-10/11
+          // noise, not an addition to it, so they must NOT enter `resinfcov`:
+          // that would double-count the material share and break the offline
+          // coverage cut `|resinfcov/refCov(0,0) - 1| < 5e-3`.
+          if (fam == 15) {
+            resinfcovgrp += float(vb);
+          } else {
+            resinfcov += vb;
+          }
+          // The hit share on its own, so the two trees expose the same
+          // decomposition. Unlike the two-track maker, `resinfcov` HERE
+          // includes the hit blocks.
+          if (fam == 8 || fam == 9) {
+            resinfcovhit += float(vb);
+          }
+        }
         for (unsigned int j = 0; j < 5; ++j) {
           resinfv.push_back(j < nb ? wqop(r0 + j) : 0.f);
         }
@@ -3776,6 +4774,658 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         for (unsigned int p = 0; p < 5; ++p) {
           for (unsigned int j = 0; j < 5; ++j) {
             resinfbv.push_back(j < nb ? Bb(p, j) : 0.f);
+          }
+        }
+      }
+
+      // ---- THE RESOLUTION-CF EXPONENTS, for the q/p functional -----------
+      //
+      // Here and not offline because the block weights `sqrt(v_b/sq2)/sigma`
+      // are the FIT's own influence coefficients and do not exist until it has
+      // converged -- which is also why the raw step records had to be exported
+      // at all. Everything the offline extractor reads is in scope now, so the
+      // 6 x 64 floats it would have spent 2.2 s and 430 kB producing cost a
+      // few ms here.
+      //
+      // The inputs are the EXPORT ARRAYS, not the propagator's logs, so the
+      // pooling is identical to `cf_track_resolution.extract`'s join by
+      // construction and cannot drift from it.
+      cvhcf::TrackInput cfin;
+      // sigma from the FLOAT the tree carries, so the in-maker weight is
+      // exactly the one a reader of the same file would have recovered.
+      // Hoisted out of the fill block below because both consumers need it.
+      const double c00 = refCov[0];
+      if (exportCfExponents_ || exportPerHitResidual_) {
+        cfin.resglobidx = resglobidx.data();
+        cfin.resfamily = resfamily_.data();
+        cfin.resvarv = resinfvarv.data();
+        cfin.nres = int(std::min({resglobidx.size(), resfamily_.size(), resinfvarv.size()}));
+        cfin.ms = {msmoliidx.data(), msmoliv.data(), int(msmoliidx.size()),
+                   msmoliidx.empty() ? 0 : int(msmoliv.size() / msmoliidx.size())};
+        cfin.ioni = {ioniurbanidx.data(), ioniurbanv.data(), int(ioniurbanidx.size()),
+                     ioniurbanidx.empty() ? 0 : int(ioniurbanv.size() / ioniurbanidx.size())};
+        cfin.qsc = {ioniqscaleidx.data(), ioniqscalev.data(), int(ioniqscaleidx.size()), 2};
+        cfin.rad = {radstepidx.data(), radstepv.data(), int(radstepidx.size()), RADSTEP_STRIDE};
+        // The material-group column of each record: `msmoliv` carries it at
+        // column 9; `ioniurbanv` and `radstepv` carry it as their LAST
+        // column. Set
+        // explicitly rather than inferred so that a stride change cannot
+        // silently relabel a group as a physics quantity.
+        cfin.ms.groupCol = cfin.ms.stride >= 10 ? 9 : -1;
+        cfin.ioni.groupCol = cfin.ioni.stride - 1;
+        cfin.rad.groupCol = RADSTEP_STRIDE - 1;
+        cfin.radspec = radstepspecv.data();
+        cfin.radvgrid = radvgrid.data();
+        cfin.radnv = int(radvgrid.size());
+        cfin.sigma = c00 > 0. ? std::sqrt(c00) : 0.;
+        // THE CHARGE. `ioniurbanv`'s cs = E/p^3 is positive for every track
+        // and the physical map is d(q/p) = q cs dE, so the ionization (and
+        // radiative) step weight is charge-signed -- the same factor
+        // `Geant4ePropagator` puts into the in-fit CGF block's `gs`.
+        cfin.ioniSign = refParms[0] >= 0.f ? 1. : -1.;
+        cfin.wantDelta = true;
+        cfin.wantGroups = exportCfGroupExponents_;
+        cfin.wantGroupDelta = true;   // the q/p functional's model uses S_del
+      }
+      if (exportCfExponents_) {
+        cvhcf::TrackResult cfres;
+        cvhcf::trackExponents(cfin, cfres);
+        cfok = cfres.ok;
+        cfnblock = cfres.nblockms + cfres.nblockioni;
+        cfnpooled = cfres.npooled;
+        cfvgf = (c00 > 0.) ? float(cfres.vgauss / c00) : 0.f;
+        auto storecf = [](const std::array<double, cvhcf::kNTau> &a, std::vector<float> &v) {
+          v.resize(cvhcf::kNTau);
+          for (int j = 0; j < cvhcf::kNTau; ++j)
+            v[j] = float(a[j]);
+        };
+        storecf(cfres.S.ms, cfmsv);
+        storecf(cfres.S.del, cfdelv);
+        storecf(cfres.S.ioRe, cfiorev);
+        storecf(cfres.S.ioIm, cfioimv);
+        storecf(cfres.S.radRe, cfradrev);
+        storecf(cfres.S.radIm, cfradimv);
+        storeCfGroups(cfres);
+        // Per-hit-class Gaussian shares of the q/p variance, ascending in
+        // class. Here `vgauss` (and hence `cfqop_vgf`) IS the sum over the
+        // parmtype-8/9 blocks, so `sum_c cfqop_hitv == cfqop_vgf` exactly.
+        {
+          std::array<double, kNHitResClasses> vcls{};
+          bool anycls = false;
+          for (std::size_t i = 0; i < reshitcls.size() && i < resinfvarv.size(); ++i) {
+            const int c = reshitcls[i];
+            if (c < 0 || c >= kNHitResClasses) {
+              continue;
+            }
+            vcls[c] += resinfvarv[i];
+            anycls = true;
+          }
+          if (anycls && c00 > 0.) {
+            for (int c = 0; c < kNHitResClasses; ++c) {
+              if (vcls[c] == 0.) {
+                continue;
+              }
+              cfhitclsv.push_back(static_cast<short>(c));
+              cfhitvv.push_back(float(vcls[c] / c00));
+            }
+          }
+        }
+      }
+
+      // ---- THE PER-HIT (COMPLEMENT) RESIDUAL VECTOR ----------------------
+      //
+      // The q/p functional above, and the whole truth-referenced prototype it
+      // feeds, need `genParms`.  On DATA there is none, and what is left is
+      // the part of the constraint residual the fit has NOT absorbed:
+      //
+      //     rho = V R r = r + F dxfree ,  Cov(rho) = V R V = V - F C F^T
+      //
+      // of rank `d = ncons - nstatefree`, which for this fit
+      // (`ncons = 5 nhits + nvalid + nvalidpixel`, `nstateparms = 5(nhits+1)`)
+      // is exactly `n_meas - 5`.  The kink rows of `rho` are a deterministic
+      // function of the measurement rows, and the Mahalanobis form of a
+      // Gaussian is invariant under a bijective map of its support, so
+      // restricting to the MEASUREMENT rows loses nothing: with
+      // `G = V_mm - F_m C F_m^T` (rank d) and any `Cw Cw^T = G`,
+      // `z = Cw^+ rho_m` has `Cov(z) = I_d` and `sum_k z_k^2 = r^T R r`,
+      // the fit's own chi2.  Both identities are exported as gates
+      // (`phres_d`, `phres_chi2`, `phres_vchk`).
+      //
+      // THE BASIS is the LDL^T of `G` in MEASUREMENT-ROW ORDER, i.e. hit
+      // order inner to outer (and, within a pixel, the first local
+      // coordinate then the second), with the `n_meas - d = 5` null pivots
+      // skipped.  Component k is then that row's post-fit residual
+      // CONDITIONED ON the inner rows' -- local to a hit, which is what a
+      // term whose parameters are per-hit-class needs.  It is deliberately
+      // NOT the Kalman filter innovation sequence: that is a different
+      // orthonormal basis of the same d-space (it conditions on the RAW
+      // inner measurements and drops the FIRST five components rather than
+      // the last five), it needs a sequential filter pass that nothing here
+      // has, and the product-of-marginals likelihood the offline term forms
+      // is basis dependent, so the choice is stated and its cross-dependence
+      // measured rather than assumed away.
+      if (exportPerHitResidual_) {
+        // (1) the measurement rows in hit order, from the parmtype-8 blocks,
+        //     with the hit index, the local coordinate and the hit class.
+        std::vector<unsigned int> mrow;
+        std::vector<short> mhit, mdim, mcls;
+        mrow.reserve(nvalid + nvalidpixel);
+        for (unsigned int ires = 0; ires < resfamily_.size(); ++ires) {
+          if (resfamily_[ires] != 8) {
+            continue;
+          }
+          const unsigned int r0 = resblockrng[ires][0];
+          const unsigned int nb = resblockrng[ires][1];
+          for (unsigned int j = 0; j < nb; ++j) {
+            mrow.push_back(r0 + j);
+            mhit.push_back(static_cast<short>(resvalidhit_[ires]));
+            mdim.push_back(static_cast<short>(j));
+            mcls.push_back(-1);
+          }
+        }
+        // the class of the SECOND pixel coordinate lives on the parmtype-9
+        // entry of the same hit, so the join is on (hit, coordinate).
+        for (unsigned int ires = 0; ires < resfamily_.size(); ++ires) {
+          const int fam = resfamily_[ires];
+          if (fam != 8 && fam != 9) {
+            continue;
+          }
+          const short want = (fam == 8) ? 0 : 1;
+          const int ih = resvalidhit_[ires];
+          const short cls = ires < reshitcls.size() ? reshitcls[ires] : short(-1);
+          for (std::size_t i = 0; i < mrow.size(); ++i) {
+            if (mhit[i] == ih && mdim[i] == want) {
+              mcls[i] = cls;
+            }
+          }
+        }
+        const int nm = static_cast<int>(mrow.size());
+        phresnmeas = nm;
+        phresnfree = static_cast<int>(nstatefree);
+
+        if (nm > 5 && nstatefree > 0 && rfull.size() == Eigen::Index(ncons)) {
+          const int nfree = static_cast<int>(nstatefree);
+
+          // (2) THE WHITENING.
+          //
+          // The construction is done in the STANDARDIZED space with
+          // ORTHOGONAL operations only, so that the rank of the post-fit
+          // covariance is IMPOSED by a projector rather than discovered from
+          // a cancellation: its null eigenvalues sit at 1e-16 of the unit
+          // diagonal, where the Schur complement `G = V_mm - F_m C F_m^T`
+          // leaves them at ~1e-9 -- there the five null directions are a
+          // DIFFERENCE of two nearly equal numbers, taken through the
+          // ill-conditioned solve `C = (F^T V^-1 F)^-1` (a thin layer gives
+          // its kink block very small process noise).  With `Fw = V^-1/2 F`,
+          //     R = V^-1/2 (I - P) V^-1/2 ,   P = Fw (Fw^T Fw)^-1 Fw^T
+          //                                     = Q1 Q1^T
+          // is an identity, so the projector is a QR of `Fw` and never an
+          // inverse:
+          //   * `s = (I - Q1 Q1^T) V^-1/2 r` is the standardized post-fit
+          //     residual and `chi2 = |s|^2 = r^T R r`;
+          //   * `Gs = I - Q1_m Q1_m^T` is its covariance on the measurement
+          //     rows, and its null eigenvalues sit at 1e-16 of the unit
+          //     diagonal because `Q1_m Q1_m^T` is a submatrix of an
+          //     orthogonal projector and not a cancelling product of solves.
+          // `V` is block diagonal over exactly the blocks `resblockrng`
+          // enumerates (5 process-noise rows per propagation, 1 or 2 per
+          // valid hit), so `V^-1/2` is a per-block symmetric square root of
+          // `Vinvfull` and costs nothing.
+          std::vector<std::array<unsigned int, 2>> vblk;
+          {
+            std::vector<char> cov(ncons, 0);
+            for (unsigned int ires = 0; ires < resfamily_.size(); ++ires) {
+              const int fam = resfamily_[ires];
+              if (fam != 8 && fam != 10) {
+                continue;
+              }
+              const unsigned int r0 = resblockrng[ires][0];
+              const unsigned int nb = resblockrng[ires][1];
+              vblk.push_back({{r0, nb}});
+              for (unsigned int j = 0; j < nb; ++j) {
+                cov[r0 + j] = 1;
+              }
+            }
+            // whatever the resolution families do not cover (the beamspot
+            // constraint rows) becomes its own contiguous block.
+            unsigned int i = 0;
+            while (i < unsigned(ncons)) {
+              if (cov[i]) {
+                ++i;
+                continue;
+              }
+              unsigned int j = i;
+              while (j < unsigned(ncons) && !cov[j]) {
+                ++j;
+              }
+              vblk.push_back({{i, j - i}});
+              i = j;
+            }
+          }
+          MatrixXd Vih = MatrixXd::Zero(ncons, ncons);
+          for (auto const &b : vblk) {
+            const unsigned int r0 = b[0];
+            const unsigned int nb = b[1];
+            const MatrixXd Vib = Vinvfull.block(r0, r0, nb, nb);
+            SelfAdjointEigenSolver<MatrixXd> esb(0.5*(Vib + Vib.transpose()));
+            Vih.block(r0, r0, nb, nb) =
+                esb.eigenvectors()*esb.eigenvalues().cwiseMax(0.).cwiseSqrt().asDiagonal()*
+                esb.eigenvectors().transpose();
+          }
+
+          MatrixXd Ffree(ncons, nfree);
+          for (int i = 0; i < int(ncons); ++i) {
+            for (int j = 0; j < nfree; ++j) {
+              Ffree(i, j) = Ffull(i, freestateidxs[j]);
+            }
+          }
+          const MatrixXd Fw = Vih*Ffree;
+          const VectorXd sfull = Vih*rfull;
+          ColPivHouseholderQR<MatrixXd> qrFw(Fw);
+          qrFw.setThreshold(1e-12);
+          const int qrank = int(qrFw.rank());
+          phresqrank = qrank;
+          const MatrixXd Q1 = qrFw.householderQ()*MatrixXd::Identity(ncons, qrank);
+          const VectorXd qts = Q1.transpose()*sfull;
+          const VectorXd sstd = sfull - Q1*qts;
+
+          MatrixXd Q1m(nm, qrank);
+          VectorXd sm(nm);
+          for (int i = 0; i < nm; ++i) {
+            Q1m.row(i) = Q1.row(mrow[i]);
+            sm(i) = sstd(mrow[i]);
+          }
+          MatrixXd G = -(Q1m*Q1m.transpose());
+          G.diagonal().array() += 1.;
+
+          // (3) hit-order factorization of `Gs`, rank imposed at
+          //     `dexp = ncons - rank(Fw)`.  `S = U sqrt(Lambda)` truncated to
+          //     `dexp`, then modified Gram-Schmidt (with one
+          //     re-orthogonalization pass) on the ROWS of `S` in
+          //     measurement-row order: row k contributes a component iff it
+          //     is not already in the span of the inner rows, which is a test
+          //     on a NORM.  What comes out is the LDL^T's own triangular
+          //     whitener, `z_k = (s_k - sum_{j<k} c_kj z_j)/|e_k|`, computed
+          //     stably.  `phres_rankgap` is lambda_dexp/lambda_(dexp+1), so
+          //     the rank decision is auditable rather than trusted.
+          int dexp = int(ncons) - qrank;
+          if (dexp > nm) {
+            dexp = nm;
+          }
+          std::vector<double> piv(nm, 0.);
+          std::vector<int> keep;
+          MatrixXd Psi;
+          VectorXd zvec;
+          if (dexp > 0) {
+            SelfAdjointEigenSolver<MatrixXd> esG(G);
+            const VectorXd ev = esG.eigenvalues();  // ascending
+            MatrixXd S(nm, dexp);
+            for (int c = 0; c < dexp; ++c) {
+              const int idx = nm - 1 - c;
+              S.col(c) = esG.eigenvectors().col(idx)*std::sqrt(std::max(ev(idx), 0.));
+            }
+            phresrankgap = (dexp < nm && ev(nm - dexp) > 0.)
+                               ? float(ev(nm - dexp)/std::max(std::abs(ev(nm - dexp - 1)), 1e-300))
+                               : 0.f;
+
+            MatrixXd Qm = MatrixXd::Zero(dexp, dexp);
+            MatrixXd T = MatrixXd::Zero(dexp, nm);
+            int nkeep = 0;
+            const double gtol = 1e-12;
+            for (int k = 0; k < nm && nkeep < dexp; ++k) {
+              VectorXd e = S.row(k).transpose();
+              VectorXd trow = VectorXd::Zero(nm);
+              trow(k) = 1.;
+              const double s0 = e.squaredNorm();
+              for (int pass = 0; pass < 2; ++pass) {
+                for (int j = 0; j < nkeep; ++j) {
+                  const double c = Qm.row(j).dot(e);
+                  e -= c*Qm.row(j).transpose();
+                  trow -= c*T.row(j).transpose();
+                }
+              }
+              const double n2 = e.squaredNorm();
+              if (!(n2 > gtol*std::max(s0, 1e-300))) {
+                continue;
+              }
+              const double nn = std::sqrt(n2);
+              Qm.row(nkeep) = e.transpose()/nn;
+              T.row(nkeep) = trow.transpose()/nn;
+              piv[k] = n2;
+              keep.push_back(k);
+              ++nkeep;
+            }
+            if (nkeep > 0) {
+              Psi = T.topRows(nkeep).transpose();
+              zvec = T.topRows(nkeep)*sm;
+              // the whitener's own closure, against the SAME `Gs` it was
+              // built from: this separates a defect in the factorization from
+              // a defect in the influence `W`, which additionally goes
+              // through `V^-1/2` and `Q1`.
+              const MatrixXd PGP = Psi.transpose()*G*Psi;
+              double gc = 0.;
+              for (int kk = 0; kk < nkeep; ++kk) {
+                gc = std::max(gc, std::abs(PGP(kk, kk) - 1.));
+              }
+              phresgchk = float(gc);
+            }
+          }
+          const int nd = static_cast<int>(keep.size());
+          phresd = nd;
+
+          if (nd > 0) {
+            // (4) the per-component influence.  `z_k = Wstd[:,k]^T (V^-1/2 n)`
+            //     with `Wstd = E_m Psi - Q1 Q1_m^T Psi`, so in the noise's own
+            //     units `W = V^-1/2 Wstd`, and
+            //     `sum_b W_b^T dV_b W_b = |Wstd_k|^2 = 1` by construction of
+            //     the whitener -- now entirely out of an orthogonal projector.
+            MatrixXd Wstd = -(Q1*(Q1m.transpose()*Psi));
+            for (int i = 0; i < nm; ++i) {
+              Wstd.row(mrow[i]) += Psi.row(i);
+            }
+            const MatrixXd W = Vih*Wstd;
+
+            double chi2z = 0.;
+            for (int kk = 0; kk < nd; ++kk) {
+              const int k = keep[kk];
+              const double zk = zvec(kk);
+              chi2z += zk*zk;
+              phresz.push_back(float(zk));
+              phresrow.push_back(static_cast<short>(k));
+              phreshit.push_back(mhit[k]);
+              phresdim.push_back(mdim[k]);
+              phrescls.push_back(mcls[k]);
+              phrespiv.push_back(float(piv[k]));
+              phresinflat.push_back(float(G(k, k)/piv[k]));
+            }
+            phreschi2 = float(chi2z);
+            // the STANDARDIZED post-fit residual before whitening, in
+            // measurement-row order: dimensionless, and what a
+            // density-vs-model plot wants.
+            phresraw.reserve(nm);
+            for (int i = 0; i < nm; ++i) {
+              phresraw.push_back(float(sm(i)));
+            }
+
+            // (3b) THE TRUTH-REFERENCED COMPONENTS, appended to the same
+            //      arrays.  `r = refParms - genParms` whitened by the lower
+            //      Cholesky factor of `refCov` is the truth-referenced
+            //      residual, and its influence
+            //      is `W5 L^-T` -- the SAME `W5` the q/p export above already
+            //      built.  Carrying it here rather than in a second
+            //      production means the two terms are read out of one file
+            //      with one convention, which is what the complementarity
+            //      test (`F^T R = 0` -> the two are uncorrelated, so their
+            //      information must add) and the joint fit need.
+            //
+            //      Component 0 of this set IS the established q/p functional:
+            //      column 0 of `L^-T` is `e_0/sigma_qp`, so its per-block
+            //      weight `sqrt(v^(0)_b/sq2)` equals the `cfqop_*` weight
+            //      `sqrt(v_b/sq2)/sigma` term by term.  That makes the
+            //      agreement of `phcf_*` component `d` with `cfqop_*` a
+            //      closure test of the whole per-component route, and it is
+            //      why nothing here is a second implementation of the model.
+            //
+            //      On DATA there is no `genParms`, `nref` is 0, and only the
+            //      per-hit components survive -- which is the point of the
+            //      whole exercise.
+            MatrixXd Wall = W;
+            VectorXd zall(nd);
+            for (int kk = 0; kk < nd; ++kk) {
+              zall(kk) = zvec(kk);
+            }
+            int nref = 0;
+            if (perHitRefComponents_ && genpart != nullptr) {
+              Matrix<double, 5, 5> Cref;
+              for (unsigned int a = 0; a < 5; ++a) {
+                for (unsigned int b = 0; b < 5; ++b) {
+                  Cref(a, b) = double(refCov[5*std::min(a, b) + std::max(a, b)]);
+                }
+              }
+              const LLT<Matrix<double, 5, 5>> llt(Cref);
+              if (llt.info() == Eigen::Success) {
+                const Matrix<double, 5, 5> Lref = llt.matrixL();
+                Matrix<double, 5, 1> rres;
+                for (unsigned int a = 0; a < 5; ++a) {
+                  rres(a) = double(refParms[a]) - double(genParms[a]);
+                }
+                const Matrix<double, 5, 1> zref = Lref.triangularView<Eigen::Lower>().solve(rres);
+                // W5 L^-T : the whitened influence, column j of which is the
+                // influence of the noise on `zref(j)`.
+                const Matrix<double, 5, 5> LinvT =
+                    Lref.transpose().triangularView<Eigen::Upper>().solve(
+                        Matrix<double, 5, 5>::Identity());
+                const MatrixXd Wref = W5*LinvT;
+                nref = 5;
+                Wall.conservativeResize(ncons, nd + nref);
+                Wall.rightCols(nref) = Wref;
+                zall.conservativeResize(nd + nref);
+                for (int j = 0; j < nref; ++j) {
+                  zall(nd + j) = zref(j);
+                  phresz.push_back(float(zref(j)));
+                  phresrow.push_back(static_cast<short>(-1 - j));
+                  phreshit.push_back(-1);
+                  phresdim.push_back(-1);
+                  phrescls.push_back(-1);
+                  phrespiv.push_back(1.f);
+                  phresinflat.push_back(float(Cref(j, j)/std::max(Lref(j, j)*Lref(j, j), 1e-300)));
+                }
+              }
+            }
+            phresnref = nref;
+            const int ntot = nd + nref;
+
+            // (4) the per-(block, component) variance shares, signed by the
+            //     qop-row influence.  `sum_b v^(k)_b == 1` over the
+            //     non-parmtype-15 blocks (15 is a RE-PARTITION of 10/11, not
+            //     an addition to it) -- the export's own closure test.
+            const std::size_t nres = dVs.size();
+            std::vector<std::vector<float>> shares(ntot, std::vector<float>(nres, 0.f));
+            std::vector<std::vector<float>> signs(ntot, std::vector<float>(nres, 1.f));
+            std::vector<double> vsum(ntot, 0.);
+            phresvarv.assign(static_cast<std::size_t>(ntot)*nres, 0.f);
+            for (std::size_t ires = 0; ires < nres; ++ires) {
+              const unsigned int r0 = resblockrng[ires][0];
+              const unsigned int nb = resblockrng[ires][1];
+              MatrixXd dVb = MatrixXd::Zero(nb, nb);
+              for (int c = 0; c < dVs[ires].outerSize(); ++c) {
+                for (SparseMatrix<double>::InnerIterator it(dVs[ires], c); it; ++it) {
+                  const int rr = int(it.row()) - int(r0);
+                  const int cc = int(it.col()) - int(r0);
+                  if (rr >= 0 && rr < int(nb) && cc >= 0 && cc < int(nb)) {
+                    dVb(rr, cc) = it.value();
+                  }
+                }
+              }
+              const int fam = ires < resfamily_.size() ? resfamily_[ires] : -1;
+              // THE PER-COMPONENT INFLUENCE VECTORS `A_b = W_b^T dV_b^{1/2}`
+              // (ntot x nb, dof-padded to 5), the exact analogue of the q/p
+              // export's `resinfbv`.  `|A_b[k]|^2` is the variance share
+              // below, so this adds nothing to the likelihood -- what it adds
+              // is `A_b[j] . A_b[k]`, and with it the FOURTH CROSS CUMULANT
+              // between components, which is the size of what the
+              // product-of-marginals likelihood drops.  For a multiple-
+              // scattering block the two projected angles are iso-Gaussian
+              // plus a common radial tail, so
+              //   kappa(z_j,z_j,z_k,z_k) ~ (A_j.A_k)^2 + |A_j|^2|A_k|^2/2
+              // against a diagonal 3/2 |A_j|^4, and neither term is available
+              // from the variance shares alone.
+              MatrixXd sqrtdVb;
+              if (perHitInfluenceBlocks_) {
+                SelfAdjointEigenSolver<MatrixXd> esv(dVb);
+                // dV of a pixel's parmtype-8 block is INDEFINITE (zero on the
+                // yy diagonal, the xy correlation off it), so the negative
+                // eigenvalue is clamped exactly as the `resinfbv` export
+                // already does. |Vxy| is small, hence the 1e-7 closure of
+                // `sum_b B_b B_b^T` against `refCov`.
+                sqrtdVb = esv.eigenvectors()*
+                          esv.eigenvalues().cwiseMax(0.).cwiseSqrt().asDiagonal()*
+                          esv.eigenvectors().transpose();
+              }
+              // THE BLOCK'S NOISE DIRECTION, and with it the SIGN of its
+              // weight.  The ionization (and radiative) CF is not even in
+              // its weight -- an energy loss goes one way -- so each
+              // component needs its own sign.  `dQI` is rank one: in the
+              // curvilinear frame it is `e_0 e_0^T sigma^2`, and the
+              // local-frame rotation `Hm` turns that into `u u^T sigma^2`
+              // with `u = Hm e_0` spread over all five rows, so the signed
+              // coefficient is `W_b . u` and NOT `W[r0, k]`.  `u` is oriented
+              // by its qop component, and the product carries one further
+              // MINUS because the process-noise constraint row is built as
+              // (propagated - state) rather than the other way round.
+              //
+              // The convention is checked, not asserted: reference component
+              // 0 IS the q/p functional (see (3b)), so it must reproduce the
+              // validated `cfqop_ioni_im` / `cfqop_rad_im`, and with the
+              // signed coefficient `W_b . u` it does, to the 1.2e-7 of their
+              // float32 storage.  The even families (`ms`, `del`, `ioni_re`,
+              // `rad_re`) are insensitive to the sign, as they must be.
+              VectorXd udir = VectorXd::Zero(nb);
+              if (fam == 11 && nb > 0) {
+                SelfAdjointEigenSolver<MatrixXd> esb(dVb);
+                int imax = 0;
+                for (int q = 1; q < int(nb); ++q) {
+                  if (std::abs(esb.eigenvalues()(q)) > std::abs(esb.eigenvalues()(imax))) {
+                    imax = q;
+                  }
+                }
+                udir = esb.eigenvectors().col(imax);
+                if (udir(0) < 0.) {
+                  udir = -udir;
+                }
+              }
+              for (int kk = 0; kk < ntot; ++kk) {
+                const VectorXd wk = Wall.block(r0, kk, nb, 1);
+                double v = wk.transpose()*dVb*wk;
+                if (!(v > 0.)) {
+                  v = 0.;
+                }
+                const float sg = (fam == 11 && wk.dot(udir) > 0.) ? -1.f : 1.f;
+                shares[kk][ires] = float(v);
+                signs[kk][ires] = sg;
+                phresvarv[static_cast<std::size_t>(kk)*nres + ires] = float(sg*v);
+                if (perHitInfluenceBlocks_) {
+                  const VectorXd ab = sqrtdVb*wk;
+                  for (unsigned int j = 0; j < 5; ++j) {
+                    phresbv.push_back(j < nb ? float(ab(j)) : 0.f);
+                  }
+                }
+                if (fam != 15) {
+                  vsum[kk] += v;
+                }
+              }
+            }
+            double vchk = 0.;
+            for (int kk = 0; kk < ntot; ++kk) {
+              vchk = std::max(vchk, std::abs(vsum[kk] - 1.));
+            }
+            phresvchk = float(vchk);
+
+            // (5) the CF exponents, one `cvhcf` pass per component.  The
+            //     standardization is 1 (z already has unit variance), so the
+            //     block weight is `sqrt(v^(k)_b / sq2)` -- exactly what
+            //     `extract_res5.py` evaluates offline.  `phcf_msec` is the
+            //     wall clock of this loop, to be read against the ~2 s the
+            //     fit itself costs.
+            const auto tcf0 = std::chrono::steady_clock::now();
+            const int nresi = int(std::min(resglobidx.size(), resfamily_.size()));
+            double grpclos = 0.;
+            for (int kk = 0; kk < ntot; ++kk) {
+              cvhcf::TrackInput ci = cfin;
+              ci.sigma = 1.;
+              ci.ioniSign = refParms[0] >= 0.f ? 1. : -1.;
+              if (perHitShareMin_ > 0.) {
+                for (auto &x : shares[kk]) {
+                  if (double(x) < perHitShareMin_) {
+                    x = 0.f;
+                  }
+                }
+              }
+              ci.resvarv = shares[kk].data();
+              ci.ressgn = signs[kk].data();
+              ci.nres = nresi;
+              ci.wantDelta = true;
+              ci.wantGroups = perHitCfGroups_;
+              ci.wantGroupDelta = true;
+              cvhcf::TrackResult cr;
+              cvhcf::trackExponents(ci, cr);
+              if (cr.ok) {
+                ++phcfnok;
+              }
+              for (int j = 0; j < cvhcf::kNTau; ++j) {
+                phcfmsv.push_back(float(cr.S.ms[j]));
+                phcfdelv.push_back(float(cr.S.del[j]));
+                phcfiorev.push_back(float(cr.S.ioRe[j]));
+                phcfioimv.push_back(float(cr.S.ioIm[j]));
+                phcfradrev.push_back(float(cr.S.radRe[j]));
+                phcfradimv.push_back(float(cr.S.radIm[j]));
+              }
+              phcfvgf.push_back(float(cr.vgauss));
+              if (perHitCfGroups_) {
+                std::array<double, cvhcf::kNTau> sms{}, sdel{}, sre{}, sim{}, srre{}, srim{};
+                for (auto const &gg : cr.groups) {
+                  phcfgrpcomp.push_back(static_cast<short>(kk));
+                  phcfgrpv.push_back(static_cast<short>(gg.group));
+                  phcfgrpvqms.push_back(float(gg.vqms));
+                  phcfgrpvqio.push_back(float(gg.vqio));
+                  for (int j = 0; j < cvhcf::kNTau; ++j) {
+                    phcfgrpmsv.push_back(float(gg.S.ms[j]));
+                    phcfgrpdelv.push_back(float(gg.S.del[j]));
+                    phcfgrpiorev.push_back(float(gg.S.ioRe[j]));
+                    phcfgrpioimv.push_back(float(gg.S.ioIm[j]));
+                    phcfgrpradrev.push_back(float(gg.S.radRe[j]));
+                    phcfgrpradimv.push_back(float(gg.S.radIm[j]));
+                    sms[j] += gg.S.ms[j];
+                    sdel[j] += gg.S.del[j];
+                    sre[j] += gg.S.ioRe[j];
+                    sim[j] += gg.S.ioIm[j];
+                    srre[j] += gg.S.radRe[j];
+                    srim[j] += gg.S.radIm[j];
+                  }
+                }
+                double dmax = 0., smax = 0.;
+                auto cmp = [&](const std::array<double, cvhcf::kNTau> &a,
+                               const std::array<double, cvhcf::kNTau> &b) {
+                  for (int j = 0; j < cvhcf::kNTau; ++j) {
+                    dmax = std::max(dmax, std::abs(a[j] - b[j]));
+                    smax = std::max(smax, std::abs(b[j]));
+                  }
+                };
+                cmp(sms, cr.S.ms);
+                cmp(sdel, cr.S.del);
+                cmp(sre, cr.S.ioRe);
+                cmp(sim, cr.S.ioIm);
+                cmp(srre, cr.S.radRe);
+                cmp(srim, cr.S.radIm);
+                if (smax > 0.) {
+                  grpclos = std::max(grpclos, dmax/smax);
+                }
+              }
+              // the component's Gaussian variance by hit class; sums to
+              // `phcf_vgf` of the same component by construction.
+              {
+                std::array<double, kNHitResClasses> vcls{};
+                for (std::size_t i = 0; i < reshitcls.size() && i < shares[kk].size(); ++i) {
+                  const int c = reshitcls[i];
+                  if (c < 0 || c >= kNHitResClasses) {
+                    continue;
+                  }
+                  vcls[c] += shares[kk][i];
+                }
+                for (int c = 0; c < kNHitResClasses; ++c) {
+                  if (vcls[c] == 0.) {
+                    continue;
+                  }
+                  phcfhitcomp.push_back(static_cast<short>(kk));
+                  phcfhitcls.push_back(static_cast<short>(c));
+                  phcfhitv.push_back(float(vcls[c]));
+                }
+              }
+            }
+            phcfgrpclosure = float(grpclos);
+            phcfms = float(std::chrono::duration<double, std::milli>(
+                               std::chrono::steady_clock::now() - tcf0).count());
+            phresok = (nd == dexp) && (nd == nm - 5) && (qrank == nfree) && (phcfnok == ntot);
           }
         }
       }
@@ -4039,6 +5689,33 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 // dxdparms += (M*dVRrsparse).transpose();
 // }
     
+    // The marginal objective the log-det gradient differentiates, in double.
+    // Same definition and same code as the two-track maker's, so the two
+    // trees' finite-difference checks are the same check.
+    if (exportObjective_) {
+      objchisq = rfull.dot(Rr);
+      // ln|V| = -ln|Vinv| as a PSEUDO-determinant: Vinv is rank deficient by
+      // construction (the deweighted strip coordinates carry exactly zero
+      // weight).  The null space is structural, so it cancels in a finite
+      // difference; `objnullv` records its size so that can be asserted.
+      const SelfAdjointEigenSolver<MatrixXd> esV(Vinvfull, EigenvaluesOnly);
+      const double lmaxV = esV.eigenvalues().maxCoeff();
+      const double cutV = 1e-12 * std::max(lmaxV, 0.);
+      double lsum = 0.;
+      objnullv = 0;
+      for (int k = 0; k < esV.eigenvalues().size(); ++k) {
+        const double ev = esV.eigenvalues()(k);
+        if (ev > cutV) {
+          lsum += std::log(ev);
+        } else {
+          ++objnullv;
+        }
+      }
+      objlogdetv = -lsum;
+      objlogdetc = Cinvd.vectorD().array().abs().log().sum();
+      objval = objchisq + objlogdetv + objlogdetc;
+    }
+
     gradchisqv.clear();
     gradchisqv.resize(nparsfinal, 0.);
 

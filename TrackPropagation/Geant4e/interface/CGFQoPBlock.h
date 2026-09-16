@@ -1,0 +1,661 @@
+#ifndef TrackPropagation_Geant4e_CGFQoPBlock_h
+#define TrackPropagation_Geant4e_CGFQoPBlock_h
+
+// Cumulant-generating-function (CGF) description of the q/p process-noise
+// block, and its FISHER INFORMATION.
+//
+// WHAT THIS IS FOR
+// ----------------
+// The CVH fit weights each process-noise block by the inverse of a VARIANCE
+// (Geant4ePropagator::computeErrorIoni, accumulated into errMSIout(0,0)).
+// For the Urban ionization model that variance does not exist without a
+// truncation: the delta-ray channel has a 1/E^2 single-collision spectrum, so
+// the second moment is dominated by the hard edge and is only finite because
+// G4UniversalFluctuationForExtrapolator truncates the spectrum at a fixed
+// QUANTILE alpha = 0.999. That truncation is a convention, it is not additive
+// under step subdivision, and it sets the fit's block weights.
+//
+// The statistically correct weight is the FISHER INFORMATION of the block,
+//
+//     I = INT (dp/dr)^2 / p dr ,      sigma2_eff = 1/I
+//
+// which is finite with no truncation anywhere (heavy-tailed ML: the estimator
+// variance is 1/I even where the data variance is divergent). I is a property
+// of the block's DISTRIBUTION, not of the realised residual, so it is a
+// data-independent weight -- the Fisher-scoring, not the Newton, choice.
+//
+// HOW I IS OBTAINED
+// -----------------
+// By EXACT FFT INVERSION of the block characteristic function, never from a
+// saddlepoint. That is not a preference: the saddlepoint Fisher route was
+// measured to be 5-38 % wrong and, worse, unpredictably so (adding a channel
+// carrying 5e-11 of the variance moved it by 33 %), because I is dominated by
+// the delta-ray HARD EDGE which an exponential-tilting expansion places in the
+// wrong location. See Documents/Resolution/NOTES_XXII_msrad.md section 4.
+//
+// SCOPE OF THIS IMPLEMENTATION
+// ----------------------------
+//   * IONIZATION channel only. On the reference pT = 3 track the multiple
+//     scattering and radiative channels move 1/I of the q/p block by +0.0 %,
+//     +0.05 % and +0.15 % at planes 0 / 9 / 18 (up to +1.8 % at pT = 100).
+//     That is a known, bounded and one-signed omission, quantified offline,
+//     NOT a claim that they are negligible in general.
+//   * SCALAR: the q/p (curvilinear component 0) marginal of the block. The
+//     joint 5x5 CGF is not attempted.
+//   * All three ionization regimes ARE covered: the Gaussian regime, the Urban
+//     1/E^2 compound Poisson, and the exact knock-on cross section of
+//     CVH_IONI_EXACTDELTA together with the Kokoulin radiative correction.
+//
+// UNITS AND THE STANDARDIZATION CONVENTION
+// ----------------------------------------
+// Per step the Urban record carries energies in MeV; `gs` is the full linear
+// map from that step's energy loss to the block's residual coordinate,
+//
+//     gs = w_s * cs_s * 1e-3 / sigma        [ (q/p units) / MeV ]
+//
+// with w_s the transport weight of the step's noise to the end of the block
+// and cs = E/p^3 [GeV^-2] the propagator's own dE -> d(q/p) map. `sigma` is a
+// purely INTERNAL numerical scale that keeps the inversion grid conditioned;
+// the returned inverse information is in units of sigma^2, and the caller
+// multiplies it back. It is not a modelling choice and the answer must not
+// depend on it (checked by scanning it).
+//
+// Note the transport weight is folded into `gs`, i.e. into the RESIDUAL
+// coordinate, and never into the CGF parameters themselves. That is the
+// convention NOTES_EXPORTS.md section 4.3 requires: it is what makes
+// d eta_b/d a = 0 exactly for the alignment and B-field global parameters,
+// and therefore what keeps the existing 50-mode scalar-potential production
+// valid.
+
+#include "FWCore/ParameterSet/interface/ParameterSet.h"
+#include <cstddef>
+#include <complex>
+#include <vector>
+
+namespace cvhcgf {
+  // CONFIGURATION.  These switches are set from the Geant4ePropagator
+  // ESProducer's ParameterSet -- `GeantPropagatorESProducer` calls
+  // `cvhcgf::configure(pset)` in its constructor -- and NOT from the
+  // environment.  That is the CMSSW convention and it buys three things the
+  // getenv readers these replaced could not:
+  //
+  //   * PROVENANCE.  The PSet is written into the output file, so
+  //     `edmProvDump` recovers exactly which corrections produced it.  An
+  //     environment variable leaves no trace in the data, which meant a model
+  //     file could not be told apart from one exported with different physics.
+  //   * VALIDATION.  A misspelled parameter is a configuration error at
+  //     construction; a misspelled CVH_* was silently the default.
+  //   * A SINGLE SOURCE.  The defaults live in `Config`'s member initializers
+  //     and are mirrored once in Geant4ePropagator_cfi.py, instead of being
+  //     spread over a dozen `envFlag(..., default)` call sites.
+  //
+  // `config()` THROWS if `configure()` has not run.  That is deliberate: a
+  // silent default is what made the environment readers hard to audit, so an
+  // unconfigured job must fail rather than quietly pick physics.
+  struct Switches {
+    // The energy-loss corrections.  DEFAULT-ON: the model should model what
+    // Geant4 actually runs.  See the block comment in CGFQoPBlock.cc.
+    bool ioniExactDelta = true;
+    bool ioniKokoulin = true;
+    bool referenceChargeAware = true;
+    bool referenceSpeciesDedx = true;
+    bool referenceHadRad = true;
+    // Diagnostics, default-OFF: these do NOT move the model toward the sim.
+    bool referenceIonOnly = false;
+    bool ioniUrban2021 = false;
+    // Diagnostics that live in Geant4 classes with no ParameterSet of their
+    // own (the physics list and the extrapolator tables), so they ride on the
+    // propagator's PSet rather than on getenv.
+    bool dumpEmParameters = false;
+    bool emHarmonise = false;
+    // dE/dx table scale.  A probe for the J/psi mass bias, not a tune.
+    double dedxScale = 1.0;
+    // Quadrature/table sizes.
+    int speciesDedxNbin = 16;
+    int ioniKokoulinNbin = 96;
+    // Log-T buckets of the Kokoulin term inside the BLOCK CGF. Separate from
+    // `ioniKokoulinNbin` because the two are used in completely different
+    // regimes: that one is a Simpson rule evaluated ONCE per step, this one is
+    // a piecewise-constant bucketing evaluated at every point of the inversion
+    // grid, where it dominates the cost of the whole transform.
+    // 0 = omit; see the cfi for the cost and the size of what is omitted.
+    int ioniKokoulinCgfNbin = 0;
+    // Radiative (brems + pair) channel in the block CGF. Default OFF, and the
+    // cfi carries the measurement that justifies it.
+    bool cgfRadiative = false;
+    // THE CGF WEIGHT ITSELF.
+    //   0 = the Gaussian weight (diagnostic only -- see cgfQoPMode's comment
+    //       in the cfi),
+    //   1 = the Fisher weight (PRODUCTION DEFAULT),
+    //   2 = 1 plus the per-leg diagnostic print,
+    //   3 = 1 plus the IRLS re-centring (prototype).
+    // Configured rather than environment-driven: which weight produced a file
+    // has to be recoverable from the file.
+    int cgfQoPMode = 1;
+    // How often the block is recomputed: 0 = freeze after the first
+    // Gauss-Newton sweep, N > 0 = every N sweeps. Freezing is the default and
+    // is justified rather than assumed -- the fixed point is schedule-
+    // independent to 1.4e-6 and freezing is 14x cheaper.
+    int cgfQoPRefresh = 0;
+    // SHRINKAGE on the mode-3 re-centring, in [0, 1].
+    //
+    // The re-centring is a NOISY BUT CORRECT correction: measured against gen
+    // truth it is anti-correlated with the residual (2 Cov/Var = -5.4e-3, the
+    // only thing in this programme that is) while adding +6.8e-3 of scatter,
+    // because `psi` is evaluated at the REALISED per-block residual, which is
+    // itself an estimate. The net is a wash at full size. Scaling it by
+    // `lambda` gives dVar = lambda^2 Var(delta) + lambda 2Cov, minimised at
+    // lambda* = -Cov/Var(delta) = 0.40 with a predicted -1.1e-3 on the
+    // residual variance.
+    double cgfRecentreDamping = 1.0;
+    double ioniExactDeltaT0 = 0.0;
+  };
+
+  // Called once, from GeantPropagatorESProducer's constructor.  Calling it
+  // twice with DIFFERENT values throws: the readers below are process-global
+  // singletons (they configure Geant4 model classes), so two propagators
+  // asking for different physics cannot both be served, and silently honouring
+  // the first would be worse than saying so.
+  void configure(const edm::ParameterSet &pset);
+  const Switches &switches();
+
+  // THE SINGLE READER of CVH_IONONLY.
+  //
+  // The reference dE/dx table drops the radiative mean when this is set, so
+  // the block model must supply that mean instead. The two were measured to
+  // differ by EXACTLY a translation, which means each alone is a bias and the
+  // pair is a no-op: at pT = 3 the reference moves by 1.03e-5 relative on q/p
+  // at the outermost plane, i.e. at the Z-mass target precision.
+  //
+  // Having ONE function produce the value, called by both the energy-loss
+  // table and the block model, is what makes the coupling structural: there is
+  // no second place that could read a different answer. Do not add another
+  // getenv("CVH_IONONLY") anywhere.
+  bool referenceIsIonOnly();
+
+  // THE SINGLE READER of CVH_IONI_KOKOULIN.
+  //
+  // Geant4's G4MuBetheBlochModel multiplies the knock-on cross section by
+  // R. Kokoulin's radiative correction
+  //
+  //     f_K(T) = 1 + (alpha/2pi) a1 (a3 - a1),
+  //     a1 = ln(1 + 2T/m_e),  a3 = ln(4 E (E - T)/M^2),
+  //
+  // for T above 100 keV and muons above 1 GeV. It reaches +6 % (pT = 3) to
+  // +9.4 % (pT = 40) at the hard end of the spectrum.
+  //
+  // The MEAN already carries it: Geant4's own ComputeDEDXPerVolume /
+  // CrossSectionPerVolume include it, so the dE/dx table -- and therefore the
+  // reference trajectory -- is already correct (matched to 5 significant
+  // digits, NOTES_SAMPLERGAP section 2b). What does NOT carry it is the
+  // FLUCTUATION: the exact-delta channel of
+  // G4UniversalFluctuationForExtrapolator is the tree-level PDG spectrum, so
+  // both the variance it returns (the fit's Q) and the offline analytic CF
+  // built from its record are missing the correction.
+  //
+  // Having ONE function name -- and ONE environment variable -- govern both
+  // is the same structural coupling as referenceIsIonOnly above: the C++
+  // variance path calls this, and the offline consumer
+  // (cf_track_resolution.IONI_KOKOULIN) derives its default from the SAME
+  // variable CVH_IONI_KOKOULIN. "On" therefore means on in the fit's Q and in
+  // the model the closure is measured with, and there is no convention for a
+  // second site to get wrong. Do not add another getenv("CVH_IONI_KOKOULIN")
+  // anywhere.
+  //
+  // DEFAULT OFF (see the block comment on the four defaults in
+  // CGFQoPBlock.cc; briefly default-ON 2026-08-16, reverted). Unset or
+  // CVH_IONI_KOKOULIN=0 means not one line of the correction runs and the
+  // export is bit-identical to the historical one (proven at 27/27 branches,
+  // NOTES_QVALID s3). CVH_IONI_KOKOULIN=1 enables it.
+  bool ioniKokoulinEnabled();
+
+  // Number of Simpson intervals of the log-T quadrature that the fluctuation
+  // model uses for the Kokoulin variance integral (CVH_IONI_KOKOULIN_NBIN,
+  // default 96). A numerical-accuracy knob only -- exposed so convergence can
+  // be MEASURED rather than asserted.
+  int ioniKokoulinNbin();
+
+  // The CGF weight mode and refresh period. Single readers, as with every
+  // other switch here; the maker asks cvhcgf rather than carrying its own
+  // copy of the parameter, so the propagator and the fit cannot disagree
+  // about which estimator is running.
+  int cgfQoPMode();
+  int cgfQoPRefresh();
+  double cgfRecentreDamping();
+
+  // Is the radiative channel to be built into the block CGF
+  // (CgfRadiativeChannel)? The propagator is the single reader; the transform
+  // itself just sees whether `Block::rad` is empty.
+  bool cgfRadiativeEnabled();
+
+  // Log-T bucket count of the Kokoulin term in the block CGF
+  // (IoniKokoulinCgfNbin, default 16). See the cfi for the measured
+  // convergence; the propagator copies it onto each IoniStep so the transforms
+  // themselves stay free of process-global state.
+  int ioniKokoulinCgfNbin();
+
+  // THE SINGLE READER of CVH_REF_CHARGEAWARE.
+  //
+  // The reference trajectory's mean energy loss is charge-ODD in nature and
+  // charge-EVEN in G4TablesForExtrapolatorForCVH, because that class builds
+  // ONE muon table -- from G4MuonPlus -- and ONE hadron table -- from
+  // G4Proton -- and then hands the muon table to both signs and scales the
+  // hadron table by q*q. `muonMinus` is a member of the class, is assigned in
+  // its constructor, and is never used. So the reference is not charge-blind
+  // at the charge AVERAGE: it is pinned to the POSITIVE particle, and every
+  // negative track carries the whole of the error.
+  //
+  // The physics it drops is the charge-odd part of Geant4's high-order
+  // stopping-power block, G4EmCorrections::HighOrderCorrections =
+  // 2*(Barkas + Bloch) + Mott. Bloch is a function of q^2 and cannot
+  // contribute; Barkas (Ashley-Ritchie, ~1.29 z, FALLS with beta) and Mott
+  // (Ahlen's z^3, pi*alpha*beta*z, GROWS with beta) are odd in z. At beta*gamma
+  // 3.3-29.7 the odd part is 0.309-0.314 % of the restricted dE/dx, Mott
+  // supplying 99.3 % of it and Barkas 0.65-0.75 %; below beta*gamma ~ 1 the two
+  // exchange roles. See Documents/Resolution/NOTES_BARKAS.md.
+  //
+  // With this set, the tables are built for the NEGATIVE particle as well --
+  // ComputeMuonDEDX(muonMinus, ...) and ComputeProtonDEDX(antiProton, ...),
+  // the SAME functions with the other argument -- and ComputeDEDX,
+  // ComputeRange and ComputeEnergy select between the two on the sign of the
+  // track's own G4ParticleDefinition charge. No term is written out by hand
+  // anywhere: the correction is whatever Geant4's own models say the negative
+  // particle's stopping power is, so it is right at every beta, for every
+  // singly-charged species, and it cannot drift away from Geant4 as the models
+  // are revised.
+  //
+  // ALL THREE of ComputeDEDX / ComputeRange / ComputeEnergy must switch
+  // together: EnergyAfterStep picks between `step * ComputeDEDX` (short step)
+  // and `ComputeEnergy(range - step)` (long step) on linLossLimit, so a
+  // partial fix would make the two branches disagree by exactly this term.
+  //
+  // THIS MOVES THE REFERENCE TRAJECTORY, i.e. the MEAN -- unlike
+  // referenceIsIonOnly's companion knobs CVH_IONI_EXACTDELTA and
+  // CVH_IONI_KOKOULIN, which move the FLUCTUATION and preserve the mean by
+  // construction. Everything downstream of the reference -- the transport
+  // Jacobians, the exported jacref/gradv/hesspackedv, the fitted momenta -- is
+  // therefore affected. It is identically zero for a POSITIVE track, which is
+  // the cheapest available regression test: any movement of a positive track
+  // is a bug.
+  //
+  // The fluctuation model's own `meanLoss = length * dedx` reads the SAME
+  // tables through G4UniversalFluctuationForExtrapolator::SetParticleAndCharge
+  // and is charge-aware with it, so the reference's mean and the noise model's
+  // mean cannot disagree by the charge-odd term (they did until 2026-08-16;
+  // NOTES_SPECIESDEDX s8 diagnosed it, NOTES_DEFAULTON s1 closed it -- that
+  // fix is a CORRECTNESS fix and is kept independently of the default).
+  //
+  // DEFAULT OFF (see the block comment on the four defaults in
+  // CGFQoPBlock.cc; briefly default-ON 2026-08-16, reverted -- this is the
+  // only charge-ODD member of the four and therefore the one degenerate with
+  // the calibration's `M`). Unset or CVH_REF_CHARGEAWARE=0 means not one extra
+  // table is built, no dispatch changes, and the export is bit-identical to
+  // the historical one (proven at 27/27 branches, NOTES_CHARGEODD s3.2).
+  // CVH_REF_CHARGEAWARE=1 enables it. Do not add another
+  // getenv("CVH_REF_CHARGEAWARE") anywhere.
+  bool referenceIsChargeAware();
+
+  // THE SINGLE READER of CVH_REF_SPECIESDEDX.
+  //
+  // `G4TablesForExtrapolatorForCVH` builds NO hadron table except the
+  // proton's. `G4EnergyLossForExtrapolatorForCVH::ComputeDEDX` serves every
+  // other hadron from it at the SCALED kinetic energy
+  //
+  //     e = ekin * proton_mass_c2 / m ,
+  //
+  // and `ComputeRange` / `ComputeEnergy` do the same with the matching
+  // `massratio` factors. That scaling is exact for a stopping power that is a
+  // function of beta*gamma alone: it preserves beta, gamma, the mean
+  // excitation energy I, the density-effect delta, the shell correction and
+  // the whole Barkas/Bloch/Mott block. It does NOT preserve `Tmax`, whose
+  // recoil denominator carries the PROJECTILE mass,
+  //
+  //     Tmax(m) = 2 m_e (b g)^2 / (1 + 2 gamma m_e/m + (m_e/m)^2) .
+  //
+  // The reference therefore integrates a stopping power built on the PROTON's
+  // Tmax at the species' beta*gamma. Unrestricted Bethe-Bloch is
+  // dE = xi [ln(2 m_e bg^2 Tmax/I^2) - 2 beta^2 - delta], so
+  // d(dE)/d ln Tmax = xi EXACTLY and the whole error is
+  //
+  //     d(dE/dx) = xi_perlength * ln( Tmax_species / Tmax_table ) ,
+  //     xi_perlength = twopi_mc2_rcl2 * n_el * z^2 / beta^2
+  //
+  // -- the same xi this class already forms in EnergyDispersion. Measured
+  // against Geant4's own unrestricted dE/dx for the species: +5.24e-3 (pi),
+  // +2.86e-4 (K), and identically zero for the proton (it IS the table) and
+  // for the muon (its own table). See Documents/Resolution/NOTES_PION.md.
+  //
+  // WHY A LOOKUP CORRECTION AND NOT A PER-SPECIES TABLE. Unlike
+  // referenceIsChargeAware -- where "call the same function with the other
+  // particle" was strictly better than transcribing Barkas and Mott -- a
+  // per-species table is NOT the cheap option here:
+  //   * the tables live on ONE energy grid, [1 MeV, 100 TeV]. That grid is a
+  //     grid in beta*gamma only after the mass scaling. A pion table on the
+  //     same grid starts at bg = 0.12, below G4BetheBlochModel's validity, and
+  //     the RANGE table is a cumulative integral from the bottom of the grid,
+  //     so the invalid region would corrupt the range at every energy. The
+  //     mass scaling is the mechanism that covers every hadron with one grid;
+  //     it is not an approximation to be removed.
+  //   * what is transcribed here is not a MODEL. `d(dE/dx)/d ln Tmax = xi` is
+  //     the exact analytic derivative of the leading term, and Tmax is exact
+  //     two-body recoil kinematics. Geant4 cannot revise either without
+  //     ceasing to be Bethe-Bloch -- which is precisely NOT true of the
+  //     Barkas parameterization or the Mott series.
+  //   * the species set is open (the propagator builds its particle from a
+  //     configured name), so a per-species table needs either a PDG list or a
+  //     lazily mutated process-wide static.
+  // Sub-leading mass dependence is left alone and is BELOW the table's own
+  // interpolation floor: the only other mass-dependent term of
+  // G4BetheBlochModel at fixed bg is the spin-1/2 recoil term
+  // (0.5 Tmax/E_tot)^2, worth 5.8e-6 relative for the pion and 5.3e-7 for the
+  // kaon against a spline floor of ~1e-5 (measured, NOTES_SPECIESDEDX s2).
+  //
+  // ALL THREE of ComputeDEDX / ComputeRange / ComputeEnergy switch together,
+  // for the same reason as referenceIsChargeAware: EnergyAfterStep picks
+  // between `step * ComputeDEDX` and `ComputeEnergy(range - step)` on
+  // linLossLimit. The range and inverse range carry the correction as the
+  // exact perturbation integral of the corrected stopping power (see
+  // G4EnergyLossForExtrapolatorForCVH::speciesRangeDefect), so that
+  // ComputeEnergy remains the numerical inverse of ComputeRange and the two
+  // branches lose the same energy over the same step.
+  // G4UniversalFluctuationForExtrapolator's own `meanLoss = length * dedx`
+  // reads the same proton table and moves with it.
+  //
+  // THIS MOVES THE REFERENCE TRAJECTORY, i.e. the MEAN, and it is
+  // charge-EVEN: unlike the Barkas/Mott term it does not cancel between charge
+  // conjugates. It is identically zero for a MUON and for a PROTON, which is
+  // the cheapest available regression test: any movement of either is a bug.
+  //
+  // DEFAULT OFF (see the block comment on the four defaults in
+  // CGFQoPBlock.cc; briefly default-ON 2026-08-16, reverted). Unset or
+  // CVH_REF_SPECIESDEDX=0 means not one line of the correction runs and the
+  // export is bit-identical to the historical one (proven at 27/27 branches,
+  // NOTES_SPECIESDEDX s3.2). CVH_REF_SPECIESDEDX=1 enables it. Do not add
+  // another getenv("CVH_REF_SPECIESDEDX") anywhere.
+  bool referenceIsSpeciesDedx();
+
+  // CVH_REF_HADRAD. The hadron reference is the PROTON dE/dx table looked up at
+  // e = ekin * m_p/m, which preserves beta*gamma -- correct for ionization,
+  // which is a function of beta*gamma, and WRONG for radiative loss, which
+  // carries explicit mass dependence. ComputeProtonDEDX builds only
+  // G4BetheBlochModel, so a hadron's reference subtracts no radiative mean at
+  // all while the simulation runs hBrems/hPairProd.
+  //
+  // Enabling this adds the radiative mean, computed per species from
+  // G4hBremsstrahlungModel/G4hPairProductionModel at the particle's OWN
+  // kinetic energy (no proton scaling), and -- in the propagator -- the
+  // matching radiative fluctuation block.
+  //
+  // BOTH HALVES OR NEITHER. Measured: the missing mean and the missing
+  // fluctuation cancel to ~90%, so the fluctuation alone is 0.00049 against
+  // 0.00005 for the complete correction -- a 10x DEGRADATION. This single
+  // switch drives both so they cannot be enabled separately.
+  bool referenceHasHadronRadiative();
+
+  // Number of Simpson intervals of the range-defect quadrature
+  // (CVH_REF_SPECIESDEDX_NBIN, default 16, forced even and >= 2). A
+  // numerical-accuracy knob only -- exposed, exactly as ioniKokoulinNbin is,
+  // so convergence can be MEASURED rather than asserted.
+  int speciesDedxNbin();
+
+  // The dE/dx defect of a proton-table lookup, to be ADDED to the table value.
+  //
+  //     xi_perlength * ln( Tmax(mass) / Tmax(refMass) )   at the SAME bg
+  //
+  // CLHEP units throughout: `ekin`, `mass`, `refMass` in MeV, `electronDensity`
+  // in 1/mm^3, the result in MeV/mm. `refMass` is the PDG mass of the particle
+  // the table was actually built from (G4Proton / G4AntiProton), NOT
+  // CLHEP::proton_mass_c2 -- the two differ by 7.5e-5 MeV (8.0e-8 relative),
+  // which would make the correction 1.4e-11 rather than 0 for the proton and
+  // destroy the exact null. Written so that mass == refMass returns +0.0 BIT
+  // FOR BIT: only the recoil denominators are formed, the common
+  // 2 m_e bg^2 numerator cancels in the ratio, and log(1.0) == 0.0.
+  //
+  // Deliberately G4-free and in this namespace so that there is exactly ONE
+  // implementation, shared by the energy-loss extrapolator and by the
+  // fluctuation's meanLoss. A second copy is how the two would drift apart.
+  double speciesTmaxDedx(double ekin, double mass, double refMass, double charge2, double electronDensity);
+
+  // Per-step Urban ionization record, already scaled and weighted.
+  // Mirrors G4UniversalFluctuationForExtrapolator::UrbanFluctRecord with the
+  // `scaling` factor applied to the energies and the transport weight folded
+  // into `gs`.
+  struct IoniStep {
+    // 0 = Gaussian regime; 1 = Urban compound Poisson (1/E^2 delta channel);
+    // 2 = the EXACT spin-1/2 knock-on cross section, 3 = the same for spin 0
+    // (CVH_IONI_EXACTDELTA). Regimes 2 and 3 differ ONLY by the spin term, and
+    // the split mirrors G4BetheBlochModel's own `0.5 == spin` branch.
+    int regime = -1;
+    double gsig2 = 0.; // regime-0 variance [MeV^2] (the ALPHA-TRUNCATED one)
+    double a1 = 0., e1 = 0.;    // excitation channel 1: count, energy [MeV]
+    double a2 = 0., e2 = 0.;    // excitation channel 2
+    // THE SLOT CHANGES MEANING WITH THE REGIME, exactly as the Urban record's
+    // does:
+    //   regime 1   -- the delta-ray collision COUNT (dimensionless, ~7.6),
+    //                 drawn from 1/E^2 on [e0, tmax];
+    //   regime 2/3 -- `xi`, the step's Landau ENERGY scale in MeV (~0.07),
+    //                 normalizing the exact cross section
+    //                 dN/dT = (xi/T^2) [1 - beta2 T/tmax (+ T^2/2E^2)].
+    // An energy takes the record's `scaling` factor and a count does not, so
+    // the caller must apply it for regime 2/3 and must not for regime 1.
+    // Reading one as the other is a ~1e-5 error that does not fail, which is
+    // why the regime -- not a heuristic on the magnitude -- selects the branch
+    // everywhere below.
+    double a3 = 0.;
+    double e0 = 0., tmax = 0.;  // spectrum support [MeV]
+    double gs = 0.;             // (residual units) per MeV, incl. transport
+    // regime 2/3 only: the projectile's beta^2 and TOTAL energy [MeV], both
+    // physical and unscaled. They are not recoverable from `tmax` without the
+    // particle mass (inverting a 3 GeV kaon's Tmax as a muon's returns
+    // beta^2 = 0.9989 instead of 0.9761, and beta^2 multiplies the whole
+    // suppression term), which is why the record carries them.
+    double beta2 = 0., etot = 0.;
+    // Kokoulin radiative correction to this step's knock-on spectrum: the
+    // number of log-T buckets to use, or 0 for "not applied". It rides on the
+    // STEP rather than being read from `switches()` inside the transforms so
+    // that the CGF stays a pure function of its argument -- the standalone
+    // driver and the unit tests run with no ParameterSet at all, and a
+    // transform that reaches for process-global configuration cannot be
+    // tested that way. The propagator sets it from
+    // `cvhcgf::ioniKokoulinEnabled()/ioniKokoulinNbin()`, which remain the
+    // single readers of the switch.
+    int kokNbin = 0;
+  };
+
+  // One step's RADIATIVE (bremsstrahlung + pair production) contribution.
+  //
+  // WHY A TABULATED SPECTRUM AND NOT A PARAMETERIZATION. The two processes
+  // have different shapes in v = eps/E and different weights -- pair
+  // production is 58 % of the radiative mean at 100 GeV and is SOFTER than
+  // brems -- so a single hand-built brems-like shape normalized to the
+  // combined mean is wrong by ~2.5x at 5-15 GeV (measured, cf_brems_exact).
+  // The propagator therefore tabulates both from Geant4's OWN
+  // G4MuBremsstrahlungModel / G4MuPairProductionModel differential cross
+  // sections -- the same objects that build the dE/dx table the reference
+  // subtracts -- and this struct carries the result.
+  //
+  // WHY IT IS IN THE CF AND NOT IN THE VARIANCE. For dsigma/dv ~ 1/v the
+  // second moment is dominated by v -> 1, so a radiative VARIANCE describes
+  // the rare catastrophic radiator rather than the 99.9 % of muons that
+  // radiate nothing. That is why the fit's Q has never carried a radiative
+  // term and why it should not start now: the object that is well defined is
+  // the characteristic function, and the Fisher information built from it.
+  struct RadStep {
+    // dN/dv on the block's shared `v` grid, ALREADY normalized to this step's
+    // own per-process mean loss and summed over the two processes
+    // (`makeRadSpectrum` does that, from the propagator's dedxBrem/dedxPair).
+    // Not owned: the caller keeps the storage alive for the call.
+    const double *dNdv = nullptr;
+    // The step's TOTAL energy, in MeV -- the same unit as IoniStep's
+    // energies, so that `gs` below means exactly what it means there. The
+    // records are natively in GeV and the propagator converts; getting this
+    // wrong is a factor 1e3 in the exponent, which collapses the CF to zero
+    // rather than failing.
+    double etot = 0.;
+    // (residual units) per MeV, including the transport weight and the charge
+    // sign -- identical convention to IoniStep::gs.
+    double gs = 0.;
+  };
+
+  // The process-noise block: the ionization steps, and the radiative steps
+  // that share one v grid.
+  //
+  // A struct rather than more arguments because every entry point needs the
+  // same bundle (`blockExponent`, `blockKappa2`, `tauReach`, `inverseFisher`),
+  // and because the multiple-scattering channel will join it next.
+  struct Block {
+    std::vector<IoniStep> ioni;
+    std::vector<RadStep> rad;
+    // Shared v grid for every RadStep; `nv` entries. Empty rad => unused.
+    const double *v = nullptr;
+    int nv = 0;
+  };
+
+  // dN/dv for one step, from the two Geant4 SHAPES and the two per-process
+  // mean losses:
+  //
+  //     dN/dv = sum_proc shape_proc(v) * dE_proc / INT v E shape_proc dv
+  //
+  // Each process is normalized to its OWN mean because that is what fixes the
+  // mixture; normalizing the sum does not. The normalization also absorbs
+  // ComputeDMicroscopicCrossSection's absolute-normalization convention
+  // (measured: 1.051 for brems, 1.63e-3 for pair, both constant to ~1 %, i.e.
+  // an offset and not a shape error) and the v-grid cutoff, so the modelled
+  // mean equals the mean the reference trajectory subtracted -- which is what
+  // makes the CENTRED exponent below leave no residual bias.
+  //
+  // `v`, `shapeBrem`, `shapePair` and `out` are all `nv` long; `dEBrem` and
+  // `dEPair` are this step's mean losses in MeV; `etot` in MeV.
+  void makeRadSpectrum(const double *v,
+                       const double *shapeBrem,
+                       const double *shapePair,
+                       double dEBrem,
+                       double dEPair,
+                       double etot,
+                       int nv,
+                       double *out);
+
+  struct Config {
+    // |phi| = e^{lncut} sets the end of the t grid. The contribution of the
+    // truncated tail to p(z) is bounded by (1/pi) INT |phi| dt, so -60
+    // (|phi| = 9e-27) is far below any relative floor used downstream.
+    double lncut = -60.;
+    // uniform t samples of the CF; fixes z_max = pi * nt / t_max (aliasing)
+    int nt = 1 << 13;
+    // zero padding; fixes dz = 2 pi / (npad * t_max) (peak resolution)
+    int npad = 32;
+    // RELATIVE density floor selecting the contiguous support around the mode.
+    // An ABSOLUTE floor on an oversized grid was a measured 57x error in this
+    // study (NOTES XV) -- do not change the sense of this.
+    double floor = 1e-8;
+    // Number of points of the resampled score table (see Result::psi), and
+    // the half-width of the WINDOW it spans, below the mode, in standardized
+    // units.
+    //
+    // The window is not a detail. The contiguous support of a block runs to
+    // z ~ -2300 (the 1/E^2 loss tail), while all of psi's structure lives in
+    // z ~ [-10, +7] and it diverges at the hard edge. Resampling npsi points
+    // over the WHOLE support gives dz = 0.29 there and gets psi wrong by 38 %
+    // one z unit from the edge -- measured, and it is this study's recurring
+    // "match the grid to the thing being scanned" failure in a new place.
+    // Spanning [zmode - psiWindow, zhi] instead gives dz ~ the native FFT
+    // spacing. Below the window psi is continued by its exact 1/|z| power-law
+    // asymptote rather than clamped.
+    int npsi = 8192;
+    double psiWindow = 60.;
+    // Rigid TRANSLATION of the block density, in the same standardized units
+    // as the residual. This is how the uncentred convention is carried: with
+    // the radiative mean removed from the reference dE/dx table the block must
+    // supply it, and the centred and uncentred radiative CFs were measured to
+    // differ by EXACTLY `i t dz_rad` (6.6e-19 relative), so the whole change
+    // is a translation and nothing about the shape moves. Applied by offsetting
+    // the z axis, which is exact and free.
+    double meanShift = 0.;
+  };
+
+  struct Result {
+    bool ok = false;
+    double invFisher = 0.;  // 1/I, in units of sigma^2 (i.e. of the residual)
+    double kappa2 = 0.;     // block variance from the CF, same units, for ref
+    double tmax = 0.;       // end of the t grid actually used
+    double mass = 0.;       // probability mass on the contiguous support
+    double massFrac = 0.;   // that mass / total mass on the grid
+    double zmode = 0.;      // mode of the density
+    double zlo = 0., zhi = 0.;  // support edges
+    int nsteps = 0;
+
+    // The SCORE psi(z) = -d ln p/dz = -p'(z)/p(z), resampled uniformly on the
+    // contiguous support: psi[i] at z = psiZ0 + i*psiDz.
+    //
+    // It comes from the SAME two transforms that produce I -- p from phi and
+    // p' from -i t phi -- so it costs nothing extra and no density (or log
+    // density) is ever differenced numerically.
+    //
+    // IT IS DELIBERATELY NOT THE SADDLEPOINT FORM. `psi_SPA = thetahat +
+    // K'''/(2 K''^2)` was measured against exact inversion at 0.52-1.44x over
+    // r in [-3, +4] -- i.e. wrong by up to a factor 2 exactly where the fit
+    // sits (NOTES_EXPORTS section 5.2). It also needs a saddlepoint solve per
+    // evaluation, which this does not.
+    double psiZ0 = 0., psiDz = 0.;
+    std::vector<double> psi;
+    // Diagnostic: sign changes of psi on the NATIVE grid, restricted to where
+    // the density carries mass (p > 1e-4 * pmax). The restriction is
+    // essential: over the full support psi = -p'/p is pure inversion noise in
+    // the deep tail, where it flips sign thousands of times and any
+    // unrestricted counter reports garbage (measured: 4322 crossings at
+    // plane 0, all of them noise).
+    //
+    // The MODE is a zero of psi and there should be exactly one in the
+    // mass-carrying region. The "second zero crossing" reported for the
+    // SADDLEPOINT score is that density's hard-edge artefact -- K'' -> 0 makes
+    // -0.5 ln(2 pi K'') diverge, so ln p_SPA turns back up -- and this counter
+    // is how one finds out whether the exact score inherits it.
+    int nZeroCross = 0;
+    double psiWinLo = 0.;  // low edge of the score window
+    int nBelowWindow = 0;  // unused; reserved for the maker's clamp counter
+  };
+
+  // psi at an arbitrary z by linear interpolation of Result::psi. psi is
+  // interpolated as a FUNCTION of z; it is never inverted (it is not
+  // monotonic). Outside the support the value is clamped to the nearest edge
+  // and `clamped` is set -- a residual outside the support means the block
+  // has essentially zero likelihood there, and the fit must not see an
+  // infinity.
+  double scoreAt(const Result &r, double z, bool *clamped = nullptr);
+
+  // sine and cosine integrals of a real non-negative argument.
+  // ci is returned as Cin(x) = gamma + ln x - Ci(x), which is what the
+  // delta-ray term needs and which stays finite and small as x -> 0.
+  void siCin(double x, double &si, double &cin);
+
+  // <(e^{i a E} - 1 - i a E)/E^2> over the 1/E^2 spectrum on [1, w] in units
+  // of e0, i.e. exactly cf_track_resolution._delta_term_2d(a, w).
+  std::complex<double> deltaTerm(double a, double w);
+
+  // Block CF exponent S(t): phi(t) = exp(S(t)). Centred (mean subtracted),
+  // which is the convention the propagator's mean-loss table implies.
+  //
+  // Every regime is handled: the regime -- never a heuristic on the magnitude
+  // -- selects how `a3` is read, because that slot holds a collision count in
+  // regime 1 and the energy scale `xi` in regime 2/3, and confusing the two is
+  // a ~1e-5 error in a WEIGHT, i.e. one that changes the answer without
+  // failing.
+  std::complex<double> blockExponent(const Block &blk, double t);
+
+  // Gaussian-limit variance of the block in residual units, i.e. -S''(0).
+  // IONIZATION ONLY: the radiative second moment is dominated by v -> 1 and
+  // belongs in the CF, not in a variance.
+  double blockKappa2(const Block &blk);
+
+  // t at which Re S(t) = lncut, bisected on a coarse log scan.
+  double tauReach(const Block &blk, double lncut);
+
+  // The whole thing: 1/I by exact inversion.
+  Result inverseFisher(const Block &blk, const Config &cfg = Config());
+
+  // in-place radix-2 FFT, forward sign convention e^{-2 pi i j k / N}
+  void fftInPlace(std::vector<std::complex<double>> &a);
+
+}  // namespace cvhcgf
+
+#endif

@@ -119,6 +119,18 @@ opts.register('kinkInjectDxdz', 0.0, VarParsing.VarParsing.multiplicity.singleto
 opts.register('kinkInjectDydz', 0.0, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.float,
               'injected dy/dz kink for the kink closure test')
+opts.register('stepLengthLimit', 10.0, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'Geant4e maximum step [mm]. Scanning it forces a DIFFERENT step '
+              'decomposition of the same physical path, which is the '
+              'controlled probe of whether a per-leg quantity depends on where '
+              'Geant4 happened to put its step boundaries.')
+# The CVH energy-loss switches are ParameterSet parameters on Geant4ePropagator.
+# Registering them here lets a real-track fit pin them explicitly instead of
+# inheriting the cfi default, and puts the configuration in the output file's
+# provenance.
+import TrackPropagation.Geant4e.cvhSwitches as cvhSwitches
+cvhSwitches.register(opts)
 opts.parseArguments()
 if not opts.scalarPot3DInitFile:
     raise SystemExit(
@@ -282,6 +294,8 @@ else:
 process.geopro.MagneticFieldLabel = fieldlabel
 process.Geant4ePropagator.MagneticFieldLabel = fieldlabel
 process.Geant4ePropagator.ForCVH = cms.bool(True)
+process.Geant4ePropagator.StepLengthLimit = cms.double(float(opts.stepLengthLimit))
+cvhSwitches.apply(process, opts)
 process.Geant4ePropagator.PropagationDirection = cms.string(opts.propagationDirection)
 process.globalCor.MagneticFieldLabel = cms.string(fieldlabel)
 # Shared CVH G4 master (EventSetup product), consumed by globalCor via esConsumes.

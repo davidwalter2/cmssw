@@ -126,7 +126,7 @@ process.globalCor = cms.EDProducer(
     useIdealGeometry=cms.bool(False),
     bsConstraint=cms.bool(False),
     applyHitQuality=cms.bool(True),
-    doVtxConstraint=cms.bool(False),
+    doVtxConstraint=cms.bool(True),
     doMassConstraint=cms.bool(False),
     massConstraint=cms.double(3.0969 if ONIA_MODE.lower() == "jpsi" else 9.4603),
     massConstraintWidth=cms.double(1e-5),

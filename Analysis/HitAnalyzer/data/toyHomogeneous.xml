@@ -1,0 +1,75 @@
+<?xml version="1.0"?>
+<DDDefinition xmlns="http://www.cern.ch/cms/DDL" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.cern.ch/cms/DDL ../../../DetectorDescription/Schema/DDLSchema.xsd">
+
+<!--
+  Toy HOMOGENEOUS tracker volume for the clean-propagation closure test.
+
+  WHY. In the real tracker a ray that scatters away from the deterministic
+  reference path traverses DIFFERENT material. Measured directly
+  (cleanprop/wander_test.py, 2026-08-12): the median energy loss rises from
+  22.07 to 24.55 MeV, +11 %, between the least- and most-wandered quintile,
+  and that "material sampling" accounts for ~40 % of the model-vs-Geant4
+  ionization mode gap. It is also the origin of the acceptance problem (rays
+  that miss or clip a module have to be dropped), which was the single largest
+  error in the study.
+
+  In a homogeneous medium every path through the same z-extent crosses
+  IDENTICAL material, so the effect collapses to the sec(theta) path
+  lengthening, ~theta^2/2 ~ 5e-7 at 1 mrad. The test then measures the
+  transport-fluctuation model and nothing else.
+
+  MATERIAL. One uniform medium filling the whole tracking region, chosen so a
+  muon sees roughly the real budget over r = 4 -> 107 cm (~103 cm of path):
+
+      real, eta = 0.30 : <dE> = 25.0 MeV
+      silicon at full density 2.33 g/cm3 would give ~400 MeV over 103 cm,
+      i.e. 16x too much, so the density is scaled to 2.33/16 = 0.1456 g/cm3.
+
+  That gives dE ~ 25 MeV and X0 = 21.82/0.1456 = 150 cm -> 0.69 X0 over the
+  path (the real tracker at this eta is nearer 0.4 X0). Density is the single
+  knob and is meant to be scanned; matching dE and X0 simultaneously needs a
+  different Z, which is a later refinement. The point of the toy is control,
+  not fidelity to CMS.
+
+  The volume is a plain cylinder about the beam axis so that there is no phi or
+  z structure of any kind.
+-->
+
+ <MaterialSection label="toyHomogeneous.xml">
+  <CompositeMaterial name="ToyTrackerAvg" density="0.1456*g/cm3" symbol=" " method="mixture by weight">
+   <MaterialFraction fraction="1.0">
+    <rMaterial name="materials:Silicon"/>
+   </MaterialFraction>
+  </CompositeMaterial>
+ </MaterialSection>
+
+ <SolidSection label="toyHomogeneous.xml">
+  <!-- world: comfortably larger than anything we propagate through -->
+  <Tubs name="ToyWorld" rMin="0*fm" rMax="6*m" dz="15*m"
+        startPhi="0*deg" deltaPhi="360*deg"/>
+  <!-- the homogeneous tracking volume. Inner radius 0 so there is no beam-pipe
+       edge and no boundary anywhere the rays go. -->
+  <Tubs name="ToyTracker" rMin="0*fm" rMax="1.2*m" dz="3.2*m"
+        startPhi="0*deg" deltaPhi="360*deg"/>
+ </SolidSection>
+
+ <LogicalPartSection label="toyHomogeneous.xml">
+  <LogicalPart name="ToyWorld" category="unspecified">
+   <rSolid name="toyHomogeneous:ToyWorld"/>
+   <rMaterial name="materials:Air"/>
+  </LogicalPart>
+  <LogicalPart name="ToyTracker" category="unspecified">
+   <rSolid name="toyHomogeneous:ToyTracker"/>
+   <rMaterial name="toyHomogeneous:ToyTrackerAvg"/>
+  </LogicalPart>
+ </LogicalPartSection>
+
+ <PosPartSection label="toyHomogeneous.xml">
+  <PosPart copyNumber="1">
+   <rParent name="toyHomogeneous:ToyWorld"/>
+   <rChild name="toyHomogeneous:ToyTracker"/>
+   <Translation x="0*m" y="0*m" z="0*m"/>
+  </PosPart>
+ </PosPartSection>
+
+</DDDefinition>

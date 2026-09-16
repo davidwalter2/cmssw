@@ -1,10 +1,14 @@
 #include "ResidualGlobalCorrectionMakerBase.h"
+#include "FWCore/MessageLogger/interface/MessageLogger.h"
 #include "Analysis/HitAnalyzer/interface/ParticleProperties.h"
 
 // Sparse GBL design-matrix formulation (ported from the single-track
 // maker). base.h provides Eigen/Core + Eigen/Eigenvalues + `using
 // namespace Eigen`; the sparse solver path needs Eigen/Sparse too.
+#include <algorithm>
+#include <array>
 #include <Eigen/Sparse>
+#include <Eigen/Cholesky>
 
 // required for Transient Tracks
 #include "TrackingTools/TransientTrack/interface/TransientTrack.h"
@@ -29,10 +33,15 @@
 #include "DataFormats/Candidate/interface/VertexCompositeCandidate.h"
 #include "DataFormats/RecoCandidate/interface/RecoChargedCandidate.h"
 #include "Geometry/CommonTopologies/interface/PixelTopology.h"
+#include "RecoLocalTracker/SiStripRecHitConverter/interface/StripCPE.h"
+#include "RecoLocalTracker/Records/interface/TkStripCPERecord.h"
+#include "RecoLocalTracker/ClusterParameterEstimator/interface/StripClusterParameterEstimator.h"
+#include "Geometry/TrackerGeometryBuilder/interface/StripGeomDetUnit.h"
 
 #include "Math/Vector4Dfwd.h"
 
 #include "TrackPropagation/Geant4e/interface/Geant4ePropagator.h"
+#include "TrackPropagation/Geant4e/interface/G4UniversalFluctuationForExtrapolator.hh"
 
 #include "FWCore/Common/interface/TriggerNames.h"
 #include "DataFormats/L1GlobalTrigger/interface/L1GlobalTriggerReadoutRecord.h"
@@ -40,6 +49,7 @@
 #include "CondFormats/L1TObjects/interface/L1GtTriggerMenu.h"
 
 #include <iomanip>
+#include <map>
 #include <iostream>
 #include <limits>
 #include <sstream>
@@ -109,9 +119,16 @@ public:
                 << "  fail[hitupdate]=" << fitFailHitUpdate_
                 << "  fail[chargeflip]=" << fitFailChargeFlip_
                 << "  fail[nan]=" << fitFailNaN_
+                << "  fail[ndof]=" << fitFailNdof_
                 << "  skipped[samesign]=" << fitSkippedSameSign_
+                << "  skipped[ndof<" << minNdof_ << "]=" << fitSkippedNdof_
+                << "  skipped[hits<" << minPairHits_ << "]=" << fitSkippedHits_
+                << "  skipped[leghits<" << minLegHits_ << "]=" << fitSkippedLegHits_
                 << "  clamped[step]=" << fitStepClamped_
+                << "  clampevents[step]=" << stepClampEvents_
                 << "  backtracked[step]=" << fitStepBacktracked_
+                << "  btchi2[step]=" << fitStepBtChi2_
+                << "  btchi2events[step]=" << stepBtChi2Events_
                 << "  inflated[seed]=" << fitSeedInflated_
                 << std::endl;
       if (pixHitsSeen_ > 0ULL) {
@@ -125,6 +142,7 @@ public:
                   << " (" << (100. * pixHitsDemoted_ / pixHitsSeen_) << "%)"
                   << "  keepPixelEdgeHits=" << keepPixelEdgeHits_
                   << "  pixelMinSizeX=" << pixelMinSizeX_
+                  << "  pixelMinSizeY=" << pixelMinSizeY_
                   << std::endl;
         // Pathology-class combination table (only non-empty bins). Class 0
         // is the healthy bulk; every other combination is a candidate for a
@@ -207,12 +225,61 @@ private:
   mutable unsigned long long fitFailHitUpdate_ = 0ULL;   // CPE re-evaluation (cloner) invalid
   mutable unsigned long long fitFailChargeFlip_ = 0ULL;  // q/p sign flip in parameter update
   mutable unsigned long long fitStepClamped_ = 0ULL;     // fits with >=1 momentum-floor-clamped GN step
+  mutable unsigned long long stepClampEvents_ = 0ULL;    // individual clamped GN steps
   mutable unsigned long long fitStepBacktracked_ = 0ULL; // step halvings after a failed-leg iteration (retries)
+  mutable unsigned long long fitStepBtChi2_ = 0ULL;      // fits with >=1 chi2 (Armijo) backtrack
+  mutable unsigned long long stepBtChi2Events_ = 0ULL;   // individual chi2 step halvings
+  mutable unsigned long long stepPrints_ = 0ULL;         // printouts emitted (rate limit)
   mutable unsigned long long fitSeedInflated_ = 0ULL;    // iteration-0 seed-momentum inflations (retries)
-  // Momentum floor for the Gauss-Newton step clamp (GeV). 2 GeV suits
-  // J/psi muons (as in the single-track maker); V0 drivers lower it to
-  // sit above the propagation floor but below the soft-daughter spectrum.
+  // Momentum floor for the Gauss-Newton step clamp (GeV). Its ONLY job is to
+  // keep the state out of the propagator's refusal region
+  // (Geant4ePropagator.PropagationPtotLimit), so it must sit just above that
+  // limit and below the soft-daughter spectrum -- the drivers derive it from
+  // the limit, and must re-derive it whenever the limit moves. The 2.0 GeV
+  // built-in default sits far above the current 0.2 GeV limit, and there it
+  // PINS every daughter below 2 GeV at 2 GeV (momentum-high, chi2/ndof>>1,
+  // and, when p_ref is already under the floor, a scale-to-zero frozen step).
+  // On the flat-pT J/psi gun that is 12 % of candidates, carrying the whole
+  // +0.21e-3 mass-scale offset.
   double clampMomentumFloor_ = 2.0;
+  // Relative Gauss-Newton step damping. Per iteration a daughter's
+  // momentum may change by at most this factor (default 2: p may at most halve
+  // or double). Implemented as the effective floor max(clampMomentumFloor_,
+  // p_ref/f) plus the symmetric upward cap p_ref*f. The lower bound is ALWAYS
+  // strictly below p_ref, which removes both pathologies of the fixed floor:
+  // no daughter is pinned at a fixed momentum, and the scale can no longer be
+  // exactly zero (which froze the whole coupled step at its seed). <= 1
+  // disables the relative cap and leaves the absolute floor as the only clamp.
+  double maxMomentumStepFactor_ = 2.0;
+  // chi2-based (Armijo) retroactive backtracking. The chi2 assembled in
+  // iteration k is the REALIZED chi2 of the step taken at k-1; if it fails the
+  // sufficient-decrease test, the k-1 linearization is restored (the same
+  // snapshot the propagation-failure retry uses), the step is halved and the
+  // iteration redone. No extra propagation on the accept path.
+  bool stepBacktracking_ = true;
+  unsigned int maxChi2Backtrack_ = 4;   // halvings per accepted step
+  // First iteration at which the Armijo test may fire. Default 2, and NOT 1:
+  // at iiter == 0 the GBL propagation/kink residuals are identically zero by
+  // construction (the layer states ARE the propagated states, dx0 = 0), so the
+  // chi2 at iteration 0 is a DIFFERENT objective from the one at every later
+  // iteration and comparing across that boundary would backtrack every
+  // candidate. From iteration 1 on the objective is the same function of the
+  // state, so the first meaningful comparison is chi2(2) against chi2(1).
+  unsigned int stepBacktrackFromIter_ = 2;
+  double armijoC_ = 1.e-4;              // sufficient-decrease coefficient
+  // Relative chi2 slack in the Armijo test. NOT a textbook line-search
+  // tolerance: the CVH/GBL iteration does NOT
+  // monotonically decrease r^T Vinv r -- the realized chi2 drifts UP by
+  // ~0.3-0.5 per iteration even at 1/16 of the step (the model's predicted
+  // decrease is never realized because every iteration re-propagates and
+  // re-linearizes). A tolerance of 1e-3 therefore turns the test into a
+  // permanent step-halver: 57 % of gun candidates backtracked, 15.6 halvings
+  // each, 6x the propagation cost, for no change in the result. At 1.0
+  // (the chi2 may not more than DOUBLE in one iteration) the test becomes a
+  // pure DIVERGENCE TRAP: +0.5 % propagation on the gun ditrack smoke,
+  // +0.2 % single track, fit output at the noise level.
+  double armijoSlack_ = 1.0;
+  unsigned int stepPrintLimit_ = 200;   // per-job cap on step-control printouts
   // Per-candidate leg-failure retry budgets (see the recovery block).
   unsigned int maxBacktracks_ = 4;
   unsigned int maxSeedInflations_ = 2;
@@ -246,11 +313,74 @@ private:
   edm::EDPutTokenT<edm::ValueMap<std::vector<float>>> vmJacRefMuPlus_, vmJacRefMuMinus_, vmJacMass_, vmHessFactor_;
 
   mutable unsigned long long fitFailNaN_ = 0ULL;         // NaN/inf parameter update
+  mutable unsigned long long fitFailNdof_ = 0ULL;        // fit with no degrees of freedom (ndof <= 0)
   mutable unsigned long long fitSkippedSameSign_ = 0ULL; // same-sign pairs skipped pre-fit (not failures)
+  mutable unsigned long long fitSkippedNdof_ = 0ULL;     // pre-fit ndof < minNdof_ (not failures)
+  mutable unsigned long long fitSkippedHits_ = 0ULL;     // pre-fit valid-hit count < minPairHits_
+  mutable unsigned long long fitSkippedLegHits_ = 0ULL;  // pre-fit weaker leg below minLegHits_
+
+  // ---- THE MINIMUM-SIZE REQUIREMENT ON A PAIR --------------------------
+  //
+  // The two-track fit spends TEN state parameters on the common vertex, so its
+  // degrees of freedom are
+  //
+  //     ndof = nvalid + nvalidpixel - 10 + (3 bs) + (1 pointing)
+  //            + (1 vertex constraint) + (1 mass constraint)
+  //
+  // -- one measurement coordinate per strip hit, two per pixel hit. With the
+  // vertex constraint on and nothing else that is `n_meas - 9`, so a pair
+  // needs MORE THAN NINE measurement coordinates to have any degrees of
+  // freedom at all (more than ten with the constraint off). At ndof == 0 the
+  // system is exactly determined: chi2 is identically zero, chi2/ndof is 0/0,
+  // and the factored-Hessian export indexes one past the end of the
+  // eigenvalue vector and aborts the PROCESS -- which is what killed 28 % of
+  // the first dymc_8p5M_260905 tasks before the signed-ndof gate below.
+  //
+  // Those pairs carry no information for the global fit and their vertex
+  // residual is meaningless (at ndof == 1 the DCA is determined by the data
+  // with one constraint left over, so its pull is not a resolution
+  // measurement either). They are cut here, BEFORE the fit, on both readings
+  // of "hits":
+  //
+  //   minNdof      minimum of the expression above evaluated for the
+  //                unconstrained-mass pass. Default 1, i.e. n_meas >= 10 with
+  //                the vertex constraint on and >= 11 with it off, exactly
+  //                the requirement above. 0 restores the legacy behaviour
+  //                (only the ndof <= 0 abort).
+  //   minPairHits  minimum number of VALID HITS summed over the two legs
+  //                (pixel hits counted once, not twice). Default -1 = auto =
+  //                10 with the vertex constraint on, 11 with it off. 0
+  //                disables.
+  //   minLegHits   minimum valid hits on the WEAKER leg. Default 8, because
+  //                a thin leg is background: by gen truth on DY, 82-93 % of
+  //                the candidates a weaker leg below 8 removes are `dup` or
+  //                `unmatched` (0.885 +- 0.026), for a signal efficiency of
+  //                0.9983 +- 0.0004 -- and every candidate with a non-finite
+  //                mass-resolution export has one. Measured on the 10 654
+  //                candidates of `dy_vtxon`: every one of the five with a
+  //                non-finite `Jpsi_sigmamass` has a leg of one or two valid
+  //                hits -- (2,11), (1,15), (21,2), (14,1), (14,1) -- while
+  //                their PAIR totals, 13 to 23 hits, sail through any
+  //                pair-level cut. A pair sum cannot see a one-hit leg; this
+  //                can. 0 disables. (The COMPANION cut on the vertex
+  //                residual, |z_v| < 5, is deliberately NOT made here: it is
+  //                a downstream selection, `resolution/selection.py`, so the
+  //                tail stays in the trees and the terms that cut on it can
+  //                normalise over the window they cut to.)
+  //
+  // Both are pre-fit, so a skipped pair costs nothing and every candidate that
+  // survives is bit-identical to what the previous build wrote.
+  int minNdof_ = 1;
+  int minPairHits_ = -1;
+  int minLegHits_ = 8;
 
   // Global material model: per-leg per-group dxi columns from the
   // propagator (reused buffer; see doc/global-material-model-plan.md).
   mutable std::vector<std::pair<int, Eigen::Matrix<double, 5, 1>>> groupJacs_;
+  // Per-group PROCESS NOISE of the last propagation (the width counterpart of
+  // groupJacs_'s mean). Filled only under doRes + the global material model;
+  // see the parmtype-15 dV registration.
+  mutable std::vector<std::pair<int, Eigen::Matrix<double, 5, 5>>> groupQs_;
   // per-step field-mode columns from the propagator (reused buffer)
   mutable std::vector<Eigen::Matrix<double, 5, 1>> modeJacs_;
 
@@ -350,38 +480,38 @@ private:
   float Muminustrk_eta;
   float Muminustrk_phi;
   
-  float Jpsicons_d;
-  float Jpsicons_x;
-  float Jpsicons_y;
-  float Jpsicons_z;
-  float Jpsicons_pt;
-  float Jpsicons_eta;
-  float Jpsicons_phi;
-  float Jpsicons_mass;
+  float Jpsicons_d = -99.f;
+  float Jpsicons_x = -99.f;
+  float Jpsicons_y = -99.f;
+  float Jpsicons_z = -99.f;
+  float Jpsicons_pt = -99.f;
+  float Jpsicons_eta = -99.f;
+  float Jpsicons_phi = -99.f;
+  float Jpsicons_mass = -99.f;
   
-  float Mupluscons_pt;
-  float Mupluscons_eta;
-  float Mupluscons_phi;
+  float Mupluscons_pt = -99.f;
+  float Mupluscons_eta = -99.f;
+  float Mupluscons_phi = -99.f;
   
-  float Muminuscons_pt;
-  float Muminuscons_eta;
-  float Muminuscons_phi;
+  float Muminuscons_pt = -99.f;
+  float Muminuscons_eta = -99.f;
+  float Muminuscons_phi = -99.f;
   
-  float Jpsikincons_x;
-  float Jpsikincons_y;
-  float Jpsikincons_z;
-  float Jpsikincons_pt;
-  float Jpsikincons_eta;
-  float Jpsikincons_phi;
-  float Jpsikincons_mass;
+  float Jpsikincons_x = -99.f;
+  float Jpsikincons_y = -99.f;
+  float Jpsikincons_z = -99.f;
+  float Jpsikincons_pt = -99.f;
+  float Jpsikincons_eta = -99.f;
+  float Jpsikincons_phi = -99.f;
+  float Jpsikincons_mass = -99.f;
   
-  float Mupluskincons_pt;
-  float Mupluskincons_eta;
-  float Mupluskincons_phi;
+  float Mupluskincons_pt = -99.f;
+  float Mupluskincons_eta = -99.f;
+  float Mupluskincons_phi = -99.f;
   
-  float Muminuskincons_pt;
-  float Muminuskincons_eta;
-  float Muminuskincons_phi;
+  float Muminuskincons_pt = -99.f;
+  float Muminuskincons_eta = -99.f;
+  float Muminuskincons_phi = -99.f;
   
   float Jpsigen_x;
   float Jpsigen_y;
@@ -390,6 +520,35 @@ private:
   float Jpsigen_eta;
   float Jpsigen_phi;
   float Jpsigen_mass;
+  // ---- THE PRE-FSR RESONANCE ------------------------------------------
+  //
+  // `Jpsigen_mass` above is the POST-FSR pair: two status-1 muons matched in
+  // dR < 0.1, i.e. what the tracker sees. The Z channel's FSR kernel is the
+  // ratio of the two, so it needs the PRE-FSR mass as well, and today that
+  // costs a separate FWLite pass over the MiniAOD (`zchannel/dump_gen_fsr.py`)
+  // whose selection has to be kept in step with this one by hand.
+  //
+  // In the DY UL16 sample (powheg-MiNNLO + pythia8 + photos) NO muon carries
+  // `fromHardProcessBeforeFSR`; what is there is the hard-process Z at
+  // status 22 (first copy) and 62 (last copy), whose masses agree in
+  // 4000/4000 events, and -- only in the 59 % of events that radiated -- the
+  // pre-Photos muon pair at status 746. `m(mumu, 746) == m(Z, 62)` to an RMS
+  // of 4e-6 GeV, so the status-62 resonance IS the pre-FSR mass and it exists
+  // in every event (`zchannel/README.md`).
+  //
+  //   Jpsigenpre_mass    the |pdgId| in `genResonancePdgIds_` entry at
+  //                      status 62, falling back to 22; -99 if absent (a
+  //                      J/psi from a B decay has neither).
+  //   Jpsigenpre_status  which copy was used, so a file says so itself.
+  //   Jpsigenpre_masslep the status-746 lepton pair, the independent
+  //                      cross-check; -99 when the event did not radiate.
+  //   Jpsigen_massdressed the matched bare pair with every prompt status-1
+  //                      photon within dR < 0.1 of either muon added back.
+  float Jpsigenpre_mass;
+  float Jpsigenpre_masslep;
+  float Jpsigen_massdressed;
+  int Jpsigenpre_status;
+  std::vector<int> genResonancePdgIds_;
   
   float Muplusgen_pt;
   float Muplusgen_eta;
@@ -401,13 +560,93 @@ private:
 
   float Muplusgen_dr;
   float Muminusgen_dr;
-  
+
+  // ---- GEN PROVENANCE OF THE TWO LEGS ----------------------------------
+  //
+  // `Mu*gen_dr` says only that SOME status-1 gen muon of the right charge sits
+  // within dR < 0.1 of the leg. It does NOT say the candidate is a real
+  // resonance decay: two reco tracks of the SAME muon, or a real muon paired
+  // with a track from a heavy-flavour decay, both leave two "matched" legs.
+  // Separating signal from combinatorial background needs the IDENTITY and the
+  // ANCESTRY of the matched particle, which is what these carry. All are
+  // filled only under doGen_, with the sentinels below otherwise.
+  //
+  //   Mu*gen_pdgId       pdgId of the matched status-1 gen particle (0 = none)
+  //   Mu*gen_idx         its index in the gen collection (-1 = none). Two
+  //                      candidates of one event sharing an index are two
+  //                      reconstructions of ONE muon -- the combinatorial
+  //                      background the inclusive vertex tail is made of.
+  //   Mu*gen_motherPdgId pdgId of the first ancestor that is not itself a
+  //                      muon copy: 23 for a Z daughter, 443/553 for a
+  //                      quarkonium, a hadron id for a heavy-flavour decay
+  //                      (0 = none found)
+  //   Mu*gen_motherIdx   that ancestor's index (-1 = none)
+  //   Mu*gen_isPrompt    GenStatusFlags::isPrompt(), asked through a
+  //   Mu*gen_fromHardProcess  dynamic_cast (the collection is an
+  //                      edm::View<reco::Candidate>, which does not expose the
+  //                      flags) and left false when the cast fails
+  //   Jpsigen_sameDecay  both legs matched, to DIFFERENT gen particles, whose
+  //                      first non-muon ancestor is the SAME particle -- the
+  //                      candidate is the two daughters of one decay
+  int Muplusgen_pdgId;
+  int Muminusgen_pdgId;
+  int Muplusgen_idx;
+  int Muminusgen_idx;
+  int Muplusgen_motherPdgId;
+  int Muminusgen_motherPdgId;
+  int Muplusgen_motherIdx;
+  int Muminusgen_motherIdx;
+  bool Muplusgen_isPrompt;
+  bool Muminusgen_isPrompt;
+  bool Muplusgen_fromHardProcess;
+  bool Muminusgen_fromHardProcess;
+  bool Jpsigen_sameDecay;
+
   std::array<float, 3> Muplus_refParms;
   std::array<float, 3> Muminus_refParms;
   
   std::vector<float> Muplus_jacRef;
   std::vector<float> Muminus_jacRef;
   std::vector<float> Jpsi_jacMass;
+
+  // ---- THE TWO LEGS' REFERENCE MOMENTUM COVARIANCE ----------------------
+  //
+  // `covrefmom` -- the (q/p, lambda, phi) covariance of BOTH legs at the
+  // reference, the very matrix `Jpsi_sigmamass` is contracted out of -- is
+  // exported so that the two second-order corrections the mass likelihood
+  // needs are measured PER CANDIDATE rather than taken from MC:
+  //
+  //     A = sigma_rel1^2 + sigma_rel2^2 ,  B = 2 rho sigma_rel1 sigma_rel2
+  //
+  // is the Jensen term's whole content, and `f_ang`, the share of the mass
+  // variance carried by the ANGLES rather than the two curvatures, is the
+  // only thing the closed form `1.5 (sigma_m/m)^2` misses. On data there is
+  // no MC to take them from, which is why the full symmetric 6x6 is written
+  // out together with the two derived pieces that make it self-contained.
+  //
+  // ORDER IS (PLUS, MINUS), NOT the internal leg order: entries 0-2 are the
+  // mu+ (q/p, lambda, phi) and 3-5 the mu-, permuted here by idxplus/idxminus
+  // so that no consumer has to know `muchargearr`.
+  //
+  // `Jpsi_covrefmom` is the UPPER TRIANGLE, row-major: 21 floats, (0,0),
+  // (0,1)...(0,5),(1,1)...(5,5). `Jpsi_jacrefmom` is dm/d(state) in the same
+  // order, so `J C J^T` must reproduce `Jpsi_sigmamass^2` -- exported so the
+  // matrix can be CHECKED rather than trusted.
+  std::vector<float> Jpsi_covrefmom;
+  std::vector<float> Jpsi_jacrefmom;
+  // q/p of each leg at the reference, so sigma_rel = sqrt(C_ll)/|q/p| and the
+  // sign conventions are fixed by the file rather than by a convention.
+  float Jpsi_qoprefplus;
+  float Jpsi_qoprefminus;
+  // Derived, and the numbers the gates quote. sigma_rel is the RELATIVE
+  // momentum resolution of the leg; `Jpsi_rhomom` is the leg-leg correlation
+  // of d ln p (NOT of q/p: the two differ by sign(q+ q-), and it is d ln p
+  // that enters B); `Jpsi_fang` = 1 - (J_kappa C J_kappa^T)/sigma_m^2 with
+  // J_kappa the mass Jacobian restricted to the two q/p components.
+  float Jpsi_sigmarelplus;
+  float Jpsi_sigmarelminus;
+  float Jpsi_rhomom;
+  float Jpsi_fang;
   
   unsigned int Muplus_nhits;
   unsigned int Muplus_nvalid;
@@ -428,6 +667,31 @@ private:
   unsigned int Muminus_nambiguousmatchedvalid;
   unsigned int Muminus_nvalidFinal;
   unsigned int Muminus_nvalidpixelFinal;
+
+  // TRANSMISSION PROBE. Total MEAN energy loss that the fit's
+  // reference trajectory actually applies between the reference point and the
+  // outermost hit, summed over propagation steps of the LAST iteration of the
+  // UNCONSTRAINED (icons==0) pass, in GeV. This is the denominator of the
+  // "systematic transmission"
+  //     T_sys = d(p_fit at reference) / d(assumed total energy loss)
+  // measured by re-running with CVH_DEDX_SCALE != 1 and pairing per track.
+  // It is the model's assumed loss, NOT the true (sim) loss: it is exactly
+  // the quantity the coherent dE/dx re-centring moves.
+  float Muplus_dEref;
+  float Muminus_dEref;
+  // THE WORST SINGLE PROPAGATION STEP OF THE LEG, as a fraction of its
+  // momentum: max over surface-to-surface propagations of (E_in - E_out)/p_in.
+  //
+  // It is a QUALITY variable for the quadratic (hit-chi2) term's material
+  // information, not a physics observable. The mean-loss bias of a group
+  // grows with the step's fractional loss and is universal across groups
+  // above dE/p ~ 0.1, while below 0.01 the pulls close (max/rms 0.96/0.19):
+  // thick steps crossed by curlers with pT < 1 GeV carry 83 % of a group's
+  // information and essentially all of its bias. With this and `_dEref` the
+  // offline accumulation can impose a `dE_ref/p < 0.01` requirement WITHOUT
+  // the step records, which is the whole point (they are 430 kB/candidate).
+  float Muplus_maxfracloss;
+  float Muminus_maxfracloss;
 
   // Per-muon pixel pathology-class counts of the hits USED in the fit
   // (16 combination bins, bit0=edgeX bit1=edgeY bit2=sizeX1 bit3=sizeY1;
@@ -503,6 +767,10 @@ private:
   edm::ESGetToken<Propagator, TrackingComponentsRecord> g4ePropToken_;
   edm::ESGetToken<TransientTrackBuilder, TransientTrackRecord> transTrackBuilderToken_;
   edm::ESGetToken<L1GtTriggerMenu, L1GtTriggerMenuRcd> l1MenuToken_;
+  // The StripCPEfromTrackAngle instance the cloner uses, queried only for its
+  // AlgoParam so the hit-resolution blocks can be labelled with the CPE's own
+  // uProj -- the strip class variable (`hitres_classes.class_of`).
+  edm::ESGetToken<StripClusterParameterEstimator, TkStripCPERecord> stripCPEToken_;
 
 };
 
@@ -513,10 +781,73 @@ ResidualGlobalCorrectionMakerTwoTrackG4e::ResidualGlobalCorrectionMakerTwoTrackG
       ttrhToken_(esConsumes(edm::ESInputTag("", "WithAngleAndTemplate"))),
       g4ePropToken_(esConsumes(edm::ESInputTag("", "Geant4ePropagator"))),
       transTrackBuilderToken_(esConsumes(edm::ESInputTag("", "TransientTrackBuilder"))),
-      l1MenuToken_(esConsumes())
+      l1MenuToken_(esConsumes()),
+      stripCPEToken_(esConsumes(edm::ESInputTag("", "StripCPEfromTrackAngle")))
 {
+  // The resolution-CF exponents this maker exports are the CANDIDATE-MASS
+  // functional, not the single-track q/p one: different standardization,
+  // different ionization sign. They must not share a branch name with it.
+  cfprefix_ = "cfmass";
+  cfGroupDelta_ = false;
+  // Which |pdgId| counts as "the resonance" for the pre-FSR gen mass. The Z
+  // is 23, prompt charmonium 443/100443, bottomonium 553/100553/200553.
+  genResonancePdgIds_ = iConfig.existsAs<std::vector<int>>("genResonancePdgIds")
+      ? iConfig.getParameter<std::vector<int>>("genResonancePdgIds")
+      : std::vector<int>{23, 443, 100443, 553, 100553, 200553};
   doVtxConstraint_ = iConfig.getParameter<bool>("doVtxConstraint");
   doMassConstraint_ = iConfig.getParameter<bool>("doMassConstraint");
+  // minimum size of a pair (see the member docs). `existsAs` so that every
+  // existing cfi keeps working; the DEFAULTS are the cut, not a no-op.
+  minNdof_ = iConfig.existsAs<int>("minNdof") ? iConfig.getParameter<int>("minNdof") : 1;
+  minPairHits_ = iConfig.existsAs<int>("minPairHits")
+                     ? iConfig.getParameter<int>("minPairHits") : -1;
+  if (minPairHits_ < 0) {
+    minPairHits_ = doVtxConstraint_ ? 10 : 11;
+  }
+  minLegHits_ = iConfig.existsAs<int>("minLegHits")
+                    ? iConfig.getParameter<int>("minLegHits") : 8;
+  // THE VERTEX-CONSTRAINT RESIDUAL, off by default so that no existing
+  // configuration changes its output by a byte.
+  exportVtxResidual_ = iConfig.existsAs<bool>("exportVtxResidual")
+                           ? iConfig.getParameter<bool>("exportVtxResidual") : false;
+  // Say out loud what the log-det term is doing, and to which families: it
+  // changes the meaning of `gradv`/`hesspackedv`/`hessfactorv` and, for the
+  // per-module families, the LAYOUT of `globalidxv`.
+  if (exportVarianceGrads_) {
+    std::string fams;
+    if (varianceGradFamilies_.empty()) {
+      fams = "8,9,10,11,15 (default)";
+    } else {
+      for (unsigned int f : varianceGradFamilies_) {
+        fams += (fams.empty() ? "" : ",") + std::to_string(f);
+      }
+    }
+    const bool wantHit = varianceFamilyWanted(8) || varianceFamilyWanted(9);
+    const bool wantMat = varianceFamilyWanted(10) || varianceFamilyWanted(11);
+    std::cout << "ResidualGlobalCorrectionMakerTwoTrackG4e: exportVarianceGrads ON, "
+              << "families " << fams << ".  gradv/hess now differentiate the "
+              << "COVARIANCE as well as the mean; the Hessian is the EXPECTED "
+              << "(Fisher) one, so the mean-variance cross term is zero by "
+              << "construction." << std::endl;
+    if (wantHit || wantMat) {
+      std::cout << "  NOTE: families 8/9/10/11 are per-module and are NOT columns "
+                << "of this maker's parameter vector, so globalidxv/gradv/"
+                << "hesspackedv/hessfactorv/jacrefv/Jpsi_jacMass GROW.  Use "
+                << "varianceGradFamilies=15 to leave the layout unchanged."
+                << std::endl;
+    }
+    if (wantHit) {
+      std::cout << "  NOTE: this maker does not apply exp(corparms) to the hit "
+                << "covariance (the single-track one does), so the parmtype-8/9 "
+                << "derivatives are evaluated at k = 0 whatever corFiles says."
+                << std::endl;
+    }
+    if (varianceFamilyWanted(15) && !exportMaterialNoise_) {
+      std::cout << "  WARNING: family 15 requested but exportMaterialNoise=False, "
+                << "so no parmtype-15 dV block is registered and k_g keeps its "
+                << "mean-loss-only derivative." << std::endl;
+    }
+  }
   massConstraint_ = iConfig.getParameter<double>("massConstraint");
   massConstraintWidth_ = iConfig.getParameter<double>("massConstraintWidth");
   // Per-daughter Geant4 particle-name base. Channel cfis specify this
@@ -550,6 +881,30 @@ ResidualGlobalCorrectionMakerTwoTrackG4e::ResidualGlobalCorrectionMakerTwoTrackG
       ? iConfig.getParameter<double>("edmConvergence") : 1.e-5;
   clampMomentumFloor_ = iConfig.existsAs<double>("clampMomentumFloor")
       ? iConfig.getParameter<double>("clampMomentumFloor") : 2.0;
+  // Echo it once per maker instance: the floor silently decides whether soft
+  // daughters are fitted or pinned at it, and a job log must record which
+  // value was in force. Same line as the single-track maker.
+  maxMomentumStepFactor_ = iConfig.existsAs<double>("maxMomentumStepFactor")
+      ? iConfig.getParameter<double>("maxMomentumStepFactor") : 2.0;
+  stepBacktracking_ = iConfig.existsAs<bool>("stepBacktracking")
+      ? iConfig.getParameter<bool>("stepBacktracking") : true;
+  maxChi2Backtrack_ = iConfig.existsAs<unsigned int>("maxChi2Backtrack")
+      ? iConfig.getParameter<unsigned int>("maxChi2Backtrack") : 4u;
+  stepBacktrackFromIter_ = iConfig.existsAs<unsigned int>("stepBacktrackFromIter")
+      ? iConfig.getParameter<unsigned int>("stepBacktrackFromIter") : 2u;
+  armijoC_ = iConfig.existsAs<double>("armijoC")
+      ? iConfig.getParameter<double>("armijoC") : 1.e-4;
+  armijoSlack_ = iConfig.existsAs<double>("armijoSlack")
+      ? iConfig.getParameter<double>("armijoSlack") : 1.0;
+  stepPrintLimit_ = iConfig.existsAs<unsigned int>("stepPrintLimit")
+      ? iConfig.getParameter<unsigned int>("stepPrintLimit") : 200u;
+  edm::LogPrint("ResidualGlobalCorrectionMakerTwoTrackG4e")
+      << "[cvh] effective: clampMomentumFloor=" << clampMomentumFloor_ << " GeV"
+      << ", maxMomentumStepFactor=" << maxMomentumStepFactor_
+      << ", stepBacktracking=" << stepBacktracking_
+      << " (fromIter=" << stepBacktrackFromIter_
+      << ", maxChi2Backtrack=" << maxChi2Backtrack_
+      << ", armijoC=" << armijoC_ << ", armijoSlack=" << armijoSlack_ << ")";
   maxBacktracks_ = iConfig.existsAs<unsigned int>("maxBacktracks")
       ? iConfig.getParameter<unsigned int>("maxBacktracks") : 4u;
   maxSeedInflations_ = iConfig.existsAs<unsigned int>("maxSeedInflations")
@@ -690,6 +1045,18 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::beginStream(edm::StreamID streami
     tree->Branch("Jpsi_mass", &Jpsi_mass);
     // Per-event dimuon-mass uncertainty propagated from the CVH covariance.
     tree->Branch("Jpsi_sigmamass", &Jpsi_sigmamass);
+    // The two legs' reference momentum covariance and the mass Jacobian it is
+    // contracted with -- 33 floats, 132 B/candidate, 0.16 % of the slim
+    // record. Always on: without them the Jensen and self-consistent-sigma
+    // corrections have no truth-free inputs on data.
+    tree->Branch("Jpsi_covrefmom", &Jpsi_covrefmom);
+    tree->Branch("Jpsi_jacrefmom", &Jpsi_jacrefmom);
+    tree->Branch("Jpsi_qoprefplus", &Jpsi_qoprefplus);
+    tree->Branch("Jpsi_qoprefminus", &Jpsi_qoprefminus);
+    tree->Branch("Jpsi_sigmarelplus", &Jpsi_sigmarelplus);
+    tree->Branch("Jpsi_sigmarelminus", &Jpsi_sigmarelminus);
+    tree->Branch("Jpsi_rhomom", &Jpsi_rhomom);
+    tree->Branch("Jpsi_fang", &Jpsi_fang);
 
     tree->Branch("Muplus_pt", &Muplus_pt);
     tree->Branch("Muplus_eta", &Muplus_eta);
@@ -791,6 +1158,10 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::beginStream(edm::StreamID streami
     tree->Branch("Jpsigen_eta", &Jpsigen_eta);
     tree->Branch("Jpsigen_phi", &Jpsigen_phi);
     tree->Branch("Jpsigen_mass", &Jpsigen_mass);
+    tree->Branch("Jpsigenpre_mass", &Jpsigenpre_mass);
+    tree->Branch("Jpsigenpre_masslep", &Jpsigenpre_masslep);
+    tree->Branch("Jpsigenpre_status", &Jpsigenpre_status);
+    tree->Branch("Jpsigen_massdressed", &Jpsigen_massdressed);
 
     tree->Branch("Muplusgen_pt", &Muplusgen_pt);
     tree->Branch("Muplusgen_eta", &Muplusgen_eta);
@@ -802,6 +1173,22 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::beginStream(edm::StreamID streami
 
     tree->Branch("Muplusgen_dr", &Muplusgen_dr);
     tree->Branch("Muminusgen_dr", &Muminusgen_dr);
+
+    // gen PROVENANCE (see the member docs): what the leg was matched TO, and
+    // whether the two legs are the two daughters of one decay.
+    tree->Branch("Muplusgen_pdgId", &Muplusgen_pdgId);
+    tree->Branch("Muminusgen_pdgId", &Muminusgen_pdgId);
+    tree->Branch("Muplusgen_idx", &Muplusgen_idx);
+    tree->Branch("Muminusgen_idx", &Muminusgen_idx);
+    tree->Branch("Muplusgen_motherPdgId", &Muplusgen_motherPdgId);
+    tree->Branch("Muminusgen_motherPdgId", &Muminusgen_motherPdgId);
+    tree->Branch("Muplusgen_motherIdx", &Muplusgen_motherIdx);
+    tree->Branch("Muminusgen_motherIdx", &Muminusgen_motherIdx);
+    tree->Branch("Muplusgen_isPrompt", &Muplusgen_isPrompt);
+    tree->Branch("Muminusgen_isPrompt", &Muminusgen_isPrompt);
+    tree->Branch("Muplusgen_fromHardProcess", &Muplusgen_fromHardProcess);
+    tree->Branch("Muminusgen_fromHardProcess", &Muminusgen_fromHardProcess);
+    tree->Branch("Jpsigen_sameDecay", &Jpsigen_sameDecay);
     
     // Per-track reference parameters at PCA (3-vector: q/pT, lambda, phi)
     // and Jacobians of those parameters and of the dimuon mass with
@@ -841,6 +1228,13 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::beginStream(edm::StreamID streami
     tree->Branch("Muminus_nvalidpixelFinal", &Muminus_nvalidpixelFinal);
     tree->Branch("Muminus_nmatchedvalid", &Muminus_nmatchedvalid);
     tree->Branch("Muminus_nambiguousmatchedvalid", &Muminus_nambiguousmatchedvalid);
+
+    // transmission probe: assumed total mean eloss along the reference
+    // trajectory (GeV), icons==0, last iteration. See member declaration.
+    tree->Branch("Muplus_dEref", &Muplus_dEref);
+    tree->Branch("Muminus_dEref", &Muminus_dEref);
+    tree->Branch("Muplus_maxfracloss", &Muplus_maxfracloss);
+    tree->Branch("Muminus_maxfracloss", &Muminus_maxfracloss);
 
     tree->Branch("Muplus_pixClass", &Muplus_pixClass);
     tree->Branch("Muminus_pixClass", &Muminus_pixClass);
@@ -972,7 +1366,28 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
   const bool dogen = fitFromGenParms_;
  
-  constexpr bool dolocalupdate = false;
+  // CVH_LOCAL_UPDATE=1 -- EXPERIMENT (2026-08-10). Default false reproduces the
+  // baseline bit-identically.
+  //
+  // false = the AN's scheme: between Gauss-Newton iterations only the REFERENCE
+  // STATE is updated and each track is re-propagated UNSCATTERED with the
+  // nominal energy loss, so material and Jacobians are evaluated on a
+  // trajectory the particle is increasingly not on. The error is second order
+  // in the scattering deviation (~1/p^2), which matches the observed low-p
+  // breakdown (spike falls as ~p^-3.4, threshold-like below 3 GeV) far better
+  // than the energy-loss 1/p.
+  //
+  // true = the standard GBL iteration: the per-layer states are updated from
+  // the fitted kinks and carried forward, so the next propagation starts from
+  // the DEFORMED trajectory and re-samples the material along it; Hp is
+  // recomputed at the updated state and Q/dQMS/dQI are transformed to local
+  // coordinates. dx0 then holds only the residual w.r.t. the propagated state,
+  // so the kink prior is not double-counted.
+  //
+  // Josh: "all attempts to relax this constraint in the past introduced other
+  // problems ... in principle you need a quasi-continuously deformed
+  // propagation to the next layer". This switch is to find out WHICH problems.
+  static const bool dolocalupdate = (getenv("CVH_LOCAL_UPDATE") != nullptr);
   
   using namespace edm;
 
@@ -1105,6 +1520,11 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
   MatrixXd covfull;
   Matrix<double, 6, 6> covrefmom;
+  // THE VERTEX FUNCTIONAL's influence row `w_v` (ncons) and its variance,
+  // carried from the doRes block (where Vinv/F/C are still alive) to the
+  // `Jpsi_jacVtx` emitter, which runs after the global-index remap. Members
+  // for the same reason `covrefmom` is one: the two live in sibling scopes.
+  Eigen::VectorXd wvtxinf;
 
   // doRes port (per-candidate mass-CF export): the material process-noise
   // derivative blocks dV_b (MS and ionization parts of Q), their row
@@ -1112,9 +1532,20 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
   // each iteration of the unconstrained (icons==0) pass; the converged
   // iteration's content feeds the mass-projected influence export.
   const bool dores = doRes_;
+  // The CPE's own uProj is the strip hit-class variable; the handle is taken
+  // once per event, as in the single-track maker.
+  const StripCPE *stripCPEForExport =
+      doRes_ ? dynamic_cast<const StripCPE *>(iSetup.getHandle(stripCPEToken_).product()) : nullptr;
+
   std::vector<SparseMatrix<double>> dVs;
   std::vector<std::array<unsigned int, 2>> resblockrng;
   std::vector<unsigned int> resglobidx;
+  // number of DISTINCT final columns that received a log-det contribution on
+  // the exported pass; bounds the rank the variance block adds to `hess`
+  // (rank(A+B) <= rank A + rank B), which is what the factored storage needs.
+  unsigned int nvarcols = 0;
+  // hit class per registered block, -1 for material (see reshitcls)
+  std::vector<int> rescls_;
 // FullPivLU<MatrixXd> Cinvd;
 // ColPivHouseholderQR<MatrixXd> Cinvd;
   
@@ -1550,7 +1981,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                 ++pixHitsClass_[isub][icls];
                 // Boundary veto configurable via keepPixelEdgeHits; sizeX
                 // threshold configurable via pixelMinSizeX (default 2 = legacy).
-                hitquality = (keepPixelEdgeHits_ || !onEdge) && cluster.sizeX() >= pixelMinSizeX_;
+                hitquality = (keepPixelEdgeHits_ || !onEdge) && cluster.sizeX() >= pixelMinSizeX_
+                          && cluster.sizeY() >= pixelMinSizeY_;
                 if (!hitquality) ++pixHitsDemoted_;
                 if (hitquality) ++pixclassarr[id][icls];
                 else ++npixdemotedarr[id];
@@ -1617,6 +2049,12 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
       std::array<unsigned int, 2> nvalidpixelFinalarr = {{ 0, 0 }};
       std::array<unsigned int, 2> nmatchedvalidarr = {{ 0, 0 }};
       std::array<unsigned int, 2> nambiguousmatchedvalidarr = {{ 0, 0 }};
+
+      // transmission probe: per-leg sum of the propagator's applied mean
+      // energy loss (GeV). Reset per leg at the top of each iteration's hit
+      // loop, so after the loop it holds the last (converged) iteration.
+      std::array<double, 2> dErefarr = {{ 0., 0. }};
+      std::array<double, 2> maxFracLossArr = {{ 0., 0. }};
       
       const std::array<bool, 2> highpurityarr = {{ itrack->quality(reco::TrackBase::highPurity),
                                                   jtrack->quality(reco::TrackBase::highPurity) }};
@@ -1748,6 +2186,30 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
       if (nhitsarr[0] == 0 || nhitsarr[1] == 0) {
         continue;
       }
+
+      // THE MINIMUM-SIZE REQUIREMENT (see the minNdof_ / minPairHits_ docs).
+      // Evaluated for the unconstrained-mass pass, which is the one whose
+      // vertex residual and chi2/ndof are exported; the mass-constrained pass
+      // has one degree of freedom more and can never be the binding one.
+      {
+        const long long ndofpre = (long long)nvalid + (long long)nvalidpixel - 10LL
+                                  + (bsConstraint_ ? 3LL : 0LL)
+                                  + (doPointingConstraint_ ? 1LL : 0LL)
+                                  + (doVtxConstraint_ ? 1LL : 0LL);
+        if (minNdof_ > 0 && ndofpre < (long long)minNdof_) {
+          ++fitSkippedNdof_;
+          continue;
+        }
+        if (minPairHits_ > 0 && (int)nvalid < minPairHits_) {
+          ++fitSkippedHits_;
+          continue;
+        }
+        if (minLegHits_ > 0 && ((int)nvalidarr[0] < minLegHits_ ||
+                                (int)nvalidarr[1] < minLegHits_)) {
+          ++fitSkippedLegHits_;
+          continue;
+        }
+      }
       
 // if (mu0gen == nullptr || mu1gen == nullptr || mu0gen->eta()<2.2 || mu1gen->eta()<2.2) {
 // continue;
@@ -1773,11 +2235,11 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
       const unsigned int nstateparms = 10 + 5*nhits;
       const unsigned int nparmsfull = nstateparms + npars;
 
-      // Sparse GBL: the state params that are actually solved for. Mirrors
-      // the dense freezeparm() logic (old lines ~2282-2298): fitFromGenParms_
-      // freezes the 10-dim vertex PCA (idx 0..9); doVtxConstraint_ freezes
-      // the track-PCA distance (idx 6). A frozen index is simply excluded
-      // from freestateidxs instead of being deweighted with a 1e6 diagonal.
+      // Sparse GBL: the state params that are actually solved for.
+      // fitFromGenParms_ freezes the 10-dim vertex PCA (idx 0..9);
+      // doVtxConstraint_ freezes the track-PCA distance (idx 6). A frozen
+      // index is simply excluded from freestateidxs instead of being
+      // deweighted with a 1e6 diagonal.
       using VectorXb = Matrix<bool, Dynamic, 1>;
       VectorXb freestatemask = VectorXb::Ones(nstateparms);
       if (fitFromGenParms_) {
@@ -1804,6 +2266,20 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
       // failures at iiter > 0, seed-momentum inflations at iiter == 0.
       unsigned int nBacktracks = 0;
       unsigned int nSeedInflations = 0;
+      // ---- chi2-based (Armijo) backtracking bookkeeping, per candidate ----
+      // chisq0valPrev is the total chi2 at the previous iteration's
+      // linearization point; predDecrPrev is the quadratic model's predicted
+      // chi2 change of the step actually applied there. stepScaleApplied
+      // accumulates the clamp scale within an iteration. nChi2Bt is the
+      // halving count since the last accepted step, nChi2BtTotal a per-
+      // candidate budget guaranteeing termination (a backtrack redoes the same
+      // iteration index and so does not consume the niters budget).
+      bool stepBtChi2ThisFit = false;
+      unsigned int nChi2Bt = 0;
+      unsigned int nChi2BtTotal = 0;
+      double chisq0valPrev = std::numeric_limits<double>::quiet_NaN();
+      double predDecrPrev = 0.;
+      double stepScaleApplied = 1.;
       ++fitAttempted_;
       
       
@@ -1829,6 +2305,44 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
         Jpsi_mass_iter.clear();
       }
 
+
+      // The *cons_* kinematics are written only by the icons != 0 (mass-
+      // constrained) pass. With doMassConstraint_ off, nicons == 1 and that
+      // pass never runs, so without this reset the branches would carry
+      // whatever was in the member from the previous candidate -- or, on the
+      // first candidate, uninitialised memory. Reset per candidate (one
+      // tree->Fill() per candidate, after the icons loop) so the value is
+      // always the -99 "not filled" sentinel used elsewhere in this maker.
+      Jpsicons_d = -99.f;
+      Jpsicons_x = -99.f;
+      Jpsicons_y = -99.f;
+      Jpsicons_z = -99.f;
+      Jpsicons_pt = -99.f;
+      Jpsicons_eta = -99.f;
+      Jpsicons_phi = -99.f;
+      Jpsicons_mass = -99.f;
+      Jpsi_mass_unc = -99.f;
+      Jpsi_covmassvtx = 0.f;
+      Mupluscons_pt = -99.f;
+      Mupluscons_eta = -99.f;
+      Mupluscons_phi = -99.f;
+      Muminuscons_pt = -99.f;
+      Muminuscons_eta = -99.f;
+      Muminuscons_phi = -99.f;
+      Jpsikincons_x = -99.f;
+      Jpsikincons_y = -99.f;
+      Jpsikincons_z = -99.f;
+      Jpsikincons_pt = -99.f;
+      Jpsikincons_eta = -99.f;
+      Jpsikincons_phi = -99.f;
+      Jpsikincons_mass = -99.f;
+      Mupluskincons_pt = -99.f;
+      Mupluskincons_eta = -99.f;
+      Mupluskincons_phi = -99.f;
+      Muminuskincons_pt = -99.f;
+      Muminuskincons_eta = -99.f;
+      Muminuskincons_phi = -99.f;
+
       for (unsigned int icons = 0; icons < nicons; ++icons) {
 
         // Sparse GBL constraint-row count for this icons pass:
@@ -1838,10 +2352,18 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
         //    are handled by a near-singular Vinv on the unmeasured coord,
         //    NOT by emitting fewer rows -- so it is 2*nvalid, not the
         //    single-track maker's nvalid+nvalidpixel)
-        //  - 3 beamspot rows per track when bsConstraint_ (off by default)
+        //  - 3 beamspot rows ONCE PER PAIR when bsConstraint_ (off by
+        //    default). It USED to be 3*2 -- the emission sat inside the
+        //    per-leg `for (id...)` loop with no `id == 0` guard, so the same
+        //    three rows (same residual, same Jacobian on the same three
+        //    state indices, same weight) went in twice and `chisq0val`
+        //    counted the beam chi2 twice, HALVING the effective luminous-
+        //    region covariance -- while `ndof` below already counted +3.
+        //    The luminous region is ONE Gaussian noise block shared by the
+        //    two legs, like one extra hit; it enters once.
         //  - 1 pointing row when doPointingConstraint_ (off by default)
         //  - 1 J/psi-mass row on the constrained pass (icons==1)
-        const unsigned int nbscons = bsConstraint_ ? 3u * 2u : 0u;
+        const unsigned int nbscons = bsConstraint_ ? 3u : 0u;
         const unsigned int npointcons = doPointingConstraint_ ? 1u : 0u;
         const unsigned int nmasscons = (icons == 1) ? 1u : 0u;
         const unsigned int ncons =
@@ -1980,6 +2502,20 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           }
         }
         
+        // THE COMMON-VERTEX CONSTRAINT FREEZES INDEX 6 AT ITS SEED VALUE, so
+        // the seed must have d = 0 for the constraint to mean "one vertex".
+        // The seeds above are each track's own PCA to the midpoint of the two
+        // perigees (or the two perigees themselves), whose separation along
+        // `n_hat` is the seed DCA -- O(10-100 um) for a J/psi, not zero.
+        // Re-expressing the seed with d = 0 moves each reference point by
+        // d_seed/2 along `n_hat` and changes nothing else (`twoTrackPca2cart`
+        // is the exact inverse of `twoTrackCart2pca` at fixed momenta).
+        if (doVtxConstraint_) {
+          Matrix<double, 10, 1> statepcaseed = twoTrackCart2pca(refftsarr[0], refftsarr[1]);
+          statepcaseed[6] = 0.;
+          refftsarr = twoTrackPca2cart(statepcaseed);
+        }
+
         std::array<std::vector<Matrix<double, 7, 1>>, 2> layerStatesarr;
         for (unsigned int id = 0; id < 2; ++id) {
           auto const &hits = hitsarr[id];
@@ -1988,6 +2524,11 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
         
 
         double chisqvalold = std::numeric_limits<double>::max();
+        // The objective CHANGES between icons passes (icons 1 adds the mass
+        // constraint row), so the Armijo history must not cross that boundary.
+        chisq0valPrev = std::numeric_limits<double>::quiet_NaN();
+        predDecrPrev = 0.;
+        nChi2Bt = 0;
 
         std::array<unsigned int, 2> trackstateidxarr;
         std::array<int, 2> muchargearr;
@@ -2026,6 +2567,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           const std::array<std::vector<Matrix<double, 7, 1>>, 2> layerStatesSnap = layerStatesarr;
           bool retryIter = false;
           int retryFailId = -1;
+          stepScaleApplied = 1.;
 
           // Sparse GBL assembly buffers (replaces dense gradfull/hessfull).
           // Ffull = d(residual)/d(state)  [ncons x nstateparms]
@@ -2043,8 +2585,16 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             dVs.clear();
             resblockrng.clear();
             resglobidx.clear();
+            resfamily_.clear();
+            resvalidhit_.clear();
+            rescls_.clear();
             ioniurbanidx.clear();
             ioniurbanv.clear();
+            ioniqscaleidx.clear();
+            ioniqscalev.clear();
+            radstepidx.clear();
+            radstepv.clear();
+            radstepspecv.clear();
             msmoliidx.clear();
             msmoliv.clear();
           }
@@ -2069,6 +2619,17 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           // `icons`; renamed `irow` here because `icons` is the outer
           // constrained/unconstrained pass index in this two-track maker).
           unsigned int irow = 0;
+
+          // The beam-line block's row offset and the numbers the export
+          // needs, refreshed every iteration so the converged iteration's
+          // values are what is written. -1 = the rows are off.
+          int bsrow = -1;
+          Matrix<double, 3, 3> bscovBS = Matrix<double, 3, 3>::Zero();
+          Matrix<double, 2, 1> bswidtherr = Matrix<double, 2, 1>::Zero();
+          Matrix<double, 3, 1> bsspot = Matrix<double, 3, 1>::Zero();
+          Matrix<double, 2, 1> bsslope = Matrix<double, 2, 1>::Zero();
+          Matrix<double, 3, 1> bswidth = Matrix<double, 3, 1>::Zero();
+          double bschisq0 = 0.;
 
           globalidxv.clear();
           globalidxv.resize(npars, 0);
@@ -2117,6 +2678,12 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
     // FreeTrajectoryState refFts = outparts[id]->currentState().freeTrajectoryState();
 // FreeTrajectoryState &refFts = refftsarr[id];
             
+            // First resolution block belonging to THIS leg. The vertex
+            // functional's ionization sign carries the leg's CHARGE (the two
+            // legs have opposite ones, unlike the mass functional whose sign
+            // is -1 for both), so each block has to know which leg it is on.
+            resLegStart_[id] = resblockrng.size();
+
             Matrix<double, 7, 1> &refFts = refftsarr[id];
             auto &hits = hitsarr[id];
 
@@ -2135,21 +2702,37 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             const unsigned int tracknhits = hits.size();
 
             Matrix<double, 7, 1> updtsos = refFts;
-            
-            
-            if (bsConstraint_) {
-              // apply beamspot constraint
-              // TODO add residual corrections for beamspot parameters?
-              // TODO impose constraints on individual tracks when not applying common vertex constraint?
-              
+
+            // transmission probe: restart the assumed-eloss accumulator for
+            // this leg on every iteration (and on every backtrack retry,
+            // which re-enters here), so the value surviving the loop belongs
+            // to the converged reference trajectory.
+            dErefarr[id] = 0.;
+            maxFracLossArr[id] = 0.;
+
+
+            // THE BEAM-LINE (LUMINOUS-REGION) CONSTRAINT.
+            //
+            // ONE Gaussian noise block shared by the two legs -- three rows
+            // on the vertex-PCA position -- so it is emitted ONCE PER PAIR,
+            // `id == 0`, exactly like the pointing constraint below.  It
+            // used to be emitted once per LEG: same residual, same Jacobian,
+            // same weight, twice, which halved the effective covariance and
+            // double-counted the beam chi2 while `ndof` counted +3.  See the
+            // beam-line block in the base-class header for the full account
+            // and for the leave-one-out residual the export builds from it.
+            if (bsConstraint_ && id == 0) {
               constexpr unsigned int nlocalvtx = 3;
               constexpr unsigned int nlocal = nlocalvtx;
               constexpr unsigned int localvtxidx = 0;
               constexpr unsigned int fullvtxidx = 7;
 
-              const double sigb1 = bsH->BeamWidthX();
-              const double sigb2 = bsH->BeamWidthY();
-              const double sigb3 = bsH->sigmaZ();
+              // `beamWidthScale_` multiplies the widths (covariance by its
+              // square).  At 1e6 the rows are weightless: the gate that the
+              // whole block reduces to the rows-OFF fit.
+              const double sigb1 = beamWidthScale_*bsH->BeamWidthX();
+              const double sigb2 = beamWidthScale_*bsH->BeamWidthY();
+              const double sigb3 = beamWidthScale_*bsH->sigmaZ();
               const double dxdz = bsH->dxdz();
               const double dydz = bsH->dydz();
               const double x0 = bsH->x0();
@@ -2176,10 +2759,20 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               covBS(2,1) = covBS(1,2) = dydz*(varb3-varb2)-dxdz*covBS(1,0);
               covBS(2,2) = varb3;
 
+              // THE COMMON VERTEX, not the leg's reference point.
+              // `twoTrackPca2cart` puts the two reference points at
+              // `x_v -+ (d/2) n_hat`, so `refftsarr[id].head<3>()` is the
+              // vertex only when index 6 is frozen at zero.  The MIDPOINT is
+              // `x_v` identically in both regimes, and its Jacobian is
+              // exactly `I` on state indices 7,8,9 and ZERO on index 6 and
+              // on the momenta -- which is what `Fbs = Identity` asserts.
+              const Matrix<double, 3, 1> xv =
+                  0.5*(refftsarr[0].head<3>() + refftsarr[1].head<3>());
+
               Matrix<double, 3, 1> dbs0;
-              dbs0[0] = refFts[0] - x0;
-              dbs0[1] = refFts[1] - y0;
-              dbs0[2] = refFts[2] - z0;
+              dbs0[0] = xv[0] - x0;
+              dbs0[1] = xv[1] - y0;
+              dbs0[2] = xv[2] - z0;
 
               const Matrix<double, 3, nlocal> Fbs = Matrix<double, 3, 3>::Identity();
               const Matrix<double, 3, 3> covBSinv = covBS.inverse();
@@ -2188,14 +2781,50 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               chisq0val += bschisq;
 
               // Sparse GBL row write: 3 beamspot rows constraining the
-              // vertex-PCA position (state idx 7,8,9). Emitted once per
-              // track id (matching the dense path's per-id accumulation;
-              // ncons accounts for 3*2). Fbs = Identity(3,3), residual
-              // dbs0 = vertex - beamspot, weight covBSinv.
+              // vertex-PCA position (state idx 7,8,9).  Fbs = Identity(3,3),
+              // residual dbs0 = vertex - beamspot, weight covBSinv.
+              bsrow = int(irow);
+              bscovBS = covBS;
+              bsspot << x0, y0, z0;
+              bsslope << dxdz, dydz;
+              bswidth << sigb1, sigb2, sigb3;
+              // the RECORD's own errors on the two transverse widths -- the
+              // prior width for the two `beamwidth_*` variance scales.  They
+              // are quoted on sigma, so the prior on a VARIANCE scale
+              // `k = (sigma'/sigma)^2` is `2 * BeamWidthXError/BeamWidthX`.
+              bswidtherr << beamWidthScale_*bsH->BeamWidthXError(),
+                            beamWidthScale_*bsH->BeamWidthYError();
+              bschisq0 = bschisq;
               rfull.segment<3>(irow) = dbs0;
               Ffull.block(irow, fullvtxidx, 3, nlocalvtx) =
                   Fbs.leftCols<nlocalvtx>();
               Vinvfull.block<3, 3>(irow, irow) = covBSinv;
+
+              // Registered as a RESOLUTION BLOCK, family 16, dV = covBS --
+              // the same convention as the hit families (dV_b/dk = V_b for
+              // `V_b -> e^k V_b`).  Without it `sum_b |a_b|^2 == sigma^2`
+              // would miss the luminous region's own share for EVERY
+              // functional.  `kBeamSpotGlobIdx` is a sentinel: family 16 has
+              // no `detidparms` entry and adds no column to the quadratic
+              // term.
+              if (dores) {
+                std::vector<Triplet<double>> bscoeffs;
+                for (unsigned int a = 0; a < 3; ++a) {
+                  for (unsigned int b = 0; b < 3; ++b) {
+                    if (covBS(a, b) != 0.) {
+                      bscoeffs.emplace_back(irow + a, irow + b, covBS(a, b));
+                    }
+                  }
+                }
+                SparseMatrix<double> &dVbs = dVs.emplace_back(ncons, ncons);
+                dVbs.setFromTriplets(bscoeffs.begin(), bscoeffs.end());
+                resblockrng.push_back({{irow, 3u}});
+                resglobidx.push_back(kBeamSpotGlobIdx);
+                resfamily_.push_back(kBeamSpotFamily);
+                resvalidhit_.push_back(-1);
+                rescls_.push_back(-1);
+              }
+
               irow += 3;
 
             }
@@ -2339,6 +2968,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                                                                           0., 0., -1., g4PartName,
                                                                           matModel_.get(),
                                                                           matModel_ ? &groupJacs_ : nullptr,
+                                                                          (matModel_ && doRes_ && exportMaterialNoise_) ? &groupQs_ : nullptr,
                                                                           fieldModeProvider_.get(),
                                                                           fieldModeProvider_ ? &modeJacs_ : nullptr);
               if (!std::get<0>(propresult)) {
@@ -2365,6 +2995,25 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
 
               updtsos = std::get<1>(propresult);
+
+              // transmission probe: accumulate the mean energy loss this
+              // propagation step actually applied. Taken from the propagator
+              // input/output states rather than from any dE/dx model call, so
+              // it stays correct whatever scales the loss (CVH_DEDX_SCALE,
+              // the global material model's k_g, the per-module dxi). The
+              // difference is formed BEFORE any local state update below, so
+              // only the propagation (not the fit) contributes.
+              {
+                const double m2 = trackMass[id] * trackMass[id];
+                const double pIn = propInputState.segment<3>(3).norm();
+                const double eIn = std::sqrt(pIn * pIn + m2);
+                const double eOut = std::sqrt(updtsos.segment<3>(3).squaredNorm() + m2);
+                dErefarr[id] += eIn - eOut;
+                if (pIn > 0.) {
+                  maxFracLossArr[id] = std::max(maxFracLossArr[id], (eIn - eOut) / pIn);
+                }
+              }
+
               const Matrix<double, 5, 5> Qcurv = std::get<2>(propresult);
               const Matrix<double, 5, 5> dQMScurv = std::get<5>(propresult);
               const Matrix<double, 5, 5> dQIcurv = std::get<6>(propresult);
@@ -2391,6 +3040,10 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                   msmoliv.push_back(ms.beta);
                   msmoliv.push_back(ms.thp2);
                   msmoliv.push_back(ms.dOverX0);
+                  // per-element Moliere sums (2026-08-08): effZ/effA are mass
+                  // averages and both parameters are non-linear in Z
+                  msmoliv.push_back(ms.zzp1OverA);
+                  msmoliv.push_back(ms.lnScreenW);
                   msmoliv.push_back(ms.stepGroup);
                 }
                 for (auto const &us : g4prop->ioniStepLog()) {
@@ -2406,6 +3059,51 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                   ioniurbanv.push_back(us.rec.tmaxr);
                   ioniurbanv.push_back(us.rec.scaling);
                   ioniurbanv.push_back(us.cs);
+                  // regime 2/3 (CVH_IONI_EXACTDELTA): two extra columns AFTER
+                  // cs, so every existing column index is unchanged. The
+                  // stride is `ioniurbanstride` (12, or 14 with the switch on).
+                  if (G4UniversalFluctuationForExtrapolator::exactDeltaEnabled()) {
+                    ioniurbanv.push_back(us.rec.beta2);
+                    ioniurbanv.push_back(us.rec.etot);
+                  }
+                  // material group of the step, ALWAYS last (see
+                  // UrbanIoniStep::stepGroup)
+                  ioniurbanv.push_back(us.stepGroup);
+                }
+
+                // Ionization-block scale of this leg, [sc, nstep]. THIS MAKER
+                // HAS NO CGF OVERRIDE HOOKS (it never calls setCgfOverride),
+                // but that alone does NOT make the factor 1: with
+                // CgfQoPMode >= 1 the propagator still takes its UNCACHED
+                // branch and substitutes there. So the value is exported the
+                // same way rather than hard-coded -- it is 1.0 because the
+                // driver pins CgfQoPMode=0, and it will be right if that ever
+                // changes.
+                ioniqscaleidx.push_back(ioniglobalidx);
+                ioniqscalev.push_back(g4prop->cgfQScale());
+                ioniqscalev.push_back(static_cast<float>(g4prop->ioniStepLog().size()));
+
+                // radiative steps of the same leg (see the single-track maker)
+                for (auto const &rs : g4prop->radStepLog()) {
+                  radstepidx.push_back(ioniglobalidx);
+                  radstepv.push_back(rs.effZ);
+                  radstepv.push_back(rs.effA);
+                  radstepv.push_back(rs.xg);
+                  radstepv.push_back(rs.etotGeV);
+                  radstepv.push_back(rs.pGeV);
+                  radstepv.push_back(rs.dOverX0);
+                  radstepv.push_back(rs.stepCm);
+                  radstepv.push_back(rs.dedxRad);
+                  radstepv.push_back(rs.dedxBrem);
+                  radstepv.push_back(rs.dedxPair);
+                  radstepv.push_back(rs.cs);
+                  radstepv.push_back(rs.stepGroup);   // column 11: the material group
+                  for (int iv = 0; iv < RADSTEP_NV; ++iv) {
+                    radstepspecv.push_back(rs.dNdvBrem[iv]);
+                  }
+                  for (int iv = 0; iv < RADSTEP_NV; ++iv) {
+                    radstepspecv.push_back(rs.dNdvPair[iv]);
+                  }
                 }
               }
 
@@ -2479,6 +3177,57 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                 dQMS = Hm*dQMScurv*Hm.transpose();
                 dQI = Hm*dQIcurv*Hm.transpose();
               }
+
+              // ---- PARMTYPE-15: THE MATERIAL GROUP'S OWN PROCESS NOISE ----
+              //
+              // `k_g` scales the step's MEAN loss AND, coherently, its MS
+              // covariance and ionization variance (`matStepFact` in the
+              // propagator's M1 block).  Only the mean was ever
+              // differentiated: the parmtype-15 column of
+              // `transportJacobianBxByBzD` is the `dxi` column, whose one
+              // non-zero row is `dqopdxi`.  Registering the group's own
+              // dV here is the two-track counterpart of the single-track
+              // maker's block (`ResidualGlobalCorrectionMakerG4e.cc`
+              // "PARMTYPE-15" comment); together with the log-det assembly
+              // further down it gives `k_g` its WIDTH term.
+              //
+              // `sum_g dQ_g == dQMS + dQI` exactly (the propagator sums the
+              // same per-step `errMS + errI` into `groupQs_`, transported at
+              // the same point and by the same Jacobian), so these blocks
+              // are a RE-PARTITION of the parmtype-10/11 noise, not an
+              // addition to it -- which is why `resinfcovgrp` is kept apart
+              // from `resinfcov` below.
+              const auto registerMatGroupNoise = [&](unsigned int r0) {
+                if (!(dores && exportMaterialNoise_ && globalMaterialModel_)) {
+                  return;
+                }
+                for (auto const &gq : groupQs_) {
+                  if (gq.first < 0 || unsigned(gq.first) >= nMatGroups) {
+                    continue;
+                  }
+                  Matrix<double, 5, 5> dQG = gq.second;
+                  if (dolocalupdate) {
+                    dQG = Hm * gq.second * Hm.transpose();
+                  }
+                  if (!(dQG.cwiseAbs().maxCoeff() > 0.)) {
+                    continue;
+                  }
+                  std::vector<Triplet<double>> coeffs;
+                  coeffs.reserve(25);
+                  for (unsigned int ir = 0; ir < 5; ++ir) {
+                    for (unsigned int ic = 0; ic < 5; ++ic) {
+                      coeffs.emplace_back(r0 + ir, r0 + ic, dQG(ir, ic));
+                    }
+                  }
+                  SparseMatrix<double> &dV = dVs.emplace_back(ncons, ncons);
+                  dV.setFromTriplets(coeffs.begin(), coeffs.end());
+                  resblockrng.push_back({{r0, 5}});
+                  resglobidx.push_back(matGroupGlobalIdx_[gq.first]);
+                  resfamily_.push_back(15);          // global material group
+                  resvalidhit_.push_back(-1);
+                  rescls_.push_back(-1);
+                }
+              };
 
               // Guarded inversion of the process noise: a (near-)zero-length
               // leg -- a displaced V0 vertex sitting on the first-hit layer --
@@ -2683,7 +3432,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                 Jfull.block(irow, parmidx, 5, nlocalparms) =
                     Fprop.middleCols(localparmidx, nlocalparms);
                 Vinvfull.block<5, 5>(irow, irow) = Qinv;
-                if (dores && icons == 0) {
+                if (dores && (icons == 0 || exportVarianceGrads_)) {
                   for (auto const *dQpart : {&dQMS, &dQI}) {
                     std::vector<Triplet<double>> coeffs;
                     for (unsigned int ir = 0; ir < 5; ++ir) {
@@ -2695,7 +3444,12 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                     dV.setFromTriplets(coeffs.begin(), coeffs.end());
                     resblockrng.push_back({{irow, 5}});
                     resglobidx.push_back(dQpart == &dQMS ? msglobalidx : ioniglobalidx);
+                    // family (parmtype) of the entry, for the cvhcf pooling
+                    resfamily_.push_back(dQpart == &dQMS ? 10 : 11);
+                    resvalidhit_.push_back(-1);   // material block, not a hit
+                    rescls_.push_back(-1);
                   }
+                  registerMatGroupNoise(irow);
                 }
                 irow += 5;
               }
@@ -2734,7 +3488,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                 Jfull.block(irow, parmidx, 5, nlocalparms) =
                     Fprop.middleCols(localparmidx, nlocalparms);
                 Vinvfull.block<5, 5>(irow, irow) = Qinv;
-                if (dores && icons == 0) {
+                if (dores && (icons == 0 || exportVarianceGrads_)) {
                   for (auto const *dQpart : {&dQMS, &dQI}) {
                     std::vector<Triplet<double>> coeffs;
                     for (unsigned int ir = 0; ir < 5; ++ir) {
@@ -2746,7 +3500,12 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                     dV.setFromTriplets(coeffs.begin(), coeffs.end());
                     resblockrng.push_back({{irow, 5}});
                     resglobidx.push_back(dQpart == &dQMS ? msglobalidx : ioniglobalidx);
+                    // family (parmtype) of the entry, for the cvhcf pooling
+                    resfamily_.push_back(dQpart == &dQMS ? 10 : 11);
+                    resvalidhit_.push_back(-1);   // material block, not a hit
+                    rescls_.push_back(-1);
                   }
+                  registerMatGroupNoise(irow);
                 }
                 irow += 5;
 
@@ -3163,6 +3922,110 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                               2, nlocalparms) =
                       Fhit.middleCols(localparmidx, nlocalparms);
                   Vinvfull.block<2, 2>(irow, irow) = Vinv;
+
+                  // ---- HIT-RESOLUTION BLOCKS (parmtype 8/9) --------------
+                  //
+                  // Registering the hit blocks here is what gives the mass
+                  // functional hit shares to weigh, so the per-hit-class
+                  // resolution parameters can be fitted from two-track
+                  // candidates and not only from single tracks.
+                  //
+                  // `dVs` in THIS maker feeds nothing but the influence
+                  // export, so registering a block cannot move the fit; and
+                  // the parmtype-8/9 corrections are deliberately NOT applied
+                  // to the covariance here (the single-track maker scales
+                  // `iV` by exp(corparms)) -- that WOULD be a fit change, and
+                  // this export is a derivative evaluated at the covariance
+                  // the fit actually used.
+                  //
+                  // dV is the derivative of the MEASUREMENT-frame covariance
+                  // w.r.t. the log-resolution parameter, split between the
+                  // local-x and local-y families so the two sum to the full
+                  // covariance -- the same decomposition the single-track
+                  // maker makes, read here off `Vinv` because the rows are
+                  // already in the measurement frame (local x/y on pixels,
+                  // local phi on wedges, local x on rectangular strips).
+                  // `icons == 0` is the influence export's pass; with the
+                  // log-det term on, the exported grad/hess come from the
+                  // LAST pass (icons == 1 under doMassConstraint), so the
+                  // blocks have to exist there too or the term would be
+                  // silently dropped.
+                  if (dores && exportHitResBlocks_ && (icons == 0 || exportVarianceGrads_)) {
+                    const bool pix2d = ispixel && !hit1d;
+                    Matrix2d hitcov = Matrix2d::Zero();
+                    bool hitcovok = false;
+                    if (pix2d) {
+                      const double det = Vinv(0, 0) * Vinv(1, 1) - Vinv(0, 1) * Vinv(1, 0);
+                      if (std::abs(det) > 0.) {
+                        hitcov = Vinv.inverse();
+                        hitcovok = true;
+                      }
+                    } else if (Vinv(0, 0) > 0.) {
+                      hitcov(0, 0) = 1. / Vinv(0, 0);
+                      hitcovok = true;
+                    }
+                    if (hitcovok) {
+                      const DetId hitdetid = preciseHit->geographicalId();
+                      const unsigned int nb = pix2d ? 2u : 1u;
+                      // the class variables, exactly `hitres_classes.class_of`
+                      int clsSizeX = 1;
+                      int clsQBin = -99;
+                      float clsUProj = -99.f;
+                      const TrackerSingleRecHit *clstkhit =
+                          dynamic_cast<const TrackerSingleRecHit *>(&*preciseHit);
+                      if (clstkhit != nullptr) {
+                        if (ispixel) {
+                          if (clstkhit->cluster_pixel().isNonnull()) {
+                            clsSizeX = clstkhit->cluster_pixel()->sizeX();
+                          }
+                          const SiPixelRecHit *pxh = dynamic_cast<const SiPixelRecHit *>(clstkhit);
+                          if (pxh != nullptr) {
+                            clsQBin = pxh->qBin();
+                          }
+                        } else if (clstkhit->cluster_strip().isNonnull()) {
+                          clsSizeX = clstkhit->cluster_strip()->amplitudes().size();
+                          const StripGeomDetUnit *stripdu =
+                              dynamic_cast<const StripGeomDetUnit *>(clstkhit->det());
+                          if (stripCPEForExport != nullptr && stripdu != nullptr) {
+                            clsUProj = stripCPEForExport->getAlgoParam(*stripdu, locparm).afullProjection;
+                          }
+                        }
+                      }
+                      const int subdet = hitdetid.subdetId();
+
+                      // local x / phi
+                      {
+                        std::vector<Triplet<double>> coeffs;
+                        coeffs.emplace_back(irow, irow, hitcov(0, 0));
+                        if (pix2d) {
+                          coeffs.emplace_back(irow, irow + 1, 0.5 * hitcov(0, 1));
+                          coeffs.emplace_back(irow + 1, irow, 0.5 * hitcov(0, 1));
+                        }
+                        SparseMatrix<double> &dVx = dVs.emplace_back(ncons, ncons);
+                        dVx.setFromTriplets(coeffs.begin(), coeffs.end());
+                        resblockrng.push_back({{irow, nb}});
+                        resglobidx.push_back(detidparms.at(std::make_pair(8, hitdetid)));
+                        resfamily_.push_back(8);
+                        resvalidhit_.push_back(int(id));
+                        rescls_.push_back(hitResClassIndex(subdet, clsSizeX, clsUProj, clsQBin, false));
+                      }
+                      // local y (pixels only)
+                      if (pix2d) {
+                        std::vector<Triplet<double>> coeffs;
+                        coeffs.emplace_back(irow, irow + 1, 0.5 * hitcov(0, 1));
+                        coeffs.emplace_back(irow + 1, irow, 0.5 * hitcov(0, 1));
+                        coeffs.emplace_back(irow + 1, irow + 1, hitcov(1, 1));
+                        SparseMatrix<double> &dVy = dVs.emplace_back(ncons, ncons);
+                        dVy.setFromTriplets(coeffs.begin(), coeffs.end());
+                        resblockrng.push_back({{irow, 2u}});
+                        resglobidx.push_back(detidparms.at(std::make_pair(9, hitdetid)));
+                        resfamily_.push_back(9);
+                        resvalidhit_.push_back(int(id));
+                        rescls_.push_back(hitResClassIndex(subdet, clsSizeX, clsUProj, clsQBin, true));
+                      }
+                    }
+                  }
+
                   irow += 2;
                   
                   for (unsigned int idim=0; idim<nlocalalignment; ++idim) {
@@ -3428,6 +4291,51 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
     // std::cout << "hessfull.diagonal():" << std::endl;
     // std::cout << hessfull.diagonal() << std::endl;
           
+          // ---- chi2-based (Armijo) retroactive backtracking ---------------
+          // chisq0val is now complete (beamspot + pointing + propagation +
+          // hits + mass) at the CURRENT linearization point, i.e. it is the
+          // REALIZED chi2 of the step taken at the end of the previous
+          // iteration. If it fails the sufficient-decrease test, restore that
+          // linearization (the same snapshot the failed-leg retry uses), halve
+          // the step and redo the iteration. Costs no extra propagation on the
+          // accept path. The slack absorbs the chi2 wobble from relinearization
+          // (the propagation/material model and the mass convolution term are
+          // re-evaluated at the new state), so only a genuine blow-up fires.
+          if (stepBacktracking_ && iiter >= stepBacktrackFromIter_ && std::isfinite(chisq0valPrev) &&
+              nChi2Bt < maxChi2Backtrack_ && nChi2BtTotal < maxChi2Backtrack_ * niters) {
+            const double thresh = chisq0valPrev + armijoC_ * predDecrPrev +
+                                  armijoSlack_ * std::max(1., std::abs(chisq0valPrev));
+            if (!(chisq0val <= thresh)) {
+              refftsarr = refftsarrSnap;
+              layerStatesarr = layerStatesSnap;
+              dxfull *= 0.5;
+              predDecrPrev *= 0.5;
+              ++nChi2Bt;
+              ++nChi2BtTotal;
+              ++stepBtChi2Events_;
+              if (!stepBtChi2ThisFit) {
+                stepBtChi2ThisFit = true;
+                ++fitStepBtChi2_;
+              }
+              if (stepPrints_ < stepPrintLimit_) {
+                ++stepPrints_;
+                std::cout << "GN step backtracked (two-track): icons = " << icons
+                          << " iiter = " << iiter
+                          << " chisq " << chisq0valPrev << " -> " << chisq0val
+                          << " (thresh " << thresh << ") nbt = " << nChi2Bt
+                          << " seed0(q,pt,eta)=(" << itrack->charge() << "," << itrack->pt()
+                          << "," << itrack->eta() << ")"
+                          << " seed1(q,pt,eta)=(" << jtrack->charge() << "," << jtrack->pt()
+                          << "," << jtrack->eta() << ")" << std::endl;
+              }
+              iiter -= 1;  // loop ++ redoes the same iteration from the snapshot
+              continue;
+            }
+          }
+          // step accepted
+          nChi2Bt = 0;
+          chisq0valPrev = chisq0val;
+
           // Sparse GBL solve (replaces dense Cinvd=LDLT(2 Fs^T Vinv Fs);
           // dxfull=-Cinvd.solve(2 Fs^T Vinv r)). Mathematically identical:
           // the factor of 2 cancels in -(Fs^T Vinv Fs)^-1 Fs^T Vinv r.
@@ -3486,14 +4394,26 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               if (qopref == 0. || dqop == 0.) {
                 continue;
               }
-              const double qopupd = qopref + dqop;
               double s = 1.;
-              if (qopupd * qopref <= 0.) {
-                // sign flip: stop half-way toward q/p = 0
-                s = -0.5 * qopref / dqop;
-              } else if (std::abs(qopupd) > 1. / clampMomentumFloor_) {
-                // p_upd below the floor: land exactly on p = floor, same charge
-                s = (std::copysign(1. / clampMomentumFloor_, qopref) - qopref) / dqop;
+              if (maxMomentumStepFactor_ > 1.) {
+                // Relative trust region in q/p, see the member comment. The
+                // bound is always strictly inside p_ref, so a soft daughter is
+                // neither pinned at the floor nor frozen at its seed. No charge
+                // flip is permitted here (the two-track fit has no
+                // ambiguous-charge use case), which the qopFlipAllow = 0
+                // argument expresses.
+                s = cvhstep::legStepScaleRel(qopref, dqop, clampMomentumFloor_,
+                                             maxMomentumStepFactor_, 0., nullptr);
+              } else {
+                // LEGACY absolute-floor-only clamp
+                const double qopupd = qopref + dqop;
+                if (qopupd * qopref <= 0.) {
+                  // sign flip: stop half-way toward q/p = 0
+                  s = -0.5 * qopref / dqop;
+                } else if (std::abs(qopupd) > 1. / clampMomentumFloor_) {
+                  // p_upd below the floor: land exactly on p = floor, same charge
+                  s = (std::copysign(1. / clampMomentumFloor_, qopref) - qopref) / dqop;
+                }
               }
               if (s < stepscale) {
                 stepscale = s;
@@ -3503,16 +4423,21 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               stepscale = std::max(stepscale, 0.);
               dxfree *= stepscale;
               dxfull *= stepscale;
+              stepScaleApplied *= stepscale;
+              ++stepClampEvents_;
               if (!stepClampedThisFit) {
                 stepClampedThisFit = true;
                 ++fitStepClamped_;
               }
-              std::cout << "GN step clamped (two-track): icons = " << icons
-                        << " iiter = " << iiter << " scale = " << stepscale
-                        << " seed0(q,pt,eta)=(" << itrack->charge() << "," << itrack->pt()
-                        << "," << itrack->eta() << ")"
-                        << " seed1(q,pt,eta)=(" << jtrack->charge() << "," << jtrack->pt()
-                        << "," << jtrack->eta() << ")" << std::endl;
+              if (stepPrints_ < stepPrintLimit_) {
+                ++stepPrints_;
+                std::cout << "GN step clamped (two-track): icons = " << icons
+                          << " iiter = " << iiter << " scale = " << stepscale
+                          << " seed0(q,pt,eta)=(" << itrack->charge() << "," << itrack->pt()
+                          << "," << itrack->eta() << ")"
+                          << " seed1(q,pt,eta)=(" << jtrack->charge() << "," << jtrack->pt()
+                          << "," << jtrack->eta() << ")" << std::endl;
+              }
             }
           }
 
@@ -3543,6 +4468,12 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 // std::cout << es.eigenvalues().transpose() << std::endl;
 // std::cout << "condition: " << condition << std::endl;
           
+          // Quadratic-model chi2 change of the step ACTUALLY applied. dxfree
+          // has already been scaled by stepScaleApplied, so deltachisq = t*d
+          // with d the full-step value and the model change is
+          // d*(2t - t^2) = deltachisq*(2 - t).
+          predDecrPrev = deltachisq * (2. - stepScaleApplied);
+
           chisqval = chisq0val + deltachisq;
 
           deltachisqval = chisq0val + deltachisq - chisqvalold;
@@ -3550,25 +4481,80 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           chisqvalold = chisq0val + deltachisq;
           
 // ndof = 5*nhits + nvalid + nvalidalign2d - nstateparms;
-          ndof = 5*nhits + nvalid + nvalidpixel - nstateparms;
-          
+          // COMPUTED SIGNED, THEN CLAMPED.  `ndof` is an unsigned member and
+          // `nstateparms` is 10 + 5*nhits, so this expression is really
+          // nvalid + nvalidpixel - 10 (+ the constraint rows): evaluated in
+          // unsigned arithmetic it UNDERFLOWS to ~4e9 for a pair whose two
+          // legs together carry fewer than ten valid-hit-equivalents, and
+          // that value then reads as "full rank" in the factored-Hessian
+          // block below (`nrank = min(ndof, nparsfinal)`).  Keeping the
+          // arithmetic signed makes the degenerate case visible instead of
+          // wrapping it.  For every candidate with a positive ndof the value
+          // stored is bit-identical to the old expression.
+          long long ndofsigned = 5LL*(long long)nhits + (long long)nvalid
+                                 + (long long)nvalidpixel - (long long)nstateparms;
+
           if (bsConstraint_) {
-            ndof += 3;
+            ndofsigned += 3;
           }
 
           if (doPointingConstraint_) {
             // 2D-transverse pointing adds 1 scalar constraint
-            ++ndof;
+            ++ndofsigned;
           }
 
           if (doVtxConstraint_) {
-            ++ndof;
+            ++ndofsigned;
           }
-          
+
           if (icons == 1) {
-            ++ndof;
+            ++ndofsigned;
           }
-          
+
+          ndof = ndofsigned > 0 ? (unsigned int)ndofsigned : 0u;
+
+          // A FIT WITH NO DEGREES OF FREEDOM IS A FAILED FIT, not a fit with
+          // an empty rank.  The factored-Hessian export takes exactly the top
+          // `nrank = min(ndof, nparsfinal)` eigenmodes of the mean Hessian and
+          // reads `eigvals(nparsfinal - nrank)` to report the truncation gap;
+          // at ndof == 0 that indexes ONE PAST THE END of the length-
+          // nparsfinal eigenvalue vector and aborts inside Eigen
+          // (DenseCoeffsBase::operator()'s `index < size()`), taking the whole
+          // job with it -- a crashed cmsRun output has NO KEYS, so the whole
+          // task is lost, not the one candidate.  That is what killed 37 of
+          // the first 133 finished dymc_8p5M_260905 tasks (28 %) -- i.e.
+          // 0.033 aborts per 1000 Z candidates at ~9850 candidates a chunk,
+          // consistent with the neighbouring bins.  The ndof == 0 bin is
+          // EXACTLY EMPTY across 197 417 candidates of 20 COMPLETED tasks
+          // while ndof == 1 and 2 hold 4 and 5 -- the bin is empty because
+          // landing in it kills the job, not because it is forbidden.  Two
+          // examples, both real: nhits=(8,1) and nhits=(2,4).  The two-track
+          // fit spends ten state parameters on the common vertex, so a
+          // MiniAOD leg whose stored hit list is a handful is enough; the
+          // J/psi ALCARECO tracks (full RECO hits) essentially never are.
+          //
+          // Such a candidate carries no information for the global fit --
+          // rank-0 Hessian, undefined chi2/ndof -- so it is counted and
+          // dropped through the same `valid` path as the other fit failures
+          // rather than being written with a degenerate factorization.
+          if (ndofsigned <= 0) {
+            if (stepPrints_ < stepPrintLimit_) {
+              ++stepPrints_;
+              std::cout << "Abort: fit has no degrees of freedom!"
+                        << " icons = " << icons << " iiter = " << iiter
+                        << " ndof = " << ndofsigned
+                        << " nhits=(" << nhitsarr[0] << "," << nhitsarr[1] << ")"
+                        << " nvalid=(" << nvalidarr[0] << "," << nvalidarr[1] << ")"
+                        << " nvalidpixel=(" << nvalidpixelarr[0] << "," << nvalidpixelarr[1] << ")"
+                        << " seed0(q,pt,eta)=(" << itrack->charge() << "," << itrack->pt() << "," << itrack->eta() << ")"
+                        << " seed1(q,pt,eta)=(" << jtrack->charge() << "," << jtrack->pt() << "," << jtrack->eta() << ")"
+                        << std::endl;
+            }
+            ++fitFailNdof_;
+            valid = false;
+            break;
+          }
+
 // std::cout << "icons = " << icons << " iiter =" << iiter << " dx = " << refftsarr[0].position() - refftsarr[1].position() << std::endl;
           
     // std::cout << "dchisqdparms.head<6>()" << std::endl;
@@ -3653,15 +4639,24 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           const bool firstplus = statepcaupd[0] > 0.;
 
           if (icons == 0) {
-            // define sign of d wrt charge of tracks
-            Jpsi_d = firstplus ? statepcaupd[6] : -statepcaupd[6];
+            // THE SIGNED TRACK-TRACK PCA DISTANCE, raw:
+            //     d = n_hat . (x_b - x_a),   n_hat = (p_a x p_b)^
+            // (`twoTrackCart2pca`). Swapping the two legs flips BOTH `n_hat`
+            // and `x_b - x_a`, so `d` is invariant under the leg ordering and
+            // is already a well-defined signed quantity; it must NOT be
+            // multiplied by the charge of leg 0, which would make its sign
+            // depend on an ordering it does not depend on.
+            // Under `doVtxConstraint` index 6 is frozen at zero and `d` is
+            // identically zero: `Jpsi_vtxres` is then the DCA the
+            // unconstrained fit would have reported.
+            Jpsi_d = statepcaupd[6];
             Jpsi_x = statepcaupd[7];
             Jpsi_y = statepcaupd[8];
             Jpsi_z = statepcaupd[9];
           }
           else {
-            // define sign of d wrt charge of tracks
-            Jpsicons_d = firstplus ? statepcaupd[6] : -statepcaupd[6];
+            // same convention as `Jpsi_d` above
+            Jpsicons_d = statepcaupd[6];
             Jpsicons_x = statepcaupd[7];
             Jpsicons_y = statepcaupd[8];
             Jpsicons_z = statepcaupd[9];
@@ -3886,6 +4881,55 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
             Jpsi_sigmamass = std::sqrt((mjacalt*covrefmom*mjacalt.transpose())[0]);
 
+            // ---- the covariance itself, permuted into (plus, minus) ------
+            {
+              const std::array<unsigned int, 6> perm = {{3 * idxplus, 3 * idxplus + 1, 3 * idxplus + 2,
+                                                         3 * idxminus, 3 * idxminus + 1, 3 * idxminus + 2}};
+              Jpsi_covrefmom.clear();
+              Jpsi_covrefmom.reserve(21);
+              for (unsigned int i = 0; i < 6; ++i) {
+                for (unsigned int j = i; j < 6; ++j) {
+                  Jpsi_covrefmom.push_back(float(covrefmom(perm[i], perm[j])));
+                }
+              }
+              Jpsi_jacrefmom.assign(6, 0.f);
+              for (unsigned int i = 0; i < 6; ++i) {
+                Jpsi_jacrefmom[i] = float(mjacalt(0, perm[i]));
+              }
+
+              // q/p at the reference: state[6] is the charge, segment<3>(3)
+              // the momentum -- the same expression massJacobianAltD uses.
+              const double qopp = refftsarr[idxplus][6] / refftsarr[idxplus].segment<3>(3).norm();
+              const double qopm = refftsarr[idxminus][6] / refftsarr[idxminus].segment<3>(3).norm();
+              Jpsi_qoprefplus = float(qopp);
+              Jpsi_qoprefminus = float(qopm);
+
+              const double cpp = covrefmom(perm[0], perm[0]);
+              const double cmm = covrefmom(perm[3], perm[3]);
+              const double cpm = covrefmom(perm[0], perm[3]);
+              const double srp = (std::abs(qopp) > 0.) ? std::sqrt(std::max(cpp, 0.)) / std::abs(qopp) : 0.;
+              const double srm = (std::abs(qopm) > 0.) ? std::sqrt(std::max(cmm, 0.)) / std::abs(qopm) : 0.;
+              Jpsi_sigmarelplus = float(srp);
+              Jpsi_sigmarelminus = float(srm);
+              // d ln p = -d(q/p)/(q/p), so the momentum correlation carries
+              // sign(q+ q-) relative to the q/p one -- i.e. it flips for an
+              // opposite-sign pair, which is every candidate here. Written
+              // out rather than assumed, so a same-sign control sample is
+              // still right.
+              Jpsi_rhomom = (srp > 0. && srm > 0. && qopp != 0. && qopm != 0.)
+                                ? float(cpm / (qopp * qopm) / (srp * srm))
+                                : 0.f;
+              // The ANGULAR share of the mass variance: everything the two
+              // curvatures do not carry. `1.5 - f_ang` is the Jensen
+              // coefficient the spec asks for.
+              Matrix<double, 1, 6> jkappa = Matrix<double, 1, 6>::Zero();
+              jkappa(0, perm[0]) = mjacalt(0, perm[0]);
+              jkappa(0, perm[3]) = mjacalt(0, perm[3]);
+              const double sm2 = double(Jpsi_sigmamass) * double(Jpsi_sigmamass);
+              const double skap2 = (jkappa * covrefmom * jkappa.transpose())[0];
+              Jpsi_fang = (sm2 > 0.) ? float(1. - skap2 / sm2) : 0.f;
+            }
+
 // std::cout << "covrefmom" << std::endl;
 // std::cout << covrefmom << std::endl;
 // std::cout << "Jpsi_sigmamass = " << Jpsi_sigmamass << std::endl;
@@ -3907,10 +4951,78 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             resinfv.clear();
             resinfvarv.clear();
             resinfcov = 0.;
+            resinfcovhit = 0.f;
+            resinfcovgrp = 0.f;
+            reshitidx.clear();
+            reshitcls.clear();
+            cfhitclsv.clear();
+            cfhitvv.clear();
             reseigidx.clear();
             reseigv.clear();
             resinfbv.clear();
+            cfmsv.clear();
+            cfdelv.clear();
+            cfiorev.clear();
+            cfioimv.clear();
+            cfradrev.clear();
+            cfradimv.clear();
+            cfvgf = 0.f;
+            cfok = false;
+            cfnblock = 0;
+            cfnpooled = 0;
+            cfgrpv.clear();
+            cfgrpmsv.clear();
+            cfgrpdelv.clear();
+            cfgrpiorev.clear();
+            cfgrpioimv.clear();
+            cfgrpradrev.clear();
+            cfgrpradimv.clear();
+            cfgrpclosure = 0.f;
             if (dores && !dVs.empty()) {
+              // ================= THE sqrt(dV_b) CACHE ======================
+              // `dV_b^{1/2}` is a property of the BLOCK, not of the
+              // functional: the same matrix serves the MASS influence, the
+              // VERTEX influence and the two BEAM influences.  It used to be
+              // recomputed from scratch in each of those loops -- four
+              // `SelfAdjointEigenSolver` calls per block per candidate, which
+              // is where the beam functionals' +63 % of maker time went.  It
+              // is now computed ONCE here and read everywhere.
+              //
+              // The ionization SIGN rule needs the dominant eigenVECTOR of
+              // the same decomposition (sign-fixed by `udir(0) >= 0`), so
+              // that is cached alongside, for family 11 only; every other
+              // family leaves an empty vector and the consumers fall back to
+              // sign +1 exactly as before.
+              //
+              // Bit-identity is not an approximation here: it is the same
+              // solver on the same matrix, so every consumer sees the same
+              // bits it computed for itself before.
+              std::vector<MatrixXd> ressqrtdV(dVs.size());
+              std::vector<VectorXd> resionidir(dVs.size());
+              for (unsigned int ires = 0; ires < dVs.size(); ++ires) {
+                const unsigned int r0c = resblockrng[ires][0];
+                const unsigned int nbc = resblockrng[ires][1];
+                const MatrixXd dVb = MatrixXd(dVs[ires]).block(r0c, r0c, nbc, nbc);
+                const SelfAdjointEigenSolver<MatrixXd> eigv(dVb);
+                ressqrtdV[ires] = eigv.eigenvectors() *
+                                  eigv.eigenvalues().cwiseMax(0.).cwiseSqrt().asDiagonal() *
+                                  eigv.eigenvectors().transpose();
+                const int famc = ires < resfamily_.size() ? resfamily_[ires] : -1;
+                if (famc == 11 && nbc > 0) {
+                  int imax = 0;
+                  for (int q = 1; q < int(nbc); ++q) {
+                    if (std::abs(eigv.eigenvalues()(q)) > std::abs(eigv.eigenvalues()(imax))) {
+                      imax = q;
+                    }
+                  }
+                  VectorXd udirc = eigv.eigenvectors().col(imax);
+                  if (udirc(0) < 0.) {
+                    udirc = -udirc;
+                  }
+                  resionidir[ires] = udirc;
+                }
+              }
+              // ============================================================
               VectorXd afull = VectorXd::Zero(nstateparms);
               afull.head<6>() = mjacalt.transpose();
               VectorXd afree = VectorXd::Zero(nstatefree);
@@ -3918,22 +5030,898 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                 afree(i) = afull(freestateidxs[i]);
               }
               const VectorXd wmass = VinvF*Cinvd.solve(afree);
+              // the BEAM block's share of sigma_m^2, kept out of `resinfcov`
+              // (material) and out of `resinfcovhit` so `cfvgf` keeps its
+              // meaning: the Gaussian remainder = hits + beamspot + pointing.
+              double vbsmass = 0., vbsmassx = 0., vbsmassy = 0.;
               for (unsigned int ires = 0; ires < dVs.size(); ++ires) {
                 const unsigned int r0 = resblockrng[ires][0];
                 const unsigned int nb = resblockrng[ires][1];
-                const MatrixXd dVb = MatrixXd(dVs[ires]).block(r0, r0, nb, nb);
-                SelfAdjointEigenSolver<MatrixXd> eigv(dVb);
-                const MatrixXd sqrtdV = eigv.eigenvectors() *
-                                        eigv.eigenvalues().cwiseMax(0.).cwiseSqrt().asDiagonal() *
-                                        eigv.eigenvectors().transpose();
-                const VectorXd ub = sqrtdV * wmass.segment(r0, nb);
+                const VectorXd ub = ressqrtdV[ires] * wmass.segment(r0, nb);
                 reseigidx.push_back(resglobidx[ires]);
+                reshitidx.push_back(ires < resvalidhit_.size() ? resvalidhit_[ires] : -1);
+                reshitcls.push_back(static_cast<short>(ires < rescls_.size() ? rescls_[ires] : -1));
                 for (unsigned int j = 0; j < 5; ++j) {
                   resinfv.push_back(j < nb ? ub(j) : 0.f);
                 }
                 const double vb = ub.squaredNorm();
                 resinfvarv.push_back(vb);
-                resinfcov += vb;
+                // MATERIAL and HIT shares are accumulated SEPARATELY.
+                // `resinfcov` is the MATERIAL share alone, so
+                // `cfmass_vgf = (sigma_m^2 - resinfcov)/sigma_m^2` is the
+                // TOTAL Gaussian share (hits + beamspot + pointing), which is
+                // what the self-consistent-sigma correction's
+                // `a_i = (1 + f_hit) sigma_i/m_i` needs. Folding the hit
+                // blocks into `resinfcov` would change both.
+                const int fam = ires < resfamily_.size() ? resfamily_[ires] : -1;
+                if (fam == 8 || fam == 9) {
+                  resinfcovhit += float(vb);
+                } else if (fam == kBeamSpotFamily) {
+                  // the luminous region is a Gaussian block like a hit, but
+                  // it is neither a hit nor material: its own accumulator.
+                  vbsmass += vb;
+                  // THE BEAM BLOCK'S VARIANCE SHARE, SPLIT BY DIRECTION.
+                  // The luminous-region WIDTHS are physical parameters, so
+                  // they float like a hit class: `sigma_x -> sqrt(k_x)
+                  // sigma_x` sends `covBS -> D covBS D` with
+                  // `D = diag(sqrt(k_x), sqrt(k_y), 1)`, and
+                  //   v_b(k) = sum_ij w_i w_j C_ij d_i d_j ,  d = (rt kx, rt ky, 1)
+                  // whose derivative at k = 1 is, EXACTLY,
+                  //   dv/dk_x = w_x^2 C_xx + w_x w_y C_xy + w_x w_z C_xz
+                  // -- each cross term split in half between the two
+                  // directions.  So the half-split shares below ARE the
+                  // first derivatives, they sum to `v_b` identically, and a
+                  // LINEAR variance scale `(1 + eps)` on them is the same
+                  // parameterisation the hit classes use (`--hit-mode
+                  // linear`, where the card value IS `eps`).
+                  {
+                    const Matrix<double, 3, 1> wbb = wmass.segment<3>(r0);
+                    const double cxx = bscovBS(0, 0), cyy = bscovBS(1, 1), czz = bscovBS(2, 2);
+                    const double cxy = bscovBS(0, 1), cxz = bscovBS(0, 2), cyz = bscovBS(1, 2);
+                    vbsmassx = wbb(0)*wbb(0)*cxx + wbb(0)*wbb(1)*cxy + wbb(0)*wbb(2)*cxz;
+                    vbsmassy = wbb(1)*wbb(1)*cyy + wbb(0)*wbb(1)*cxy + wbb(1)*wbb(2)*cyz;
+                    (void)czz;
+                  }
+                } else if (fam == 15) {
+                  // The parmtype-15 blocks are a RE-PARTITION of the
+                  // parmtype-10/11 noise (`sum_g dQ_g == dQMS + dQI`), not an
+                  // addition to it, so they must NOT enter `resinfcov`: that
+                  // would double-count the material share and, here, silently
+                  // move `cfmass_vgf = (sigma_m^2 - resinfcov)/sigma_m^2`.
+                  // Same split as the single-track maker.
+                  resinfcovgrp += float(vb);
+                } else {
+                  resinfcov += vb;
+                }
+              }
+
+              {
+                const double sm2b = double(Jpsi_sigmamass) * double(Jpsi_sigmamass);
+                Jpsi_massvbs = sm2b > 0. ? float(vbsmass / sm2b) : 0.f;
+                Jpsi_massvbsx = sm2b > 0. ? float(vbsmassx / sm2b) : 0.f;
+                Jpsi_massvbsy = sm2b > 0. ? float(vbsmassy / sm2b) : 0.f;
+              }
+
+              // Per-hit-class Gaussian shares, ascending in class index.
+              {
+                const double sm2c = double(Jpsi_sigmamass) * double(Jpsi_sigmamass);
+                std::array<double, kNHitResClasses> vcls{};
+                bool anycls = false;
+                for (std::size_t ires = 0; ires < reshitcls.size(); ++ires) {
+                  const int c = reshitcls[ires];
+                  if (c < 0 || c >= kNHitResClasses) {
+                    continue;
+                  }
+                  vcls[c] += resinfvarv[ires];
+                  anycls = true;
+                }
+                if (anycls && sm2c > 0.) {
+                  for (int c = 0; c < kNHitResClasses; ++c) {
+                    if (vcls[c] == 0.) {
+                      continue;
+                    }
+                    cfhitclsv.push_back(static_cast<short>(c));
+                    cfhitvv.push_back(float(vcls[c] / sm2c));
+                  }
+                }
+              }
+
+              // ---- THE FUNCTIONALS THAT SHARE ONE EVALUATOR PASS --------
+              //
+              // The candidate MASS, the vertex DCA and the two whitened
+              // BEAM-LINE pulls are four linear functionals of the SAME
+              // converged fit: the same blocks, the same step records, and
+              // different per-block weights.  Every `cvhcf` exponent
+              // primitive depends on (weight, tau) ONLY through the product
+              // `w tau`, so the four are ONE `cvhcf::trackExponents` pass on
+              // the concatenated argument list { w_{b,k} tau_j } instead of
+              // four passes over the same records -- and the pooling by
+              // global index, the Moliere step parameters, the `gshape_elec`
+              // rows and the radiative spectra are then built once rather
+              // than four times.  It is EXACT: `phi_{aU}(tau) = phi_U(a tau)`
+              // is an identity and the products are formed by the same
+              // expression a single call forms them with, so each
+              // functional's arrays are bitwise what its own call wrote.
+              //
+              // Each site below REGISTERS its weights here, in the order the
+              // exported branches expect, and reads its results back from the
+              // single pass that follows the beam block; nothing else about
+              // them changes.  The weights are COPIED because `vabs` and the
+              // two `vabsbs` live only inside their own blocks.
+              std::vector<cvhcf::TrackInput> cfins;
+              std::vector<std::vector<float>> cfvarw;
+              std::vector<std::vector<float>> cfsgnw;
+              std::vector<cvhcf::TrackResult> cfress;
+              cfins.reserve(4);
+              cfvarw.reserve(4);
+              cfsgnw.reserve(4);
+              int cfslotmass = -1;
+              int cfslotvtx = -1;
+              std::array<int, 2> cfslotbs = {{-1, -1}};
+              auto cfRegister = [&](const float *var, int nvar, const float *sgn, double sigma,
+                                    double ioniSign) -> int {
+                cfvarw.emplace_back(var, var + nvar);
+                cfsgnw.emplace_back();
+                if (sgn != nullptr) {
+                  cfsgnw.back().assign(sgn, sgn + nvar);
+                }
+                cvhcf::TrackInput ci;
+                ci.resglobidx = resglobidx.data();
+                ci.resfamily = resfamily_.data();
+                ci.resvarv = cfvarw.back().data();
+                ci.nres = int(std::min({resglobidx.size(), resfamily_.size(), cfvarw.back().size()}));
+                ci.ressgn = cfsgnw.back().empty() ? nullptr : cfsgnw.back().data();
+                ci.ms = {msmoliidx.data(), msmoliv.data(), int(msmoliidx.size()),
+                         msmoliidx.empty() ? 0 : int(msmoliv.size() / msmoliidx.size())};
+                ci.ioni = {ioniurbanidx.data(), ioniurbanv.data(), int(ioniurbanidx.size()),
+                           ioniurbanidx.empty() ? 0 : int(ioniurbanv.size() / ioniurbanidx.size())};
+                ci.qsc = {ioniqscaleidx.data(), ioniqscalev.data(), int(ioniqscaleidx.size()), 2};
+                ci.rad = {radstepidx.data(), radstepv.data(), int(radstepidx.size()), RADSTEP_STRIDE};
+                // material-group column of each record; see the single-track
+                // maker for why these are set explicitly
+                ci.ms.groupCol = ci.ms.stride >= 10 ? 9 : -1;
+                ci.ioni.groupCol = ci.ioni.stride - 1;
+                ci.rad.groupCol = RADSTEP_STRIDE - 1;
+                ci.radspec = radstepspecv.data();
+                ci.radvgrid = radvgrid.data();
+                ci.radnv = int(radvgrid.size());
+                ci.sigma = sigma;
+                ci.ioniSign = ioniSign;
+                ci.wantDelta = true;
+                ci.wantGroups = exportCfGroupExponents_;
+                // No functional's reference model splits the DELTA-RAY family
+                // per group (`cf_mass_likelihood.build_pairs_tt` has no
+                // `Sdel`), so the flat delta family is exported for comparison
+                // but is not split.
+                ci.wantGroupDelta = false;
+                cfins.push_back(ci);
+                return int(cfins.size()) - 1;
+              };
+
+              // ---- THE RESOLUTION-CF EXPONENTS, for the MASS functional ---
+              //
+              // Same blocks, same step records, DIFFERENT functional: the
+              // standardization is sigma_m rather than sqrt(refCov(0,0)), and
+              // the ionization (and radiative) weight carries the sign -1 for
+              // BOTH legs and BOTH charges. That sign is not a convention:
+              // dm = (dm/d(q/p)) q cs dE = -p^2 cs (dm/dp) dE < 0, i.e. q^2
+              // removes the charge and an energy loss on EITHER muon can only
+              // LOWER the pair mass, so the two legs' Landau skews ADD.
+              // (cf_mass_likelihood.IONI_SGN; using sign(sum u_b) instead --
+              // an arbitrary noise-eigenvector convention, +1 on 50.5 % of
+              // candidates -- cancelled the skew and moved the unbinned scale
+              // by 0.1e-3.)
+              //
+              // The DELTA-RAY family is computed but is not part of the
+              // reference mass model (`build_pairs_tt` has no `Sdel`); it is
+              // exported so the two can be compared, and the reader leaves it
+              // out of the pairs cache unless asked.
+              if (exportCfExponents_) {
+                cfslotmass = cfRegister(resinfvarv.data(), int(resinfvarv.size()), nullptr, Jpsi_sigmamass, -1.);
+                // The GAUSSIAN REMAINDER: hits + beamspot + pointing, i.e.
+                // sigma_m^2 minus the material share, BY CONSTRUCTION --
+                // unlike the single-track tree, resinfcov here does not carry
+                // the hit blocks at all (they are not registered).
+                const double sm2 = double(Jpsi_sigmamass) * double(Jpsi_sigmamass);
+                cfvgf = (sm2 > 0.) ? float((sm2 - resinfcov) / sm2) : 0.f;
+              }
+
+              // ================= THE VERTEX-CONSTRAINT RESIDUAL ===========
+              //
+              // State index 6 is the SIGNED track-track PCA distance
+              //     theta_6 = n_hat . (x_b - x_a),  n_hat = (p_a x p_b)^
+              // (`twoTrackCart2pca`). Two free helices have 10 vertex
+              // parameters, two through a common point have 9: a common-
+              // vertex constraint removes exactly ONE dof and leaves exactly
+              // ONE residual per candidate, the DCA the unconstrained fit
+              // finds. Both muons come from one gen point, so on ideal
+              // geometry its mean is ZERO BY CONSTRUCTION -- this is the
+              // mass term with a delta kernel at zero: no kernel, no theory,
+              // no PDG input, a pure resolution term.
+              //
+              // Both configurations of index 6 are supported, and the same
+              // three numbers come out of each:
+              //   * index 6 FREE (`doVtxConstraint == False`): the fit itself
+              //     reports the DCA, so
+              //       sigma_v^2 = C_66,  w_v = Vinv F C e_6,  r_v = theta_6
+              //   * index 6 FROZEN: b is zero on every free index at
+              //     convergence and nonzero only on index 6, and with
+              //     F_6 = Ffull.col(6), h_f6 = F_f^T Vinv F_6, Cs = C h_f6,
+              //       sigma_v^2 = 1/(h_66 - h_f6^T Cs)
+              //       b_6 = -(Vinv F_6).r          (minus the half-gradient)
+              //       r_v = theta_6^frozen + sigma_v^2 b_6   (one Newton step)
+              //       w_v = sigma_v^2 (Vinv F_6 - Vinv F Cs)
+              // In both, `sum_b |dV_b^{1/2} w_v,b|^2 == sigma_v^2` exactly
+              // (one line: w_v^T V w_v), which is the closure gate
+              // `Jpsi_vtxvchk`.
+              if (exportVtxResidual_) {
+                const VectorXd F6 = Ffull.col(6);
+                const VectorXd VinvF6 = Vinvsparse * F6;
+                // THE POST-STEP RESIDUAL.  `rfull` is the residual at the
+                // LINEARISATION point, and in a GBL-type fit the reference
+                // trajectory is built BY PROPAGATING, so every process-noise
+                // row of `rfull` is identically zero there.  The vertex state
+                // enters ONLY through the ihit == 0 propagation rows, so
+                // `F_6^T Vinv rfull` vanishes identically on every candidate
+                // and says nothing.  The gradient that matters is the one at
+                // the OPTIMUM,
+                //     rho = rfull + F_f dxfree
+                // the same vector the exported `Rr` is built from: there the
+                // free-index gradient is zero and the index-6 one is not.
+                const VectorXd rho = rfull + Fsparse * dxfree;
+                const double g6 = VinvF6.dot(rho);   // the half-gradient
+                // THE CONVERGENCE GATE, DIMENSIONLESS.  `|g_i| sqrt(C_ii)` is
+                // the remaining Newton step of free parameter i in units of
+                // that parameter's own error, so it is directly comparable
+                // with `|z_v| = |b_6| sigma_v`; the raw half-gradient is in
+                // 1/(cm, rad, GeV^-1) units and says nothing on its own.
+                // `r_v` below is built from the SAME pair (reference + one
+                // step), so the two configurations of index 6 are compared at
+                // the same linearisation point.
+                const VectorXd gfree = VinvF.transpose() * rho;
+                double bfree = 0.;
+                for (unsigned int i = 0; i < nstatefree; ++i) {
+                  const Eigen::Index is = freestateidxs[i];
+                  const double ci = std::sqrt(std::max(covstate(is, is), 0.));
+                  bfree = std::max(bfree, std::abs(gfree(i)) * ci);
+                }
+                // the fitted vertex covariance, packed upper-triangular --
+                // what the rows-OFF run hands the leave-one-out construction
+                {
+                  const Matrix<double, 3, 3> Cv = covstate.block<3, 3>(7, 7);
+                  Jpsi_covvtx = {{float(Cv(0, 0)), float(Cv(0, 1)), float(Cv(0, 2)),
+                                  float(Cv(1, 1)), float(Cv(1, 2)), float(Cv(2, 2))}};
+                }
+                Jpsi_vtxbfree = float(bfree);
+                Jpsi_vtxb6 = float(-g6);
+                Jpsi_vtxfree = !doVtxConstraint_;
+
+                // NO CHARGE RE-SIGN. theta_6 is INVARIANT under swapping the
+                // two legs (`twoTrackCart2pca` flips both `n_hat` and
+                // `x_b - x_a`), so it is already a well-defined signed DCA and
+                // multiplying it by the charge of a leg would make its sign
+                // depend on the leg ordering. The CF exponents below are built
+                // from `w_v` in this same convention, so re-signing the
+                // residual and not the weights would put the Landau skew on
+                // the wrong side. `Jpsi_vtxfirstplus` records which leg is the
+                // positive one.
+                Jpsi_vtxfirstplus = firstplus;
+                double sig2 = 0.;
+                double rv = 0.;
+                VectorXd wv;
+                // THE UNCONSTRAINED MASS.  Freezing theta_6 at zero is a
+                // CONDITIONING of the unconstrained solution,
+                //     x_c = x_u - C_u e_6 sigma_v^-2 r_v ,
+                // so the mass functional a = dm/dx transforms as
+                //     m_u = m_c + cov(m, theta_6) sigma_v^-2 r_v ,
+                //     cov(m, theta_6) = a^T C_u e_6 .
+                // `a` lives on the momentum block alone (`afull.head<6>()`),
+                // so its index-6 entry is zero and, with the frozen-index
+                // block inverse C_u,f6 = -C h_f6 sigma_v^2,
+                //     cov(m, theta_6) = -sigma_v^2 (C a_f).h_f6
+                // and sigma_v^2 cancels out of `m_u` itself.  `dmdv` below is
+                // that slope; with index 6 free the fit already reports the
+                // unconstrained mass and the slope is zero, while the
+                // covariance element is the plain a_f^T C e_6.
+                double dmdv = 0.;
+                double covmv = 0.;
+                if (Jpsi_vtxfree) {
+                  VectorXd afree6 = VectorXd::Zero(nstatefree);
+                  for (unsigned int i = 0; i < nstatefree; ++i) {
+                    if (freestateidxs[i] == 6) {
+                      afree6(i) = 1.;
+                    }
+                  }
+                  const VectorXd Ce6 = Cinvd.solve(afree6);
+                  wv = VinvF * Ce6;
+                  sig2 = covstate(6, 6);
+                  rv = statepcaupd[6];
+                  covmv = afree.dot(Ce6);
+                } else {
+                  const VectorXd hf6 = VinvF.transpose() * F6;
+                  const VectorXd Cs = Cinvd.solve(hf6);
+                  const double denom = F6.dot(VinvF6) - hf6.dot(Cs);
+                  sig2 = denom > 0. ? 1. / denom : 0.;
+                  wv = sig2 * (VinvF6 - VinvF * Cs);
+                  rv = statepcaupd[6] - sig2 * g6;
+                  dmdv = -Cinvd.solve(afree).dot(hf6);
+                  covmv = sig2 * dmdv;
+                }
+                wvtxinf = wv;
+                Jpsi_vtxres = float(rv);
+                Jpsi_vtxsig = float(std::sqrt(std::max(sig2, 0.)));
+                Jpsi_vtxz = Jpsi_vtxsig > 0.f ? Jpsi_vtxres / Jpsi_vtxsig : 0.f;
+                Jpsi_vtxdchi2 = Jpsi_vtxz * Jpsi_vtxz;
+                Jpsi_covmassvtx = float(covmv);
+                Jpsi_mass_unc = float((muarr[0] + muarr[1]).M() + dmdv * rv);
+                // ---- the per-block influence, variance shares and signs ---
+                //
+                // THE IONIZATION SIGN. The ionization CF is not even in its
+                // weight (an energy loss goes one way), so a functional whose
+                // influence changes sign from block to block needs the sign
+                // to travel with the block -- `cvhcf::TrackInput::ressgn`.
+                // `dQI` is rank one: in the curvilinear frame it is
+                // `e_0 e_0^T sigma^2` and the local rotation spreads it over
+                // all five rows, so the signed coefficient is `w_b . u` with
+                // `u` the leading eigenvector of `dQI` oriented by its qop
+                // component, and NOT the single row `w[r0]`, which the
+                // rotation leaves no longer aligned with q/p. The leg CHARGE
+                // multiplies it: the two legs have opposite charges, which is
+                // exactly what the MASS functional's single `ioniSign = -1`
+                // hides. `Jpsi_vtxsgnchk` applies the identical rule to the
+                // MASS influence `wmass`, where the answer must be -1 on every
+                // ionization block, so the convention is checked per candidate
+                // rather than asserted.
+                const unsigned int nb_all = dVs.size();
+                resinfvtxv.clear();
+                resinfvtxv.reserve(5 * nb_all);
+                vtxvarv.clear();
+                vtxvarv.reserve(nb_all);
+                vtxsgnv.clear();
+                vtxsgnv.reserve(nb_all);
+                std::vector<float> vabs(nb_all, 0.f);
+                double vsum = 0., vmat = 0., vhit = 0., vms = 0., vioni = 0., vbs = 0.;
+                double vbsx = 0., vbsy = 0.;
+                double mms = 0., mioni = 0.;
+                double nioni = 0., nionimass = 0.;
+                for (unsigned int ires = 0; ires < nb_all; ++ires) {
+                  const unsigned int r0 = resblockrng[ires][0];
+                  const unsigned int nb = resblockrng[ires][1];
+                  const VectorXd wb = wv.segment(r0, nb);
+                  const VectorXd ab = ressqrtdV[ires] * wb;
+                  for (unsigned int j = 0; j < 5; ++j) {
+                    resinfvtxv.push_back(j < nb ? float(ab(j)) : 0.f);
+                  }
+                  const double vb = ab.squaredNorm();
+                  vabs[ires] = float(vb);
+                  const int fam = ires < resfamily_.size() ? resfamily_[ires] : -1;
+                  if (fam != 15) {
+                    vsum += vb;
+                  }
+                  if (fam == 10 || fam == 11) {
+                    vmat += vb;
+                    (fam == 10 ? vms : vioni) += vb;
+                    (fam == 10 ? mms : mioni) += double(resinfvarv[ires]);
+                  } else if (fam == 8 || fam == 9) {
+                    vhit += vb;
+                  } else if (fam == kBeamSpotFamily) {
+                    vbs += vb;
+                    {
+                      const Matrix<double, 3, 1> wbb = wv.segment<3>(r0);
+                      const double cxx = bscovBS(0, 0), cyy = bscovBS(1, 1), czz = bscovBS(2, 2);
+                      const double cxy = bscovBS(0, 1), cxz = bscovBS(0, 2), cyz = bscovBS(1, 2);
+                      vbsx = wbb(0)*wbb(0)*cxx + wbb(0)*wbb(1)*cxy + wbb(0)*wbb(2)*cxz;
+                      vbsy = wbb(1)*wbb(1)*cyy + wbb(0)*wbb(1)*cxy + wbb(1)*wbb(2)*cyz;
+                      (void)czz;
+                    }
+                  }
+                  float sg = 1.f;
+                  if (fam == 11 && nb > 0 && resionidir[ires].size() == Eigen::Index(nb)) {
+                    const VectorXd &udir = resionidir[ires];
+                    const unsigned int leg = (ires >= resLegStart_[1]) ? 1u : 0u;
+                    const double qleg = refftsarr[leg][6] >= 0. ? 1. : -1.;
+                    sg = float(qleg * (wb.dot(udir) > 0. ? -1. : 1.));
+                    // The same rule on the MASS influence, whose answer is
+                    // known to be -1.  VARIANCE-WEIGHTED, because `cvhcf`
+                    // pools blocks by global index and takes
+                    // `sign(sum_i s_i v_i)`: a block carrying no variance
+                    // cannot flip a pooled sign, and its own `w_b . u` is a
+                    // ratio of two small numbers.
+                    const VectorXd wmb = wmass.segment(r0, nb);
+                    const double vm = double(resinfvarv[ires]);
+                    nioni += vm;
+                    if (qleg * (wmb.dot(udir) > 0. ? -1. : 1.) < 0.) {
+                      nionimass += vm;
+                    }
+                  }
+                  vtxsgnv.push_back(sg);
+                }
+                for (unsigned int ires = 0; ires < nb_all; ++ires) {
+                  vtxvarv.push_back(sig2 > 0. ? float(vabs[ires] / sig2) : 0.f);
+                }
+                Jpsi_vtxvchk = sig2 > 0. ? float(std::abs(vsum / sig2 - 1.)) : 0.f;
+                Jpsi_vtxvgf = sig2 > 0. ? float((sig2 - vmat) / sig2) : 0.f;
+                Jpsi_vtxvhit = sig2 > 0. ? float(vhit / sig2) : 0.f;
+                Jpsi_vtxvbs = sig2 > 0. ? float(vbs / sig2) : 0.f;
+                Jpsi_vtxvbsx = sig2 > 0. ? float(vbsx / sig2) : 0.f;
+                Jpsi_vtxvbsy = sig2 > 0. ? float(vbsy / sig2) : 0.f;
+                Jpsi_vtxvms = sig2 > 0. ? float(vms / sig2) : 0.f;
+                Jpsi_vtxvioni = sig2 > 0. ? float(vioni / sig2) : 0.f;
+                const double sm2v = double(Jpsi_sigmamass) * double(Jpsi_sigmamass);
+                Jpsi_massvms = sm2v > 0. ? float(mms / sm2v) : 0.f;
+                Jpsi_massvioni = sm2v > 0. ? float(mioni / sm2v) : 0.f;
+                Jpsi_vtxsgnchk = nioni > 0. ? float(nionimass / nioni) : 0.f;
+
+                // per-hit-class Gaussian shares of sigma_v^2
+                vtxhitclsv.clear();
+                vtxhitvv.clear();
+                {
+                  std::array<double, kNHitResClasses> vcls{};
+                  bool anycls = false;
+                  for (std::size_t ires = 0; ires < reshitcls.size() && ires < nb_all; ++ires) {
+                    const int c = reshitcls[ires];
+                    if (c < 0 || c >= kNHitResClasses) {
+                      continue;
+                    }
+                    vcls[c] += vabs[ires];
+                    anycls = true;
+                  }
+                  if (anycls && sig2 > 0.) {
+                    for (int c = 0; c < kNHitResClasses; ++c) {
+                      if (vcls[c] == 0.) {
+                        continue;
+                      }
+                      vtxhitclsv.push_back(static_cast<short>(c));
+                      vtxhitvv.push_back(float(vcls[c] / sig2));
+                    }
+                  }
+                }
+
+                // ---- the CF exponents AT THE VERTEX WEIGHTS ---------------
+                // Same blocks, same step records, third functional: the
+                // standardization is sigma_v and the ionization sign travels
+                // per block, so `ioniSign` is 1 and `ressgn` carries
+                // everything.
+                cfvtxmsv.clear();
+                cfvtxdelv.clear();
+                cfvtxiorev.clear();
+                cfvtxioimv.clear();
+                cfvtxradrev.clear();
+                cfvtxradimv.clear();
+                cfvtxgrpv.clear();
+                cfvtxgrpmsv.clear();
+                cfvtxgrpdelv.clear();
+                cfvtxgrpiorev.clear();
+                cfvtxgrpioimv.clear();
+                cfvtxgrpradrev.clear();
+                cfvtxgrpradimv.clear();
+                cfvtxgrpvqmsv.clear();
+                cfvtxgrpvqiov.clear();
+                cfvtxgrpclosure = 0.f;
+                Jpsi_vtxok = false;
+                if (exportCfExponents_ && Jpsi_vtxsig > 0.f) {
+                  cfslotvtx = cfRegister(vabs.data(), int(vabs.size()), vtxsgnv.data(), Jpsi_vtxsig, 1.);
+                }
+              }
+
+              // ============= THE BEAM-LINE (LUMINOUS-REGION) RESIDUALS ====
+              //
+              // With the beam rows ON they are MEASUREMENT rows, so the
+              // unbiased residual is the LEAVE-ONE-OUT (innovation) one: the
+              // vertex the fit finds WITHOUT the beam rows, minus the beam
+              // line at that vertex's z.  With
+              //     A    = C[7:10, 7:10]           the fitted vertex covariance
+              //     M    = covBS - A = Cov(rho_B)  the FITTED residual's covariance
+              //     rho_B = x_v^fit - b0           the post-step residual on those rows
+              // Sherman-Morrison gives, exactly,
+              //     e_B      = covBS M^-1 rho_B            = x_v^{-B} - b0
+              //     Cov(e_B) = covBS M^-1 covBS            = C_{-B} + covBS
+              // and the CONDITIONAL-MEAN projector to the transverse plane
+              //     P = [ I_2 , -s ] ,   s = covBS[0:2,2] / covBS[2,2]
+              // is exactly "the beam line evaluated at that vertex's z",
+              // because `P covBS P^T` IS the conditional covariance
+              // Sigma_{xy|z}.  So the task's two readings coincide:
+              //     Cov(r_bs) = P Cov(e_B) P^T = P C_{-B} P^T + Sigma_{xy|z}.
+              // z is left out: its row is weightless (sigmaZ ~ 3.5 cm
+              // against a ~100 um vertex error), and conditioning on it is
+              // what makes the transverse pair well defined.
+              //
+              // The influence weights come from `rho = (I - F C F^T Vinv) n`:
+              // with `G = P covBS M^-1` and `u_i` the vector that is `G_i^T`
+              // on the three beam rows and zero elsewhere,
+              //     w_i = u_i - Vinv F C (F^T u_i)
+              // and `w_i^T V w_i = G_i M G_i^T = Cov(r_bs)_{ii}` identically
+              // (the algebra: `(I - Q Vinv) V (I - Vinv Q) = V - Q` because
+              // `Q Vinv Q = Q`).  `Jpsi_bsvchk` is that closure measured
+              // block by block.
+              //
+              // A FREE INTERNAL GATE: `w_i` restricted to the beam rows is
+              //     (I - covBS^-1 A) M^-1 covBS P_i^T = P_i^T
+              // exactly, so `Jpsi_bsmeanbs` (= -w_i on those rows) MUST equal
+              // -P to machine precision.  It is written out rather than
+              // asserted.
+              if (exportBsResidual_ && bsConstraint_ && bsrow >= 0) {
+                Jpsi_bsres = {{0.f, 0.f}};
+                Jpsi_bscov = {{0.f, 0.f, 0.f}};
+                Jpsi_bsz = {{0.f, 0.f}};
+                Jpsi_bschi2 = 0.f;
+                Jpsi_bschi2fit = 0.f;
+                Jpsi_bschi20 = float(bschisq0);
+                Jpsi_bsvchk = 0.f;
+                Jpsi_bsok = false;
+                Jpsi_bscovlo = {{0.f, 0.f, 0.f, 0.f, 0.f, 0.f}};
+                Jpsi_bslinv = {{0.f, 0.f, 0.f}};
+                Jpsi_bsmeig = 0.f;
+                Jpsi_bsvbs = {{0.f, 0.f}};
+                Jpsi_bsvbsx = {{0.f, 0.f}};
+                Jpsi_bsvbsy = {{0.f, 0.f}};
+                Jpsi_bsvhit = {{0.f, 0.f}};
+                Jpsi_bsvms = {{0.f, 0.f}};
+                Jpsi_bsvioni = {{0.f, 0.f}};
+                Jpsi_bssgnchk = {{0.f, 0.f}};
+                Jpsi_bsmeanmass = {{0.f, 0.f, 0.f}};
+                Jpsi_bsmeanvtx = {{0.f, 0.f, 0.f}};
+                Jpsi_bsmeanbs = {{0.f, 0.f, 0.f, 0.f, 0.f, 0.f}};
+                resinfbsv.clear();
+                bsvarv.clear();
+                cfbsmsv.clear();
+                cfbsdelv.clear();
+                cfbsiorev.clear();
+                cfbsioimv.clear();
+                cfbsradrev.clear();
+                cfbsradimv.clear();
+                cfbshitclsv.clear();
+                cfbshitcompv.clear();
+                cfbshitvv.clear();
+                cfbsgrpv.clear();
+                cfbsgrpcompv.clear();
+                cfbsgrpmsv.clear();
+                cfbsgrpdelv.clear();
+                cfbsgrpiorev.clear();
+                cfbsgrpioimv.clear();
+                cfbsgrpradrev.clear();
+                cfbsgrpradimv.clear();
+                cfbsgrpvqmsv.clear();
+                cfbsgrpvqiov.clear();
+                cfbsgrpclosure = {{0.f, 0.f}};
+
+                const unsigned int bsr0 = static_cast<unsigned int>(bsrow);
+                const VectorXd rhobs = rfull + Fsparse*dxfree;
+                const Matrix<double, 3, 1> rhoB = rhobs.segment<3>(bsr0);
+                const Matrix<double, 3, 3> Abs = covstate.block<3, 3>(7, 7);
+                const Matrix<double, 3, 3> Mbs = bscovBS - Abs;
+
+                const Matrix<double, 3, 3> covBSinv = bscovBS.inverse();
+                Jpsi_bschi2fit = float((rhoB.transpose()*covBSinv*rhoB)(0, 0));
+                Jpsi_bsvtx = {{float(bsspot[0] + rhoB[0]),
+                               float(bsspot[1] + rhoB[1]),
+                               float(bsspot[2] + rhoB[2])}};
+                Jpsi_bsspot = {{float(bsspot[0]), float(bsspot[1]), float(bsspot[2])}};
+                Jpsi_bsslope = {{float(bsslope[0]), float(bsslope[1])}};
+                Jpsi_bswidth = {{float(bswidth[0]), float(bswidth[1]), float(bswidth[2])}};
+                Jpsi_bswidtherr = {{float(bswidtherr[0]), float(bswidtherr[1])}};
+
+                // THE CONDITIONING FIX.  `M = covBS - A` is a DIFFERENCE of
+                // two nearly equal covariances whenever the two tracks barely
+                // constrain the vertex in some direction (A -> covBS), and
+                // `A` comes out of a large sparse solve with its own
+                // numerical error.  Building the innovation as
+                // `covBS M^-1 covBS` then evaluates the WHOLE answer through
+                // that amplification and can even return a non-positive
+                // matrix -- which is what produced the 5 sigma tail.
+                //
+                // The "+" form puts the leading order in explicitly and
+                // leaves only the CORRECTION to be amplified:
+                //     C_{-B} = A + A M^-1 A            (the rows-OFF vertex
+                //                                       covariance)
+                //     Cov(e) = C_{-B} + covBS          (manifestly >= covBS,
+                //                                       so positive definite)
+                //     e_B    = rho_B + A M^-1 rho_B    (= covBS M^-1 rho_B)
+                // Algebraically identical, numerically not: the answer is
+                // never smaller than its own leading term, and `Cov(e)` can
+                // no longer come back indefinite.  `Jpsi_bscovlo` exports
+                // `C_{-B}`, which the rows-OFF run's `Jpsi_covvtx` must
+                // reproduce (gate G7a).
+                //
+                // The guard below is a DEFINEDNESS test, not a clip: when the
+                // vertex is determined by the beam rows alone (`A -> covBS`,
+                // `M -> 0`) the leave-one-out residual does not exist, so it
+                // is flagged (`Jpsi_bsok = false`) and not written as a
+                // number.  It is tested on the smallest eigenvalue of `M`
+                // relative to `covBS`'s own scale, which is dimensionally
+                // clean because both are covariances of the same three
+                // coordinates, and that ratio is EXPORTED (`Jpsi_bsmeig`) so
+                // the degenerate corner can be studied rather than guessed.
+                SelfAdjointEigenSolver<Matrix<double, 3, 3>> esM(Mbs);
+                const double mmin = esM.eigenvalues().minCoeff();
+                const double bsscale = bscovBS.diagonal().minCoeff();
+                Jpsi_bsmeig = float(bsscale > 0. ? mmin/bsscale : 0.);
+                if (mmin > 1.e-9*bsscale && bsscale > 0.) {
+                  const LLT<Matrix<double, 3, 3>> lltM(Mbs);
+                  const Matrix<double, 3, 3> AMinv =
+                      lltM.info() == Eigen::Success
+                          ? Matrix<double, 3, 3>(lltM.solve(Abs).transpose())
+                          : Matrix<double, 3, 3>(Abs*Mbs.inverse());
+                  const Matrix<double, 3, 1> eB = rhoB + AMinv*rhoB;
+                  const Matrix<double, 3, 3> Clo = Abs + AMinv*Abs;
+                  const Matrix<double, 3, 3> Se = Clo + bscovBS;
+                  Jpsi_bscovlo = {{float(Clo(0, 0)), float(Clo(0, 1)), float(Clo(0, 2)),
+                                   float(Clo(1, 1)), float(Clo(1, 2)), float(Clo(2, 2))}};
+
+                  Matrix<double, 2, 3> P = Matrix<double, 2, 3>::Zero();
+                  P(0, 0) = 1.;
+                  P(1, 1) = 1.;
+                  P(0, 2) = -bscovBS(0, 2)/bscovBS(2, 2);
+                  P(1, 2) = -bscovBS(1, 2)/bscovBS(2, 2);
+
+                  const Matrix<double, 2, 1> rbs = P*eB;
+                  const Matrix<double, 2, 2> Cbs = P*Se*P.transpose();
+
+                  Jpsi_bsres = {{float(rbs[0]), float(rbs[1])}};
+                  Jpsi_bscov = {{float(Cbs(0, 0)), float(Cbs(0, 1)), float(Cbs(1, 1))}};
+
+                  // LOWER-CHOLESKY whitening in the order (x, y): Cbs = L L^T
+                  // with L lower triangular, z = L^-1 r.  z[0] is the x pull
+                  // and z[1] the y pull GIVEN x.  The basis is a CHOICE and
+                  // this is the one stated in the branch docs; the chi2
+                  // below is basis independent.
+                  const LLT<Matrix<double, 2, 2>> llt(Cbs);
+                  const bool lok = llt.info() == Eigen::Success;
+                  Matrix<double, 2, 2> Linv = Matrix<double, 2, 2>::Identity();
+                  if (lok) {
+                    const Matrix<double, 2, 1> zbs = llt.matrixL().solve(rbs);
+                    Jpsi_bsz = {{float(zbs[0]), float(zbs[1])}};
+                    Jpsi_bschi2 = float(zbs.squaredNorm());
+                    Jpsi_bsok = true;
+                    Linv = llt.matrixL().solve(Matrix<double, 2, 2>::Identity());
+                    Jpsi_bslinv = {{float(Linv(0, 0)), float(Linv(1, 0)), float(Linv(1, 1))}};
+                  }
+
+                  // ---- the two influence rows, and everything at them ----
+                  // THE TWO FUNCTIONALS ARE THE WHITENED PAIR, not the global
+                  // x and y components.  `r = P e_B = Gbs rho_B` with
+                  // `Gbs = P (I + A M^-1)` (the "+" form again), so the
+                  // whitened pulls are `z = L^-1 r = (L^-1 Gbs) rho_B` and
+                  // the functional's row is that product.  By construction
+                  // `Cov(z) = I`: each pull has unit variance -- so the
+                  // closure below is `sum_b |a_b|^2 == 1` -- and the two are
+                  // UNCORRELATED, which is what stops their product from
+                  // over-counting (the global pair's sandwich/quoted was
+                  // 1.385 because `Cov_xy` is not zero).  The price, stated:
+                  // neither pull is the response to a single beam-spot
+                  // parameter any more; `Jpsi_bslinv` is exported so the
+                  // global-basis response is one 2x2 multiply away.
+                  const Matrix<double, 2, 3> Gbs =
+                      Linv*(P*(Matrix<double, 3, 3>::Identity() + AMinv));
+                  const unsigned int nb_bs = dVs.size();
+                  resinfbsv.assign(2*5*nb_bs, 0.f);
+                  bsvarv.assign(2*nb_bs, 0.f);
+                  std::array<std::vector<float>, 2> vabsbs;
+                  std::array<std::vector<float>, 2> sgnbs;
+                  double vchkmax = 0.;
+                  for (unsigned int k = 0; k < 2; ++k) {
+                    VectorXd ubs = VectorXd::Zero(ncons);
+                    ubs.segment<3>(bsr0) = Gbs.row(k).transpose();
+                    VectorXd absfree = VectorXd::Zero(nstatefree);
+                    for (unsigned int i = 0; i < nstatefree; ++i) {
+                      const Eigen::Index is = freestateidxs[i];
+                      if (is >= 7 && is <= 9) {
+                        absfree(i) = Gbs(k, is - 7);
+                      }
+                    }
+                    const VectorXd wbs = ubs - VinvF*Cinvd.solve(absfree);
+
+                    for (unsigned int j = 0; j < 3; ++j) {
+                      Jpsi_bsmeanbs[k*3 + j] = float(-wbs(bsr0 + j));
+                    }
+
+                    vabsbs[k].assign(nb_bs, 0.f);
+                    sgnbs[k].assign(nb_bs, 1.f);
+                    double vsumk = 0., vbsk = 0., vhitk = 0., vmsk = 0., vionik = 0.;
+                    double vbsxk = 0., vbsyk = 0.;
+                    for (unsigned int ires = 0; ires < nb_bs; ++ires) {
+                      const unsigned int r0b = resblockrng[ires][0];
+                      const unsigned int nbb = resblockrng[ires][1];
+                      const VectorXd wb = wbs.segment(r0b, nbb);
+                      const VectorXd ab = ressqrtdV[ires]*wb;
+                      for (unsigned int j = 0; j < 5; ++j) {
+                        resinfbsv[(k*nb_bs + ires)*5 + j] = j < nbb ? float(ab(j)) : 0.f;
+                      }
+                      const double vb = ab.squaredNorm();
+                      vabsbs[k][ires] = float(vb);
+                      const int fam = ires < resfamily_.size() ? resfamily_[ires] : -1;
+                      if (fam != 15) {
+                        vsumk += vb;
+                      }
+                      if (fam == 10) {
+                        vmsk += vb;
+                      } else if (fam == 11) {
+                        vionik += vb;
+                      } else if (fam == 8 || fam == 9) {
+                        vhitk += vb;
+                      } else if (fam == kBeamSpotFamily) {
+                        vbsk += vb;
+                        {
+                          const Matrix<double, 3, 1> wbb = wbs.segment<3>(r0b);
+                          const double cxx = bscovBS(0, 0), cyy = bscovBS(1, 1), czz = bscovBS(2, 2);
+                          const double cxy = bscovBS(0, 1), cxz = bscovBS(0, 2), cyz = bscovBS(1, 2);
+                          vbsxk = wbb(0)*wbb(0)*cxx + wbb(0)*wbb(1)*cxy + wbb(0)*wbb(2)*cxz;
+                          vbsyk = wbb(1)*wbb(1)*cyy + wbb(0)*wbb(1)*cxy + wbb(1)*wbb(2)*cyz;
+                          (void)czz;
+                        }
+                      }
+                      // the per-block ionization sign, the same rule as the
+                      // vertex functional's (the two legs carry opposite
+                      // charges, so the sign travels with the block)
+                      if (fam == 11 && nbb > 0 && resionidir[ires].size() == Eigen::Index(nbb)) {
+                        const VectorXd &udir = resionidir[ires];
+                        const unsigned int leg = (ires >= resLegStart_[1]) ? 1u : 0u;
+                        const double qleg = refftsarr[leg][6] >= 0. ? 1. : -1.;
+                        sgnbs[k][ires] = float(qleg*(wb.dot(udir) > 0. ? -1. : 1.));
+                      }
+                    }
+                    // the whitened functional has UNIT variance by
+                    // construction; `ckk` stays the normaliser so the closure
+                    // reads as `sum_b |a_b|^2 / Cov_kk - 1` exactly as before
+                    const double ckk = lok ? 1. : Cbs(k, k);
+                    if (ckk > 0.) {
+                      vchkmax = std::max(vchkmax, std::abs(vsumk/ckk - 1.));
+                      Jpsi_bsvbs[k] = float(vbsk/ckk);
+                      Jpsi_bsvbsx[k] = float(vbsxk/ckk);
+                      Jpsi_bsvbsy[k] = float(vbsyk/ckk);
+                      Jpsi_bsvhit[k] = float(vhitk/ckk);
+                      Jpsi_bsvms[k] = float(vmsk/ckk);
+                      Jpsi_bsvioni[k] = float(vionik/ckk);
+                      for (unsigned int ires = 0; ires < nb_bs; ++ires) {
+                        bsvarv[k*nb_bs + ires] = float(vabsbs[k][ires]/ckk);
+                      }
+                    }
+
+                    // per-hit-class Gaussian shares of Cov_kk
+                    if (ckk > 0.) {
+                      std::array<double, kNHitResClasses> vcls{};
+                      for (std::size_t ires = 0; ires < reshitcls.size() && ires < nb_bs; ++ires) {
+                        const int c = reshitcls[ires];
+                        if (c < 0 || c >= kNHitResClasses) {
+                          continue;
+                        }
+                        vcls[c] += vabsbs[k][ires];
+                      }
+                      for (int c = 0; c < kNHitResClasses; ++c) {
+                        if (vcls[c] == 0.) {
+                          continue;
+                        }
+                        cfbshitcompv.push_back(static_cast<short>(k));
+                        cfbshitclsv.push_back(static_cast<short>(c));
+                        cfbshitvv.push_back(float(vcls[c]/ckk));
+                      }
+                    }
+
+                    // ---- the CF exponents at THIS beam weight ------------
+                    // The third and fourth functional of the same fit. They
+                    // no longer cost a `trackExponents` call each: the four
+                    // weight sets are evaluated together on the concatenated
+                    // argument list after this block (see the registration
+                    // above), so the pooling and the step-record work they
+                    // used to repeat is paid once.
+                    if (exportCfExponents_ && ckk > 0.) {
+                      cfslotbs[k] = cfRegister(vabsbs[k].data(), int(vabsbs[k].size()), sgnbs[k].data(),
+                                               std::sqrt(ckk), 1.);
+                    }
+                  }
+                  Jpsi_bsvchk = float(vchkmax);
+                }
+
+                // THE MEAN TERM. A shift `delta` of the centroid moves the
+                // beam residual row by `-delta`, so for ANY functional
+                // `theta = w^T n`, `d theta / d b0 = -w[bs rows]`. The slope
+                // response is that same entry times `(z_v - z0)`, which is
+                // `Jpsi_bsvtx[2] - Jpsi_bsspot[2]`. No new global parameter
+                // is added to the quadratic term by writing these.
+                for (unsigned int j = 0; j < 3; ++j) {
+                  Jpsi_bsmeanmass[j] = float(-wmass(bsr0 + j));
+                }
+                if (exportVtxResidual_ && wvtxinf.size() == Eigen::Index(ncons)) {
+                  for (unsigned int j = 0; j < 3; ++j) {
+                    Jpsi_bsmeanvtx[j] = float(-wvtxinf(bsr0 + j));
+                  }
+                }
+              }
+
+              // ========= ONE EVALUATOR PASS FOR EVERY FUNCTIONAL ==========
+              // Every functional registered above is evaluated here together,
+              // on the concatenated argument list { w_{b,k} tau_j }, and its
+              // results are written to exactly the branches its own call used
+              // to write, in the same order and layout.
+              if (!cfins.empty()) {
+                cfress.resize(cfins.size());
+                cvhcf::trackExponents(cfins.data(), int(cfins.size()), cfress.data());
+
+                auto storecf = [](const std::array<double, cvhcf::kNTau> &a, std::vector<float> &v) {
+                  v.resize(cvhcf::kNTau);
+                  for (int j = 0; j < cvhcf::kNTau; ++j)
+                    v[j] = float(a[j]);
+                };
+
+                if (cfslotmass >= 0) {
+                  const cvhcf::TrackResult &cfres = cfress[cfslotmass];
+                  cfok = cfres.ok;
+                  cfnblock = cfres.nblockms + cfres.nblockioni;
+                  cfnpooled = cfres.npooled;
+                  storecf(cfres.S.ms, cfmsv);
+                  storecf(cfres.S.del, cfdelv);
+                  storecf(cfres.S.ioRe, cfiorev);
+                  storecf(cfres.S.ioIm, cfioimv);
+                  storecf(cfres.S.radRe, cfradrev);
+                  storecf(cfres.S.radIm, cfradimv);
+                  storeCfGroups(cfres);
+                }
+
+                if (cfslotvtx >= 0) {
+                  const cvhcf::TrackResult &cfresv = cfress[cfslotvtx];
+                  Jpsi_vtxok = cfresv.ok;
+                  storecf(cfresv.S.ms, cfvtxmsv);
+                  storecf(cfresv.S.del, cfvtxdelv);
+                  storecf(cfresv.S.ioRe, cfvtxiorev);
+                  storecf(cfresv.S.ioIm, cfvtxioimv);
+                  storecf(cfresv.S.radRe, cfvtxradrev);
+                  storecf(cfresv.S.radIm, cfvtxradimv);
+                  if (exportCfGroupExponents_) {
+                    storeCfGroupsTo(cfresv,
+                                    cfvtxgrpv,
+                                    cfvtxgrpmsv,
+                                    cfvtxgrpdelv,
+                                    cfvtxgrpiorev,
+                                    cfvtxgrpioimv,
+                                    cfvtxgrpradrev,
+                                    cfvtxgrpradimv,
+                                    cfvtxgrpclosure,
+                                    false,
+                                    &cfvtxgrpvqmsv,
+                                    &cfvtxgrpvqiov);
+                  }
+                }
+
+                // the two beam components APPEND, so component 0 must be
+                // written before component 1 exactly as the loop did
+                for (unsigned int k = 0; k < 2; ++k) {
+                  if (cfslotbs[k] < 0) {
+                    continue;
+                  }
+                  const cvhcf::TrackResult &cfresb = cfress[cfslotbs[k]];
+                  auto appendcf = [](const std::array<double, cvhcf::kNTau> &a, std::vector<float> &v) {
+                    for (int j = 0; j < cvhcf::kNTau; ++j)
+                      v.push_back(float(a[j]));
+                  };
+                  appendcf(cfresb.S.ms, cfbsmsv);
+                  appendcf(cfresb.S.del, cfbsdelv);
+                  appendcf(cfresb.S.ioRe, cfbsiorev);
+                  appendcf(cfresb.S.ioIm, cfbsioimv);
+                  appendcf(cfresb.S.radRe, cfbsradrev);
+                  appendcf(cfresb.S.radIm, cfbsradimv);
+                  if (exportCfGroupExponents_) {
+                    std::vector<short> gtmpv;
+                    std::vector<float> gms, gdel, giore, gioim, gradre, gradim, gvqms, gvqio;
+                    float gclos = 0.f;
+                    storeCfGroupsTo(cfresb, gtmpv, gms, gdel, giore, gioim, gradre, gradim,
+                                    gclos, false, &gvqms, &gvqio);
+                    cfbsgrpclosure[k] = gclos;
+                    for (std::size_t ig = 0; ig < gtmpv.size(); ++ig) {
+                      cfbsgrpv.push_back(gtmpv[ig]);
+                      cfbsgrpcompv.push_back(static_cast<short>(k));
+                      cfbsgrpvqmsv.push_back(gvqms[ig]);
+                      cfbsgrpvqiov.push_back(gvqio[ig]);
+                      for (int j = 0; j < cvhcf::kNTau; ++j) {
+                        cfbsgrpmsv.push_back(gms[ig*cvhcf::kNTau + j]);
+                        cfbsgrpiorev.push_back(giore[ig*cvhcf::kNTau + j]);
+                        cfbsgrpioimv.push_back(gioim[ig*cvhcf::kNTau + j]);
+                        cfbsgrpradrev.push_back(gradre[ig*cvhcf::kNTau + j]);
+                        cfbsgrpradimv.push_back(gradim[ig*cvhcf::kNTau + j]);
+                      }
+                    }
+                  }
+                  Jpsi_bssgnchk[k] = cfresb.ok ? 1.f : 0.f;
+                }
               }
             }
 
@@ -3981,6 +5969,17 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           Muminus_nvalidpixelFinal = nvalidpixelFinalarr[idxminus];
           Muminus_nmatchedvalid = nmatchedvalidarr[idxminus];
           Muminus_nambiguousmatchedvalid = nambiguousmatchedvalidarr[idxminus];
+
+          // transmission probe: the UNCONSTRAINED pass is the one whose
+          // Mu{plus,minus}_pt the dE/dx scan uses, so pin the accumulator to
+          // icons==0 (the mass-constrained pass re-propagates and would
+          // otherwise overwrite it).
+          if (icons == 0) {
+            Muplus_dEref = dErefarr[idxplus];
+            Muminus_dEref = dErefarr[idxminus];
+            Muplus_maxfracloss = maxFracLossArr[idxplus];
+            Muminus_maxfracloss = maxFracLossArr[idxminus];
+          }
 
           Muplus_pixClass.assign(pixclassarr[idxplus].begin(), pixclassarr[idxplus].end());
           Muminus_pixClass.assign(pixclassarr[idxminus].begin(), pixclassarr[idxminus].end());
@@ -4045,19 +6044,76 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           
           const reco::Candidate *muplusgen = nullptr;
           const reco::Candidate *muminusgen = nullptr;
-          
+
+          // pre-FSR resonance + the photons the dressed mass needs, gathered
+          // in the same pass as the muon match (see the Jpsigenpre_ member
+          // docs). The container is an edm::View<reco::Candidate>, which does
+          // NOT expose GenStatusFlags, so `isPrompt` is asked for through a
+          // dynamic_cast and simply not required when the cast fails.
+          const reco::Candidate *resgen = nullptr;
+          int resstatus = -1;
+          std::vector<const reco::Candidate *> pre746;
+          std::vector<const reco::Candidate *> fsrphot;
+
           Muplusgen_dr = -99.;
           Muminusgen_dr = -99.;
+          Muplusgen_pdgId = 0;
+          Muminusgen_pdgId = 0;
+          Muplusgen_idx = -1;
+          Muminusgen_idx = -1;
+          Muplusgen_motherPdgId = 0;
+          Muminusgen_motherPdgId = 0;
+          Muplusgen_motherIdx = -1;
+          Muminusgen_motherIdx = -1;
+          Muplusgen_isPrompt = false;
+          Muminusgen_isPrompt = false;
+          Muplusgen_fromHardProcess = false;
+          Muminusgen_fromHardProcess = false;
+          Jpsigen_sameDecay = false;
+          Jpsigenpre_mass = -99.;
+          Jpsigenpre_masslep = -99.;
+          Jpsigenpre_status = -1;
+          Jpsigen_massdressed = -99.;
 
           if (doGen_) {
             double drminplus = 0.1;
             double drminminus = 0.1;
+            // address -> position in the collection, so that the matched
+            // particle's mother can be reported as an INDEX (mother() hands
+            // back a pointer into this same product) and two candidates that
+            // matched the same muon can be recognised downstream.
+            std::unordered_map<const reco::Candidate *, int> genidx;
+            int igen = -1;
 
             for (auto const &genpart : *genPartCollection) {
-              if (genpart.status() != 1) {
+              ++igen;
+              genidx[&genpart] = igen;
+              const int apid = std::abs(genpart.pdgId());
+              const int st = genpart.status();
+              // the hard-process resonance: last copy (62) wins over first
+              // copy (22); their masses agree to 4e-6 GeV where both exist
+              if ((st == 62 || st == 22) &&
+                  std::find(genResonancePdgIds_.begin(), genResonancePdgIds_.end(), apid) !=
+                      genResonancePdgIds_.end()) {
+                if (resgen == nullptr || (st == 62 && resstatus != 62)) {
+                  resgen = &genpart;
+                  resstatus = st;
+                }
+              }
+              // the pre-Photos lepton copies, present only in radiating events
+              if (st == 746 && apid == 13) {
+                pre746.push_back(&genpart);
+              }
+              if (st == 1 && apid == 22) {
+                const reco::GenParticle *gp = dynamic_cast<const reco::GenParticle *>(&genpart);
+                if (gp == nullptr || gp->statusFlags().isPrompt()) {
+                  fsrphot.push_back(&genpart);
+                }
+              }
+              if (st != 1) {
                 continue;
               }
-              if (std::abs(genpart.pdgId()) != 13) {
+              if (apid != 13) {
                 continue;
               }
 
@@ -4065,6 +6121,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               const double dRplus = deltaR(genpart, muarr[idxplus]);
               if (dRplus < drminplus && genpart.charge() > 0) {
                 muplusgen = &genpart;
+                Muplusgen_idx = igen;
                 drminplus = dRplus;
               }
 
@@ -4072,6 +6129,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               const double dRminus = deltaR(genpart, muarr[idxminus]);
               if (dRminus < drminminus && genpart.charge() < 0) {
                 muminusgen = &genpart;
+                Muminusgen_idx = igen;
                 drminminus = dRminus;
               }
             }
@@ -4082,6 +6140,69 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
             if (muminusgen != nullptr) {
               Muminusgen_dr = drminminus;
+            }
+
+            // PROVENANCE. Walk up from the matched particle through its own
+            // copies (pdgId == +-13 at any status) to the first ancestor that
+            // is something else: the Z for a signal leg, a B/D/K/pi for a
+            // decay leg. The guard bounds a pathological self-referential
+            // chain; 50 is far above any real decay chain's depth.
+            auto firstNonMuonMother = [](const reco::Candidate *p) -> const reco::Candidate * {
+              const reco::Candidate *m = p;
+              for (int guard = 0; guard < 50 && m != nullptr; ++guard) {
+                if (m->numberOfMothers() == 0) {
+                  return nullptr;
+                }
+                m = m->mother(0);
+                if (m == nullptr) {
+                  return nullptr;
+                }
+                if (std::abs(m->pdgId()) != 13) {
+                  return m;
+                }
+              }
+              return nullptr;
+            };
+            auto fillProv = [&](const reco::Candidate *mu, int &pdgOut, int &mpdgOut,
+                                int &midxOut, bool &promptOut, bool &hardOut) {
+              if (mu == nullptr) {
+                return;
+              }
+              pdgOut = mu->pdgId();
+              const reco::GenParticle *gp = dynamic_cast<const reco::GenParticle *>(mu);
+              if (gp != nullptr) {
+                promptOut = gp->statusFlags().isPrompt();
+                hardOut = gp->statusFlags().fromHardProcess();
+              }
+              const reco::Candidate *mother = firstNonMuonMother(mu);
+              if (mother != nullptr) {
+                mpdgOut = mother->pdgId();
+                auto it = genidx.find(mother);
+                midxOut = it != genidx.end() ? it->second : -1;
+              }
+            };
+            fillProv(muplusgen, Muplusgen_pdgId, Muplusgen_motherPdgId,
+                     Muplusgen_motherIdx, Muplusgen_isPrompt, Muplusgen_fromHardProcess);
+            fillProv(muminusgen, Muminusgen_pdgId, Muminusgen_motherPdgId,
+                     Muminusgen_motherIdx, Muminusgen_isPrompt, Muminusgen_fromHardProcess);
+            // The two legs are one decay only if they are two DIFFERENT gen
+            // particles (an index collision is the same muon reconstructed
+            // twice) sharing one non-muon ancestor.
+            Jpsigen_sameDecay = muplusgen != nullptr && muminusgen != nullptr &&
+                                Muplusgen_idx >= 0 && Muminusgen_idx >= 0 &&
+                                Muplusgen_idx != Muminusgen_idx &&
+                                Muplusgen_motherIdx >= 0 &&
+                                Muplusgen_motherIdx == Muminusgen_motherIdx;
+
+            if (resgen != nullptr) {
+              Jpsigenpre_mass = resgen->mass();
+              Jpsigenpre_status = resstatus;
+            }
+            if (pre746.size() == 2) {
+              Jpsigenpre_masslep =
+                  (ROOT::Math::PtEtaPhiMVector(pre746[0]->pt(), pre746[0]->eta(), pre746[0]->phi(), trackMass[0]) +
+                   ROOT::Math::PtEtaPhiMVector(pre746[1]->pt(), pre746[1]->eta(), pre746[1]->phi(), trackMass[1]))
+                      .mass();
             }
 
           }
@@ -4116,7 +6237,21 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             Jpsigen_eta = jpsigen.eta();
             Jpsigen_phi = jpsigen.phi();
             Jpsigen_mass = jpsigen.mass();
-            
+
+            // DRESSED: the bare pair plus every prompt final-state photon
+            // within dR < 0.1 of EITHER muon -- the same cone and the same
+            // photon collection `zchannel/dump_gen_fsr.py` uses, so the two
+            // definitions cannot drift.
+            {
+              ROOT::Math::PtEtaPhiMVector dressed = jpsigen;
+              for (auto const *ph : fsrphot) {
+                if (deltaR(*ph, *muplusgen) < 0.1 || deltaR(*ph, *muminusgen) < 0.1) {
+                  dressed += ROOT::Math::PtEtaPhiMVector(ph->pt(), ph->eta(), ph->phi(), 0.);
+                }
+              }
+              Jpsigen_massdressed = dressed.mass();
+            }
+
             Jpsigen_x = muplusgen->vx();
             Jpsigen_y = muplusgen->vy();
             Jpsigen_z = muplusgen->vz();
@@ -4332,6 +6467,36 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           }
         }
 
+        // ---- VARIANCE-ONLY COLUMNS (exportVarianceGrads) ------------------
+        //
+        // A parmtype-8/9/10/11 parameter enters this maker's -2lnL ONLY
+        // through the covariance: unlike the single-track maker, the
+        // two-track parameter vector is alignment + field + eloss/material
+        // and carries no resolution slots (`npars = nparsAlignment +
+        // nparsBfield + nparsEloss`).  So those families need columns
+        // APPENDED here; their `Jfinal` columns stay exactly zero and only
+        // the log-det block below writes to them.
+        //
+        // Parmtype 15 needs NOTHING appended -- `matGroupGlobalIdx_[g]` is
+        // already a column of `globalidxv`, one slot per group per hit --
+        // which is why `varianceGradFamilies = {15}` preserves the layout
+        // and can be pooled with a production that ran without the switch.
+        const std::size_t nparsmean = globalidxvfinal.size();
+        if (dores && exportVarianceGrads_) {
+          for (unsigned int ires = 0; ires < resglobidx.size(); ++ires) {
+            const int fam = ires < resfamily_.size() ? resfamily_[ires] : -1;
+            if (!varianceFamilyWanted(fam)) {
+              continue;
+            }
+            const unsigned int idx = resglobidx[ires];
+            if (!idxmap.count(idx)) {
+              idxmap[idx] = globalidxvfinal.size();
+              globalidxvfinal.push_back(idx);
+            }
+          }
+        }
+        (void)nparsmean;
+
         const unsigned int nparsfinal = globalidxvfinal.size();
 
         // Sparse GBL reduction (mirrors single-track maker 2536-2651).
@@ -4369,6 +6534,359 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
         dxdparms(Eigen::placeholders::all, freestateidxs) =
             -Cinvd.solve(VinvF.transpose()*Jsparse).transpose();
 
+        // ================= THE VARIANCE (log-det) TERM =====================
+        //
+        // Up to here the exported gradient/Hessian are those of the QUADRATIC
+        // form alone, `chi2(theta) = r^T R r` with `r -> r + J theta`, i.e.
+        // every parameter enters only through the MEAN of the residuals.  For
+        // a parameter that also moves the COVARIANCE -- parmtype 15 (a
+        // material group scales its steps' MS covariance and ionization
+        // variance by the same `exp(k_g)` that scales their mean loss), and
+        // parmtypes 8/9/10/11 (which move nothing else) -- that is not the
+        // derivative of the likelihood.
+        //
+        // The objective is the MARGINAL (REML) one, exactly as in the
+        // single-track maker (`ResidualGlobalCorrectionMakerG4e.cc`, the
+        // `gradll` loop):
+        //
+        //     -2 lnL(theta) = r^T R r + ln|V| + ln|C|,
+        //         R = V^-1 - V^-1 F C^-1 F^T V^-1,   C = F^T V^-1 F,
+        //
+        // whose derivatives use  dR/dtheta = -R (dV/dtheta) R  and
+        // d(ln|V| + ln|C|)/dtheta = tr(R dV/dtheta):
+        //
+        //     dG_i   = -r^T R dV_i R r  +  tr(dV_i R)
+        //     dH_ij  =  tr(dV_i R dV_j R)                       (EXPECTED)
+        //
+        // Three properties of this, all deliberate and all shared with the
+        // single-track code:
+        //
+        //  * THE LOCAL TRACK PARAMETERS.  `R` already carries the projection
+        //    -V^-1 F C^-1 F^T V^-1, so the fitted state is profiled out and
+        //    its implicit derivative vanishes by the envelope theorem; the
+        //    `ln|C|` piece -- the difference between profiling and
+        //    marginalizing -- is supplied automatically by using `R` rather
+        //    than `V^-1` inside the trace.  The vertex / beamspot / pointing
+        //    / mass constraint rows have theta-independent weights, so they
+        //    register no `dV` and enter only through `R` and `C`.
+        //
+        //  * THE HESSIAN IS THE EXPECTED (FISHER) ONE.  The observed pieces
+        //    `2 r^T R dV_i R dV_j R r` and the mean-variance cross term
+        //    `-2 J^T R dV_i R r` are DROPPED -- the single-track maker has
+        //    them behind `if (false)` for the same reason.  For a Gaussian
+        //    the mean and variance blocks of the Fisher matrix are exactly
+        //    orthogonal, so the cross term is zero IN EXPECTATION and keeping
+        //    the observed one only adds noise; and the expected form is a
+        //    Gram matrix, `tr(dV_i R dV_j R) = <R^1/2 dV_i R^1/2,
+        //    R^1/2 dV_j R^1/2>_F`, hence positive semi-definite by
+        //    construction, which `2 J^T R J` also is.  The exported `hess` is
+        //    therefore PSD whatever the candidate does.
+        //
+        //  * WHAT dV IS EVALUATED AT.  `dV_i` is the derivative at the point
+        //    the FIT USED.  For parmtypes 10/11/15 that is the covariance the
+        //    propagator actually built (`k_g` included).  For parmtypes 8/9
+        //    this maker does not apply `exp(corparms)` to the hit covariance
+        //    at all (the single-track maker does), so those derivatives are
+        //    at theta = 0 regardless of any `corFiles` -- see the doc.
+        //
+        // The blocks are evaluated in their own row range rather than as full
+        // ncons x ncons sparse products: every `dV_i` is supported on
+        // `resblockrng[i]`, so `tr(dV_i R) = tr(D_i R_ii)` and
+        // `tr(dV_i R dV_j R) = tr(D_i R_ij D_j R_ji)` with `D` the small
+        // dense block.  Identical algebra, ~5 x 5 matrices instead of
+        // 400 x 400 sparse ones.
+        nvarcols = 0;
+        if (dores && exportVarianceGrads_) {
+          // per candidate, so a candidate with no registered block writes an
+          // EMPTY gradchisqv/gradllv rather than the previous candidate's
+          gradchisqv.clear();
+          gradllv.clear();
+          hessvaridxv.clear();
+          hessvarpackedv.clear();
+          nHessVar = 0;
+        }
+        if (dores && exportVarianceGrads_ && !dVs.empty()) {
+          std::vector<unsigned int> vcol, vr0, vnb;
+          std::vector<MatrixXd> vD;
+          vcol.reserve(dVs.size());
+          vr0.reserve(dVs.size());
+          vnb.reserve(dVs.size());
+          vD.reserve(dVs.size());
+          for (unsigned int ires = 0; ires < dVs.size(); ++ires) {
+            const int fam = ires < resfamily_.size() ? resfamily_[ires] : -1;
+            if (!varianceFamilyWanted(fam)) {
+              continue;
+            }
+            const unsigned int r0 = resblockrng[ires][0];
+            const unsigned int nb = resblockrng[ires][1];
+            MatrixXd Db(nb, nb);
+            for (unsigned int a = 0; a < nb; ++a) {
+              for (unsigned int b = 0; b < nb; ++b) {
+                Db(a, b) = dVs[ires].coeff(r0 + a, r0 + b);
+              }
+            }
+            if (!(Db.cwiseAbs().maxCoeff() > 0.)) {
+              continue;
+            }
+            vcol.push_back(idxmap.at(resglobidx[ires]));
+            vr0.push_back(r0);
+            vnb.push_back(nb);
+            vD.emplace_back(std::move(Db));
+          }
+
+          const unsigned int nv = vcol.size();
+          if (nv > 0) {
+            {
+              std::vector<unsigned int> uniq(vcol);
+              std::sort(uniq.begin(), uniq.end());
+              uniq.erase(std::unique(uniq.begin(), uniq.end()), uniq.end());
+              nvarcols = uniq.size();
+            }
+
+            VectorXd gradll = VectorXd::Zero(nparsfinal);
+            // dVRr(:, p) = sum over the blocks of parameter p of dV_i R r.
+            // Dense ncons x nparsfinal, but only the blocks' own rows are
+            // ever written.
+            MatrixXd dVRr = MatrixXd::Zero(ncons, nparsfinal);
+
+            std::vector<VectorXd> vDRr(nv);
+            for (unsigned int i = 0; i < nv; ++i) {
+              const auto Rri = Rr.segment(vr0[i], vnb[i]);
+              vDRr[i] = vD[i] * Rri;
+              dVRr.block(vr0[i], vcol[i], vnb[i], 1) += vDRr[i];
+              // log-det gradient: tr(dV_i R)
+              gradll(vcol[i]) +=
+                  (vD[i] * R.block(vr0[i], vr0[i], vnb[i], vnb[i])).trace();
+            }
+
+            // expected Hessian: tr(dV_i R dV_j R) = tr(D_i R_ij D_j R_ji).
+            // Accumulated BOTH into `hess` (so `hesspackedv` stays complete)
+            // and into its own small dense block over the variance columns,
+            // which is what is shipped alongside `hessfactorv` -- see
+            // `hessvaridxv` in the base class for why.
+            std::vector<unsigned int> varcols(vcol);
+            std::sort(varcols.begin(), varcols.end());
+            varcols.erase(std::unique(varcols.begin(), varcols.end()),
+                          varcols.end());
+            std::unordered_map<unsigned int, unsigned int> varpos;
+            varpos.reserve(varcols.size());
+            for (unsigned int i = 0; i < varcols.size(); ++i) {
+              varpos[varcols[i]] = i;
+            }
+            MatrixXd hessvar = MatrixXd::Zero(varcols.size(), varcols.size());
+            for (unsigned int i = 0; i < nv; ++i) {
+              const MatrixXd DiRij_base = vD[i];
+              const unsigned int pi = varpos.at(vcol[i]);
+              for (unsigned int j = 0; j <= i; ++j) {
+                const MatrixXd T =
+                    DiRij_base * R.block(vr0[i], vr0[j], vnb[i], vnb[j]);   // nb_i x nb_j
+                const MatrixXd U =
+                    vD[j] * R.block(vr0[j], vr0[i], vnb[j], vnb[i]);        // nb_j x nb_i
+                const double hessres = (T.array() * U.transpose().array()).sum();
+                const unsigned int pj = varpos.at(vcol[j]);
+                hess(vcol[i], vcol[j]) += hessres;
+                hessvar(pi, pj) += hessres;
+                if (i != j) {
+                  hess(vcol[j], vcol[i]) += hessres;
+                  hessvar(pj, pi) += hessres;
+                }
+              }
+            }
+            // pack the block, upper triangle row-major, columns ascending
+            nHessVar = varcols.size();
+            hessvaridxv.assign(varcols.begin(), varcols.end());
+            hessvarpackedv.clear();
+            hessvarpackedv.reserve(nHessVar * (nHessVar + 1) / 2);
+            for (unsigned int i = 0; i < nHessVar; ++i) {
+              for (unsigned int j = i; j < nHessVar; ++j) {
+                hessvarpackedv.push_back(float(hessvar(i, j)));
+              }
+            }
+
+            // chi2 part of the variance gradient: -r^T R dV_i R r
+            const SparseMatrix<double> dVRrsparse = dVRr.sparseView();
+            grad += -dVRrsparse.transpose()*Rr;
+
+            gradchisqv.clear();
+            gradchisqv.resize(nparsfinal, 0.);
+            Map<VectorXf>(gradchisqv.data(), nparsfinal) = grad.cast<float>();
+
+            gradllv.clear();
+            gradllv.resize(nparsfinal, 0.);
+            Map<VectorXf>(gradllv.data(), nparsfinal) = gradll.cast<float>();
+
+            grad += gradll;
+
+            // The fitted state moves with a variance parameter too:
+            //   dxhat/dtheta_i = C^-1 F^T V^-1 dV_i R r
+            // (same expression the single-track maker adds).  This is what
+            // puts the variance families into `Jpsi_jacMass` and the two
+            // `_jacRef`, i.e. what lets the MASS term see them.
+            dxdparms(Eigen::placeholders::all, freestateidxs) +=
+                Cinvd.solve(FtVinv*dVRrsparse).transpose();
+          }
+        }
+
+        // ---- IN-MAKER FINITE DIFFERENCE, at FIXED linearization -----------
+        //
+        // The propagator-level FD (perturb `k_g`, re-fit, difference `objval`)
+        // cannot be sharp: the reference trajectory moves with the parameter,
+        // so `V` moves with it through paths the analytic `dV` deliberately
+        // omits, and the Gauss-Newton stopping tolerance leaves a
+        // delta-INDEPENDENT residual that grows as 1/delta.  This one holds
+        // `r`, `F` and `J` fixed and perturbs only the covariance,
+        // `V -> V + s dV_i`, then re-does the profile from scratch:
+        //
+        //   obj(s) = r^T R(s) r + ln|V(s)| + ln|C(s)|,  C(s) = F^T V(s)^-1 F
+        //
+        // so (obj(+s) - obj(-s))/2s must reproduce the exported column to
+        // O(s^2).  It tests the traces, the projector, the sign and the ln|C|
+        // term -- everything except whether `dV` really is dV/dtheta.
+        //
+        // Only families 10/11/15 are done: their dV blocks span the 5x5
+        // process-noise rows, whose V block is exactly the inverse of the
+        // Vinv block there.  A hit block's rows are 2 wide with a
+        // (near-)singular Vinv on the unmeasured strip coordinate, so the
+        // same trick does not apply and the parmtype-8/9 columns rely on the
+        // structural argument instead.
+        if (exportVarianceGrads_ && varianceFDGlobalIdx_ != -1 && !dVs.empty()
+            && nvarcols > 0) {
+          // global index -> its blocks, keyed by row offset (one block per
+          // propagation for a given global index, so the ranges are disjoint)
+          std::map<unsigned int, std::map<unsigned int, MatrixXd>> perGlob;
+          for (unsigned int ires = 0; ires < dVs.size(); ++ires) {
+            const int fam = ires < resfamily_.size() ? resfamily_[ires] : -1;
+            if (!(fam == 10 || fam == 11 || fam == 15)) {
+              continue;
+            }
+            if (!varianceFamilyWanted(fam)) {
+              continue;
+            }
+            const unsigned int gidx = resglobidx[ires];
+            if (varianceFDGlobalIdx_ >= 0 && gidx != unsigned(varianceFDGlobalIdx_)) {
+              continue;
+            }
+            const unsigned int r0 = resblockrng[ires][0];
+            const unsigned int nb = resblockrng[ires][1];
+            MatrixXd Db = MatrixXd::Zero(nb, nb);
+            for (unsigned int a = 0; a < nb; ++a) {
+              for (unsigned int b = 0; b < nb; ++b) {
+                Db(a, b) = dVs[ires].coeff(r0 + a, r0 + b);
+              }
+            }
+            auto &m = perGlob[gidx];
+            auto it = m.find(r0);
+            if (it == m.end()) {
+              m.emplace(r0, std::move(Db));
+            } else {
+              it->second += Db;
+            }
+          }
+          const double eps = varianceFDEps_;
+          for (auto const &g : perGlob) {
+            const unsigned int gidx = g.first;
+            auto itcol = idxmap.find(gidx);
+            if (itcol == idxmap.end()) {
+              continue;
+            }
+            const unsigned int col = itcol->second;
+            std::array<double, 2> objs{{0., 0.}};
+            std::array<double, 2> chis{{0., 0.}};
+            std::array<double, 2> lls{{0., 0.}};
+            bool ok = true;
+            for (int is = 0; is < 2 && ok; ++is) {
+              const double sgn = is == 0 ? eps : -eps;
+              MatrixXd Vinvs = Vinvfull;
+              double dlogdetV = 0.;
+              for (auto const &blk : g.second) {
+                const unsigned int r0 = blk.first;
+                const unsigned int nb = blk.second.rows();
+                const MatrixXd Vinvb = Vinvfull.block(r0, r0, nb, nb);
+                const double dib = Vinvb.determinant();
+                if (!(std::abs(dib) > 0.)) {
+                  ok = false;
+                  break;
+                }
+                const MatrixXd Vb = Vinvb.inverse();
+                const MatrixXd Vbs = Vb + sgn * blk.second;
+                const double d0 = Vb.determinant();
+                const double d1 = Vbs.determinant();
+                if (!(d0 > 0. && d1 > 0.)) {
+                  ok = false;
+                  break;
+                }
+                dlogdetV += std::log(d1) - std::log(d0);
+                Vinvs.block(r0, r0, nb, nb) = Vbs.inverse();
+              }
+              if (!ok) {
+                break;
+              }
+              const SparseMatrix<double> Vinvss = Vinvs.sparseView();
+              const SparseMatrix<double> VinvFs = Vinvss * Fsparse;
+              SimplicialLDLT<SparseMatrix<double>> Cs(SparseMatrix<double>(
+                  Fsparse.transpose() * VinvFs));
+              if (Cs.info() != Eigen::Success) {
+                ok = false;
+                break;
+              }
+              const VectorXd dxs = -Cs.solve(VinvFs.transpose() * rfull);
+              chis[is] = rfull.dot(VectorXd(Vinvss * (rfull + Fsparse * dxs)));
+              // ln|V_0| is common to the two arms and cancels in the
+              // difference, so it is not needed here (and `objlogdetv` is
+              // filled below, not above).
+              lls[is] = dlogdetV + Cs.vectorD().array().abs().log().sum();
+              objs[is] = chis[is] + lls[is];
+            }
+            if (!ok) {
+              continue;
+            }
+            std::cout << "VARFD glob=" << gidx
+                      << " col=" << col
+                      << " eps=" << eps
+                      << " an=" << std::setprecision(12) << grad(col)
+                      << " anchi=" << (col < gradchisqv.size() ? double(gradchisqv[col]) : 0.)
+                      << " anll=" << (col < gradllv.size() ? double(gradllv[col]) : 0.)
+                      << " fd=" << (objs[0] - objs[1]) / (2. * eps)
+                      << " fdchi=" << (chis[0] - chis[1]) / (2. * eps)
+                      << " fdll=" << (lls[0] - lls[1]) / (2. * eps)
+                      << " ev=" << run << ":" << lumi << ":" << event
+                      << std::setprecision(6) << std::endl;
+          }
+        }
+
+        // The marginal objective itself, for finite-differencing the above.
+        if (exportObjective_) {
+          objchisq = rfull.dot(Rr);
+          // ln|V| = -ln|Vinv|.  Vinv is block diagonal and positive definite
+          // (the deweighted strip coordinate carries a tiny but non-zero
+          // weight), so an LDLT is enough.
+          // ln|V| = -ln|Vinv|, but Vinv is RANK DEFICIENT by construction:
+          // the deweighted second coordinate of every 1-D strip hit carries
+          // exactly zero weight, so a plain determinant is 0 and its log is
+          // -inf.  What is wanted -- and what cancels in a finite difference,
+          // because the null space is structural and delta-independent -- is
+          // the PSEUDO-determinant over the non-null modes.  `objnullv`
+          // records how many were dropped so a FD can assert that the two
+          // arms dropped the same number.
+          const SelfAdjointEigenSolver<MatrixXd> esV(Vinvfull, EigenvaluesOnly);
+          const double lmaxV = esV.eigenvalues().maxCoeff();
+          const double cutV = 1e-12 * std::max(lmaxV, 0.);
+          double lsum = 0.;
+          objnullv = 0;
+          for (int k = 0; k < esV.eigenvalues().size(); ++k) {
+            const double ev = esV.eigenvalues()(k);
+            if (ev > cutV) {
+              lsum += std::log(ev);
+            } else {
+              ++objnullv;
+            }
+          }
+          objlogdetv = -lsum;
+          objlogdetc = Cinvd.vectorD().array().abs().log().sum();
+          objval = objchisq + objlogdetv + objlogdetc;
+        }
+        // ===================================================================
+
         if (icons == 0) {
           const unsigned int idxplus = muchargearr[0] > 0 ? 0 : 1;
           const unsigned int idxminus = muchargearr[0] > 0 ? 1 : 0;
@@ -4387,6 +6905,28 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
           Jpsi_jacMass.resize(nparsfinal);
           Map<Matrix<float, 1, Dynamic, RowMajor>>(Jpsi_jacMass.data(), 1, nparsfinal) = (mjacalt*dxdparms.leftCols<6>().transpose()).cast<float>();
+
+          // `Jpsi_jacVtx` = d theta_6^unconstrained / d(global params),
+          // aligned with `globalidxv` exactly as `Jpsi_jacMass` is. It is the
+          // D row a DATA fit needs for the MEAN (alignment / field) part of
+          // the vertex term -- cheap, one row.
+          //   index 6 free  : it is simply `dxdparms.col(6)`.
+          //   index 6 frozen: that column is zero by construction, and the
+          //     unconstrained response is `-w_v^T J`, which reduces to
+          //     `dxdparms.col(6)` in the free case (same algebra), so the two
+          //     branches agree where they overlap.
+          if (exportVtxResidual_) {
+            Jpsi_jacVtx.resize(nparsfinal);
+            if (Jpsi_vtxfree) {
+              Map<Matrix<float, 1, Dynamic, RowMajor>>(Jpsi_jacVtx.data(), 1, nparsfinal) =
+                  dxdparms.col(6).transpose().cast<float>();
+            } else if (wvtxinf.size() == Jfinal.rows()) {
+              Map<Matrix<float, 1, Dynamic, RowMajor>>(Jpsi_jacVtx.data(), 1, nparsfinal) =
+                  (-(wvtxinf.transpose() * Jfinal)).cast<float>();
+            } else {
+              std::fill(Jpsi_jacVtx.begin(), Jpsi_jacVtx.end(), 0.f);
+            }
+          }
 
 
           if (false) {
@@ -4563,9 +7103,37 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
       // Convention: H = B^T B, B row-major (nRank x nParms), row k =
       // sqrt(lambda_k) * v_k^T.
       if (fillGradsFactored_) {
-        const SelfAdjointEigenSolver<MatrixXd> eshess(hess);
+        MatrixXd hessmean = hess;
+        if (nHessVar > 0 && hessvarpackedv.size()
+                                == std::size_t(nHessVar) * (nHessVar + 1) / 2) {
+          std::size_t ip = 0;
+          for (unsigned int i = 0; i < nHessVar; ++i) {
+            for (unsigned int j = i; j < nHessVar; ++j, ++ip) {
+              const double v = hessvarpackedv[ip];
+              hessmean(hessvaridxv[i], hessvaridxv[j]) -= v;
+              if (i != j) {
+                hessmean(hessvaridxv[j], hessvaridxv[i]) -= v;
+              }
+            }
+          }
+        }
+        const SelfAdjointEigenSolver<MatrixXd> eshess(hessmean);
         const VectorXd& eigvals = eshess.eigenvalues();  // ascending
 
+        // WHAT THE FACTORED FORM CANNOT DO.  `B^T B` is exact for the MEAN
+        // Hessian `2 J^T R J`, whose rank is exactly ndof.  The log-det block
+        // `tr(dV_i R dV_j R)` is a Gram matrix of the ncons x ncons objects
+        // `R^1/2 dV_i R^1/2`, so its rank is the NUMBER of variance
+        // parameters: it does not compress, and carrying it as extra rows of
+        // B costs nvar*nParms floats -- measured at +57 % of a production
+        // candidate with family 15 alone and +429 % with 8-11.  Its own
+        // packed triangle costs nvar*(nvar+1)/2, ~20x less.  So `hessfactorv`
+        // factors the MEAN block only, at `nRank = ndof`, and
+        // the variance block rides in `hessvaridxv`/`hessvarpackedv`:
+        //
+        //     hess = B^T B + scatter(hessvarpackedv on hessvaridxv)
+        //
+        // `hesspackedv`, when written, is COMPLETE and needs no addition.
         const unsigned int nrank = std::min(ndof, nparsfinal);
 
         double keptmass = 0.;
@@ -4580,8 +7148,15 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           }
         }
 
-        const double lambdakeptmin = eigvals(nparsfinal - nrank);
-        hessrankgap = (nrank < nparsfinal && lambdakeptmin > 0.)
+        // DEFENCE IN DEPTH.  `nrank == 0` (ndof == 0, or an empty parameter
+        // list) makes `nparsfinal - nrank` one past the end of `eigvals` and
+        // `nparsfinal - nrank - 1` wrap; the candidate-level gate at the ndof
+        // computation already rejects that fit, so this branch is unreachable
+        // in a healthy job -- but an out-of-range Eigen index aborts the
+        // PROCESS, and a production is not the place to find out that some
+        // other path can reach it. Bit-identical for every nrank > 0.
+        const double lambdakeptmin = nrank > 0 ? eigvals(nparsfinal - nrank) : 0.;
+        hessrankgap = (nrank > 0 && nrank < nparsfinal && lambdakeptmin > 0.)
                           ? std::max(0., eigvals(nparsfinal - nrank - 1)) / lambdakeptmin
                           : 0.;
 

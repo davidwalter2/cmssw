@@ -54,6 +54,26 @@ opts.register('materialGroupsFile', _defaultGroupsFile, VarParsing.VarParsing.mu
 opts.register('doKinkFinder', True, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'per-material-step decay-in-flight score test')
+opts.register('fitAs', '', VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.string,
+              'mass hypothesis used by the fit, if different from the gen-matched '
+              'species. Set fitAs=mu with particle=kaon/pi for the decay-in-flight '
+              'muon-fake study: a hadron that decays and is reconstructed as a '
+              'muon is fitted with the MUON hypothesis in the real analysis, so '
+              'the energy-loss model must match that, not the true species.')
+opts.register('doMuons', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'match tracks to the ALCARECO loose-muon collection and store the '
+              'muon ID flags (needed to ask which tracks actually fake a muon)')
+opts.register('genMatchDR', 0.1, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'dR search window of the gen match')
+opts.register('doSimDecayTruth', True, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'Geant4 decay/interaction truth for the gen-matched particle '
+              '(simTrk*/simVtx*/simDau* branches). Requires the v3+ production, '
+              'which keeps SimTracks+SimVertices; earlier campaigns do not have '
+              'them and the job will fail on the missing product')
 opts.register('genMatchPtWindow', 10.0, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.float,
               'relative pT window of the gen match. Default 10 = effectively '
@@ -61,6 +81,12 @@ opts.register('genMatchPtWindow', 10.0, VarParsing.VarParsing.multiplicity.singl
               'legacy 0.5 the reco pT of a decayed kaon (daughter mu can '
               'carry 5% of p) fails the match and decays are silently '
               'removed from the requireGen sample')
+# The CVH energy-loss switches are ParameterSet parameters on Geant4ePropagator.
+# Registering them here lets this driver pin them explicitly instead of
+# inheriting the cfi default, and puts the configuration in the output file's
+# provenance.
+import TrackPropagation.Geant4e.cvhSwitches as cvhSwitches
+cvhSwitches.register(opts)
 opts.parseArguments()
 if not opts.scalarPot3DInitFile:
     raise SystemExit("scalarPot3DInitFile=<path> is required (coefficient dump file)")
@@ -70,6 +96,10 @@ _species = {'kaon': (321, ('kaon+', 'kaon-')),
             'mu':   (13,  ('mu+', 'mu-'))}
 assert opts.particle in _species, "particle must be one of %s" % list(_species)
 _pdgid, _g4parts = _species[opts.particle]
+# The gen match selects the TRUE species; the fit hypothesis may differ.
+_fitas = opts.fitAs or opts.particle
+assert _fitas in _species, "fitAs must be one of %s" % list(_species)
+_fitname, _g4parts = _fitas, _species[_fitas][1]
 
 process = cms.Process("BENCH", Run2_2016)
 
@@ -116,6 +146,10 @@ process.source = cms.Source(
     # events (~15 events kept out of thousands). NOTE the flip side: tree
     # rows cannot be uniquely keyed by run/lumi/event for this sample.
     duplicateCheckMode=cms.untracked.string("noDuplicateCheck"),
+    # The production is written by thousands of condor jobs and a handful of
+    # outputs are zero-length (job died during the copy out). One such file
+    # aborts the whole cmsRun with a FileOpenError, so skip rather than die.
+    skipBadFiles=cms.untracked.bool(True),
 )
 
 process.options = cms.untracked.PSet(
@@ -152,9 +186,27 @@ process.globalCor = cms.EDProducer(
     pileupInfo=cms.InputTag("addPileupInfo"),
     genMatchPdgId=cms.int32(_pdgid),
     genMatchPtWindow=cms.double(float(opts.genMatchPtWindow)),
+    # Every stable charged species competes for the dR match and the winner
+    # must be the species of this pass. Without this, opening the pT window
+    # (mandatory for decay studies) lets a soft gen hadron steal the match to
+    # an unrelated J/psi muon track: on the v3 MC that mislabelled ~2/3 of
+    # the "decayed kaon" sample and diluted the ROC from AUC 0.78 to 0.59.
+    genMatchPdgIds=cms.vint32(11, 13, 211, 321, 2212),
+    genMatchDR=cms.double(float(opts.genMatchDR)),
     doSim=cms.bool(False),
+    # doSim (PSimHit-based) stays off: the ALCARECO keeps SimTracks and
+    # SimVertices but NOT the TrackerHits*LowTof collections.
+    doSimDecayTruth=cms.bool(bool(opts.doSimDecayTruth)),
     requireGen=cms.bool(True),
+    # Muon-detector match, from the loose-muon collection the ALCARECO keeps.
+    # Needed to ask which decayed hadrons are actually reconstructed as muons.
+    # The loose-muon collection's own track refs point into generalTracks,
+    # which the ALCARECO drops, so use the shipped track->muon association
+    # instead of the momentum matching (doMuons) that dereferences them.
     doMuons=cms.bool(False),
+    muons=cms.InputTag("ALCARECOTkAlJpsiXLooseMuons"),
+    doMuonTrackAssoc=cms.bool(bool(opts.doMuons)),
+    muonTrackAssoc=cms.InputTag("ALCARECOTkAlJpsiXTrackToMuon"),
     doMuonAssoc=cms.bool(False),
     doTrigger=cms.bool(False),
     doRes=cms.bool(False),
@@ -163,7 +215,7 @@ process.globalCor = cms.EDProducer(
     applyHitQuality=cms.bool(True),
     corFiles=cms.vstring(),
     triggers=cms.vstring(),
-    trackParticleName=cms.string(opts.particle),
+    trackParticleName=cms.string(_fitname),
     MagneticFieldLabel=cms.string(""),
     scalarPotentialInitFile=cms.string(opts.scalarPot3DInitFile),
     materialGroupsFile=cms.string(opts.materialGroupsFile),
@@ -185,6 +237,7 @@ process.ScalarPot3DMagneticFieldProducer.label = fieldlabel
 process.geopro.MagneticFieldLabel = fieldlabel
 process.Geant4ePropagator.MagneticFieldLabel = fieldlabel
 process.Geant4ePropagator.ForCVH = cms.bool(True)
+cvhSwitches.apply(process, opts)
 process.Geant4ePropagator.PropagationDirection = cms.string(opts.propagationDirection)
 process.globalCor.MagneticFieldLabel = cms.string(fieldlabel)
 from TrackPropagation.Geant4e.cvhMasterESProducer_cfi import cvhMasterESProducer

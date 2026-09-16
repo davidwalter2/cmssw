@@ -51,6 +51,12 @@ opts.register('kinkInjectDxdz', 0.0, VarParsing.VarParsing.multiplicity.singleto
               VarParsing.VarParsing.varType.float, 'injected dx/dz kink')
 opts.register('kinkInjectDydz', 0.0, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.float, 'injected dy/dz kink')
+# The CVH energy-loss switches are ParameterSet parameters on Geant4ePropagator.
+# Registering them here lets this driver pin them explicitly instead of
+# inheriting the cfi default, and puts the configuration in the output file's
+# provenance.
+import TrackPropagation.Geant4e.cvhSwitches as cvhSwitches
+cvhSwitches.register(opts)
 opts.parseArguments()
 if not opts.scalarPot3DInitFile:
     raise SystemExit("scalarPot3DInitFile=<path> is required (coefficient dump file)")
@@ -155,6 +161,7 @@ process.ScalarPot3DMagneticFieldProducer.label = fieldlabel
 process.geopro.MagneticFieldLabel = fieldlabel
 process.Geant4ePropagator.MagneticFieldLabel = fieldlabel
 process.Geant4ePropagator.ForCVH = cms.bool(True)
+cvhSwitches.apply(process, opts)
 process.Geant4ePropagator.PropagationDirection = cms.string(opts.propagationDirection)
 process.globalCor.MagneticFieldLabel = cms.string(fieldlabel)
 from TrackPropagation.Geant4e.cvhMasterESProducer_cfi import cvhMasterESProducer

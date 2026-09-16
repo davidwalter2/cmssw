@@ -46,8 +46,17 @@ public:
   double materialOffset(const G4LogicalVolume *lv, double r_cm, double z_cm) const override;
 
   // same value for an already-classified group (used by the propagator to
-  // avoid a second classification per step)
-  double offsetOf(int g) const { return kval_[g] + (g == injGroup_ ? injEps_ : 0.); }
+  // avoid a second classification per step -- and ONLY for the step's MS and
+  // ionisation VARIANCE factor; the MEAN loss goes through materialOffset()).
+  //
+  // injMeanOnly_ (env CVH_MATGROUP_MEANONLY) withholds the injection here, so
+  // the probe becomes a pure coherent shift of the group's MEAN energy loss
+  // with Q untouched. That is what the influence-weight measurement needs:
+  // moving the variance would move the fit weights themselves and the measured
+  // response would no longer be d(p_fit)/d(applied loss) at fixed weights.
+  double offsetOf(int g) const {
+    return kval_[g] + ((g == injGroup_ && !injMeanOnly_) ? injEps_ : 0.);
+  }
 
   int nGroups() const { return nGroups_; }
   const std::string &groupName(int g) const { return gnames_[g]; }
@@ -77,6 +86,7 @@ private:
   std::vector<std::string> gnames_;
   int injGroup_ = -1;
   double injEps_ = 0.;
+  bool injMeanOnly_ = false;
 
   // lazy per-LV shortlist memo (single-stream use; no locking)
   mutable std::unordered_map<const G4LogicalVolume *, std::vector<unsigned short>> lvCache_;
