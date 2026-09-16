@@ -166,8 +166,14 @@ namespace {
   }
 
   //Contents of a message which should be reported as an INFO not a ERROR
-  constexpr std::array<const char* const, 11> in_message{
+  constexpr std::array<const char* const, 12> in_message{
       {"no dictionary for class",
+       // WMass: LHEEventProduct written by 10_6_X with std::auto_ptr<gen::PdfInfo> pdf_ at
+       // ClassVersion 14 (RunIILowPUSummer20UL17 H2ErratumFix samples; checksum unknown to the
+       // 15_0 dictionary): ROOT rebuilds the streamer from the file, cannot convert that one
+       // element and skips it (pdf() is null, everything else is read). No NanoAOD producer
+       // uses pdf(); without this entry the message is a fatal FileReadError.
+       "Cannot convert LHEEventProduct::pdf_ from type: auto_ptr<gen::PdfInfo>",
        "already in TClassTable",
        "matrix not positive definite",
        "not a TStreamerInfo object",
