@@ -527,14 +527,12 @@ def nanoAOD_wmassContent(process):
     """WMass content of the 15_0 NanoAOD on UL2016 MiniAOD (data and MC), the
     non-CVH customisations of WmassNanoProd_10_6_26 that are not upstream:
 
-    * drop the boosted-tau chain. On run2_nanoAOD_106Xv2 the stock 15_0 nano
-      re-runs the boosted-tau MVA isolation, which needs GBRForest payloads
-      (RecoTauTag_tauIdMVAIsoDBnewDMwLT) that the UL16 global tags
-      (106X_mcRun2_asymptotic_v17, 106X_dataRun2_v35) do not carry. The CVH
-      refit has to keep those global tags (sim-consistent alignment and field
-      for MC), and boosted taus play no role in the W/Z analyses -- the 10_6
-      fork already excluded them for the other 106X eras. Only unschedules the
-      tasks; PATObjectCrossLinker accepts an empty boostedTaus tag.
+    * drop the boosted-tau chain: boosted taus play no role in the W/Z
+      analyses and the 10_6 nano did not have them. (With the UL 106X global
+      tags the stock rerun of their MVA isolation would also fail -- the
+      RecoTauTag GBRForest payloads only exist in the 150X tags the production
+      uses since 2026-09-17.) Only unschedules the tasks; PATObjectCrossLinker
+      accepts an empty boostedTaus tag.
     * the vertex-agnostic muon isolation (muonvtxagnosticiso_cff, 10_6 PR #31)
     * the extra Muon columns of the 10_6 table: inner-track algo, kink finder,
       tracker/pixel hit counts, the pfRelIso04 components, the standalone track
