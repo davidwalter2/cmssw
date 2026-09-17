@@ -236,6 +236,15 @@ def nanoAOD_customizeCommon(process):
         nanoAOD_rePuppi_switch, useExistingWeights=False, reclusterAK4MET=True, reclusterAK8=True
     )
 
+    # PAT running in the same job (NANO from AOD, e.g. the muon tag-and-probe
+    # nano): PAT builds the PUPPI jets and MET in this release already, and the
+    # "from MiniAOD" re-clustering replaces slimmedJetsAK8 before the PAT
+    # customisation (applySubstructure) runs on it -> skip it.
+    if hasattr(process, "packedPFCandidates"):
+        nanoAOD_rePuppi_switch.useExistingWeights = True
+        nanoAOD_rePuppi_switch.reclusterAK4MET = False
+        nanoAOD_rePuppi_switch.reclusterAK8 = False
+
     runOnMC = True
     if hasattr(process, "NANOEDMAODoutput") or hasattr(process, "NANOAODoutput"):
         runOnMC = False
