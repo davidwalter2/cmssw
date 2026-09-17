@@ -1,6 +1,0 @@
-<lcgdict>
-  <class name="vector<ROOT::Math::SMatrix<double,2,2,ROOT::Math::MatRepStd<double,2,2> >>"/>
-  <!-- edm::ValueMap<std::vector<int>> (+Wrapper) dictionary lives in
-       RecoTracker/TrackProducer (whose producers own those products);
-       cms-addpkg that package rather than re-declaring the dict here. -->
-</lcgdict>
