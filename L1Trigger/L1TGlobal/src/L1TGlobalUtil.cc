@@ -16,6 +16,36 @@
 #include "FWCore/Utilities/interface/Transition.h"
 
 #include "FWCore/MessageLogger/interface/MessageLogger.h"
+#include "CondFormats/DataRecord/interface/L1TGlobalPrescalesVetosRcd.h"
+#include "CondFormats/L1TObjects/interface/L1TGlobalPrescalesVetos.h"
+
+#include <mutex>
+#include <unordered_map>
+
+namespace {
+  // WMass fork: the Run 2 UL (106X) global tags carry only the integer-prescale
+  // L1TGlobalPrescalesVetosRcd. The fallback below reads it when the fractional
+  // record is absent. Its per-instance state lives in this side table rather than
+  // in the class: L1TGlobalUtil is constructed inline by libraries compiled
+  // against the release header (HLTPrescaleProvider in the PatAlgos plugins), so
+  // the class layout must stay identical to the release.
+  struct LegacyPrescaleState {
+    edm::ESGetToken<L1TGlobalPrescalesVetos, L1TGlobalPrescalesVetosRcd> runToken;
+    edm::ESGetToken<L1TGlobalPrescalesVetos, L1TGlobalPrescalesVetosRcd> eventToken;
+    std::unique_ptr<L1TGlobalPrescalesVetosFract> converted;
+  };
+  std::mutex legacyPrescaleMutex;
+  std::unordered_map<const l1t::L1TGlobalUtil*, LegacyPrescaleState> legacyPrescaleStates;
+
+  LegacyPrescaleState& legacyPrescaleState(const l1t::L1TGlobalUtil* self) {
+    std::lock_guard<std::mutex> lock(legacyPrescaleMutex);
+    return legacyPrescaleStates[self];
+  }
+  void eraseLegacyPrescaleState(const l1t::L1TGlobalUtil* self) {
+    std::lock_guard<std::mutex> lock(legacyPrescaleMutex);
+    legacyPrescaleStates.erase(self);
+  }
+}  // namespace
 #include "FWCore/MessageLogger/interface/MessageDrop.h"
 
 // constructor
@@ -50,9 +80,7 @@ l1t::L1TGlobalUtil::L1TGlobalUtil(edm::ParameterSet const& pset,
 }
 
 // destructor
-l1t::L1TGlobalUtil::~L1TGlobalUtil() {
-  // empty
-}
+l1t::L1TGlobalUtil::~L1TGlobalUtil() { eraseLegacyPrescaleState(this); }
 
 /// check that the L1TGlobalUtil has been properly initialised
 bool l1t::L1TGlobalUtil::valid() const { return m_l1GtMenuCacheID != 0ULL and m_l1GtMenu != nullptr; }
@@ -109,8 +137,12 @@ void l1t::L1TGlobalUtil::retrieveL1Setup(const edm::EventSetup& evSetup, bool is
   }
 
   if (!m_readPrescalesFromFile) {
-    auto vetosRcd = evSetup.get<L1TGlobalPrescalesVetosFractRcd>();
-    unsigned long long l1GtPfAlgoCacheID = vetosRcd.cacheIdentifier();
+    // WMass fork: the Run 2 UL (106X) global tags carry only the integer-prescale
+    // L1TGlobalPrescalesVetosRcd. When the fractional record is absent, read the
+    // integer one and convert it, so PAT (HLTPrescaleProvider) runs on UL AOD.
+    auto vetosRcdFract = evSetup.tryToGet<L1TGlobalPrescalesVetosFractRcd>();
+    unsigned long long l1GtPfAlgoCacheID = vetosRcdFract ? vetosRcdFract->cacheIdentifier()
+                                                         : evSetup.get<L1TGlobalPrescalesVetosRcd>().cacheIdentifier();
 
     if (m_l1GtPfAlgoCacheID != l1GtPfAlgoCacheID) {
       //std::cout << "Reading Prescales and Masks from dB" << std::endl;
@@ -123,10 +155,31 @@ void l1t::L1TGlobalUtil::retrieveL1Setup(const edm::EventSetup& evSetup, bool is
       m_numberPhysTriggers = 0;
 
       const L1TGlobalPrescalesVetosFract* es = nullptr;
-      if (isRun) {
-        es = &vetosRcd.get(m_L1TGlobalPrescalesVetosFractRunToken);
+      if (vetosRcdFract) {
+        if (isRun) {
+          es = &vetosRcdFract->get(m_L1TGlobalPrescalesVetosFractRunToken);
+        } else {
+          es = &vetosRcdFract->get(m_L1TGlobalPrescalesVetosFractEventToken);
+        }
       } else {
-        es = &vetosRcd.get(m_L1TGlobalPrescalesVetosFractEventToken);
+        auto& state = legacyPrescaleState(this);
+        auto vetosRcd = evSetup.get<L1TGlobalPrescalesVetosRcd>();
+        const L1TGlobalPrescalesVetos& legacy = isRun ? vetosRcd.get(state.runToken) : vetosRcd.get(state.eventToken);
+        auto fract = std::make_unique<L1TGlobalPrescalesVetosFract>();
+        fract->version_ = legacy.version_;
+        fract->bxmask_default_ = legacy.bxmask_default_;
+        fract->bxmask_map_ = legacy.bxmask_map_;
+        fract->veto_ = legacy.veto_;
+        fract->exp_ints_ = legacy.exp_ints_;
+        fract->exp_doubles_ = legacy.exp_doubles_;
+        fract->prescale_table_.reserve(legacy.prescale_table_.size());
+        for (auto const& column : legacy.prescale_table_) {
+          fract->prescale_table_.emplace_back(column.begin(), column.end());
+        }
+        state.converted = std::move(fract);
+        es = state.converted.get();
+        edm::LogInfo("L1TGlobalUtil") << "L1TGlobalPrescalesVetosFractRcd not available; using the integer "
+                                         "L1TGlobalPrescalesVetosRcd converted to fractional prescales";
       }
       m_l1GtPrescalesVetoes = PrescalesVetosFractHelper::readFromEventSetup(es);
 
@@ -405,6 +458,8 @@ void l1t::L1TGlobalUtil::eventSetupConsumes(edm::ConsumesCollector& iC, UseEvent
     if (!m_readPrescalesFromFile) {
       m_L1TGlobalPrescalesVetosFractRunToken =
           iC.esConsumes<L1TGlobalPrescalesVetosFract, L1TGlobalPrescalesVetosFractRcd, edm::Transition::BeginRun>();
+      legacyPrescaleState(this).runToken =
+          iC.esConsumes<L1TGlobalPrescalesVetos, L1TGlobalPrescalesVetosRcd, edm::Transition::BeginRun>();
     }
   }
   if (useEventSetupIn == UseEventSetupIn::Event || useEventSetupIn == UseEventSetupIn::RunAndEvent) {
@@ -412,6 +467,7 @@ void l1t::L1TGlobalUtil::eventSetupConsumes(edm::ConsumesCollector& iC, UseEvent
     if (!m_readPrescalesFromFile) {
       m_L1TGlobalPrescalesVetosFractEventToken =
           iC.esConsumes<L1TGlobalPrescalesVetosFract, L1TGlobalPrescalesVetosFractRcd>();
+      legacyPrescaleState(this).eventToken = iC.esConsumes<L1TGlobalPrescalesVetos, L1TGlobalPrescalesVetosRcd>();
     }
   }
 }
