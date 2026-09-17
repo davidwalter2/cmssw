@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Phase 0 of the global material model: build the two grouping tiers
-(materialGroups50 / materialGroups100) from the MaterialAuditAnalyzer
+(materialGroups50; the 100 tier is not kept in the repository) from the MaterialAuditAnalyzer
 per-volume tally.
 
 Groups are defined as ordered classification rules

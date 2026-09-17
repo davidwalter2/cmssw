@@ -1,7 +1,7 @@
 // MaterialAuditAnalyzer
 //
 // Phase 0 of the global material model (see
-// Analysis/HitAnalyzer/doc/global-material-model-plan.md): geometry-only
+// the global-material-model design note (kept outside the repository)): geometry-only
 // audit of the Geant4 tracker material. Builds the same DDDWorld the CVH
 // refit propagates through, then traces straight rays (geantino-style,
 // no field, no physics) from the beamline across the tracker volume and
@@ -18,8 +18,8 @@
 // plus a per-eta profile of the total x/X0 (sanity check against the
 // published tracker material-budget plots).
 //
-// The per-volume table is the input that defines the materialGroups50 /
-// materialGroups100 grouping tiers.
+// The per-volume table is the input that defines the materialGroups50 tier
+// (and the materialGroupsV2 grouping, makeMaterialGroupsV2.py).
 
 #include "FWCore/Framework/interface/one/EDAnalyzer.h"
 #include "FWCore/Framework/interface/Event.h"

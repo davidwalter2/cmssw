@@ -632,7 +632,7 @@ private:
   mutable unsigned long long fitSkippedFewHits_ = 0ULL;  // numerical guard, skipped pre-fit
 
   // Global material model: per-leg per-group dxi columns from the
-  // propagator (reused buffer; see doc/global-material-model-plan.md).
+  // propagator (reused buffer; see the global-material-model design note (kept outside the repository)).
   mutable std::vector<std::pair<int, Eigen::Matrix<double, 5, 1>>> groupJacs_;
   // Per-group PROCESS NOISE of the last propagation (the width counterpart of
   // groupJacs_'s mean). Filled only under doRes + the global material model;

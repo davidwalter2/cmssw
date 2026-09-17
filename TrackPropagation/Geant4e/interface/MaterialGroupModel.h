@@ -19,7 +19,7 @@
 // residual-maker stream instance). The LV shortlist cache is built
 // lazily on first use, after the G4 world exists.
 //
-// See Analysis/HitAnalyzer/doc/global-material-model-plan.md.
+// See the global-material-model design note (kept outside the repository).
 
 #include "SimG4Core/MagneticField/interface/Field.h"
 

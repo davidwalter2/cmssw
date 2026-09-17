@@ -13,7 +13,7 @@ class G4LogicalVolume;
 
 namespace sim {
   // Volume-resolved material-scaling provider (global material model,
-  // Analysis/HitAnalyzer/doc/global-material-model-plan.md). When a
+  // the global-material-model design note (kept outside the repository)). When a
   // provider is attached to the field wrapper, the CVH energy-loss
   // process adds materialOffset(volume, r, z) of the step's volume to
   // the leg-constant dxi. Implemented by

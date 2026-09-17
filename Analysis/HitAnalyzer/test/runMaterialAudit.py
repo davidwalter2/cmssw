@@ -1,5 +1,5 @@
 ## Phase 0 of the global material model: geometry-only geantino-ray audit
-## of the Geant4 tracker material (see doc/global-material-model-plan.md).
+## of the Geant4 tracker material (see the global-material-model design note (kept outside the repository)).
 ## Uses the same DB XML geometry as the CVH refit drivers; no field, no
 ## physics, no input data (EmptySource pinned to a 2016 run).
 import FWCore.ParameterSet.Config as cms
