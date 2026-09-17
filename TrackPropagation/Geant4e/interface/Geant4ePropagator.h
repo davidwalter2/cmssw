@@ -111,7 +111,7 @@ public:
                                    // groupJacOut is also set, the per-group transported
                                    // d(state)/dk_g columns are accumulated into it (the sum
                                    // over groups equals the integrated dxi column of the 5x9
-                                   // Jacobian exactly). See doc/global-material-model-plan.md.
+                                   // Jacobian exactly). See the global-material-model design note (kept outside the repository).
                                    const MaterialGroupModel *matGroups = nullptr,
                                    std::vector<std::pair<int, Eigen::Matrix<double, 5, 1>>>
                                        *groupJacOut = nullptr,

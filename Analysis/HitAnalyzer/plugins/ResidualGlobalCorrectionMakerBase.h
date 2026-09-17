@@ -683,7 +683,7 @@ protected:
   std::string scalarPotentialInitFile_;
   std::unique_ptr<ana_hitanalyzer::ScalarPotentialFieldCorrection> fieldCorrection_;
 
-  // Global material model (doc/global-material-model-plan.md).
+  // Global material model (the global-material-model design note (kept outside the repository)).
   // materialGroupsFile loads a grouping-tier rules file (Phase A
   // validation hook usable on its own); globalMaterialModel=true
   // additionally REPLACES the per-module material parameters (parmtype 7)

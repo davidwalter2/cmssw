@@ -1,3 +1,6 @@
+# Josh Bendavid, 2021 ("producers for gbl fits"): SymPy derivation of the GBL
+# curvature variance on a 24-plane toy tracker (symbolic, prints sigma_k^2).
+# Not used by the build; kept as the derivation record. Was plugins/script.py.
 import sympy
 from sympy.matrices import Matrix, ones, zeros, hadamard_product, BlockMatrix, block_collapse
 from sympy import init_printing

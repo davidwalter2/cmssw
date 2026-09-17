@@ -8,7 +8,7 @@
   <use name="Alignment/ReferenceTrajectories"/>
   <use name="TrackingTools/GsfTracking"/>
   <!-- deps of the WMass additions (TrackProducerFromPatMuons, GlobalIdxProducer,
-       TrackExtraRekeyer, MagneticFieldOffset) -->
+       TrackExtraRekeyer) -->
   <use name="DataFormats/PatCandidates"/>
   <use name="DataFormats/MuonReco"/>
   <use name="MagneticField/VolumeBasedEngine"/>
