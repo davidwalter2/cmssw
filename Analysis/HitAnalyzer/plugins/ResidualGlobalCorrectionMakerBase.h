@@ -883,10 +883,46 @@ protected:
   // Phase B analogue for multiple scattering: per Geant4 step, raw
   // material/kinematic data for the offline Moliere compound-Poisson tail
   // model, tagged by the parmtype-10 global parameter index of the leg.
-  // 8 floats per step: [effZ, effA, x(g/cm2), p(GeV), beta,
-  // thp2-as-in-Q, d/X0, materialGroup] (see Geant4ePropagator::MoliereMsStep).
+  // MSMOLI_STRIDE floats per step (see Geant4ePropagator::MoliereMsStep):
+  //     [effZ, effA, x(g/cm2), p(GeV), beta, thp2-as-in-Q, d/X0,
+  //      zzp1OverA, lnScreenW, materialGroup]
+  // Columns 7/8 are the per-element Moliere sums; both Moliere parameters are
+  // non-linear in Z, so they cannot be rebuilt from the mass-averaged
+  // effZ/effA. Column 9 is the step's material group, which the per-group CF
+  // export keys on. Read the stride from `msmolistride`, never hard-code it:
+  // it has already grown once (8 -> 10) and the natural next columns are the
+  // step path length and the transported lever arms of the offline (angle,
+  // offset) Moliere leg density.
+  static constexpr int MSMOLI_STRIDE = 10;
   std::vector<unsigned int> msmoliidx;
   std::vector<float> msmoliv;
+  int msmolistride = MSMOLI_STRIDE;
+
+  // THE ONE PLACE THE MOLIERE STEP LAYOUT LIVES. Every drain goes through
+  // here, so a new column is added here and `MSMOLI_STRIDE` bumped with it --
+  // the check refuses any other combination, which is what keeps the
+  // `msmolistride` branch from ever lying to a reader.
+  void pushMsMoliStep(unsigned int globalidx, const Geant4ePropagator::MoliereMsStep &ms) {
+    msmoliidx.push_back(globalidx);
+    const std::size_t n0 = msmoliv.size();
+    msmoliv.push_back(ms.effZ);
+    msmoliv.push_back(ms.effA);
+    msmoliv.push_back(ms.xg);
+    msmoliv.push_back(ms.pGeV);
+    msmoliv.push_back(ms.beta);
+    msmoliv.push_back(ms.thp2);
+    msmoliv.push_back(ms.dOverX0);
+    // per-element Moliere sums: effZ/effA are mass averages and both Moliere
+    // parameters are non-linear in Z, so they cannot be rebuilt from them
+    msmoliv.push_back(ms.zzp1OverA);
+    msmoliv.push_back(ms.lnScreenW);
+    msmoliv.push_back(ms.stepGroup);
+    if (msmoliv.size() - n0 != static_cast<std::size_t>(MSMOLI_STRIDE)) {
+      throw cms::Exception("MsMoliStride")
+          << "pushMsMoliStep wrote " << (msmoliv.size() - n0) << " floats but MSMOLI_STRIDE is "
+          << MSMOLI_STRIDE << "; the `msmolistride` branch would misdescribe the record";
+    }
+  }
 
   // Per resolution entry (leg), the exact eigenvalues of the block
   // quadratic form dV_b^{1/2} R_bb dV_b^{1/2} (descending, zero-padded to

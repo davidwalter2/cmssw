@@ -109,6 +109,12 @@ private:
   double dEdxlast_ = 0.;
   std::vector<double> F_, Q_, dQMS_, dQI_;
   // per-step physics records (same layout as the maker's exports)
+  // Per-step record strides. Written as branches so no offline reader has to
+  // hard-code them -- both have grown once already. NOTE this plugin's
+  // `ioniurbanv` has no trailing material-group column, unlike the maker's.
+  static constexpr int kMsMoliStride = 10;
+  int msmolistride_ = kMsMoliStride;
+  int ioniurbanstride_ = 0;
   std::vector<double> msmoliv_;
   std::vector<double> ioniurbanv_;
   std::vector<double> radv_;  // 9 doubles/step, aligned with msmoliv
@@ -186,7 +192,10 @@ G4ePropagationExport::G4ePropagationExport(const edm::ParameterSet &iConfig)
   tree_->Branch("dQMS", &dQMS_);
   tree_->Branch("dQI", &dQI_);
   tree_->Branch("msmoliv", &msmoliv_);
+  tree_->Branch("msmolistride", &msmolistride_);
   tree_->Branch("ioniurbanv", &ioniurbanv_);
+  ioniurbanstride_ = G4UniversalFluctuationForExtrapolator::exactDeltaEnabled() ? 13 : 11;
+  tree_->Branch("ioniurbanstride", &ioniurbanstride_);
   tree_->Branch("radv", &radv_);
   tree_->Branch("radspecv", &radspecv_);
   tree_->Branch("radvgrid", &radvgrid_);
@@ -434,7 +443,8 @@ void G4ePropagationExport::analyze(const edm::Event &iEvent, const edm::EventSet
 
     edm::LogPrint("G4ePropagationExport")
         << "leg " << k << " detid " << detid_ << "  r=" << refglobr_ << " z=" << refglobz_ << " cm  p=" << refp_
-        << " GeV  steps=" << stepnms_.size() << " ms=" << msmoliv_.size() / 8 << " ioni=" << ioniurbanv_.size() / 11;
+        << " GeV  steps=" << stepnms_.size() << " ms=" << msmoliv_.size() / msmolistride_
+        << " ioni=" << ioniurbanv_.size() / ioniurbanstride_;
 
     tree_->Fill();
     state = endState;

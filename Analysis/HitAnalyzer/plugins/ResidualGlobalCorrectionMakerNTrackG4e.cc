@@ -4712,12 +4712,29 @@ void ResidualGlobalCorrectionMakerNTrackG4e::produce(edm::Event &iEvent, const e
           niter = iiter + 1;
           edmval = -deltachisq;
 
+          // The reference-block EDM, and with it the convergence break, is
+          // taken on the reference indices ACTUALLY SOLVED FOR. `covstate` is
+          // the free-subspace covariance scattered into the full index space,
+          // so a frozen reference index leaves a zero row and column and the
+          // block inverse is NaN -- which would leave `edmvalref` NaN and the
+          // break inoperative. Nothing is frozen here under the common-vertex
+          // layout, so this is the same number; under fitFromGenParms the
+          // whole block is frozen and the EDM is zero, as it should be.
           const VectorXd dxRef = dxfull.head(nvtxstate);
-          const MatrixXd covref = covstate.topLeftCorner(nvtxstate, nvtxstate);
-
-          const MatrixXd hessref = covref.inverse();
-
-          const double deltachisqref = -0.5*dxRef.transpose()*hessref*dxRef;
+          std::vector<Eigen::Index> reffreeidxs;
+          reffreeidxs.reserve(nvtxstate);
+          for (auto const idx : freestateidxs) {
+            if (idx < (Eigen::Index)nvtxstate) {
+              reffreeidxs.push_back(idx);
+            }
+          }
+          double deltachisqref = 0.;
+          if (!reffreeidxs.empty()) {
+            const MatrixXd covref = covstate(reffreeidxs, reffreeidxs);
+            const MatrixXd hessref = covref.inverse();
+            const VectorXd dxReffree = dxRef(reffreeidxs);
+            deltachisqref = -0.5*dxReffree.transpose()*hessref*dxReffree;
+          }
 
           edmvalref = -deltachisqref;
 
