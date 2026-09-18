@@ -3105,19 +3105,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             // Phase B export: Moliere raw step data of the same leg (log
             // sync argument as for the Urban export below).
             for (auto const &ms : g4prop->msStepLog()) {
-              msmoliidx.push_back(msglobalidx);
-              msmoliv.push_back(ms.effZ);
-              msmoliv.push_back(ms.effA);
-              msmoliv.push_back(ms.xg);
-              msmoliv.push_back(ms.pGeV);
-              msmoliv.push_back(ms.beta);
-              msmoliv.push_back(ms.thp2);
-              msmoliv.push_back(ms.dOverX0);
-              // per-element Moliere sums: effZ/effA are mass
-              // averages and both parameters are non-linear in Z
-              msmoliv.push_back(ms.zzp1OverA);
-              msmoliv.push_back(ms.lnScreenW);
-              msmoliv.push_back(ms.stepGroup);
+              pushMsMoliStep(msglobalidx, ms);
             }
           }
 

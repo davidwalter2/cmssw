@@ -2105,8 +2105,31 @@ Eigen::Matrix<double, 5, 5> Geant4ePropagator::PropagateErrorMSC(const G4Track *
            << G4endl;
 #endif
   Eigen::Matrix<double, 5, 5> res = Eigen::Matrix<double, 5, 5>::Zero();
+  // THE WITHIN-STEP ANGLE-OFFSET CORRELATION IS POSITIVE IN BOTH PROJECTIONS.
+  //
+  // The state is the curvilinear (qop, lambda, phi, xt, yt) with
+  //   U = zhat x W / |zhat x W|,   V = W x U,   xt = M.U,  yt = M.V,
+  // so dW/dlambda = +V and dW/dphi = +cos(lambda) U: a positive lambda kick
+  // tilts the direction toward +yt and a positive phi kick toward +xt. The
+  // transport therefore carries a POSITIVE lever in BOTH projections,
+  // J(4,1) = +L and J(3,2) = +L cos(lambda) on a straight step of length L
+  // (verified by finite differences on the helix map of
+  // python/gen_transport_jacobian.py at B = 0 and at 3.8 T).
+  //
+  // For a uniform scatterer the within-step block at the step EXIT is then
+  //   Var(angle) = DD,  Var(offset) = DD l^2/3,  Cov = +DD l/2 = +S3
+  // in BOTH projections -- the same sign, because both levers are positive.
+  // The inherited GEANE line wrote res(1, 4) = -S3 while res(2, 3) = +S3/CLA.
+  //
+  // THE DECISIVE TEST is step-subdivision invariance. DD is linear in the
+  // step length with no logarithmic term, so the scattering power of a slab
+  // is exactly additive and the accumulated Q of the slab must not depend on
+  // how it is diced. Accumulating Q <- J Q J^T + q over k equal sub-steps
+  //   with +S3:  Var(offset) = DD L^2/3,             Cov = DD L/2   (any k)
+  //   with -S3:  Var(offset) = DD L^2/3 (1-3/k+3/k^2), Cov = DD L/2 (1-2/k)
+  // -- a factor 4 low at k = 2 and a 3/k deficit on a real leg.
   res(1, 1) = S2;
-  res(1, 4) = -S3;
+  res(1, 4) = S3;
   res(2, 2) = S2 / CLA / CLA;
   res(2, 3) = S3 / CLA;
   res(3, 3) = S1;

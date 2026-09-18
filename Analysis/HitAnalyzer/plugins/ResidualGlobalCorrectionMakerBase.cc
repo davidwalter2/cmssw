@@ -556,6 +556,9 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
       if (exportStepRecords_) {
         tree->Branch("msmoliidx", &msmoliidx);
         tree->Branch("msmoliv", &msmoliv);
+        // written out for the same reason as `radstepstride` /
+        // `ioniurbanstride`: no reader may hard-code the stride
+        tree->Branch("msmolistride", &msmolistride);
         tree->Branch("reseigv", &reseigv);
         tree->Branch("resinfv", &resinfv);
         tree->Branch("resinfbv", &resinfbv);

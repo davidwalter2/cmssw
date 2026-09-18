@@ -2588,15 +2588,22 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             resfamily_.clear();
             resvalidhit_.clear();
             rescls_.clear();
-            ioniurbanidx.clear();
-            ioniurbanv.clear();
-            ioniqscaleidx.clear();
-            ioniqscalev.clear();
-            radstepidx.clear();
-            radstepv.clear();
-            radstepspecv.clear();
-            msmoliidx.clear();
-            msmoliv.clear();
+            // The raw step records are drained on the icons == 0 pass only
+            // (see the `icons == 0` guard at the push sites), so they are
+            // cleared on that pass only: cleared on the constrained pass too,
+            // the tree would carry EMPTY step records whenever
+            // doMassConstraint is on.
+            if (icons == 0) {
+              ioniurbanidx.clear();
+              ioniurbanv.clear();
+              ioniqscaleidx.clear();
+              ioniqscalev.clear();
+              radstepidx.clear();
+              radstepv.clear();
+              radstepspecv.clear();
+              msmoliidx.clear();
+              msmoliv.clear();
+            }
           }
 
           // Per-hit diagnostics: cleared every iteration so the vectors
@@ -3032,19 +3039,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                 msglobalidx = detidparms.at(std::make_pair(10, propdetid));
                 ioniglobalidx = detidparms.at(std::make_pair(11, propdetid));
                 for (auto const &ms : g4prop->msStepLog()) {
-                  msmoliidx.push_back(msglobalidx);
-                  msmoliv.push_back(ms.effZ);
-                  msmoliv.push_back(ms.effA);
-                  msmoliv.push_back(ms.xg);
-                  msmoliv.push_back(ms.pGeV);
-                  msmoliv.push_back(ms.beta);
-                  msmoliv.push_back(ms.thp2);
-                  msmoliv.push_back(ms.dOverX0);
-                  // per-element Moliere sums (2026-08-08): effZ/effA are mass
-                  // averages and both parameters are non-linear in Z
-                  msmoliv.push_back(ms.zzp1OverA);
-                  msmoliv.push_back(ms.lnScreenW);
-                  msmoliv.push_back(ms.stepGroup);
+                  pushMsMoliStep(msglobalidx, ms);
                 }
                 for (auto const &us : g4prop->ioniStepLog()) {
                   ioniurbanidx.push_back(ioniglobalidx);
@@ -6334,12 +6329,29 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           niter = iiter + 1;
           edmval = -deltachisq;
 
+          // The reference-block EDM, and with it the convergence break, is
+          // taken on the reference indices ACTUALLY SOLVED FOR. `covstate` is
+          // the free-subspace covariance scattered into the full index space,
+          // so a frozen reference index leaves a zero row and column: under
+          // doVtxConstraint (index 6) the 10x10 block is singular, its inverse
+          // is NaN, `edmvalref < edmConvergence_` is never true and every
+          // candidate runs to `nIters`. Under fitFromGenParms the whole block
+          // is frozen and the same happens.
           const Matrix<double, 10, 1> dxRef = dxfull.head<10>();
-          const Matrix<double, 10, 10> covref = covstate.topLeftCorner<10, 10>();
-
-          const Matrix<double, 10, 10> hessref = covref.inverse();
-
-          const double deltachisqref = -0.5*dxRef.transpose()*hessref*dxRef;
+          std::vector<Eigen::Index> reffreeidxs;
+          reffreeidxs.reserve(10);
+          for (auto const idx : freestateidxs) {
+            if (idx < 10) {
+              reffreeidxs.push_back(idx);
+            }
+          }
+          double deltachisqref = 0.;
+          if (!reffreeidxs.empty()) {
+            const MatrixXd covref = covstate(reffreeidxs, reffreeidxs);
+            const MatrixXd hessref = covref.inverse();
+            const VectorXd dxReffree = dxRef(reffreeidxs);
+            deltachisqref = -0.5*dxReffree.transpose()*hessref*dxReffree;
+          }
 
           edmvalref = -deltachisqref;
 
