@@ -2223,7 +2223,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 // const unsigned int nparsAlignment = 2*nvalid + nvalidalign2d;
 // const unsigned int nparsAlignment = 6*nvalid;
       const unsigned int nparsAlignment = 5*nvalid + nvalidalign2d + nparsPixClass;
-      const unsigned int nFieldModes = fieldCorrection_->nModes();
+      const unsigned int nFieldModes = nFieldSlots();
       const unsigned int nparsBfield = nhits * nFieldModes;
       // Global material model: one slot per group per hit (uncrossed groups
       // contribute zero columns; shared global indices collapse like the
@@ -2675,7 +2675,11 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           std::array<Eigen::Vector3d, 2> dBrefarr;
           for (unsigned int id = 0; id < 2; ++id) {
               const GlobalPoint refPos(refftsarr[id][0], refftsarr[id][1], refftsarr[id][2]);
-              dBrefarr[id] = fieldCorrection_->getCorrectionAt(refPos, corparms_);
+              const auto &firsthit = hitsarr[id][0];
+              const uint32_t firstgluedid = trackerTopology->glued(firsthit->geographicalId());
+              const DetId firstparmdetid = firstgluedid != 0 ? DetId(firstgluedid)
+                                                             : firsthit->geographicalId();
+              dBrefarr[id] = referenceFieldCorrection(refPos, firstparmdetid);
           }
 
           const Matrix<double, 10, 10> twotrackpca2curvref = twoTrackPca2curvJacobianD(refftsarr[0], refftsarr[1], field, dBrefarr[0], dBrefarr[1]);
@@ -2950,15 +2954,11 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               const GlobalPoint propStartPos(updtsos[0], updtsos[1], updtsos[2]);
               // Per-step mode: the provider applies the correction inside
               // the propagator; per-leg basis samples not needed.
-              const Eigen::Vector3d dB = perStepFieldModes_
-                  ? Eigen::Vector3d::Zero()
-                  : fieldCorrection_->getCorrectionAt(propStartPos, corparms_);
+              // perModuleBfield: the Bz offset of this hit's module
+              // (parmdetid, the same module as parmtype 7).
               std::vector<double> dBxPerMode, dByPerMode, dBzPerMode;
-              if (!perStepFieldModes_) {
-                fieldCorrection_->getBxBasisAt(propStartPos, dBxPerMode);
-                fieldCorrection_->getByBasisAt(propStartPos, dByPerMode);
-                fieldCorrection_->getBzBasisAt(propStartPos, dBzPerMode);
-              }
+              const Eigen::Vector3d dB =
+                  legFieldCorrection(propStartPos, parmdetid, dBxPerMode, dByPerMode, dBzPerMode);
 
               // Global material model: leg-constant dxi is zero; per-step
               // group values are applied by the propagator's provider path
@@ -3507,7 +3507,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               }
 
               for (unsigned int imode = 0; imode < nlocalbfield; ++imode) {
-                globalidxv[parmidx++] = fieldCorrection_->basisGlobalIdx(imode);
+                globalidxv[parmidx++] = fieldSlotGlobalIdx(imode, parmdetid);
               }
               if (globalMaterialModel_) {
                 // One slot per material group, shared global indices

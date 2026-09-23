@@ -1590,7 +1590,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     nValidPixelHits = nvalidpixel;
     
     const unsigned int nparsAlignment = 5*nvalid + nvalidalign2d + nparsPixClass;
-    const unsigned int nFieldModes = fieldCorrection_->nModes();
+    const unsigned int nFieldModes = nFieldSlots();
     const unsigned int nparsBfield = nhits * nFieldModes;
     // Global material model: one slot per group per hit (uncrossed groups
     // contribute zero columns; the idxmap collapses the shared global
@@ -2339,15 +2339,11 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         // Per-step mode: the provider applies the correction inside the
         // propagator (dB argument stays zero for FD perturbations) and the
         // per-leg basis samples are not needed.
-        const Eigen::Vector3d dB = perStepFieldModes_
-            ? Eigen::Vector3d::Zero()
-            : fieldCorrection_->getCorrectionAt(propStartPos, corparms_);
+        // perModuleBfield: the Bz offset of the leg's module (propdetid,
+        // the same module as the parmtype-7 material parameter).
         std::vector<double> dBxPerMode, dByPerMode, dBzPerMode;
-        if (!perStepFieldModes_) {
-          fieldCorrection_->getBxBasisAt(propStartPos, dBxPerMode);
-          fieldCorrection_->getByBasisAt(propStartPos, dByPerMode);
-          fieldCorrection_->getBzBasisAt(propStartPos, dBzPerMode);
-        }
+        const Eigen::Vector3d dB =
+            legFieldCorrection(propStartPos, propdetid, dBxPerMode, dByPerMode, dBzPerMode);
 
         // Global material model: the leg-constant dxi is zero; the per-step
         // group values k_g (synced from corparms_ into the model at the top
@@ -3033,14 +3029,26 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           }
 
           if (runFDClosure_ && !didFDClosure_ && !perStepFieldModes_ && nlocalbfield > 0) {
-            const Matrix<double, 5, 1> stateNom =
-                Eigen::Matrix<double, 5, 1>(updtsos.head<5>());
+            // Per-leg chain rule (scalar-potential modes or the per-module Bz):
+            // perturb the leg's dB by eps * basis, re-propagate from the same
+            // input state and compare the basis-invariant curvilinear
+            // (qop, lambda, phi) of the endpoint with dStateDparams.head<3>().
+            // (The propagator returns the GLOBAL 7-vector, so its head<5>()
+            // is (x, y, z, px, py) and cannot be differenced against the
+            // curvilinear columns directly.)
+            auto qopLamPhi = [](const Eigen::Matrix<double, 7, 1> &st) {
+              const double px = st(3), py = st(4), pz = st(5), q = st(6);
+              const double pT = std::sqrt(px * px + py * py);
+              const double pmag = std::sqrt(pT * pT + pz * pz);
+              return Eigen::Vector3d(q / pmag, std::atan2(pz, pT), std::atan2(py, px));
+            };
+            const Eigen::Vector3d cNom = qopLamPhi(updtsos);
             const double eps = epsilonFDClosure_;
             const unsigned int nTest = std::min<unsigned int>(10u, nlocalbfield);
             std::cout << "===== Numerical-FD closure ====="
                       << "  nFieldModes=" << nlocalbfield
                       << "  testing " << nTest << " modes"
-                      << "  eps=" << eps << std::endl;
+                      << "  eps=" << eps << "  comparing (qop, lambda, phi)" << std::endl;
             std::cout << std::scientific << std::setprecision(4);
             double worstRel = 0.0;
             for (unsigned int imode = 0; imode < nTest; ++imode) {
@@ -3056,20 +3064,17 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                           << ": perturbed propagation failed" << std::endl;
                 continue;
               }
-              const Matrix<double, 5, 1> statePert =
-                  Eigen::Matrix<double, 5, 1>(std::get<1>(pertResult).head<5>());
-              const Matrix<double, 5, 1> dStateFD = (statePert - stateNom) / eps;
-              const Matrix<double, 5, 1> dStateAn = dStateDparams.col(imode);
-              Matrix<double, 5, 1> rel;
-              for (int k = 0; k < 5; ++k) {
-                const double scale = std::max(std::abs(dStateAn(k)), 1e-30);
-                rel(k) = std::abs(dStateFD(k) - dStateAn(k)) / scale;
-                if (rel(k) > worstRel) worstRel = rel(k);
-              }
+              const Eigen::Vector3d dCFD = (qopLamPhi(std::get<1>(pertResult)) - cNom) / eps;
+              const Eigen::Vector3d dCAn = dStateDparams.col(imode).head<3>();
+              // relative to the largest component: qop and lambda do not
+              // respond to a Bz shift, their analytic entries are ~0
+              const double scale = std::max(dCAn.cwiseAbs().maxCoeff(), 1e-30);
+              const double rel = (dCFD - dCAn).cwiseAbs().maxCoeff() / scale;
+              worstRel = std::max(worstRel, rel);
               std::cout << "  mode " << imode
-                        << "  max|FD-an|/|an| = " << rel.maxCoeff()
-                        << "  FD=[" << dStateFD.transpose() << "]"
-                        << "  an=[" << dStateAn.transpose() << "]"
+                        << "  max|FD-an|/max|an| = " << rel
+                        << "  FD=[" << dCFD.transpose() << "]"
+                        << "  an=[" << dCAn.transpose() << "]"
                         << std::endl;
             }
             std::cout << "===== FD closure: worst rel = " << worstRel
@@ -3254,7 +3259,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           // One slot per scalar-potential mode, sharing the same global index
           // across all hits (the idxmap collapses these in the final Jacobian).
           for (unsigned int imode = 0; imode < nlocalbfield; ++imode) {
-            globalidxv[iparm++] = fieldCorrection_->basisGlobalIdx(imode);
+            globalidxv[iparm++] = fieldSlotGlobalIdx(imode, propdetid);
           }
 
           if (globalMaterialModel_) {

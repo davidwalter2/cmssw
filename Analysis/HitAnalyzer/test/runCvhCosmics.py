@@ -152,8 +152,17 @@ opts.register('goodRunsFile', '', VarParsing.VarParsing.multiplicity.singleton,
               'solenoid was ramped down for parts of era G -- the 3.8T '
               'ScalarPot3D coefficients must not be fit to reduced-field runs '
               '(see repack/goodruns_cosmics_2016GH.txt). Empty = no filter.')
+opts.register('perModuleBfield', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'per-module B-field corrections (10_6 scheme): one Bz offset per '
+              'module (parmtype 6) instead of the scalar-potential modes '
+              '(parmtype 14, then not registered); forces perStepFieldModes=False '
+              'and needs no scalarPot3DInitFile when the baseline field is not '
+              'ScalarPot3D. The full module-level configuration is '
+              'perModuleBfield=True globalMaterialModel=False useOpera3D=True '
+              '(data; useDefaultField=True for MC where available)')
 opts.parseArguments()
-if not opts.scalarPot3DInitFile:
+if not opts.scalarPot3DInitFile and not opts.perModuleBfield:
     raise SystemExit(
         "scalarPot3DInitFile=<path> is required (coefficient dump file)")
 
@@ -268,7 +277,8 @@ process.globalCor = cms.EDProducer(
     runFDClosure=cms.bool(bool(opts.runFDClosure)),
     epsilonFDClosure=cms.double(float(opts.epsilonFDClosure)),
     globalMaterialModel=cms.bool(bool(opts.globalMaterialModel)),
-    perStepFieldModes=cms.bool(bool(opts.perStepFieldModes)),
+    perStepFieldModes=cms.bool(bool(opts.perStepFieldModes) and not opts.perModuleBfield),
+    perModuleBfield=cms.bool(bool(opts.perModuleBfield)),
     skipHitlessSurfaces=cms.bool(bool(opts.skipHitlessSurfaces) and bool(opts.globalMaterialModel)),
     materialFDGroup=cms.int32(int(opts.materialFDGroup)),
     materialFDEps=cms.double(float(opts.materialFDEps)),

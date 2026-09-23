@@ -733,6 +733,34 @@ protected:
   std::string scalarPotentialInitFile_;
   std::unique_ptr<ana_hitanalyzer::ScalarPotentialFieldCorrection> fieldCorrection_;
 
+  // Per-module B-field corrections (the 10_6 / W-mass scheme): one Bz offset
+  // per module (parmtype 6; glued pairs share one, like the parmtype-7
+  // material parameter), applied as a constant Bz shift on the propagation
+  // leg that ends at that module -- the same leg attribution as parmtype 7.
+  // Every tracker module is registered, dead ones included; their legs are
+  // in the fit when skipHitlessSurfaces=False. EXCLUSIVE with the scalar-
+  // potential block: with perModuleBfield=True no parmtype-14 mode is
+  // registered, fieldCorrection_ is not built (scalarPotentialInitFile may
+  // be empty) and perStepFieldModes must be False.
+  bool perModuleBfield_ = false;
+
+  // Field-correction slots on one propagation leg: the scalar-potential
+  // modes, or the single per-module Bz of the leg's module.
+  unsigned int nFieldSlots() const;
+  // Field correction dB applied on the leg starting at `pos` and ending at
+  // module `legdetid` (parmdetid convention), and the per-slot (Bx, By, Bz)
+  // basis for the chain rule of the transport-Jacobian dB columns. The
+  // basis vectors stay empty in the per-step scalar-potential mode.
+  Eigen::Vector3d legFieldCorrection(const GlobalPoint &pos, const DetId &legdetid,
+                                     std::vector<double> &dBxPerSlot,
+                                     std::vector<double> &dByPerSlot,
+                                     std::vector<double> &dBzPerSlot) const;
+  // Global index of field slot `islot` on the leg ending at `legdetid`.
+  unsigned int fieldSlotGlobalIdx(unsigned int islot, const DetId &legdetid) const;
+  // Field correction at a track's reference point: the expansion at `refpos`,
+  // or (per-module scheme, as in 10_6) the Bz of the track's first-hit module.
+  Eigen::Vector3d referenceFieldCorrection(const GlobalPoint &refpos, const DetId &firsthitdetid) const;
+
   // Global material model (the global-material-model design note (kept outside the repository)).
   // materialGroupsFile loads a grouping-tier rules file (Phase A
   // validation hook usable on its own); globalMaterialModel=true

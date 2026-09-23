@@ -421,6 +421,15 @@ opts.register('propagationDirection', 'anyDirection', VarParsing.VarParsing.mult
 import TrackPropagation.Geant4e.cvhSwitches as cvhSwitches
 cvhSwitches.register(opts)
 
+opts.register('perModuleBfield', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'per-module B-field corrections (10_6 scheme): one Bz offset per '
+              'module (parmtype 6) instead of the scalar-potential modes '
+              '(parmtype 14, then not registered); forces perStepFieldModes=False '
+              'and needs no scalarPot3DInitFile when the baseline field is not '
+              'ScalarPot3D. The full module-level configuration is '
+              'perModuleBfield=True globalMaterialModel=False useOpera3D=True '
+              '(data; useDefaultField=True for MC where available)')
 opts.parseArguments()
 # TWO-TRACK DEFAULT IS THE Q-MATRIX ESTIMATOR. Under CgfQoPMode >= 1 the
 # fluctuation model returns the UNTRUNCATED ionization second cumulant as the
@@ -435,7 +444,7 @@ if opts.CgfQoPMode < 0:
     opts.CgfQoPMode = 0
     print('[cvh] two-track driver: CgfQoPMode not given, defaulting to 0 '
           '(legacy truncated-Q); the two-track maker has no CGF override hooks')
-if not opts.scalarPot3DInitFile:
+if not opts.scalarPot3DInitFile and not opts.perModuleBfield:
     raise SystemExit(
         "scalarPot3DInitFile=<path> is required (coefficient dump file): "
         "the basis evaluator in globalCor needs it for chain-rule columns "
@@ -657,7 +666,8 @@ process.globalCor = cms.EDProducer(
     edmConvergence=cms.double(float(opts.edmConvergence)),
     materialGroupsFile=cms.string(opts.materialGroupsFile),
     globalMaterialModel=cms.bool(bool(opts.globalMaterialModel)),
-    perStepFieldModes=cms.bool(bool(opts.perStepFieldModes)),
+    perStepFieldModes=cms.bool(bool(opts.perStepFieldModes) and not opts.perModuleBfield),
+    perModuleBfield=cms.bool(bool(opts.perModuleBfield)),
     skipHitlessSurfaces=cms.bool(bool(opts.skipHitlessSurfaces) and bool(opts.globalMaterialModel)),
     outprefix=cms.untracked.string("globalcor"),
     # MT G4Error master: GlobalCache config for CvhMasterThread. The master
