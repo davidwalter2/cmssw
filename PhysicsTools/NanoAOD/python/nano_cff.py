@@ -353,15 +353,17 @@ _DEFAULT_SCALARPOT_INITFILE = _resolveInPath(_SCALARPOT_INITFILE_REL)
 #   "module"  one Bz offset (parmtype 6) and one material scale (parmtype 7) per
 #             tracker module, dead modules included (their hitless surfaces stay
 #             in the fit) -- the 10_6 / W-mass scheme. DATA baseline field: the
-#             OPERA/TOSCA finite-element map 160812 as the full 3D grid, without
-#             the tracker parametrization (as in WMass/cmssw#42; 170812 differs
-#             only in the yoke-steel BH curve and its grid files exceed the CRAB
-#             sandbox). No scalar-potential or material-group Jacobians.
+#             OPERA/TOSCA finite-element map CVH_OPERA_VERSION (default 170812,
+#             the latest model) as the full 3D grid, without the tracker
+#             parametrization (Analysis/HitAnalyzer/python/cvhOperaField.py; the
+#             170812 tables must be on CMSSW_SEARCH_PATH, see TABLES_HELP there).
+#             No scalar-potential or material-group Jacobians.
 #   "global"  the scalar-potential field modes (parmtype 14) and the global
 #             material groups (parmtype 15); DATA baseline field: ScalarPot3D.
 #
 # MC always keeps the default field (the one the simulation used).
 CVH_CORRECTION_MODEL = "module"
+CVH_OPERA_VERSION = "170812"
 _CVH_REFITS = ("trackrefit", "trackrefitideal", "trackrefitbs", "trackrefitdimuon")
 
 
@@ -444,19 +446,9 @@ def setup3DFieldForRefit(process, initFile=None, useScalarPot3D=True, correction
     fieldlabel = ""
     if useScalarPot3D:
         if model == "module":
-            # OPERA/TOSCA 160812 3D grid, no tracker parametrization (WMass/cmssw#42).
-            # The cfi also provides the magfield XMLIdealGeometryESSource that
-            # supplies DDCompactView("magfield") to VolumeBasedMagneticFieldESProducer.
-            from MagneticField.Engine.volumeBasedMagneticField_160812_cfi import \
-                VolumeBasedMagneticFieldESProducer as Opera3DMagneticFieldProducer
-            from MagneticField.Engine.volumeBasedMagneticField_160812_cfi import \
-                magfield as MagneticFieldGeometry
-            process.magfield = MagneticFieldGeometry
-            process.es_prefer_magfield_cvhrefit = cms.ESPrefer("XMLIdealGeometryESSource", "magfield")
-            process.Opera3DMagneticFieldProducer = Opera3DMagneticFieldProducer.clone()
-            fieldlabel = "grid_160812_3_8t"
-            process.Opera3DMagneticFieldProducer.label = fieldlabel
-            process.Opera3DMagneticFieldProducer.useParametrizedTrackerField = cms.bool(False)
+            # OPERA/TOSCA 3D grid, no tracker parametrization (cvhOperaField)
+            from Analysis.HitAnalyzer.cvhOperaField import setupOpera3DField
+            fieldlabel = setupOpera3DField(process, version=CVH_OPERA_VERSION, routeCPEs=False)
         else:
             from MagneticField.ParametrizedEngine.parametrizedMagneticField_ScalarPot3D_cfi \
                 import ParametrizedMagneticFieldProducer as ScalarPot3DMagneticFieldProducer

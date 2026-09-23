@@ -431,7 +431,7 @@ opts.register('useDefaultField', True, VarParsing.VarParsing.multiplicity.single
               'width. Takes precedence over useOpera3D and useScalarPot3D.')
 opts.register('useOpera3D', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
-              'use the full 3D TOSCA volumetric grid (160812) as the baseline '
+              'use the full 3D TOSCA volumetric grid (version: operaVersion) as the baseline '
               'field; reserved as a deliberate injected-field systematic on a '
               'subset, not as the baseline for a closure test.')
 opts.register('useScalarPot3D', True, VarParsing.VarParsing.multiplicity.singleton,
@@ -459,6 +459,11 @@ opts.register('perModuleBfield', False, VarParsing.VarParsing.multiplicity.singl
               'ScalarPot3D. The full module-level configuration is '
               'perModuleBfield=True globalMaterialModel=False useOpera3D=True '
               '(data; useDefaultField=True for MC where available)')
+opts.register('operaVersion', '170812', VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.string,
+              'OPERA/TOSCA map used by useOpera3D=True: 170812 (latest model, '
+              'DD4hep builder + merged tables on CMSSW_SEARCH_PATH, see '
+              'Analysis/HitAnalyzer/python/cvhOperaField.py) or 160812 (release tables)')
 opts.parseArguments()
 
 # TWO-TRACK DEFAULT IS THE Q-MATRIX ESTIMATOR. Under CgfQoPMode >= 1 the
@@ -590,20 +595,11 @@ if opts.useDefaultField:
     # same field as everything else.
     fieldlabel = ""
 elif opts.useOpera3D:
-    from MagneticField.Engine.volumeBasedMagneticField_160812_cfi import \
-        VolumeBasedMagneticFieldESProducer as Opera3DMagneticFieldProducer
-    from MagneticField.Engine.volumeBasedMagneticField_160812_cfi import \
-        magfield as MagneticFieldGeometry
-    process.magfield = MagneticFieldGeometry
-    process.es_prefer_magfield_cvhrefit = cms.ESPrefer("XMLIdealGeometryESSource", "magfield")
-    process.Opera3DMagneticFieldProducer = Opera3DMagneticFieldProducer
-    fieldlabel = "grid_160812_3_8t"
-    process.Opera3DMagneticFieldProducer.label = fieldlabel
-    process.Opera3DMagneticFieldProducer.useParametrizedTrackerField = cms.bool(False)
-    for _cpe in ("stripCPEESProducer", "StripCPEfromTrackAngleESProducer",
-                 "siPixelTemplateDBObjectESProducer", "templates"):
-        if hasattr(process, _cpe):
-            getattr(process, _cpe).MagneticFieldLabel = fieldlabel
+    # OPERA/TOSCA volume-based map as the labelled baseline field (full 3D
+    # grid in the tracker), routed into the CPEs; one implementation shared
+    # with the NanoAOD customise (Analysis/HitAnalyzer/python/cvhOperaField.py).
+    from Analysis.HitAnalyzer.cvhOperaField import setupOpera3DField
+    fieldlabel = setupOpera3DField(process, version=opts.operaVersion)
 elif not opts.useScalarPot3D:
     raise RuntimeError(
         "useScalarPot3D=False is not supported; the legacy non-thread-safe "
