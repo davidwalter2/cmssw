@@ -1544,6 +1544,11 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     unsigned int nvalid = 0;
     unsigned int nvalidpixel = 0;
     unsigned int nvalidalign2d = 0;
+    // Extra per-hit columns from the pixel pathological-hit class
+    // corrections (parmtypes 16-21, or 17/18/19/21/22 in the dtanLA mode),
+    // counted with exactly the rule pixelClassColumnCount() that the fit
+    // loop uses to append them, so iparm == npars holds.
+    unsigned int nparsPixClass = 0;
     
     
     // count valid hits since this is needed to size the arrays
@@ -1568,6 +1573,11 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         }
         if (GeomDetEnumerators::isTrackerPixel(hit->det()->subDetector())) {
           nvalidpixel += 1;
+          if (pixelHitClassCorrections_) {
+            bool clsvalid = false;
+            const int cls = pixelHitClass(*hit, clsvalid);
+            nparsPixClass += pixelClassColumnCount(cls, clsvalid);
+          }
         }
       }
     }
@@ -1579,7 +1589,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     nValidHits = nvalid;
     nValidPixelHits = nvalidpixel;
     
-    const unsigned int nparsAlignment = 5*nvalid + nvalidalign2d;
+    const unsigned int nparsAlignment = 5*nvalid + nvalidalign2d + nparsPixClass;
     const unsigned int nFieldModes = fieldCorrection_->nModes();
     const unsigned int nparsBfield = nhits * nFieldModes;
     // Global material model: one slot per group per hit (uncrossed groups
@@ -3318,6 +3328,17 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             Matrix<double, 2, 2> iV;
             // rotation from module to strip coordinates
             Matrix2d R;
+
+            // Side-resolved pathology class of this hit (pixels only, same
+            // bit layout as the two-track maker: 0 = -x edge, 1 = +x edge,
+            // 2 = -y edge, 3 = +y edge, 4 = sizeX==1, 5 = sizeY==1) and
+            // whether the classification succeeded. Only evaluated for the
+            // class corrections; the counting loop above uses the same rule.
+            int pixcls = 0;
+            bool pixclsValid = false;
+            if (pixelHitClassCorrections_ && ispixel) {
+              pixcls = pixelHitClass(*preciseHit, pixclsValid);
+            }
             
             const double lxcor = localparmsalignprop[3];
             const double lycor = localparmsalignprop[4];
@@ -3404,6 +3425,42 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                       preciseHit->localPositionError().xy(), preciseHit->localPositionError().yy();
 
                 R = Matrix2d::Identity();
+
+                // Pixel class corrections: dy0 += J*theta with the columns
+                // appended below (theta seeded from corFiles), so a fitted
+                // theta zeroes the class-parameter gradients. Port of the
+                // two-track maker, identical conventions.
+                if (pixelHitClassCorrections_ && pixclsValid) {
+                  const double lorentzScale =
+                      0.5 * preciseHit->det()->surface().bounds().thickness();
+                  if (injectLorentzTan_ != 0.) {
+                    const double winj = (pixcls & 0x10) ? lorentzWsize1_
+                        : ((pixcls & 0x3) ? lorentzWedge_
+                           : (injectLorentzWclean_ > -900. ? injectLorentzWclean_
+                                                           : lorentzWclean_));
+                    dy0[0] += lorentzScale * winj * injectLorentzTan_;
+                  }
+                  if (pixcls != 0 || pixelLorentzParam_) {
+                    const DetId pixdetid = preciseHit->geographicalId();
+                    auto corval = [&](unsigned int pt) {
+                      return corparms_[detidparms.at(std::make_pair(pt, pixdetid))];
+                    };
+                    if (pixelLorentzParam_) {
+                      dy0[0] += lorentzScale * pixelLorentzWeight(pixcls) * corval(22);
+                    }
+                    if (pixcls & 0x3) {
+                      const double sx = (pixcls & 0x2) ? 1. : -1.;
+                      if (!pixelLorentzParam_) dy0[0] += corval(16);
+                      dy0[0] += sx * corval(17);
+                    }
+                    if (pixcls & 0xc) {
+                      const double sy = (pixcls & 0x8) ? 1. : -1.;
+                      dy0[1] += corval(18) + sy * corval(19);
+                    }
+                    if ((pixcls & 0x10) && !pixelLorentzParam_) dy0[0] += corval(20);
+                    if (pixcls & 0x20) dy0[1] += corval(21);
+                  }
+                }
               }
               else {
                 // transform to polar coordinates to end the madness
@@ -3633,6 +3690,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
 // const double scalecov = hit1d ? 1.2 : 1.0;
             const double scalecov = ispixel ? 0.8 : 1.2;
+
+            // first residual row of this hit (the class columns below)
+            const unsigned int iconshit = icons;
             
             if (ispixel) {
               constexpr unsigned int nlocalcons = 2;
@@ -3684,6 +3744,41 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             if (dores && ispixel) {
               globalidxv[iparm] = yresglobalidx;
               ++iparm;
+            }
+
+            // Pixel pathological-hit class corrections: local-translation
+            // columns gated on this hit's class, appended after the hit's
+            // alignment (and resolution) slots. d(residual)/d(param) = +1 on
+            // the local-x (x-type) or local-y (y-type) row -- the sign of the
+            // parmtype-0/1 columns, -R*A.col with R = identity on pixels --
+            // times the edge-side sign s (+1 at the hi boundary, -1 at lo)
+            // for the diff params. dtanLA (22): (t/2)*w(class) on local x.
+            // Counted in nparsPixClass by pixelClassColumnCount().
+            if (pixelHitClassCorrections_ && ispixel && pixclsValid &&
+                (pixcls != 0 || pixelLorentzParam_)) {
+              const DetId pixdetid = preciseHit->geographicalId();
+              auto appendClassCol = [&](unsigned int parmtype, unsigned int coord, double val) {
+                Jfull(iconshit + coord, iparm) = val;
+                globalidxv[iparm] = detidparms.at(std::make_pair(parmtype, pixdetid));
+                ++iparm;
+              };
+              if (pixelLorentzParam_) {
+                appendClassCol(22, 0,
+                    0.5 * preciseHit->det()->surface().bounds().thickness() *
+                    pixelLorentzWeight(pixcls));
+              }
+              if (pixcls & 0x3) {                    // edge in x
+                const double sx = (pixcls & 0x2) ? 1. : -1.;
+                if (!pixelLorentzParam_) appendClassCol(16, 0, 1.);   // edge-x-mean
+                appendClassCol(17, 0, sx);                             // edge-x-diff
+              }
+              if (pixcls & 0xc) {                    // edge in y
+                const double sy = (pixcls & 0x8) ? 1. : -1.;
+                appendClassCol(18, 1, 1.);                             // edge-y-mean
+                appendClassCol(19, 1, sy);                             // edge-y-diff
+              }
+              if ((pixcls & 0x10) && !pixelLorentzParam_) appendClassCol(20, 0, 1.);  // sizeX1
+              if (pixcls & 0x20) appendClassCol(21, 1, 1.);                           // sizeY1
             }
             
             localqop_iter[ivalidhit] = localqopval;

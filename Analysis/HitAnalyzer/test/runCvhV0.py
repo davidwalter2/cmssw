@@ -82,6 +82,13 @@ opts.register('useStartingState', 'perigee', VarParsing.VarParsing.multiplicity.
 opts.register('eventsToProcess', '', VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string,
               'comma-separated run:event list; empty = all')
+opts.register('pixelClassHits', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              're-admit pixel edge / single-pixel clusters and emit the '
+              'per-pixel-module class-correction columns (parmtypes 16-21): '
+              'keepPixelEdgeHits=True pixelMinSizeX=1 pixelHitClassCorrections=True. '
+              'All channels of one calibration must use the same setting '
+              '(the parameter catalog changes)')
 opts.parseArguments()
 if not opts.scalarPot3DInitFile:
     raise SystemExit("scalarPot3DInitFile=<path> is required (coefficient dump file)")
@@ -163,6 +170,11 @@ process.globalCor = _v0maker.clone(
     outprefix=cms.untracked.string("globalcor_" + opts.mode),
     CvhMaster=CvhMasterPSet.clone(Particles=cms.vstring(*_particles)),
 )
+if opts.pixelClassHits:
+    process.globalCor.applyHitQuality = cms.bool(True)
+    process.globalCor.keepPixelEdgeHits = cms.bool(True)
+    process.globalCor.pixelMinSizeX = cms.int32(1)
+    process.globalCor.pixelHitClassCorrections = cms.bool(True)
 
 # Field label routing (ScalarPot3D as in the J/psi drivers)
 from MagneticField.ParametrizedEngine.parametrizedMagneticField_ScalarPot3D_cfi \

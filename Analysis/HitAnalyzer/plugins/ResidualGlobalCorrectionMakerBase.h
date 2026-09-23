@@ -37,6 +37,7 @@
 #include "DataFormats/GeometryCommonDetAlgo/interface/MeasurementPoint.h"
 #include "DataFormats/HepMCCandidate/interface/GenParticle.h"
 #include "Geometry/CommonTopologies/interface/StripTopology.h"
+#include "Geometry/CommonTopologies/interface/PixelTopology.h"
 #include "Geometry/CommonTopologies/interface/TkRadialStripTopology.h"
 #include "DataFormats/Math/interface/approx_log.h"
 #include "DataFormats/Math/interface/AlgebraicROOTObjects.h"
@@ -668,6 +669,55 @@ protected:
   // study); < -900 = use lorentzWclean.
   double injectLorentzTan_ = 0.;
   double injectLorentzWclean_ = -999.;
+
+  // Side-resolved pathology class of a pixel hit: bit 0 = -x edge,
+  // 1 = +x edge, 2 = -y edge, 3 = +y edge, 4 = sizeX==1, 5 = sizeY==1
+  // (0 = clean). `valid` is false when the hit is not a pixel cluster hit
+  // with a PixelTopology (then the class is 0 and no column is emitted).
+  // Same rule as the inline classification of the two-track maker.
+  static int pixelHitClass(const TrackingRecHit &hit, bool &valid) {
+    valid = false;
+    const TrackerSingleRecHit *tkhit = dynamic_cast<const TrackerSingleRecHit *>(&hit);
+    if (tkhit == nullptr || hit.det() == nullptr) {
+      return 0;
+    }
+    const PixelTopology *pixtopo = dynamic_cast<const PixelTopology *>(&hit.det()->topology());
+    if (pixtopo == nullptr || !tkhit->cluster_pixel().isNonnull()) {
+      return 0;
+    }
+    const SiPixelCluster &cl = *tkhit->cluster_pixel();
+    int cls = 0;
+    if (cl.minPixelRow() == 0) cls |= 1 << 0;
+    if (cl.maxPixelRow() == pixtopo->nrows() - 1) cls |= 1 << 1;
+    if (cl.minPixelCol() == 0) cls |= 1 << 2;
+    if (cl.maxPixelCol() == pixtopo->ncolumns() - 1) cls |= 1 << 3;
+    if (cl.sizeX() <= 1) cls |= 1 << 4;
+    if (cl.sizeY() <= 1) cls |= 1 << 5;
+    valid = true;
+    return cls;
+  }
+
+  // Number of class-correction Jacobian columns a pixel hit of class `cls`
+  // contributes: 2 per edge coordinate (mean + diff), 1 each for sizeX1 and
+  // sizeY1; in the dtanLA mode 1 on every classified hit + edge-x-diff +
+  // edge-y mean/diff + sizeY1 (16 and 20 are replaced by 22).
+  unsigned int pixelClassColumnCount(int cls, bool valid) const {
+    if (!pixelHitClassCorrections_ || !valid) {
+      return 0u;
+    }
+    const bool edgeX = cls & 0x3;
+    const bool edgeY = cls & 0xc;
+    if (pixelLorentzParam_) {
+      return 1u + (edgeX ? 1u : 0u) + (edgeY ? 2u : 0u) + ((cls & 0x20) ? 1u : 0u);
+    }
+    return (edgeX ? 2u : 0u) + (edgeY ? 2u : 0u) + ((cls & 0x10) ? 1u : 0u) +
+           ((cls & 0x20) ? 1u : 0u);
+  }
+
+  // dtanLA response weight of a pixel hit of class `cls`.
+  double pixelLorentzWeight(int cls) const {
+    return (cls & 0x10) ? lorentzWsize1_ : ((cls & 0x3) ? lorentzWedge_ : lorentzWclean_);
+  }
 
   bool doRes_ = false;
   bool useIdealGeometry_ = false;

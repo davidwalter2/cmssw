@@ -54,6 +54,13 @@ opts.register('propagationDirection', 'anyDirection', VarParsing.VarParsing.mult
               'Geant4ePropagator PropagationDirection (anyDirection = per-leg '
               'forward/backward choice, default; alongMomentum = legacy '
               'forward-only)')
+opts.register('pixelClassHits', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              're-admit pixel edge / single-pixel clusters and emit the '
+              'per-pixel-module class-correction columns (parmtypes 16-21): '
+              'keepPixelEdgeHits=True pixelMinSizeX=1 pixelHitClassCorrections=True. '
+              'All channels of one calibration must use the same setting '
+              '(the parameter catalog changes)')
 opts.register('keepPixelEdgeHits', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'keep pixel hits whose cluster touches the sensor boundary '
@@ -240,8 +247,9 @@ process.globalCor = cms.EDProducer(
     useIdealGeometry=cms.bool(bool(opts.useIdealGeometry)),
     bsConstraint=cms.bool(False),
     applyHitQuality=cms.bool(True),
-    keepPixelEdgeHits=cms.bool(bool(opts.keepPixelEdgeHits)),
-    pixelMinSizeX=cms.int32(int(opts.pixelMinSizeX)),
+    keepPixelEdgeHits=cms.bool(bool(opts.keepPixelEdgeHits) or bool(opts.pixelClassHits)),
+    pixelMinSizeX=cms.int32(1 if opts.pixelClassHits else int(opts.pixelMinSizeX)),
+    pixelHitClassCorrections=cms.bool(bool(opts.pixelClassHits)),
     corFiles=cms.vstring(),
     triggers=cms.vstring(),
     MagneticFieldLabel=cms.string(""),

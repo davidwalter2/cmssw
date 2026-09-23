@@ -47,6 +47,22 @@ opts.register('pixelMinSizeX', 2, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.int,
               'minimum pixel cluster size in x for a hit to stay in the fit '
               '(default 2 = baseline sizeX>1 cut; 1 admits all clusters)')
+opts.register('pixelHitClassCorrections', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'register the per-pixel-module pathology-class correction '
+              'parameters (parmtypes 16-21) and emit their Jacobian columns; '
+              'use with keepPixelEdgeHits=True pixelMinSizeX=1')
+opts.register('pixelLorentzParam', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'dtanLA (parmtype 22) replaces edge-x-mean (16) and sizeX1 (20); '
+              'requires pixelHitClassCorrections')
+opts.register('injectLorentzTan', 0., VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'closure test: shift every classified pixel hit by '
+              '(t/2)*w(class)*injectLorentzTan (requires pixelHitClassCorrections)')
+opts.register('corFile', '', VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.string,
+              'optional correction file (parmtree/x in catalog order) applied in-fit')
 opts.register('nIters', 10, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.int,
               'Gauss-Newton iteration cap (default 10 = baseline)')
@@ -237,7 +253,10 @@ process.globalCor = cms.EDProducer(
     applyHitQuality=cms.bool(True),
     keepPixelEdgeHits=cms.bool(bool(opts.keepPixelEdgeHits)),
     pixelMinSizeX=cms.int32(int(opts.pixelMinSizeX)),
-    corFiles=cms.vstring(),
+    pixelHitClassCorrections=cms.bool(bool(opts.pixelHitClassCorrections)),
+    pixelLorentzParam=cms.bool(bool(opts.pixelLorentzParam)),
+    injectLorentzTan=cms.double(float(opts.injectLorentzTan)),
+    corFiles=cms.vstring(*([opts.corFile] if opts.corFile else [])),
     triggers=cms.vstring(*JPSI_TRIGGERS),
     MagneticFieldLabel=cms.string(""),
     scalarPotentialInitFile=cms.string(opts.scalarPot3DInitFile),

@@ -472,6 +472,18 @@ def nanoAOD_addCvhMuonMC(process, initFile=None):
     return nanoAOD_addCvhMuonBranches(process, initFile=initFile, isMC=True)
 
 
+def nanoAOD_cvhPixelClassHits(process):
+    """cmsDriver add-on, chained AFTER nanoAOD_addCvhMuon[MC]: re-admit the
+    pixel edge / single-pixel hits in every CVH refit and emit their class-
+    correction columns (parmtypes 16-21). The calibration applied to the
+    resulting nano must be derived with the same setting (catalog +8640).
+
+        --customise PhysicsTools/NanoAOD/nano_cff.nanoAOD_addCvhMuon,PhysicsTools/NanoAOD/nano_cff.nanoAOD_cvhPixelClassHits
+    """
+    from PhysicsTools.NanoAOD.muons_cff import cvhPixelClassHits
+    return cvhPixelClassHits(process)
+
+
 def nanoWmassGenCustomize(process):
     pdgSelection="?(abs(pdgId) == 11|| abs(pdgId)==13 || abs(pdgId)==15 ||abs(pdgId)== 12 || abs(pdgId)== 14 || abs(pdgId)== 16|| abs(pdgId)== 24|| pdgId== 23)"
     # Keep precision same as default RECO for selected particles

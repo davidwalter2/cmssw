@@ -351,6 +351,13 @@ opts.register('edmConvergence', 1e-5, VarParsing.VarParsing.multiplicity.singlet
               VarParsing.VarParsing.varType.float,
               'EDM convergence threshold on the reference-state block '
               '(0 disables early stopping)')
+opts.register('pixelClassHits', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              're-admit pixel edge / single-pixel clusters and emit the '
+              'per-pixel-module class-correction columns (parmtypes 16-21): '
+              'keepPixelEdgeHits=True pixelMinSizeX=1 pixelHitClassCorrections=True. '
+              'All channels of one calibration must use the same setting '
+              '(the parameter catalog changes)')
 opts.register('keepPixelEdgeHits', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'keep pixel hits whose cluster touches the sensor boundary')
@@ -710,8 +717,9 @@ process.trackrefitdimuon = ResidualGlobalCorrectionMakerDiMuonG4e.clone(
     doMassConstraint=cms.bool(bool(opts.doMassConstraint)),
     massConstraint=cms.double(float(opts.massConstraint)),
     massConstraintWidth=cms.double(float(opts.massConstraintWidth)),
-    keepPixelEdgeHits=cms.bool(bool(opts.keepPixelEdgeHits)),
-    pixelMinSizeX=cms.int32(int(opts.pixelMinSizeX)),
+    keepPixelEdgeHits=cms.bool(bool(opts.keepPixelEdgeHits) or bool(opts.pixelClassHits)),
+    pixelMinSizeX=cms.int32(1 if opts.pixelClassHits else int(opts.pixelMinSizeX)),
+    pixelHitClassCorrections=cms.bool(bool(opts.pixelClassHits)),
     nIters=cms.uint32(int(opts.nIters)),
     edmConvergence=cms.double(float(opts.edmConvergence)),
     outprefix=cms.untracked.string(opts.outprefix),
