@@ -667,6 +667,11 @@ protected:
   // clean-hit response differ from the model one (response-model error
   // study); < -900 = use lorentzWclean.
   double injectLorentzTan_ = 0.;
+  // Validation only: shifts of the parmtype-14 (scalar-potential) coefficients
+  // by mode index, applied after the corFiles, so the field modes can be
+  // finite-differenced through the full refit like any other global.
+  std::vector<int> injectFieldModes_;
+  std::vector<double> injectFieldModeValues_;
   double injectLorentzWclean_ = -999.;
 
   bool doRes_ = false;
@@ -704,6 +709,15 @@ protected:
   // placeholders and quality-demoted hits): valid only with the global
   // material model (per-module leg attribution would otherwise break).
   bool skipHitlessSurfaces_ = false;
+
+  // Gauss-Newton linearisation point. false: only the reference state is
+  // updated between iterations and each track is re-propagated unscattered
+  // with the nominal energy loss. true: the fitted per-layer states are
+  // carried forward, so every leg is propagated from the fitted state on the
+  // previous layer and material, Q and the Jacobians are evaluated along the
+  // fitted (scattered) trajectory; dx0 then holds the residual w.r.t. the
+  // propagated state.
+  bool localUpdate_ = true;
 
   // Numerical-FD closure (debug only; one-shot per job).
   bool runFDClosure_ = false;

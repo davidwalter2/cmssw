@@ -397,6 +397,7 @@ private:
   // Successful backward legs (anyDirection mode): counted so the frequency
   // of the momentum-flipped frame conversion stays observable per job.
   mutable unsigned long long propBackwardLegs_{0ULL};
+  mutable unsigned long long propTargetResumes_{0ULL};
 
   // Geant4 11.1 made G4ErrorPropagatorManager / G4ErrorPropagatorData
   // singletons G4ThreadLocal. Fetch them per-call via the static accessors

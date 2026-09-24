@@ -48,6 +48,12 @@ opts.register('globalMaterialModel', True, VarParsing.VarParsing.multiplicity.si
               VarParsing.VarParsing.varType.bool,
               'parmtype-15 global material groups (default True -- the whole '
               'point for displaced tracks); False = legacy per-module block')
+opts.register('localUpdate', True, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'Gauss-Newton linearisation point: False = re-propagate each '
+              'track unscattered from the updated reference state; True = '
+              'carry the fitted per-layer states forward and propagate along '
+              'the fitted (scattered) trajectory')
 opts.register('skipHitlessSurfaces', True, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'hit-to-hit propagation (effective only with globalMaterialModel)')
@@ -154,6 +160,7 @@ process.globalCor = _v0maker.clone(
     scalarPotentialInitFile=cms.string(opts.scalarPot3DInitFile),
     materialGroupsFile=cms.string(opts.materialGroupsFile),
     globalMaterialModel=cms.bool(bool(opts.globalMaterialModel)),
+    localUpdate=cms.bool(bool(opts.localUpdate)),
     skipHitlessSurfaces=cms.bool(bool(opts.skipHitlessSurfaces) and bool(opts.globalMaterialModel)),
     perStepFieldModes=cms.bool(bool(opts.perStepFieldModes)),
     useStartingState=cms.string(opts.useStartingState),

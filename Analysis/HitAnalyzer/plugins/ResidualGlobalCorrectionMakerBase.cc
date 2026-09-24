@@ -271,6 +271,13 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
       ? iConfig.getParameter<double>("lorentzWedge") : 0.75;
   injectLorentzTan_ = iConfig.existsAs<double>("injectLorentzTan")
       ? iConfig.getParameter<double>("injectLorentzTan") : 0.;
+  injectFieldModes_ = iConfig.existsAs<std::vector<int>>("injectFieldModes")
+      ? iConfig.getParameter<std::vector<int>>("injectFieldModes") : std::vector<int>();
+  injectFieldModeValues_ = iConfig.existsAs<std::vector<double>>("injectFieldModeValues")
+      ? iConfig.getParameter<std::vector<double>>("injectFieldModeValues") : std::vector<double>();
+  if (injectFieldModes_.size() != injectFieldModeValues_.size()) {
+    throw cms::Exception("Configuration") << "injectFieldModes and injectFieldModeValues differ in length";
+  }
   injectLorentzWclean_ = iConfig.existsAs<double>("injectLorentzWclean")
       ? iConfig.getParameter<double>("injectLorentzWclean") : -999.;
   assert(!pixelLorentzParam_ || pixelHitClassCorrections_);
@@ -353,6 +360,9 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
     fieldModeProvider_ = std::make_unique<ana_hitanalyzer::ScalarPotFieldModeProvider>(
         fieldCorrection_.get(), &corparms_);
   }
+
+  localUpdate_ = iConfig.existsAs<bool>("localUpdate")
+      ? iConfig.getParameter<bool>("localUpdate") : true;
 
   // Numerical-FD closure flags (debug; both makers honour them).
   runFDClosure_ = iConfig.existsAs<bool>("runFDClosure")
@@ -1580,6 +1590,17 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
                 << " parmtype-14 (B-field absolute) entries" << std::endl;
 
       corfile->Close();
+    }
+
+    for (unsigned int i = 0; i < injectFieldModes_.size(); ++i) {
+      if (!fieldCorrection_ || injectFieldModes_[i] < 0 ||
+          unsigned(injectFieldModes_[i]) >= fieldCorrection_->nModes()) {
+        throw cms::Exception("Configuration") << "injectFieldModes: no scalar-potential mode " << injectFieldModes_[i];
+      }
+      const unsigned int gidx = fieldCorrection_->basisGlobalIdx(injectFieldModes_[i]);
+      corparms_[gidx] += injectFieldModeValues_[i];
+      std::cout << "injectFieldModes: mode " << injectFieldModes_[i] << " (global " << gidx << ") += "
+                << injectFieldModeValues_[i] << std::endl;
     }
   
   }

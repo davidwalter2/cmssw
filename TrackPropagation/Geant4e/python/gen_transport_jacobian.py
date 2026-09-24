@@ -72,12 +72,23 @@ phi0val = sympy.atan2(W0y, W0x)
 xt0val = M0const.dot(U0)
 yt0val = M0const.dot(V0)
 zt0val = M0const.dot(W0)
+Bxval = sympy.Symbol("Bxval")
+Byval = sympy.Symbol("Byval")
 Bzval = sympy.Symbol("Bzval")
 sval = sympy.Symbol("sval")
 
+# Every input parameter is frozen at its nominal value inside the output
+# curvilinear frame (U, V, W below): the frame is that of the NOMINAL end
+# state and must not move when any input is varied. All three field
+# components are frozen, not only Bz -- leaving Bx, By symbolic in W makes
+# d(xt, yt)/d(Bx, By) pick up M . dU/dB, a spurious frame-rotation term of
+# order |M| (the global position, ~1e2 cm) that dominates the true
+# transverse-field response of the position rows.
 subsconst = [(qop0, qop0val), (lam0, lam0val), (phi0, phi0val),
-             (xt0, xt0val), (yt0, yt0val), (Bz, Bzval), (s, sval), (xi, 0)]
-subsrev = [(qop0val, qop0), (Bzval, Bz), (sval, s), (xi, 0)]
+             (xt0, xt0val), (yt0, yt0val), (Bx, Bxval), (By, Byval),
+             (Bz, Bzval), (s, sval), (xi, 0)]
+subsrev = [(qop0val, qop0), (Bxval, Bx), (Byval, By), (Bzval, Bz),
+           (sval, s), (xi, 0)]
 
 M0 = xt0*U0 + yt0*V0 + zt0val*W0
 T0 = (sympy.cos(lam0)*sympy.cos(phi0)*coords.i
