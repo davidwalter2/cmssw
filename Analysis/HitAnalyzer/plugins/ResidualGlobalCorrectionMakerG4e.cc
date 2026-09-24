@@ -830,8 +830,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   }
 
   const bool dogen = fitFromGenParms_;
-  const bool dolocalupdate = fitFromSimParms_;
-  // const bool dolocalupdate = true;
+  // fitFromSimParms_ re-seeds every layer from the sim state, which needs
+  // the per-layer states.
+  const bool dolocalupdate = localUpdate_ || fitFromSimParms_;
   
   const bool dores = doRes_;
 
@@ -2961,10 +2962,13 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           // eps * basis_i and re-propagate with the provider active --
           // the FD then probes the same per-step application the analytic
           // columns describe.
-          // Compares the basis-invariant curvilinear components (qop,
-          // lambda, phi), per-mode eps scaled to a target |dB| at the leg
-          // start, top modes by basis amplitude -- mirroring the per-leg
-          // closure in the two-track maker.
+          // Compares all five curvilinear components against the per-mode
+          // leg Jacobian: (qop, lambda, phi) directly, and (xt, yt) in the
+          // curvilinear frame of the NOMINAL end state (U = z x W / |z x W|,
+          // V = W x U), where the perturbed end point on the destination
+          // surface is moved along W onto the plane through the nominal end
+          // point (first order in eps). Per-mode eps scaled to a target |dB|
+          // at the leg start, top modes by basis amplitude.
           if (runFDClosure_ && !didFDClosure_ && perStepFieldModes_ && nlocalbfield > 0) {
             didFDClosure_ = true;
             auto qopLamPhi = [](const Eigen::Matrix<double, 7, 1> &s) {
@@ -2974,6 +2978,10 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               return Eigen::Vector3d(q / pmag, std::atan2(pz, pT), std::atan2(py, px));
             };
             const Eigen::Vector3d cNom = qopLamPhi(updtsos);
+            const Eigen::Vector3d posNom = updtsos.head<3>();
+            const Eigen::Vector3d Wnom = updtsos.segment<3>(3).normalized();
+            const Eigen::Vector3d Unom = Eigen::Vector3d::UnitZ().cross(Wnom).normalized();
+            const Eigen::Vector3d Vnom = Wnom.cross(Unom);
             const double dBtarget = epsilonFDClosure_;
             const double *bxs = nullptr;
             const double *bys = nullptr;
@@ -2992,7 +3000,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             const unsigned int nTest = std::min<unsigned int>(10u, nlocalbfield);
             std::cout << "===== Per-step field FD closure =====  nModes=" << nlocalbfield
                       << "  testing top-" << nTest << " by basis amplitude  dB_target="
-                      << dBtarget << " T  comparing (qop, lambda, phi)" << std::endl;
+                      << dBtarget << " T  comparing (qop, lambda, phi, xt, yt)" << std::endl;
             std::cout << std::scientific << std::setprecision(4);
             double worstRel = 0.0;
             for (unsigned int j = 0; j < nTest; ++j) {
@@ -3002,7 +3010,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                 continue;
               }
               const double eps = dBtarget / basisAmp;
-              const Eigen::Vector3d anac = modeJacs_[imode].head<3>();
+              const Eigen::Matrix<double, 5, 1> anac = modeJacs_[imode];
               fieldModeProvider_->setInjection(imode, eps);
               auto const &pertResult = g4prop->propagateGenericWithJacobianAltD(
                   propInputState, surface, dB, dxival, dmsval, dionival, -1., g4PartName,
@@ -3012,16 +3020,24 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                 std::cout << "  mode " << imode << ": perturbed propagation failed" << std::endl;
                 continue;
               }
-              const Eigen::Vector3d dCFD = (qopLamPhi(std::get<1>(pertResult)) - cNom) / eps;
-              Eigen::Vector3d rel;
-              for (int k = 0; k < 3; ++k) {
+              const Eigen::Matrix<double, 7, 1> &statePert = std::get<1>(pertResult);
+              const Eigen::Vector3d dPos = statePert.head<3>() - posNom;
+              const Eigen::Vector3d dPosCurv = dPos - dPos.dot(Wnom) * Wnom;
+              Eigen::Matrix<double, 5, 1> dCFD;
+              dCFD.head<3>() = (qopLamPhi(statePert) - cNom) / eps;
+              dCFD(3) = dPosCurv.dot(Unom) / eps;
+              dCFD(4) = dPosCurv.dot(Vnom) / eps;
+              Eigen::Matrix<double, 5, 1> rel;
+              for (int k = 0; k < 5; ++k) {
                 rel(k) = std::abs(dCFD(k) - anac(k)) / std::max(std::abs(anac(k)), 1e-30);
                 if (rel(k) > worstRel) {
                   worstRel = rel(k);
                 }
               }
               std::cout << "  mode " << imode << " (basis=" << basisAmp
-                        << ")  rel(qop,lam,phi) = " << rel.transpose() << std::endl;
+                        << ")  rel(qop,lam,phi,xt,yt) = " << rel.transpose() << std::endl;
+              std::cout << "      FD = [" << dCFD.transpose() << "]" << std::endl;
+              std::cout << "      an = [" << anac.transpose() << "]" << std::endl;
             }
             std::cout << "===== per-step FD closure: worst rel = " << worstRel << " ====="
                       << std::endl;

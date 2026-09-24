@@ -393,6 +393,20 @@ opts.register('perStepFieldModes', True, VarParsing.VarParsing.multiplicity.sing
               'apply the scalar-potential correction and attribute the per-mode '
               'derivatives per Geant4 step instead of piecewise-constant per leg '
               '(leg-structure-free field attribution; default True)')
+opts.register('injectFieldModes', [], VarParsing.VarParsing.multiplicity.list,
+              VarParsing.VarParsing.varType.int,
+              'validation: scalar-potential mode indices whose coefficients '
+              'are shifted by injectFieldModeValues (finite differences of '
+              'the field columns through the full refit)')
+opts.register('injectFieldModeValues', [], VarParsing.VarParsing.multiplicity.list,
+              VarParsing.VarParsing.varType.float,
+              'shifts for injectFieldModes, same order')
+opts.register('localUpdate', True, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'Gauss-Newton linearisation point: False = re-propagate each '
+              'track unscattered from the updated reference state; True = '
+              'carry the fitted per-layer states forward and propagate along '
+              'the fitted (scattered) trajectory')
 opts.register('skipHitlessSurfaces', True, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'drop hitless module surfaces (dead-module placeholders, '
@@ -673,6 +687,9 @@ process.globalCor = cms.EDProducer(
     globalMaterialModel=cms.bool(bool(opts.globalMaterialModel)),
     perStepFieldModes=cms.bool(bool(opts.perStepFieldModes) and not opts.perModuleBfield),
     perModuleBfield=cms.bool(bool(opts.perModuleBfield)),
+    localUpdate=cms.bool(bool(opts.localUpdate)),
+    injectFieldModes=cms.vint32(*opts.injectFieldModes),
+    injectFieldModeValues=cms.vdouble(*opts.injectFieldModeValues),
     skipHitlessSurfaces=cms.bool(bool(opts.skipHitlessSurfaces) and bool(opts.globalMaterialModel)),
     outprefix=cms.untracked.string("globalcor"),
     # MT G4Error master: GlobalCache config for CvhMasterThread. The master

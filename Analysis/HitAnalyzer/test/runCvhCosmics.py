@@ -129,6 +129,12 @@ opts.register('perStepFieldModes', True, VarParsing.VarParsing.multiplicity.sing
               VarParsing.VarParsing.varType.bool,
               'apply the scalar-potential correction and attribute the per-mode '
               'derivatives per Geant4 step (leg-structure-free; default True)')
+opts.register('localUpdate', True, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'Gauss-Newton linearisation point: False = re-propagate each '
+              'track unscattered from the updated reference state; True = '
+              'carry the fitted per-layer states forward and propagate along '
+              'the fitted (scattered) trajectory')
 opts.register('skipHitlessSurfaces', True, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'drop hitless module surfaces from the fit; propagation goes hit '
@@ -279,6 +285,7 @@ process.globalCor = cms.EDProducer(
     globalMaterialModel=cms.bool(bool(opts.globalMaterialModel)),
     perStepFieldModes=cms.bool(bool(opts.perStepFieldModes) and not opts.perModuleBfield),
     perModuleBfield=cms.bool(bool(opts.perModuleBfield)),
+    localUpdate=cms.bool(bool(opts.localUpdate)),
     skipHitlessSurfaces=cms.bool(bool(opts.skipHitlessSurfaces) and bool(opts.globalMaterialModel)),
     materialFDGroup=cms.int32(int(opts.materialFDGroup)),
     materialFDEps=cms.double(float(opts.materialFDEps)),

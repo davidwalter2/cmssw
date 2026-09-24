@@ -1439,7 +1439,7 @@ void ResidualGlobalCorrectionMakerNTrackG4e::produce(edm::Event &iEvent, const e
 
   const bool dogen = fitFromGenParms_;
  
-  constexpr bool dolocalupdate = false;
+  const bool dolocalupdate = localUpdate_;
   
   using namespace edm;
 
