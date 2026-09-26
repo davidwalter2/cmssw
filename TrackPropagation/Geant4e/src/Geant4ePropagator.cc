@@ -1257,6 +1257,7 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
       ms.thp2 = errMSIout(1, 1);
       ms.dOverX0 = thisPathLength / X0;
       ms.stepGroup = stepGroup;
+      ms.materialIndex = static_cast<int>(mate->GetIndex());
       msStepLog_.push_back(ms);
 
       // radiative (brems + pair) record for the offline CF, one per step and

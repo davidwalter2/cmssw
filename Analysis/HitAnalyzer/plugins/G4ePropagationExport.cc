@@ -53,6 +53,9 @@
 
 #include "CLHEP/Random/RandomEngine.h"
 #include "Randomize.hh"
+#include "G4Material.hh"
+#include "G4Element.hh"
+#include "CLHEP/Units/SystemOfUnits.h"
 
 #include <Eigen/Dense>
 
@@ -116,6 +119,16 @@ private:
   int msmolistride_ = kMsMoliStride;
   int ioniurbanstride_ = 0;
   std::vector<double> msmoliv_;
+  // G4Material index of each msmoliv step (same order, one entry per step);
+  // resolved to elements by the `materials` tree written once per job
+  std::vector<int> msmatv_;
+  TTree *matTree_ = nullptr;
+  bool materialsWritten_ = false;
+  int matIndex_ = -1;
+  std::string matName_;
+  double matDensity_ = 0.;                              // g/cm3
+  std::vector<double> matElemZ_, matElemA_, matElemW_;  // Z, g/mole, mass fraction
+  void writeMaterials();
   std::vector<double> ioniurbanv_;
   std::vector<double> radv_;  // 9 doubles/step, aligned with msmoliv
   std::vector<double> radspecv_;  // 2*kNRadV doubles/step: dN/dv brem then pair
@@ -193,6 +206,14 @@ G4ePropagationExport::G4ePropagationExport(const edm::ParameterSet &iConfig)
   tree_->Branch("dQI", &dQI_);
   tree_->Branch("msmoliv", &msmoliv_);
   tree_->Branch("msmolistride", &msmolistride_);
+  tree_->Branch("msmatv", &msmatv_);
+  matTree_ = fs->make<TTree>("materials", "G4 material table: elements, atomic masses, mass fractions");
+  matTree_->Branch("index", &matIndex_);
+  matTree_->Branch("name", &matName_);
+  matTree_->Branch("density", &matDensity_);
+  matTree_->Branch("elemZ", &matElemZ_);
+  matTree_->Branch("elemA", &matElemA_);
+  matTree_->Branch("elemW", &matElemW_);
   tree_->Branch("ioniurbanv", &ioniurbanv_);
   ioniurbanstride_ = G4UniversalFluctuationForExtrapolator::exactDeltaEnabled() ? 13 : 11;
   tree_->Branch("ioniurbanstride", &ioniurbanstride_);
@@ -324,6 +345,7 @@ void G4ePropagationExport::analyze(const edm::Event &iEvent, const edm::EventSet
     dQMS_.assign(25, 0.);
     dQI_.assign(25, 0.);
     msmoliv_.clear();
+    msmatv_.clear();
     ioniurbanv_.clear();
     radv_.clear();
     radspecv_.clear();
@@ -386,6 +408,7 @@ void G4ePropagationExport::analyze(const edm::Event &iEvent, const edm::EventSet
       msmoliv_.push_back(ms.zzp1OverA);
       msmoliv_.push_back(ms.lnScreenW);
       msmoliv_.push_back(ms.stepGroup);
+      msmatv_.push_back(ms.materialIndex);
     }
     // radiative (brems + pair) per-step records; same ordering as msmoliv so
     // the two zip step-for-step offline
@@ -449,6 +472,34 @@ void G4ePropagationExport::analyze(const edm::Event &iEvent, const edm::EventSet
     tree_->Fill();
     state = endState;
   }
+  writeMaterials();
+}
+
+// The whole G4 material table, once per job: every index msmatv can hold,
+// resolved to its elements with Geant4's own mass fractions and atomic masses
+// (the numbers the simulation's per-element cross sections use).
+void G4ePropagationExport::writeMaterials() {
+  if (materialsWritten_) {
+    return;
+  }
+  const G4MaterialTable *table = G4Material::GetMaterialTable();
+  for (const G4Material *mat : *table) {
+    matIndex_ = static_cast<int>(mat->GetIndex());
+    matName_ = mat->GetName();
+    matDensity_ = mat->GetDensity() / (CLHEP::g / CLHEP::cm3);
+    matElemZ_.clear();
+    matElemA_.clear();
+    matElemW_.clear();
+    const G4double *frac = mat->GetFractionVector();
+    for (size_t i = 0; i < mat->GetNumberOfElements(); ++i) {
+      const G4Element *el = mat->GetElement(i);
+      matElemZ_.push_back(el->GetZ());
+      matElemA_.push_back(el->GetA() / (CLHEP::g / CLHEP::mole));
+      matElemW_.push_back(frac[i]);
+    }
+    matTree_->Fill();
+  }
+  materialsWritten_ = true;
 }
 
 DEFINE_FWK_MODULE(G4ePropagationExport);
