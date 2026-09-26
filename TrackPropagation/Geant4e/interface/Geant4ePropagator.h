@@ -257,6 +257,13 @@ public:
     // no global material model is active) -- lets the offline fit tie the
     // MS scale to the parmtype-15 material groups
     int stepGroup = -1;
+    // G4Material::GetIndex() of the step's medium (-1 = not recorded). The
+    // effZ/effA/zzp1OverA summaries cannot be inverted to a composition, and
+    // a channel whose kernel is non-linear in Z per ELEMENT (nuclear elastic:
+    // a hydrogen target is ~3x wider in angle and ~12x harder in recoil than
+    // carbon) needs the element list itself. The index keys into the
+    // material table the exporter writes alongside the step records.
+    int materialIndex = -1;
   };
   const std::vector<MoliereMsStep> &msStepLog() const { return msStepLog_; }
 
