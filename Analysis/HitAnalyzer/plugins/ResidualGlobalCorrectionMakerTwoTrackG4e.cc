@@ -865,6 +865,16 @@ ResidualGlobalCorrectionMakerTwoTrackG4e::ResidualGlobalCorrectionMakerTwoTrackG
   daughterMass2_    = props2.mass;
   daughterMass1Err_ = props1.massErr;
   daughterMass2Err_ = props2.massErr;
+  // The nuclear-elastic family exists when either daughter is a hadron (the
+  // track charge then picks pi+/pi-, K+/K-, p/pbar per leg); a muon pair
+  // writes nothing extra with the switch on.
+  {
+    bool anyHadron = false;
+    for (const std::string *nm : {&daughterParticleName1_, &daughterParticleName2_})
+      for (int q : {1, -1})
+        anyHadron = anyHadron || cvhcf::nucelPdg(ana_hitanalyzer::g4ParticleName(*nm, q)) != 0;
+    nucelActive_ = exportCfNucel_ && exportCfExponents_ && anyHadron;
+  }
   // 2D-transverse pointing-angle constraint (V0 channels). Default off.
   doPointingConstraint_ = iConfig.existsAs<bool>("doPointingConstraint")
       ? iConfig.getParameter<bool>("doPointingConstraint") : false;
@@ -2582,6 +2592,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               radstepspecv.clear();
               msmoliidx.clear();
               msmoliv.clear();
+              msmatv.clear();
+              mspdgv.clear();
             }
           }
 
@@ -3017,8 +3029,9 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                 const DetId propdetid = gluedidprop ? DetId(gluedidprop) : hit->geographicalId();
                 msglobalidx = detidparms.at(std::make_pair(10, propdetid));
                 ioniglobalidx = detidparms.at(std::make_pair(11, propdetid));
+                const int nucPdg = cvhcf::nucelPdg(g4PartName);
                 for (auto const &ms : g4prop->msStepLog()) {
-                  pushMsMoliStep(msglobalidx, ms);
+                  pushMsMoliStep(msglobalidx, ms, nucPdg);
                 }
                 for (auto const &us : g4prop->ioniStepLog()) {
                   ioniurbanidx.push_back(ioniglobalidx);
@@ -4952,6 +4965,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             cfgrpradrev.clear();
             cfgrpradimv.clear();
             cfgrpclosure = 0.f;
+            clearCfNucel();
             if (dores && !dVs.empty()) {
               // ================= THE sqrt(dV_b) CACHE ======================
               // `dV_b^{1/2}` is a property of the BLOCK, not of the
@@ -5192,6 +5206,16 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               // out of the pairs cache unless asked.
               if (exportCfExponents_) {
                 cfslotmass = cfRegister(resinfvarv.data(), int(resinfvarv.size()), nullptr, Jpsi_sigmamass, -1.);
+                // the nuclear-elastic family, for the MASS functional only:
+                // the same MS blocks, and the legs' ionisation weights with
+                // the mass's sign -1
+                if (nucelActive_) {
+                  cvhcf::TrackInput &cim = cfins[cfslotmass];
+                  cim.wantNucel = true;
+                  cim.msmat = msmatv.data();
+                  cim.mspdg = mspdgv.data();
+                  cim.nucel = nucelMixtures();
+                }
                 // The GAUSSIAN REMAINDER: hits + beamspot + pointing, i.e.
                 // sigma_m^2 minus the material share, BY CONSTRUCTION --
                 // unlike the single-track tree, resinfcov here does not carry
@@ -5829,6 +5853,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                   storecf(cfres.S.radRe, cfradrev);
                   storecf(cfres.S.radIm, cfradimv);
                   storeCfGroups(cfres);
+                  storeCfNucel(cfres);
                 }
 
                 if (cfslotvtx >= 0) {

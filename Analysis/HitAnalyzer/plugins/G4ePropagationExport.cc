@@ -53,8 +53,7 @@
 
 #include "CLHEP/Random/RandomEngine.h"
 #include "Randomize.hh"
-#include "G4Material.hh"
-#include "G4Element.hh"
+#include "G4MaterialTableTree.h"
 #include "CLHEP/Units/SystemOfUnits.h"
 
 #include <Eigen/Dense>
@@ -124,10 +123,6 @@ private:
   std::vector<int> msmatv_;
   TTree *matTree_ = nullptr;
   bool materialsWritten_ = false;
-  int matIndex_ = -1;
-  std::string matName_;
-  double matDensity_ = 0.;                              // g/cm3
-  std::vector<double> matElemZ_, matElemA_, matElemW_;  // Z, g/mole, mass fraction
   void writeMaterials();
   std::vector<double> ioniurbanv_;
   std::vector<double> radv_;  // 9 doubles/step, aligned with msmoliv
@@ -208,12 +203,6 @@ G4ePropagationExport::G4ePropagationExport(const edm::ParameterSet &iConfig)
   tree_->Branch("msmolistride", &msmolistride_);
   tree_->Branch("msmatv", &msmatv_);
   matTree_ = fs->make<TTree>("materials", "G4 material table: elements, atomic masses, mass fractions");
-  matTree_->Branch("index", &matIndex_);
-  matTree_->Branch("name", &matName_);
-  matTree_->Branch("density", &matDensity_);
-  matTree_->Branch("elemZ", &matElemZ_);
-  matTree_->Branch("elemA", &matElemA_);
-  matTree_->Branch("elemW", &matElemW_);
   tree_->Branch("ioniurbanv", &ioniurbanv_);
   ioniurbanstride_ = G4UniversalFluctuationForExtrapolator::exactDeltaEnabled() ? 13 : 11;
   tree_->Branch("ioniurbanstride", &ioniurbanstride_);
@@ -482,23 +471,7 @@ void G4ePropagationExport::writeMaterials() {
   if (materialsWritten_) {
     return;
   }
-  const G4MaterialTable *table = G4Material::GetMaterialTable();
-  for (const G4Material *mat : *table) {
-    matIndex_ = static_cast<int>(mat->GetIndex());
-    matName_ = mat->GetName();
-    matDensity_ = mat->GetDensity() / (CLHEP::g / CLHEP::cm3);
-    matElemZ_.clear();
-    matElemA_.clear();
-    matElemW_.clear();
-    const G4double *frac = mat->GetFractionVector();
-    for (size_t i = 0; i < mat->GetNumberOfElements(); ++i) {
-      const G4Element *el = mat->GetElement(i);
-      matElemZ_.push_back(el->GetZ());
-      matElemA_.push_back(el->GetA() / (CLHEP::g / CLHEP::mole));
-      matElemW_.push_back(frac[i]);
-    }
-    matTree_->Fill();
-  }
+  cvh::fillG4MaterialTree(*matTree_);
   materialsWritten_ = true;
 }
 

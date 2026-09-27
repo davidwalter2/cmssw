@@ -722,6 +722,620 @@ namespace cvhcf {
   }
 
   //==========================================================================
+  // 4b. THE NUCLEAR-ELASTIC FAMILY  (ksclosure/nucel/nucel_tables.Table and
+  //     ks_nucel_cf.step_family; layout and rules in
+  //     data/make_cvhcf_nucel_tables.py)
+  //==========================================================================
+  namespace {
+
+    const std::string kNucelTableId = "cvhcf_nucel_v1";
+
+    struct NucelTable {
+      int nS = 0, nE = 0, nU = 0, nD = 0, nR = 0;
+      std::vector<double> ug, dee, prate, lpr, binC, elemA;
+      std::vector<int> pdg, elemZ;
+      double lug0 = 0., dlug = 0.;
+      struct Species {
+        std::vector<double> edges, nodeP;
+        std::vector<int> seg;
+        // node range [segA[k], segB[k]] of model segment k (0 .. nEdge)
+        std::vector<int> segA, segB;
+      };
+      std::vector<Species> sp;
+      std::vector<double> lnMu;              // [s][e][r]
+      std::vector<std::size_t> recBase;      // first record of species s
+      std::vector<float> fixed;              // [rec][7 + nU]
+      std::vector<int> b0, nb;               // nonzero recoil-bin range per record
+      std::vector<std::size_t> binOff;       // offset into `bins` per record
+      std::vector<float> bins;               // per record: P[nb], D1[nb], D2[nb]
+      std::string path;
+
+      std::size_t rec(int s, int e, int n) const {
+        return recBase[s] + static_cast<std::size_t>(e) * sp[s].nodeP.size() + n;
+      }
+      int speciesIndex(int code) const {
+        for (int s = 0; s < nS; ++s)
+          if (pdg[s] == code)
+            return s;
+        return -1;
+      }
+      int elementIndex(int z) const {
+        for (int e = 0; e < nE; ++e)
+          if (elemZ[e] == z)
+            return e;
+        return -1;
+      }
+    };
+
+    NucelTable &nucTable() {
+      static NucelTable t;
+      return t;
+    }
+    std::once_flag &nucOnce() {
+      static std::once_flag f;
+      return f;
+    }
+
+    void readNucel(const std::string &pathIn) {
+      NucelTable &T = nucTable();
+      std::string path = pathIn;
+      if (path.empty())
+        path = edm::FileInPath("TrackPropagation/Geant4e/data/" + kNucelTableId + ".bin").fullPath();
+      std::ifstream f(path, std::ios::binary);
+      if (!f)
+        throw cms::Exception("CvhCfExponents") << "cannot open the nuclear-elastic table " << path;
+      auto rdraw = [&](void *dst, std::size_t nbytes) {
+        f.read(reinterpret_cast<char *>(dst), static_cast<std::streamsize>(nbytes));
+        if (!f)
+          throw cms::Exception("CvhCfExponents") << path << ": truncated nuclear-elastic table";
+      };
+      auto rdd = [&](std::vector<double> &v, std::size_t n) {
+        v.resize(n);
+        rdraw(v.data(), n * sizeof(double));
+      };
+      auto rdi = [&](std::vector<int> &v, std::size_t n) {
+        v.resize(n);
+        rdraw(v.data(), n * sizeof(int));
+      };
+      static_assert(sizeof(int) == 4 && sizeof(float) == 4 && sizeof(double) == 8, "table layout");
+      char magic[8];
+      rdraw(magic, 8);
+      if (std::strncmp(magic, "CVHNUCEL", 8) != 0)
+        throw cms::Exception("CvhCfExponents") << path << " is not a cvhcf nuclear-elastic table";
+      int hdr[6];
+      rdraw(hdr, sizeof(hdr));
+      if (hdr[0] != 1)
+        throw cms::Exception("CvhCfExponents") << path << ": unsupported nuclear-elastic table version " << hdr[0];
+      T.nS = hdr[1];
+      T.nE = hdr[2];
+      T.nU = hdr[3];
+      T.nD = hdr[4];
+      T.nR = hdr[5];
+      if (T.nS < 1 || T.nE < 1 || T.nU < 4 || T.nD < 1 || T.nR < 2)
+        throw cms::Exception("CvhCfExponents") << path << ": nonsensical nuclear-elastic table dimensions";
+      rdd(T.ug, T.nU);
+      rdd(T.dee, T.nD + 1);
+      rdd(T.prate, T.nR);
+      rdi(T.pdg, T.nS);
+      rdi(T.elemZ, T.nE);
+      rdd(T.elemA, T.nE);
+      T.sp.resize(T.nS);
+      std::size_t nrec = 0;
+      T.recBase.resize(T.nS);
+      for (int s = 0; s < T.nS; ++s) {
+        int nn[2];
+        rdraw(nn, sizeof(nn));
+        NucelTable::Species &S = T.sp[s];
+        rdd(S.edges, nn[0]);
+        rdd(S.nodeP, nn[1]);
+        rdi(S.seg, nn[1]);
+        if (nn[1] < 1)
+          throw cms::Exception("CvhCfExponents") << path << ": species " << T.pdg[s] << " has no kernel nodes";
+        S.segA.assign(nn[0] + 1, -1);
+        S.segB.assign(nn[0] + 1, -1);
+        for (int n = 0; n < nn[1]; ++n) {
+          const int k = S.seg[n];
+          if (k < 0 || k > nn[0] || (n > 0 && (k < S.seg[n - 1] || !(S.nodeP[n] > S.nodeP[n - 1]))))
+            throw cms::Exception("CvhCfExponents") << path << ": species " << T.pdg[s] << ": bad node segments";
+          if (S.segA[k] < 0)
+            S.segA[k] = n;
+          S.segB[k] = n;
+        }
+        for (int k = 0; k <= nn[0]; ++k)
+          if (S.segA[k] < 0)
+            throw cms::Exception("CvhCfExponents")
+                << path << ": species " << T.pdg[s] << ": model segment " << k << " has no kernel node";
+        T.recBase[s] = nrec;
+        nrec += static_cast<std::size_t>(T.nE) * nn[1];
+      }
+      rdd(T.lnMu, static_cast<std::size_t>(T.nS) * T.nE * T.nR);
+      T.fixed.resize(nrec * (7 + T.nU));
+      rdraw(T.fixed.data(), T.fixed.size() * sizeof(float));
+      std::vector<int> idx;
+      rdi(idx, 2 * nrec);
+      T.b0.resize(nrec);
+      T.nb.resize(nrec);
+      T.binOff.resize(nrec);
+      std::size_t tot = 0;
+      for (std::size_t r = 0; r < nrec; ++r) {
+        T.b0[r] = idx[2 * r];
+        T.nb[r] = idx[2 * r + 1];
+        if (T.b0[r] < 0 || T.nb[r] < 0 || T.b0[r] + T.nb[r] > T.nD)
+          throw cms::Exception("CvhCfExponents") << path << ": recoil bin range out of bounds";
+        T.binOff[r] = tot;
+        tot += 3 * static_cast<std::size_t>(T.nb[r]);
+      }
+      T.bins.resize(tot);
+      rdraw(T.bins.data(), tot * sizeof(float));
+      char tail[8];
+      rdraw(tail, 8);
+      if (std::strncmp(tail, "CVHNUEND", 8) != 0 || f.peek() != std::char_traits<char>::eof())
+        throw cms::Exception("CvhCfExponents") << path << ": bad nuclear-elastic table trailer / size";
+      T.lpr.resize(T.nR);
+      for (int r = 0; r < T.nR; ++r)
+        T.lpr[r] = std::log(T.prate[r]);
+      T.binC.resize(T.nD);
+      for (int b = 0; b < T.nD; ++b)
+        T.binC[b] = 0.5 * (T.dee[b] + T.dee[b + 1]);
+      T.lug0 = std::log(T.ug[0]);
+      T.dlug = (std::log(T.ug[T.nU - 1]) - T.lug0) / (T.nU - 1);
+      T.path = path;
+    }
+
+    inline const NucelTable &NT() {
+      std::call_once(nucOnce(), [&]() { readNucel(std::string()); });
+      return nucTable();
+    }
+
+    // log-log interpolation of a ln(mu) row on the rate grid: linear in ln p
+    // between the bracketing nodes, constant beyond the ends.
+    inline double logLog(const NucelTable &t, const double *lmu, double lp) {
+      int j = static_cast<int>(std::lower_bound(t.lpr.begin(), t.lpr.end(), lp) - t.lpr.begin()) - 1;
+      j = std::max(0, std::min(j, t.nR - 2));
+      const double f = clipd((lp - t.lpr[j]) / (t.lpr[j + 1] - t.lpr[j]), 0., 1.);
+      return (1. - f) * lmu[j] + f * lmu[j + 1];
+    }
+
+  }  // namespace
+
+  // The mixture record of one (species, material): what `Table.mixture`
+  // holds, with the recoil bins reduced to their uniform-bin form.
+  struct NucelMix {
+    int isp = -1;
+    std::vector<double> lmu;   // ln mu_mat on the rate grid
+    std::vector<double> mom;   // [node][7]: <theta>, <theta^2>, <dE>, <dE^2>, P_low, M1_low, M2_low
+    std::vector<double> gm1;   // [node][nU]: g - 1
+    std::vector<int> binStart; // [node + 1] into bP / bMu / bHw
+    std::vector<double> bP, bMu, bHw;  // P_b, the bin mean, sqrt(3) x the bin's std
+  };
+
+  void NucelExponents::clear() {
+    ang.fill(0.);
+    recRe.fill(0.);
+    recIm.fill(0.);
+    N = 0.;
+  }
+
+  int nucelPdg(const std::string &n) {
+    if (n == "pi+")
+      return 211;
+    if (n == "pi-")
+      return -211;
+    if (n == "kaon+")
+      return 321;
+    if (n == "kaon-")
+      return -321;
+    if (n == "proton")
+      return 2212;
+    if (n == "anti_proton")
+      return -2212;
+    return 0;
+  }
+
+  void loadNucelTables(const std::string &path) {
+    std::call_once(nucOnce(), [&]() { readNucel(path); });
+    if (!path.empty() && nucTable().path != path)
+      throw cms::Exception("CvhCfExponents")
+          << "the nuclear-elastic table is already loaded from " << nucTable().path << "; " << path << " was requested";
+  }
+
+  const std::string &nucelTableId() { return kNucelTableId; }
+
+  NucelMixtures::NucelMixtures(NucelResolver resolver) : resolver_(std::move(resolver)) {}
+  NucelMixtures::~NucelMixtures() = default;
+
+  const NucelMix &NucelMixtures::get(int pdgCode, int matIndex) {
+    const auto key = std::make_pair(pdgCode, matIndex);
+    auto it = cache_.find(key);
+    if (it != cache_.end())
+      return *it->second;
+    const NucelTable &t = NT();
+    const int isp = t.speciesIndex(pdgCode);
+    if (isp < 0)
+      throw cms::Exception("CvhCfExponents") << "no nuclear-elastic table for species " << pdgCode;
+    NucelComposition c;
+    if (matIndex < 0 || !resolver_ || !resolver_(matIndex, c) || c.Z.size() != c.A.size() ||
+        c.Z.size() != c.W.size())
+      throw cms::Exception("CvhCfExponents") << "nuclear-elastic family: material index " << matIndex
+                                             << " does not resolve to a composition";
+    // elements with a mass share (Z >= 1, w > 0), as `Table.composition`
+    std::vector<int> ei;
+    std::vector<double> scale;
+    for (std::size_t i = 0; i < c.Z.size(); ++i) {
+      if (!(c.Z[i] >= 1.) || !(c.W[i] > 0.))
+        continue;
+      const int z = static_cast<int>(std::lround(c.Z[i]));
+      const int e = t.elementIndex(z);
+      if (e < 0)
+        throw cms::Exception("CvhCfExponents") << "nuclear-elastic family: material index " << matIndex
+                                               << " has element Z=" << z << ", which the table "
+                                               << t.path << " does not carry";
+      if (!(c.A[i] > 0.))
+        throw cms::Exception("CvhCfExponents")
+            << "nuclear-elastic family: material index " << matIndex << " has a non-positive atomic mass";
+      ei.push_back(e);
+      // w_i A_tab / A_i: at a fixed per-atom cross section the mass
+      // attenuation scales as 1/A
+      scale.push_back(c.W[i] * t.elemA[e] / c.A[i]);
+    }
+    if (ei.empty())
+      throw cms::Exception("CvhCfExponents") << "nuclear-elastic family: material index " << matIndex
+                                             << " has no element";
+    const std::size_t nc = ei.size();
+    const NucelTable::Species &S = t.sp[isp];
+    const int nn = static_cast<int>(S.nodeP.size());
+    auto m = std::make_unique<NucelMix>();
+    m->isp = isp;
+    // the rate on its own grid
+    m->lmu.resize(t.nR);
+    for (int r = 0; r < t.nR; ++r) {
+      double s = 0.;
+      for (std::size_t i = 0; i < nc; ++i)
+        s += scale[i] * std::exp(t.lnMu[(static_cast<std::size_t>(isp) * t.nE + ei[i]) * t.nR + r]);
+      m->lmu[r] = std::log(s);
+    }
+    // the kernel records at every node: rate-weighted mixtures of the
+    // element records (linear in every stored entry, the recoil bins
+    // included)
+    const int nfix = 7 + t.nU;
+    m->mom.assign(static_cast<std::size_t>(nn) * 7, 0.);
+    m->gm1.assign(static_cast<std::size_t>(nn) * t.nU, 0.);
+    m->binStart.assign(nn + 1, 0);
+    std::vector<double> share(nc), P(t.nD), D1(t.nD), D2(t.nD);
+    for (int n = 0; n < nn; ++n) {
+      const double lp = std::log(S.nodeP[n]);
+      double rs = 0.;
+      for (std::size_t i = 0; i < nc; ++i) {
+        share[i] = scale[i] * std::exp(logLog(t, &t.lnMu[(static_cast<std::size_t>(isp) * t.nE + ei[i]) * t.nR], lp));
+        rs += share[i];
+      }
+      for (std::size_t i = 0; i < nc; ++i)
+        share[i] /= rs;
+      std::fill(P.begin(), P.end(), 0.);
+      std::fill(D1.begin(), D1.end(), 0.);
+      std::fill(D2.begin(), D2.end(), 0.);
+      double *mo = &m->mom[static_cast<std::size_t>(n) * 7];
+      double *gm = &m->gm1[static_cast<std::size_t>(n) * t.nU];
+      for (std::size_t i = 0; i < nc; ++i) {
+        const std::size_t r = t.rec(isp, ei[i], n);
+        const float *fx = &t.fixed[r * nfix];
+        for (int k = 0; k < 7; ++k)
+          mo[k] += share[i] * static_cast<double>(fx[k]);
+        for (int k = 0; k < t.nU; ++k)
+          gm[k] += share[i] * static_cast<double>(fx[7 + k]);
+        const int b0 = t.b0[r], nb = t.nb[r];
+        const float *bb = &t.bins[t.binOff[r]];
+        for (int b = 0; b < nb; ++b) {
+          P[b0 + b] += share[i] * static_cast<double>(bb[b]);
+          D1[b0 + b] += share[i] * static_cast<double>(bb[nb + b]);
+          D2[b0 + b] += share[i] * static_cast<double>(bb[2 * nb + b]);
+        }
+      }
+      // each bin uniform over its own mean -+ sqrt(3) x its own std
+      for (int b = 0; b < t.nD; ++b) {
+        if (!(P[b] > 0.))
+          continue;
+        const double d = D1[b] / P[b];
+        m->bP.push_back(P[b]);
+        m->bMu.push_back(t.binC[b] + d);
+        m->bHw.push_back(std::sqrt(3. * std::max(D2[b] / P[b] - d * d, 0.)));
+      }
+      m->binStart[n + 1] = static_cast<int>(m->bP.size());
+    }
+    const NucelMix &ref = *m;
+    cache_.emplace(key, std::move(m));
+    return ref;
+  }
+
+  namespace {
+
+    // The node pair bracketing p inside p's model segment and the ln-p weight
+    // of the upper one (`Table.nodes`); the end node alone outside the
+    // segment's nodes.
+    inline void nucelNodes(const NucelTable::Species &S, double p, int &j0, int &j1, double &f) {
+      const int seg = static_cast<int>(std::upper_bound(S.edges.begin(), S.edges.end(), p) - S.edges.begin());
+      const int a = S.segA[seg], b = S.segB[seg];
+      const double *P = S.nodeP.data();
+      if (p <= P[a]) {
+        j0 = j1 = a;
+        f = 0.;
+        return;
+      }
+      if (p >= P[b]) {
+        j0 = j1 = b;
+        f = 0.;
+        return;
+      }
+      int j = static_cast<int>(std::lower_bound(P + a, P + b + 1, p) - P) - 1;
+      j = std::max(a, std::min(j, b));
+      const int jj = std::min(j + 1, b);
+      j0 = j;
+      j1 = jj;
+      f = (jj > j) ? clipd(std::log(p / P[j]) / std::log(P[jj] / P[j]), 0., 1.) : 0.;
+    }
+
+    // g - 1 of one node record at u >= 0 (`Table.g_node` minus one).
+    inline double nucelGm1(const NucelTable &t, const double *gm, double theta2, double u) {
+      if (u < t.ug[0])
+        return -0.25 * u * u * theta2;
+      if (u > t.ug[t.nU - 1])
+        return gm[t.nU - 1];
+      const double tt = (std::log(u) - t.lug0) / t.dlug;
+      int i = static_cast<int>(std::floor(tt));
+      i = std::max(0, std::min(i, t.nU - 2));
+      const double s = tt - i;
+      const double p1 = gm[i], p2 = gm[i + 1];
+      const double p0 = (i == 0) ? (gm[0] * 2 - gm[1]) : gm[i - 1];
+      const double p3 = (i == t.nU - 2) ? (gm[t.nU - 1] * 2 - gm[t.nU - 2]) : gm[i + 2];
+      return 0.5 * (2 * p1 + (p2 - p0) * s + (2 * p0 - 5 * p1 + 4 * p2 - p3) * s * s +
+                    (3 * p1 - p0 - 3 * p2 + p3) * s * s * s);
+    }
+
+    // ADDS c * (h(v_j) - 1) of node n over the tau grid, v_j = wq tau_j
+    // (`Table.h_node`).  The tau grid is uniform (tau_j = j dt), so each bin's
+    // phase exp(i j theta_b) and the sin(j phi_b) of its sinc are advanced by
+    // complex recurrence -- two sincos per bin instead of two per bin and tau
+    // point -- in four independent lanes (j, j+1, j+2, j+3 stepped by
+    // exp(4 i theta)), so that the tau points of one bin carry no dependency
+    // on each other.  The recurrence drifts by ~j ulp (<= 1e-14 here), far
+    // below the float32 floor of the export.
+    constexpr int kLanes = 4;
+    constexpr int kNBlk = (kNTau - 1 + kLanes - 1) / kLanes;  // blocks covering j = 1 .. kNTau-1
+
+    void nucelRecoilNode(const NucelMix &m, int n, double wq, double c, double *re, double *im) {
+      const double *tau = tauGrid();
+      const double *mo = &m.mom[static_cast<std::size_t>(n) * 7];
+      // the recoil below the first bin, by its partial moments
+      for (int j = 0; j < kNTau; ++j) {
+        const double v = wq * tau[j];
+        re[j] += c * (mo[4] - 1. - 0.5 * v * v * mo[6]);
+        im[j] += c * (v * mo[5]);
+      }
+      const int b0 = m.binStart[n], b1 = m.binStart[n + 1];
+      if (b1 <= b0)
+        return;
+      const double dt = tau[1];  // tau_j = j dt
+      // accumulators for j = 1 .. kLanes * kNBlk (the tail beyond kNTau-1 is dropped)
+      double ar[kLanes * kNBlk] = {0.}, ai[kLanes * kNBlk] = {0.};
+      double ij[kLanes * kNBlk];
+      for (int k = 0; k < kLanes * kNBlk; ++k)
+        ij[k] = 1. / (k + 1);
+      double p0 = 0.;
+      for (int b = b0; b < b1; ++b) {
+        const double Pb = c * m.bP[b];
+        p0 += Pb;
+        const double th = wq * dt * m.bMu[b];
+        const double ph = wq * dt * m.bHw[b];
+        const double c1 = std::cos(th), s1 = std::sin(th);
+        const double d1 = std::cos(ph), e1 = std::sin(ph);
+        // sinc(j ph) = Im exp(i j ph) / (j ph); a zero-width bin has sinc 1
+        const double iph = (ph != 0.) ? 1. / ph : 0.;
+        const double sz = (ph != 0.) ? 0. : 1.;
+        // lanes at j = 1..4, and the step exp(4 i theta), exp(4 i phi)
+        double zr[kLanes], zi[kLanes], yr[kLanes], yi[kLanes];
+        zr[0] = c1;
+        zi[0] = s1;
+        yr[0] = d1;
+        yi[0] = e1;
+        for (int l = 1; l < kLanes; ++l) {
+          zr[l] = zr[l - 1] * c1 - zi[l - 1] * s1;
+          zi[l] = zr[l - 1] * s1 + zi[l - 1] * c1;
+          yr[l] = yr[l - 1] * d1 - yi[l - 1] * e1;
+          yi[l] = yr[l - 1] * e1 + yi[l - 1] * d1;
+        }
+        const double c4 = zr[kLanes - 1], s4 = zi[kLanes - 1];
+        const double d4 = yr[kLanes - 1], e4 = yi[kLanes - 1];
+        for (int k = 0; k < kNBlk; ++k) {
+          double *__restrict pr = ar + k * kLanes;
+          double *__restrict pi = ai + k * kLanes;
+          const double *__restrict pj = ij + k * kLanes;
+          for (int l = 0; l < kLanes; ++l) {
+            const double q = Pb * (yi[l] * iph * pj[l] + sz);
+            pr[l] += q * zr[l];
+            pi[l] += q * zi[l];
+          }
+          for (int l = 0; l < kLanes; ++l) {
+            const double zr2 = zr[l] * c4 - zi[l] * s4;
+            zi[l] = zr[l] * s4 + zi[l] * c4;
+            zr[l] = zr2;
+            const double yr2 = yr[l] * d4 - yi[l] * e4;
+            yi[l] = yr[l] * e4 + yi[l] * d4;
+            yr[l] = yr2;
+          }
+        }
+      }
+      re[0] += p0;
+      for (int j = 1; j < kNTau; ++j) {
+        re[j] += ar[j - 1];
+        im[j] += ai[j - 1];
+      }
+    }
+
+    // One row's contribution: ADDS N_s (g - 1) and N_s (h - 1) into the
+    // caller's arrays and returns N_s (0 when the row has no species).
+    double nucelRow(const NucelTable &t,
+                    const float *r,
+                    int matIndex,
+                    int pdgCode,
+                    double wAng,
+                    double wRec,
+                    NucelMixtures &mix,
+                    double *ang,
+                    double *re,
+                    double *im) {
+      if (pdgCode == 0)
+        return 0.;
+      const double xg = r[2];
+      const double p = r[3];
+      if (!(xg > 0.) || !(p > 0.))
+        return 0.;
+      const NucelMix &m = mix.get(pdgCode, matIndex);
+      const NucelTable::Species &S = t.sp[m.isp];
+      const double Ns = std::exp(logLog(t, m.lmu.data(), std::log(p))) * xg;
+      if (!(Ns > 0.))
+        return 0.;
+      int j0, j1;
+      double f;
+      nucelNodes(S, p, j0, j1, f);
+      const int nodes[2] = {j0, j1};
+      const double wts[2] = {1. - f, f};
+      const double *tau = tauGrid();
+      if (wAng != 0.) {
+        for (int q = 0; q < 2; ++q) {
+          if (wts[q] == 0.)
+            continue;
+          const int n = nodes[q];
+          const double sc = S.nodeP[n] / p;  // fixed momentum transfer
+          const double *gm = &m.gm1[static_cast<std::size_t>(n) * t.nU];
+          const double th2 = m.mom[static_cast<std::size_t>(n) * 7 + 1];
+          const double c = Ns * wts[q];
+          for (int j = 0; j < kNTau; ++j)
+            ang[j] += c * nucelGm1(t, gm, th2, (std::fabs(wAng) * tau[j]) * sc);
+        }
+      }
+      if (wRec != 0.) {
+        for (int q = 0; q < 2; ++q) {
+          if (wts[q] == 0.)
+            continue;
+          nucelRecoilNode(m, nodes[q], wRec, Ns * wts[q], re, im);
+        }
+      }
+      return Ns;
+    }
+
+  }  // namespace
+
+  void nucelSteps(const float *rows,
+                  int stride,
+                  int n,
+                  const int *mat,
+                  const int *pdgv,
+                  const double *wAng,
+                  const double *wRec,
+                  NucelMixtures &mix,
+                  NucelExponents &out) {
+    if (rows == nullptr || mat == nullptr || pdgv == nullptr || n <= 0 || stride < 4)
+      return;
+    const NucelTable &t = NT();
+    for (int i = 0; i < n; ++i)
+      out.N += nucelRow(t,
+                        rows + static_cast<std::size_t>(i) * stride,
+                        mat[i],
+                        pdgv[i],
+                        wAng ? wAng[i] : 0.,
+                        wRec ? wRec[i] : 0.,
+                        mix,
+                        out.ang.data(),
+                        out.recRe.data(),
+                        out.recIm.data());
+  }
+
+  namespace {
+
+    // The family of one functional from the MS rows and the block weights
+    // the pooling pass formed: `wms` / `wio` are (global index, weight) of
+    // the MS and (signed) ionisation blocks, ascending in index.
+    void nucelFunctional(const TrackInput &sh,
+                         const TrackInput &in,
+                         const std::vector<std::pair<unsigned int, double>> &wms,
+                         const std::vector<std::pair<unsigned int, double>> &wio,
+                         TrackResult &out) {
+      out.nucel = true;
+      out.nuc.clear();
+      out.nucGroups.clear();
+      const StepRows &ms = sh.ms;
+      if (ms.n <= 0)
+        return;
+      if (sh.msmat == nullptr || sh.mspdg == nullptr)
+        throw cms::Exception("CvhCfExponents") << "nuclear-elastic family requested without msmat / mspdg";
+      if (sh.rad.n != ms.n || sh.rad.v == nullptr || sh.rad.stride < 11)
+        throw cms::Exception("CvhCfExponents")
+            << "nuclear-elastic family: the radiative rows (" << sh.rad.n << ") are not parallel to the MS rows ("
+            << ms.n << "); the recoil weight cannot be paired";
+      const NucelTable &t = NT();
+      auto look = [](const std::vector<std::pair<unsigned int, double>> &v, unsigned int g) {
+        auto it = std::lower_bound(
+            v.begin(), v.end(), g, [](const std::pair<unsigned int, double> &a, unsigned int b) { return a.first < b; });
+        return (it != v.end() && it->first == g) ? it->second : 0.;
+      };
+      const bool groups = in.wantGroups && ms.groupCol >= 0 && ms.groupCol < ms.stride;
+      std::array<double, kNTau> a{}, re{}, im{};
+      for (int i = 0; i < ms.n; ++i) {
+        if (sh.mspdg[i] == 0)
+          continue;
+        const float *r = ms.v + static_cast<std::size_t>(i) * ms.stride;
+        const float *rr = sh.rad.v + static_cast<std::size_t>(i) * sh.rad.stride;
+        // the pairing is exact by construction; check it on the momentum
+        // both records carry (the same double, stored as float twice)
+        if (rr[4] != r[3])
+          throw cms::Exception("CvhCfExponents")
+              << "nuclear-elastic family: radiative row " << i << " (p = " << rr[4]
+              << ") is not the MS row's step (p = " << r[3] << ")";
+        const double wA = look(wms, ms.idx[i]);
+        const double wR = look(wio, sh.rad.idx[i]) * static_cast<double>(rr[10]) * 1e-3;
+        if (groups) {
+          a.fill(0.);
+          re.fill(0.);
+          im.fill(0.);
+          const double Ns = nucelRow(t, r, sh.msmat[i], sh.mspdg[i], wA, wR, *in.nucel, a.data(), re.data(), im.data());
+          if (Ns == 0.)
+            continue;
+          const int g = static_cast<int>(r[ms.groupCol]);
+          auto it = std::lower_bound(out.nucGroups.begin(),
+                                     out.nucGroups.end(),
+                                     g,
+                                     [](const std::pair<int, NucelExponents> &x, int y) { return x.first < y; });
+          if (it == out.nucGroups.end() || it->first != g)
+            it = out.nucGroups.insert(it, std::make_pair(g, NucelExponents()));
+          NucelExponents &ge = it->second;
+          ge.N += Ns;
+          out.nuc.N += Ns;
+          for (int j = 0; j < kNTau; ++j) {
+            ge.ang[j] += a[j];
+            ge.recRe[j] += re[j];
+            ge.recIm[j] += im[j];
+            out.nuc.ang[j] += a[j];
+            out.nuc.recRe[j] += re[j];
+            out.nuc.recIm[j] += im[j];
+          }
+        } else {
+          out.nuc.N += nucelRow(t,
+                                r,
+                                sh.msmat[i],
+                                sh.mspdg[i],
+                                wA,
+                                wR,
+                                *in.nucel,
+                                out.nuc.ang.data(),
+                                out.nuc.recRe.data(),
+                                out.nuc.recIm.data());
+        }
+      }
+    }
+
+  }  // namespace
+
+  //==========================================================================
   // 5. THE POOLING
   //
   // Identical to `cf_track_resolution.extract`: for each material family in
@@ -914,6 +1528,9 @@ namespace cvhcf {
         out[k].nblockms = out[k].nblockioni = out[k].npooled = 0;
         out[k].S.clear();
         out[k].groups.clear();
+        out[k].nucel = false;
+        out[k].nuc.clear();
+        out[k].nucGroups.clear();
       }
       if (nf <= 0)
         return;
@@ -984,6 +1601,15 @@ namespace cvhcf {
       std::vector<int> kact;     // the functionals ACTIVE on this block
       std::vector<double> wact;  // their weights, packed to match `kact`
       std::vector<double> bufA, bufB;
+      // The nuclear-elastic family needs every block's weight before it can
+      // pair a step with its leg's ionisation block, so the weights are
+      // collected here (ascending in global index, as `gs` is) and the family
+      // is formed after the pooling pass.
+      bool anyNucel = false;
+      for (int k = 0; k < nf; ++k)
+        anyNucel = anyNucel || (alive[k] && in[k].wantNucel && in[k].nucel != nullptr);
+      std::vector<std::vector<std::pair<unsigned int, double>>> nucWms(anyNucel ? nf : 0),
+          nucWio(anyNucel ? nf : 0);
 
       for (int fam = 10; fam <= 11; ++fam) {
         const StepRows &rows = (fam == 10) ? sh.ms : sh.ioni;
@@ -1063,6 +1689,8 @@ namespace cvhcf {
               // the block's share of the STANDARDIZED variance under the
               // fit's Q
               vqblk[k] = vpool[k] / (in[k].sigma * in[k].sigma);
+              if (anyNucel && in[k].wantNucel)
+                nucWms[k].emplace_back(g, wact[a]);
             }
 
             rowGroups(blk.data(), rows.stride, ns, anyGroups ? sh.ms.groupCol : -1, gsteps);
@@ -1148,6 +1776,8 @@ namespace cvhcf {
               const double sgnblk = (vsig[k] < 0.) ? -1. : 1.;
               wact[a] = in[k].ioniSign * sgnblk * (std::sqrt(vpool[k] / sq2) / in[k].sigma);
               vqblk[k] = vpool[k] / (in[k].sigma * in[k].sigma);
+              if (anyNucel && in[k].wantNucel)
+                nucWio[k].emplace_back(g, wact[a]);
             }
 
             rowGroups(blk.data(), rows.stride, ns, anyGroups ? sh.ioni.groupCol : -1, gsteps);
@@ -1290,6 +1920,12 @@ namespace cvhcf {
           }
         }
       }
+
+      if (anyNucel) {
+        for (int k = 0; k < nf; ++k)
+          if (alive[k] && in[k].wantNucel && in[k].nucel != nullptr)
+            nucelFunctional(sh, in[k], nucWms[k], nucWio[k], out[k]);
+      }
     }
 
   }  // namespace
@@ -1305,6 +1941,10 @@ namespace cvhcf {
         "ioni:kokoulin=0,a3=1,exc=1,tmaxScale=1 rad:cf_brems_exact del:tcut=0.35MeV,tmaxcap=50MeV "
         "tab=cvhcf_gshape_elec_v1";
     return tag;
+  }
+
+  std::string modelTag(bool withNucel) {
+    return withNucel ? modelTag() + " nuc=" + nucelTableId() : modelTag();
   }
 
 }  // namespace cvhcf

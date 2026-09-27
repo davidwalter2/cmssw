@@ -911,13 +911,27 @@ protected:
   std::vector<unsigned int> msmoliidx;
   std::vector<float> msmoliv;
   int msmolistride = MSMOLI_STRIDE;
+  // G4Material index of each `msmoliv` record (one int per record, same
+  // order): a PARALLEL array rather than an 11th column, so the stride and
+  // every stride-aware reader are untouched. The index resolves to the step's
+  // elements (Z, A, mass fractions) through the `materials` tree written once
+  // per output file (G4MaterialTableTree.h) -- what a per-element process
+  // needs, since effZ/effA are mass averages that drop minority nuclei.
+  std::vector<int> msmatv;
+  // The species of each `msmoliv` record as the nuclear-elastic family keys
+  // it (cvhcf::nucelPdg of the Geant4 particle the leg was propagated as; 0
+  // for a particle with no elastic channel, e.g. a muon). Parallel to
+  // `msmoliv`; exported (`mspdgv`) only with the step records and the family.
+  std::vector<int> mspdgv;
 
   // THE ONE PLACE THE MOLIERE STEP LAYOUT LIVES. Every drain goes through
   // here, so a new column is added here and `MSMOLI_STRIDE` bumped with it --
   // the check refuses any other combination, which is what keeps the
   // `msmolistride` branch from ever lying to a reader.
-  void pushMsMoliStep(unsigned int globalidx, const Geant4ePropagator::MoliereMsStep &ms) {
+  void pushMsMoliStep(unsigned int globalidx, const Geant4ePropagator::MoliereMsStep &ms, int nucPdg) {
     msmoliidx.push_back(globalidx);
+    msmatv.push_back(ms.materialIndex);
+    mspdgv.push_back(nucPdg);
     const std::size_t n0 = msmoliv.size();
     msmoliv.push_back(ms.effZ);
     msmoliv.push_back(ms.effA);
@@ -1489,6 +1503,24 @@ protected:
   std::vector<float> cftau;
   std::string cfmodel;
 
+  // ---- THE NUCLEAR-ELASTIC FAMILY (exportCfNucel) ------------------------
+  // The functional's hadElastic exponents on `cftau` (see cvhcf
+  // NucelExponents): the angular part (real), the recoil part (complex), and
+  // the expected number of collisions of the track / candidate. Per material
+  // group under exportCfGroupExponents, sparse as `cf*_grp`: `_grp_nuc` is
+  // the ascending group id and each array is n_grp x kNTau, row-major.
+  std::vector<float> cfnucangv, cfnucrecrev, cfnucrecimv;
+  float nucN = 0.f;
+  std::vector<short> cfgrpnucv;
+  std::vector<float> cfgrpnucangv, cfgrpnucrecrev, cfgrpnucrecimv, cfgrpnucNv;
+  // The per-(species, material) mixture kernels, built lazily from this
+  // job's own Geant4 material table (G4Material::GetMaterialTable, resolved
+  // by index); one per stream, like the maker.
+  std::unique_ptr<cvhcf::NucelMixtures> nucMix_;
+  void clearCfNucel();
+  void storeCfNucel(const cvhcf::TrackResult &res);
+  cvhcf::NucelMixtures *nucelMixtures();
+
   // Export switches.
   //   exportCfExponents_  -- compute and write the cf* branches at all.
   //   exportStepRecords_  -- write the RAW per-step export the exponents are
@@ -1497,10 +1529,24 @@ protected:
   //                          to re-derive them with a different model.
   bool exportCfExponents_ = true;
   bool exportStepRecords_ = false;
+  // Set where the raw step records are booked: the output file then also
+  // carries the `materials` tree that resolves `msmatv` (written at endStream).
+  bool writeMaterialTable_ = false;
   //   exportCfGroupExponents_ -- additionally split those exponents by
   //                          material group (see cfgrp*). +26 kB/candidate,
   //                          so it is opt-in and off by default.
   bool exportCfGroupExponents_ = false;
+  //   exportCfNucel_      -- the NUCLEAR-ELASTIC family of the cf* exponents
+  //                          (cvhcf NucelExponents): `<cfprefix>_nuc_ang`,
+  //                          `_nuc_rec_re/_im`, `nuc_N`, and per material
+  //                          group under exportCfGroupExponents. OFF by
+  //                          default. It is ACTIVE (`nucelActive_`) only when
+  //                          the maker's configured species include a hadron
+  //                          with a tabulated elastic channel; a muon maker
+  //                          with the switch on writes exactly what it writes
+  //                          with it off.
+  bool exportCfNucel_ = false;
+  bool nucelActive_ = false;
   //   exportPerHitResidual_ -- build and write the per-hit (complement)
   //                          residual block above.  OFF by default: it costs
   //                          `d` extra `cvhcf` evaluations per track.

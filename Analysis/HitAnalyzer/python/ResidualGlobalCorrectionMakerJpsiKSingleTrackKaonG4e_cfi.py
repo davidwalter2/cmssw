@@ -34,6 +34,11 @@ globalCorJpsiKKaon = cms.EDProducer(
     doMuonAssoc = cms.bool(False),
     doTrigger = cms.bool(False),
     doRes = cms.bool(False),
+    # The nuclear-elastic (hadElastic) family of the resolution-CF exponents
+    # (cvhcf NucelExponents, per-element targets, tables
+    # TrackPropagation/Geant4e/data/cvhcf_nucel_v1.bin); needs doRes and the
+    # cf exponents. Off until the family is adopted.
+    exportCfNucel = cms.bool(False),
     # False by default: True together with the default empty corFiles is the
     # broken Stage-1-only configuration (ideal geometry, no corrections)
     # the maker itself warns about. The driver overrides per leg.

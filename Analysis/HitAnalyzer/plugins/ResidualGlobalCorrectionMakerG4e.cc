@@ -431,6 +431,11 @@ ResidualGlobalCorrectionMakerG4e::ResidualGlobalCorrectionMakerG4e(const edm::Pa
   trackParticleName_ = iConfig.existsAs<std::string>("trackParticleName")
       ? iConfig.getParameter<std::string>("trackParticleName") : std::string("mu");
   trackMass_ = ana_hitanalyzer::getParticleProperties(trackParticleName_).mass;
+  // The nuclear-elastic family exists for a hadron species only (either
+  // charge; the charge then picks pi+/pi-, K+/K-, p/pbar per track).
+  nucelActive_ = exportCfNucel_ && exportCfExponents_ &&
+                 (cvhcf::nucelPdg(ana_hitanalyzer::g4ParticleName(trackParticleName_, 1)) != 0 ||
+                  cvhcf::nucelPdg(ana_hitanalyzer::g4ParticleName(trackParticleName_, -1)) != 0);
 
   // Convergence knobs, mirroring the two-track maker (existsAs-guarded so
   // legacy cfis keep the baseline behaviour: 10 iterations, EDM < 1e-5).
@@ -2118,6 +2123,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       radstepspecv.clear();
       msmoliidx.clear();
       msmoliv.clear();
+      msmatv.clear();
+      mspdgv.clear();
       reseigidx.clear();
       reseigv.clear();
       resinfv.clear();
@@ -2126,6 +2133,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       reshitcls.clear();
       cfhitclsv.clear();
       cfhitvv.clear();
+      clearCfNucel();
       resinfcov = 0.;
       resinfcovhit = 0.f;
       resinfcovgrp = 0.f;
@@ -3120,8 +3128,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
 
             // Phase B export: Moliere raw step data of the same leg (log
             // sync argument as for the Urban export below).
+            const int nucPdg = cvhcf::nucelPdg(g4PartName);
             for (auto const &ms : g4prop->msStepLog()) {
-              pushMsMoliStep(msglobalidx, ms);
+              pushMsMoliStep(msglobalidx, ms, nucPdg);
             }
           }
 
@@ -4843,6 +4852,14 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         cfin.wantDelta = true;
         cfin.wantGroups = exportCfGroupExponents_;
         cfin.wantGroupDelta = true;   // the q/p functional's model uses S_del
+        // the nuclear-elastic family, on the same MS blocks and the same
+        // legs' ionisation weights (the charge sign above)
+        if (nucelActive_) {
+          cfin.wantNucel = true;
+          cfin.msmat = msmatv.data();
+          cfin.mspdg = mspdgv.data();
+          cfin.nucel = nucelMixtures();
+        }
       }
       if (exportCfExponents_) {
         cvhcf::TrackResult cfres;
@@ -4863,6 +4880,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         storecf(cfres.S.radRe, cfradrev);
         storecf(cfres.S.radIm, cfradimv);
         storeCfGroups(cfres);
+        storeCfNucel(cfres);
         // Per-hit-class Gaussian shares of the q/p variance, ascending in
         // class. Here `vgauss` (and hence `cfqop_vgf`) IS the sum over the
         // parmtype-8/9 blocks, so `sum_c cfqop_hitv == cfqop_vgf` exactly.
@@ -5349,6 +5367,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             double grpclos = 0.;
             for (int kk = 0; kk < ntot; ++kk) {
               cvhcf::TrackInput ci = cfin;
+              ci.wantNucel = false;   // not part of the per-hit components
               ci.sigma = 1.;
               ci.ioniSign = refParms[0] >= 0.f ? 1. : -1.;
               if (perHitShareMin_ > 0.) {

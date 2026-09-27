@@ -44,7 +44,11 @@
 //   * S_del  -- `cf_delta_ray.delta_step_exponent` minus `carve_factor`
 //               times S_ms of the same block (the discrete delta-ray recoil
 //               REPLACES part of Moliere's continuous Z(Z+1), it does not
-//               add to it).
+//               add to it);
+//   * S_nuc  -- hadron tracks only, on request (`TrackInput::wantNucel`):
+//               the nuclear-elastic family, `ks_nucel_cf.step_family` on the
+//               per-element tables `data/cvhcf_nucel_v1.bin` (see
+//               NucelExponents below).
 //
 // THE PORTED SWITCH CONFIGURATION is the offline production default and is
 // recorded in `modelTag()` (which the makers write into the runtree, so a file
@@ -68,7 +72,11 @@
 
 #include <array>
 #include <cstddef>
+#include <functional>
+#include <map>
+#include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace cvhcf {
@@ -92,6 +100,8 @@ namespace cvhcf {
   constexpr int kTauFullN = 448;
   constexpr double kTauFullMax = 14.0;
   const double *tauGrid();
+
+  class NucelMixtures;  // the nuclear-elastic kernels, below
 
   // One block's / one track's exponents, on `tauGrid()`.
   struct Exponents {
@@ -189,7 +199,135 @@ namespace cvhcf {
     // (`cf_mass_likelihood.build_pairs_tt`) does not, so the two-track maker
     // leaves it out of the per-group arrays and saves a sixth of them.
     bool wantGroupDelta = false;
+
+    // THE NUCLEAR-ELASTIC FAMILY (see NucelExponents).  Computed only when
+    // `wantNucel` and `nucel` are set; then `msmat` and `mspdg` must be
+    // parallel to `ms` (one G4Material index and one species PDG code per
+    // row, 0 = no elastic channel) and `rad` must be parallel to `ms` as the
+    // makers write it (checked: a mismatch throws).  Split by the step's
+    // material group (`ms.groupCol`) as well when `wantGroups`.
+    bool wantNucel = false;
+    const int *msmat = nullptr;
+    const int *mspdg = nullptr;
+    NucelMixtures *nucel = nullptr;
   };
+
+  //------------------------------------------------------------------------
+  // THE NUCLEAR-ELASTIC FAMILY (hadElastic), for hadron tracks.
+  //
+  // A hadron also takes `hadElastic` collisions: rare (N ~ 0.02-0.1 per
+  // track), large (25-100 mrad at 3 GeV) isotropic kicks that no Gaussian
+  // block and no Moliere exponent carries.  They enter ONLY the resolution
+  // CF, as compound-Poisson families -- never the fit's process noise Q or its
+  // weights, which stay frozen (a Gaussian variance for a rare large kick
+  // would outweigh multiple scattering and inflate every hadron's errors).
+  //
+  //   angular:  S_ang(tau) = sum_b sum_{s in b} N_s ( g_{m(s)}(p_s; w_b tau) - 1 )
+  //   recoil:   S_rec(tau) = sum_s N_s ( h_{m(s)}(p_s; wq_s tau) - 1 )
+  //
+  // over the `msmoliv` rows s, with N_s = mu_{m(s)}(p_s) xg_s the expected
+  // collisions of the step (rate mu in cm^2/g, xg in g/cm^2), g the projected
+  // single-collision CF of the deflection and h the CF of the kinetic energy
+  // given to the recoiling nucleus [MeV].  m(s) is the step's material with ONE
+  // TARGET PER ELEMENT: a compound's kernel is the rate-weighted mixture of its
+  // elements' kernels (hydrogen in the tracker composites is ~3x wider in
+  // angle and ~12x harder in recoil than carbon).
+  //
+  //   * w_b is the MS block's own weight sqrt(v_b / sum_s thp2_s) / sigma --
+  //     a collision is an isotropic 2D kick at a point in the step, like a
+  //     Moliere one, so it rides on the same weight.  Real, not centred (the
+  //     kick's mean projection is zero).
+  //   * wq_s is the ionisation weight of the SAME leg at the SAME step:
+  //     wq_s = w_io(block) * cs_s * 1e-3, with w_io the leg's ionisation block
+  //     weight (it carries `ioniSign`: the charge for q/p, -1 for a mass),
+  //     cs_s = E/p^3 of the step and 1e-3 for the MeV of the recoil against
+  //     the GeV of cs.  The ionisation block of step s is `rad.idx[s]` and cs_s
+  //     is `rad.v[s][10]`: the radiative records are written one per Geant4
+  //     step, PARALLEL to `msmoliv` (the Urban ionisation records are not --
+  //     a step without a valid Urban record has none -- so they can never be
+  //     paired by row).  Not centred: the Geant4e reference energy loss
+  //     carries no elastic recoil, so no mean was subtracted.
+  //   * The angular and recoil parts are treated as independent (they are
+  //     correlated through dE = (p theta)^2 / 2M); the recoil moves q/p, the
+  //     angle enters a q/p functional only through the transport.
+  //
+  // THE TABLES are `data/cvhcf_nucel_v1.bin` (writer
+  // `data/make_cvhcf_nucel_tables.py`, whose docstring is the byte layout and
+  // the evaluation rules implemented here): per (species, element, momentum
+  // node) from Geant4's own species-specific elastic model and cross section.
+  // Offline reference: calibration_studies resolution/ksclosure/nucel/
+  // nucel_tables.py (`Table`) and ks_nucel_cf.py (`step_family`).
+  //
+  // SPECIES come from the maker's configured particle and the track charge
+  // (p and pbar share a mass, not a model).  Muons and electrons have no
+  // hadElastic: species 0, no family, zero cost.
+
+  // The element composition of one Geant4 material: element Z, the element's
+  // atomic mass [g/mole] and its mass fraction, as G4Material holds them.
+  struct NucelComposition {
+    std::vector<double> Z, A, W;
+  };
+  // Resolves a G4Material index to its composition; false if unknown.
+  using NucelResolver = std::function<bool(int, NucelComposition &)>;
+
+  // The table's PDG code for a Geant4 particle name ("pi+", "kaon-",
+  // "proton", "anti_proton", ...); 0 for a particle without a tabulated
+  // elastic channel (mu+-, e+-, ...).
+  int nucelPdg(const std::string &g4ParticleName);
+
+  // Load the kernel tables (automatic on first use; thread-safe, idempotent,
+  // first caller wins as for the shape tables).  Throws cms::Exception if the
+  // file is unusable.
+  void loadNucelTables(const std::string &path = std::string());
+  // The table id recorded in `modelTag(true)`: "cvhcf_nucel_v1".
+  const std::string &nucelTableId();
+
+  // The per-(species, material) mixture kernels, built on first use from the
+  // resolver's composition and kept for the life of the object.  NOT
+  // thread-safe: one per stream (the makers own one each).  The table itself
+  // is process-global and read-only.
+  struct NucelMix;
+  class NucelMixtures {
+  public:
+    explicit NucelMixtures(NucelResolver resolver);
+    ~NucelMixtures();
+    NucelMixtures(const NucelMixtures &) = delete;
+    NucelMixtures &operator=(const NucelMixtures &) = delete;
+    // The mixture of species `pdg` in material `matIndex`.  Throws
+    // cms::Exception when the material cannot be resolved or has an element
+    // the table does not carry: a silently missing target would bias the
+    // family, and every element of the tracker geometry is tabulated.
+    const NucelMix &get(int pdg, int matIndex);
+    std::size_t size() const { return cache_.size(); }
+
+  private:
+    NucelResolver resolver_;
+    std::map<std::pair<int, int>, std::unique_ptr<NucelMix>> cache_;
+  };
+
+  // One track's (or candidate's) nuclear-elastic exponents.
+  struct NucelExponents {
+    std::array<double, kNTau> ang{};
+    std::array<double, kNTau> recRe{};
+    std::array<double, kNTau> recIm{};
+    double N = 0.;  // expected collisions, sum_s N_s over the hadron rows
+    void clear();
+  };
+
+  // THE PER-STEP PRIMITIVE.  Accumulates the family of `n` `msmoliv` rows
+  // into `out`: row i has species `pdg[i]` (0: skipped), material `mat[i]`,
+  // angular weight `wAng[i]` (0: no angular term) and signed recoil weight
+  // `wRec[i]` [z per MeV] (0: no recoil term).  N accumulates over every row
+  // with a species, whatever its weights.  Public for the validation.
+  void nucelSteps(const float *rows,
+                  int stride,
+                  int n,
+                  const int *mat,
+                  const int *pdg,
+                  const double *wAng,
+                  const double *wRec,
+                  NucelMixtures &mix,
+                  NucelExponents &out);
 
   // One material group's share of a track's exponents.
   struct GroupExponents {
@@ -222,6 +360,13 @@ namespace cvhcf {
     // round-off -- they are the same per-step sums associated differently,
     // NOT two models -- which is the validation gate the makers report.
     std::vector<GroupExponents> groups;
+    // The nuclear-elastic family; filled only under `TrackInput::wantNucel`
+    // (`nucel` false otherwise), and its per-material-group split, ascending
+    // in group, under `wantGroups` as well.  The split is its own list: a
+    // step can carry an elastic term in a group where no other family does.
+    bool nucel = false;
+    NucelExponents nuc;
+    std::vector<std::pair<int, NucelExponents>> nucGroups;
   };
 
   // THE ENTRY POINT. Pools by global parameter index exactly as
@@ -321,6 +466,10 @@ namespace cvhcf {
   // Provenance: the ported switch configuration and the shape-table id, for
   // the runtree. Stable for a given model; changes only when the model does.
   const std::string &modelTag();
+  // The same with the nuclear-elastic table id appended
+  // (" nuc=cvhcf_nucel_v1") when that family is exported; `modelTag(false)`
+  // is `modelTag()`.
+  std::string modelTag(bool withNucel);
 
   // Load the Moliere shape tables. Called automatically on first use; exposed
   // so a job can fail at configuration time rather than mid-event, and so the
