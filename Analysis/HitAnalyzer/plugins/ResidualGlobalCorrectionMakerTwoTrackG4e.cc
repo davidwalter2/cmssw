@@ -4966,6 +4966,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             cfgrpradimv.clear();
             cfgrpclosure = 0.f;
             clearCfNucel();
+            clearCfKnockon();
             if (dores && !dVs.empty()) {
               // ================= THE sqrt(dV_b) CACHE ======================
               // `dV_b^{1/2}` is a property of the BLOCK, not of the
@@ -5178,10 +5179,13 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                 ci.wantDelta = true;
                 ci.wantGroups = exportCfGroupExponents_;
                 // No functional's reference model splits the DELTA-RAY family
-                // per group (`cf_mass_likelihood.build_pairs_tt` has no
-                // `Sdel`), so the flat delta family is exported for comparison
-                // but is not split.
+                // per group (`cf_mass_likelihood.build_pairs_tt` carries the
+                // flat `Sdel` only), so the flat delta family is exported but
+                // is not split.
                 ci.wantGroupDelta = false;
+                // the hard knock-on families, for every functional
+                ci.wantKnockonMap = exportCfKnockon_;
+                ci.wantKnockonJoint = exportCfKnockon_;
                 cfins.push_back(ci);
                 return int(cfins.size()) - 1;
               };
@@ -5200,10 +5204,10 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               // candidates -- cancelled the skew and moved the unbinned scale
               // by 0.1e-3.)
               //
-              // The DELTA-RAY family is computed but is not part of the
-              // reference mass model (`build_pairs_tt` has no `Sdel`); it is
-              // exported so the two can be compared, and the reader leaves it
-              // out of the pairs cache unless asked.
+              // The DELTA-RAY family is computed and exported flat, as the
+              // reference mass cache carries it (`build_pairs_tt` `Sdel`);
+              // the mass model adds it only when asked (`--kdel`), and the
+              // knock-on joint family requires it.
               if (exportCfExponents_) {
                 cfslotmass = cfRegister(resinfvarv.data(), int(resinfvarv.size()), nullptr, Jpsi_sigmamass, -1.);
                 // the nuclear-elastic family, for the MASS functional only:
@@ -5854,6 +5858,9 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                   storecf(cfres.S.radIm, cfradimv);
                   storeCfGroups(cfres);
                   storeCfNucel(cfres);
+                  if (exportCfKnockon_) {
+                    cfKnock_.append(cfres, exportCfGroupExponents_);
+                  }
                 }
 
                 if (cfslotvtx >= 0) {
@@ -5865,6 +5872,9 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                   storecf(cfresv.S.ioIm, cfvtxioimv);
                   storecf(cfresv.S.radRe, cfvtxradrev);
                   storecf(cfresv.S.radIm, cfvtxradimv);
+                  if (exportCfKnockon_) {
+                    cfvtxKnock_.append(cfresv, exportCfGroupExponents_);
+                  }
                   if (exportCfGroupExponents_) {
                     storeCfGroupsTo(cfresv,
                                     cfvtxgrpv,
@@ -5898,6 +5908,9 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                   appendcf(cfresb.S.ioIm, cfbsioimv);
                   appendcf(cfresb.S.radRe, cfbsradrev);
                   appendcf(cfresb.S.radIm, cfbsradimv);
+                  if (exportCfKnockon_) {
+                    cfbsKnock_.append(cfresb, exportCfGroupExponents_);
+                  }
                   if (exportCfGroupExponents_) {
                     std::vector<short> gtmpv;
                     std::vector<float> gms, gdel, giore, gioim, gradre, gradim, gvqms, gvqio;

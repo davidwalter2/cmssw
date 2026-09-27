@@ -11,7 +11,9 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <map>
 #include <mutex>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -49,6 +51,10 @@ namespace cvhcf {
     ioIm.fill(0.);
     radRe.fill(0.);
     radIm.fill(0.);
+    kxRe.fill(0.);
+    kxIm.fill(0.);
+    kjRe.fill(0.);
+    kjIm.fill(0.);
   }
 
   //==========================================================================
@@ -1336,6 +1342,433 @@ namespace cvhcf {
   }  // namespace
 
   //==========================================================================
+  // 4c. THE HARD KNOCK-ON COLLISION  (cf_knockon: map_block_pooled, map_rad,
+  //     joint_rows_pooled, fit_map, fit_joint)
+  //==========================================================================
+  namespace {
+
+    constexpr double kMeMeV = 0.51099895;
+    constexpr double kHalfK = 0.1535;
+    constexpr int kKnockonNPerDec = 40;       // cf_knockon.FIT_NPERDEC
+    constexpr double kKnockonMapTlo = 1e-4;   // cf_knockon.FIT_MAP_TLO
+    constexpr double kDelTcutGeV = 0.35e-3;   // cf_track_resolution.DELTA_TCUT
+    constexpr double kDelTmaxCapGeV = 0.05;   // cf_track_resolution.DELTA_TMAXCAP
+
+    // T_eff = p^2 T (2E - T) / (E p' (p + p')), the q/p change of a loss T in
+    // units of the linear one (cf_knockon.t_eff), and its derivative.
+    inline double ppOf(double T, double E, double p) {
+      const double M2 = E * E - p * p;
+      return std::sqrt(std::max((E - T) * (E - T) - M2, 1e-300));
+    }
+    inline double tEff(double T, double E, double p) {
+      const double pp = ppOf(T, E, p);
+      return p * p * T * (2.0 * E - T) / (E * pp * (p + pp));
+    }
+    inline double dTeffdT(double T, double E, double p) {
+      const double pp = ppOf(T, E, p);
+      return (p * p * p / E) * (E - T) / (pp * pp * pp);
+    }
+    // c in T_eff = T + c T^2 + O(T^3)
+    inline double teffC2(double E, double p) { return 1.5 * E / (p * p) - 0.5 / E; }
+
+    // np.geomspace(lo, hi, n): 10**linspace(log10 lo, log10 hi) with the ends
+    // forced
+    void geomspace(double lo, double hi, int n, std::vector<double> &out) {
+      const double a = std::log10(lo), b = std::log10(hi);
+      const double step = (b - a) / static_cast<double>(n - 1);
+      for (int i = 0; i < n; ++i)
+        out.push_back(std::pow(10.0, a + step * i));
+      out[out.size() - static_cast<std::size_t>(n)] = lo;
+      out.back() = hi;
+    }
+
+    void makeOdd(std::vector<double> &x) {
+      if (x.size() % 2 == 0)
+        x.insert(x.begin() + 1, std::sqrt(x[0] * x[1]));
+    }
+
+    // cf_knockon.nodes: nper per decade on [lo, 0.9 tmax], then 30 in
+    // (tmax - T) down to 1e-7 tmax, then tmax; odd count
+    void knockonNodes(double lo, double tmax, int nper, std::vector<double> &x) {
+      x.clear();
+      const double top = 0.9 * tmax;
+      const int n1 = std::max(static_cast<int>(std::ceil(std::log10(top / lo) * nper)), 2);
+      geomspace(lo, top, n1 + 1, x);
+      std::vector<double> d;
+      geomspace(0.1, 1e-7, 31, d);
+      for (int i = 1; i < 31; ++i)
+        x.push_back(tmax - tmax * d[i]);
+      x.push_back(tmax);
+      makeOdd(x);
+    }
+
+    // cf_knockon._joint_nodes
+    void jointNodes(double tlo, double thi, double tkin, int nper, std::vector<double> &x) {
+      if (thi >= tkin) {
+        knockonNodes(tlo, tkin, nper, x);
+        return;
+      }
+      x.clear();
+      const int n1 = std::max(static_cast<int>(std::ceil(std::log10(thi / tlo) * nper)), 2);
+      geomspace(tlo, thi, n1 + 1, x);
+      makeOdd(x);
+    }
+
+    // f_n(z) = INT_0^1 s^n e^{zs} ds, n = 0, 1, 2 (cf_knockon._fmom)
+    inline void fmom(std::complex<double> z, std::complex<double> f[3]) {
+      if (std::abs(z) < 0.2) {
+        std::complex<double> term(1.0, 0.0), acc[3];
+        for (int k = 0; k < 14; ++k) {
+          if (k)
+            term = term * z / static_cast<double>(k);
+          for (int n = 0; n < 3; ++n)
+            acc[n] += term / static_cast<double>(n + k + 1);
+        }
+        for (int n = 0; n < 3; ++n)
+          f[n] = acc[n];
+      } else {
+        const std::complex<double> ez = std::exp(z);
+        f[0] = (ez - 1.0) / z;  // expm1(z)/z; |z| >= 0.2 here
+        f[1] = (ez * (z - 1.0) + 1.0) / (z * z);
+        f[2] = (ez * (z * z - 2.0 * z + 2.0) - 2.0) / (z * z * z);
+      }
+    }
+
+    // INT e^{i a x} h(x) dx by Filon-Simpson (cf_knockon.filon), one a
+    std::complex<double> filon1(const std::vector<double> &x, const double *h, double a) {
+      std::complex<double> s(0.0, 0.0), f[3];
+      const std::size_t n = x.size();
+      for (std::size_t i = 0; i + 2 < n; i += 2) {
+        const double x0 = x[i], x1 = x[i + 1], x2 = x[i + 2];
+        const double h0 = h[i], h1 = h[i + 1], h2 = h[i + 2];
+        const double d01 = (h1 - h0) / (x1 - x0);
+        const double d12 = (h2 - h1) / (x2 - x1);
+        const double c2 = (d12 - d01) / (x2 - x0);
+        const double c1 = d01 - c2 * (x1 - x0);
+        const double D = x2 - x0;
+        fmom(std::complex<double>(0.0, a * D), f);
+        s += D * std::exp(std::complex<double>(0.0, a * x0)) * (h0 * f[0] + c1 * D * f[1] + c2 * D * D * f[2]);
+      }
+      return s;
+    }
+
+    double simpson1(const std::vector<double> &x, const double *h) {
+      double s = 0.;
+      const std::size_t n = x.size();
+      for (std::size_t i = 0; i + 2 < n; i += 2) {
+        const double x0 = x[i], x1 = x[i + 1], x2 = x[i + 2];
+        const double h0 = h[i], h1 = h[i + 1], h2 = h[i + 2];
+        const double d01 = (h1 - h0) / (x1 - x0);
+        const double d12 = (h2 - h1) / (x2 - x1);
+        const double c2 = (d12 - d01) / (x2 - x0);
+        const double c1 = d01 - c2 * (x1 - x0);
+        const double D = x2 - x0;
+        s += D * (h0 + c1 * D / 2.0 + c2 * D * D / 3.0);
+      }
+      return s;
+    }
+  }  // namespace
+
+  namespace {
+
+    // The map piece of one pooled row (cf_knockon.map_rows on the pool):
+    // xi, e0, tmax [MeV], beta^2, E [MeV], spin 1/2 (regime 2) or 0 (3);
+    // accumulated at the arguments a[j] = tau[j] * alpha.
+    void mapPoolRow(double xi, double e0, double tmax, double b2, double E, bool spinhalf, const double *targs,
+                    int nargs, std::complex<double> *S) {
+      if (!(xi > 0.) || !(tmax > e0) || !(e0 > 0.))
+        return;
+      const double p = E * std::sqrt(b2);
+      std::vector<double> T;
+      knockonNodes(std::max(e0, kKnockonMapTlo * tmax), tmax, kKnockonNPerDec, T);
+      const std::size_t n = T.size();
+      std::vector<double> dN(n), X(n), amp(n);
+      for (std::size_t i = 0; i < n; ++i) {
+        double r = (xi / (T[i] * T[i])) * (1.0 - b2 * T[i] / tmax);
+        if (spinhalf)
+          r = r + xi / (2.0 * E * E);
+        dN[i] = r;
+        X[i] = tEff(T[i], E, p);
+        amp[i] = dN[i] / dTeffdT(T[i], E, p);
+      }
+      const double c = teffC2(E, p);
+      const double lo = T[0];
+      for (int j = 0; j < nargs; ++j) {
+        const double a = targs[j];
+        std::complex<double> v = filon1(X, amp.data(), a) - filon1(T, dN.data(), a);
+        // the part below the lower limit in closed form (cf_knockon._map_below)
+        if (lo > e0)
+          v += xi * c * std::complex<double>(0.0, 2.0 * std::sin(0.5 * a * (lo - e0))) *
+               std::exp(std::complex<double>(0.0, 0.5 * a * (lo + e0)));
+        S[j] += v;
+      }
+    }
+
+    // One pool of the ionisation block: xi-weighted means of the rows `m`
+    struct MapPool {
+      double xi = 0., se0 = 0., stmax = 0., scs = 0., sb2 = 0., sE = 0.;
+    };
+
+    // The pools of one ionisation block, keyed (regime, group); the block's
+    // rows are `rows` (stride >= 13), the group read from `groupCol` (-1:
+    // one group).  cf_knockon.map_block_pooled.
+    void mapPools(const float *rows, int stride, int n, int groupCol, std::map<std::pair<int, int>, MapPool> &pools) {
+      pools.clear();
+      if (rows == nullptr || n <= 0 || stride < 13)
+        return;
+      for (int i = 0; i < n; ++i) {
+        const float *r = rows + static_cast<std::size_t>(i) * stride;
+        const int reg = static_cast<int>(r[0]);
+        if (reg != 2 && reg != 3)
+          continue;
+        const double gam = r[9];
+        const double xi = static_cast<double>(r[6]) * gam;
+        const double e0 = static_cast<double>(r[7]) * gam;
+        const double tmax = static_cast<double>(r[8]) * gam;
+        if (!(xi > 0.) || !(tmax > e0) || !(e0 > 0.))
+          continue;
+        const int g = (groupCol >= 0 && groupCol < stride) ? static_cast<int>(r[groupCol]) : -1;
+        MapPool &P = pools[std::make_pair(reg, g)];
+        P.xi += xi;
+        P.se0 += e0 * xi;
+        P.stmax += tmax * xi;
+        P.scs += static_cast<double>(r[10]) * xi;
+        P.sb2 += static_cast<double>(r[11]) * xi;
+        P.sE += static_cast<double>(r[12]) * xi;
+      }
+    }
+
+    // The map piece of the pools at `nk` signed block weights.  Sre/Sim are
+    // (nk x kNTau) slabs; `gout`, when non-null, receives each pool's share
+    // under its group as (group, k, value) through the callback.
+    template <class GroupSink>
+    void mapPoolsEval(const std::map<std::pair<int, int>, MapPool> &pools, const double *wstdSigned, int nk,
+                      double *Sre, double *Sim, GroupSink &&sink) {
+      const double *tau = tauGrid();
+      std::vector<double> ta(kNTau);
+      std::vector<std::complex<double>> v(kNTau);
+      for (const auto &kv : pools) {
+        const MapPool &P = kv.second;
+        const double e0 = P.se0 / P.xi, tmax = P.stmax / P.xi, cs = P.scs / P.xi;
+        const double b2 = P.sb2 / P.xi, E = P.sE / P.xi;
+        for (int k = 0; k < nk; ++k) {
+          const double alpha = wstdSigned[k] * cs * 1e-3;
+          if (alpha == 0.)
+            continue;
+          for (int j = 0; j < kNTau; ++j)
+            ta[j] = tau[j] * alpha;
+          std::fill(v.begin(), v.end(), std::complex<double>(0., 0.));
+          mapPoolRow(P.xi, e0, tmax, b2, E, kv.first.first == 2, ta.data(), kNTau, v.data());
+          double *Rk = Sre + static_cast<std::size_t>(k) * kNTau;
+          double *Ik = Sim + static_cast<std::size_t>(k) * kNTau;
+          for (int j = 0; j < kNTau; ++j) {
+            Rk[j] += v[j].real();
+            Ik[j] += v[j].imag();
+          }
+          sink(kv.first.second, k, v.data());
+        }
+      }
+    }
+
+    // The map piece of radiative rows (cf_knockon.map_rad): the exact minus
+    // the linear radiative exponent, e^{i xe} - e^{i x} = 2i sin((xe - x)/2)
+    // e^{i (xe + x)/2}, on the trapezoid rule of radBlockMulti.
+    void radMapMulti(const float *rows, int stride, int n, const float *spec, const float *vgridf, int nv,
+                     const double *wstdSigned, int nk, double *Sre, double *Sim) {
+      if (rows == nullptr || spec == nullptr || vgridf == nullptr || n <= 0 || nv < 2 || nk <= 0)
+        return;
+      std::vector<double> vgrid(nv), shapeB(nv), shapeP(nv), dNdv(nv), wtrap(nv, 0.), T(nv), Te(nv);
+      for (int i = 0; i < nv; ++i)
+        vgrid[i] = vgridf[i];
+      for (int i = 0; i + 1 < nv; ++i) {
+        const double dv = 0.5 * (vgrid[i + 1] - vgrid[i]);
+        wtrap[i] += dv;
+        wtrap[i + 1] += dv;
+      }
+      const double *tau = tauGrid();
+      for (int ir = 0; ir < n; ++ir) {
+        const float *r = rows + static_cast<std::size_t>(ir) * stride;
+        const float *sp = spec + static_cast<std::size_t>(ir) * 2 * nv;
+        for (int i = 0; i < nv; ++i) {
+          shapeB[i] = sp[i];
+          shapeP[i] = sp[nv + i];
+        }
+        const double etot = r[3], p = r[4], stepCm = r[6];  // GeV, GeV, cm
+        if (!(etot > 0.))
+          continue;
+        cvhcgf::makeRadSpectrum(vgrid.data(), shapeB.data(), shapeP.data(), r[8] * stepCm, r[9] * stepCm, etot, nv,
+                                dNdv.data());
+        bool any = false;
+        for (int i = 0; i < nv; ++i)
+          if (dNdv[i] > 0.) {
+            any = true;
+            break;
+          }
+        if (!any)
+          continue;
+        for (int i = 0; i < nv; ++i) {
+          T[i] = vgrid[i] * etot;
+          // p' floored at 1e-3 p, as cf_brems_exact
+          const double pp = std::sqrt(std::max((etot - T[i]) * (etot - T[i]) - (etot * etot - p * p), (1e-3 * p) * (1e-3 * p)));
+          Te[i] = p * p * T[i] * (2.0 * etot - T[i]) / (etot * pp * (p + pp));
+        }
+        for (int k = 0; k < nk; ++k) {
+          const double gs = static_cast<double>(r[10]) * wstdSigned[k];
+          if (gs == 0.)
+            continue;
+          double *Rk = Sre + static_cast<std::size_t>(k) * kNTau;
+          double *Ik = Sim + static_cast<std::size_t>(k) * kNTau;
+          for (int j = 0; j < kNTau; ++j) {
+            const double a = tau[j] * gs;
+            double re = 0., im = 0.;
+            for (int i = 0; i < nv; ++i) {
+              const double q = wtrap[i] * dNdv[i];
+              if (q == 0.)
+                continue;
+              const double x = a * T[i], xe = a * Te[i];
+              const double h = std::sin(0.5 * (xe - x)), c = 0.5 * (xe + x);
+              re += q * (-2.0 * h * std::sin(c));
+              im += q * (2.0 * h * std::cos(c));
+            }
+            Rk[j] += re;
+            Ik[j] += im;
+          }
+        }
+      }
+    }
+
+    // cf_delta_ray._tmx without the cap [GeV]
+    inline double delTkinGeV(double p, double beta) {
+      const double bt = std::min(std::max(beta, 1e-9), 1. - 1e-12);
+      const double g = 1. / std::sqrt(1. - bt * bt);
+      const double m = std::max(p / (bt * g), 1e-6);
+      const double r = kMeGeV / std::max(m, 1e-6);
+      return 2. * kMeGeV * (bt * g) * (bt * g) / (1. + 2. * g * r + r * r);
+    }
+
+    struct JointPool {
+      double w = 0., sp = 0., sbt = 0., stk = 0., sal = 0., sbe = 0.;
+    };
+
+    // The joint piece of one functional over the MS rows (cf_knockon.
+    // joint_rows_pooled with keys (MS block, ionisation block, group)).
+    // alpha, beta per row; `exact` = the map piece on (X = T_eff).
+    void jointPooled(const StepRows &ms,
+                     const unsigned int *ridx,
+                     const double *alpha,
+                     const double *beta,
+                     bool exact,
+                     bool wantGroups,
+                     std::array<double, kNTau> &Sre,
+                     std::array<double, kNTau> &Sim,
+                     std::map<int, std::pair<std::array<double, kNTau>, std::array<double, kNTau>>> &grp) {
+      std::map<std::tuple<unsigned int, unsigned int, int>, JointPool> pools;
+      const double tlo = kDelTcutGeV * 1e3;
+      const double cap = kDelTmaxCapGeV * 1e3;
+      for (int i = 0; i < ms.n; ++i) {
+        const float *r = ms.v + static_cast<std::size_t>(i) * ms.stride;
+        const double Z = r[0], A = r[1], xg = r[2], pg = r[3];
+        const double bt = std::min(std::max(static_cast<double>(r[4]), 1e-9), 1. - 1e-15);
+        const double tkin = delTkinGeV(pg, r[4]) * 1e3;
+        const double thi = std::min(tkin, cap);
+        const double al = alpha[i], be = std::fabs(beta[i]);
+        if (!(xg > 0.) || !(thi > tlo) || !(pg > 0.) || al == 0. || be == 0.)
+          continue;
+        const double xi = kHalfK * (Z / std::max(A, 1.)) * xg / std::max(bt * bt, 1e-9);
+        const double fsp = 1. - 0.5 * bt * bt / std::log(std::max(thi / tlo, 1.0001));
+        const double w = xi * fsp;
+        const int g = (ms.groupCol >= 0 && ms.groupCol < ms.stride) ? static_cast<int>(r[ms.groupCol]) : -1;
+        JointPool &P = pools[std::make_tuple(ms.idx[i], ridx[i], g)];
+        P.w += w;
+        P.sp += pg * w;
+        P.sbt += bt * w;
+        P.stk += tkin * w;
+        P.sal += al * w;
+        P.sbe += be * w;
+      }
+      const double *tau = tauGrid();
+      std::vector<double> T, dN, X, dX, th, h, hx;
+      for (const auto &kv : pools) {
+        const JointPool &P = kv.second;
+        const double p = P.sp / P.w * 1e3, b = P.sbt / P.w, tk = P.stk / P.w;
+        const double th_ = std::min(tk, cap);
+        const double al = P.sal / P.w, be = P.sbe / P.w;
+        const double E = p / b;
+        jointNodes(tlo, th_, tk, kKnockonNPerDec, T);
+        const std::size_t n = T.size();
+        dN.resize(n);
+        X.resize(n);
+        dX.resize(n);
+        th.resize(n);
+        h.resize(n);
+        hx.resize(n);
+        for (std::size_t q = 0; q < n; ++q) {
+          dN[q] = P.w / (T[q] * T[q]);
+          th[q] = std::sqrt(2.0 * kMeMeV * T[q]) / p;
+          X[q] = exact ? tEff(T[q], E, p) : T[q];
+          dX[q] = exact ? dTeffdT(T[q], E, p) : 1.0;
+        }
+        const int g = std::get<2>(kv.first);
+        for (int j = 0; j < kNTau; ++j) {
+          const double t = tau[j];
+          for (std::size_t q = 0; q < n; ++q) {
+            h[q] = dN[q] * (std::cyl_bessel_j(0., t * be * th[q]) - 1.0);
+            hx[q] = h[q] / dX[q];
+          }
+          const std::complex<double> v = filon1(X, hx.data(), t * al) - simpson1(T, h.data());
+          Sre[j] += v.real();
+          Sim[j] += v.imag();
+          if (wantGroups) {
+            auto &ge = grp[g];
+            ge.first[j] += v.real();
+            ge.second[j] += v.imag();
+          }
+        }
+      }
+    }
+
+  }  // namespace
+
+  void knockonMapBlock(const float *rows, int stride, int n, int groupCol, double wstdSigned, double *Sre, double *Sim) {
+    std::map<std::pair<int, int>, MapPool> pools;
+    mapPools(rows, stride, n, groupCol, pools);
+    mapPoolsEval(pools, &wstdSigned, 1, Sre, Sim, [](int, int, const std::complex<double> *) {});
+  }
+
+  void knockonMapRad(const float *rows, int stride, int n, const float *spec, const float *vgridf, int nv,
+                     double wstdSigned, double *Sre, double *Sim) {
+    radMapMulti(rows, stride, n, spec, vgridf, nv, &wstdSigned, 1, Sre, Sim);
+  }
+
+  void knockonJointRows(const float *rows,
+                        int stride,
+                        int n,
+                        const unsigned int *msidx,
+                        const unsigned int *ioniidx,
+                        int groupCol,
+                        const double *alpha,
+                        const double *beta,
+                        bool exact,
+                        double *Sre,
+                        double *Sim) {
+    if (rows == nullptr || n <= 0)
+      return;
+    StepRows ms;
+    ms.idx = msidx;
+    ms.v = rows;
+    ms.n = n;
+    ms.stride = stride;
+    ms.groupCol = groupCol;
+    std::array<double, kNTau> re{}, im{};
+    std::map<int, std::pair<std::array<double, kNTau>, std::array<double, kNTau>>> grp;
+    jointPooled(ms, ioniidx, alpha, beta, exact, false, re, im, grp);
+    for (int j = 0; j < kNTau; ++j) {
+      Sre[j] += re[j];
+      Sim[j] += im[j];
+    }
+  }
+
+  //==========================================================================
   // 5. THE POOLING
   //
   // Identical to `cf_track_resolution.extract`: for each material family in
@@ -1415,6 +1848,54 @@ namespace cvhcf {
         dst.ioIm[j] += src.ioIm[j];
         dst.radRe[j] += src.radRe[j];
         dst.radIm[j] += src.radIm[j];
+        dst.kxRe[j] += src.kxRe[j];
+        dst.kxIm[j] += src.kxIm[j];
+        dst.kjRe[j] += src.kjRe[j];
+        dst.kjIm[j] += src.kjIm[j];
+      }
+    }
+
+    // The knock-on joint family of one functional from the MS rows and the
+    // block weights of the pooling pass (the nuclear-elastic recoil's
+    // pairing: each MS row takes its own MS block's weight and the
+    // ionisation weight of the same leg at the same step, through the
+    // parallel radiative rows).
+    void knockonJointFunctional(const TrackInput &sh,
+                                const TrackInput &in,
+                                const std::vector<std::pair<unsigned int, double>> &wms,
+                                const std::vector<std::pair<unsigned int, double>> &wio,
+                                TrackResult &out) {
+      const StepRows &ms = sh.ms;
+      if (ms.n <= 0)
+        return;
+      if (sh.rad.n != ms.n || sh.rad.v == nullptr || sh.rad.stride < 11)
+        throw cms::Exception("CvhCfExponents")
+            << "knock-on joint family: the radiative rows (" << sh.rad.n << ") are not parallel to the MS rows ("
+            << ms.n << "); the energy weight cannot be paired";
+      auto look = [](const std::vector<std::pair<unsigned int, double>> &v, unsigned int g) {
+        auto it = std::lower_bound(
+            v.begin(), v.end(), g, [](const std::pair<unsigned int, double> &a, unsigned int b) { return a.first < b; });
+        return (it != v.end() && it->first == g) ? it->second : 0.;
+      };
+      std::vector<double> alpha(ms.n), beta(ms.n);
+      for (int i = 0; i < ms.n; ++i) {
+        const float *r = ms.v + static_cast<std::size_t>(i) * ms.stride;
+        const float *rr = sh.rad.v + static_cast<std::size_t>(i) * sh.rad.stride;
+        if (rr[4] != r[3])
+          throw cms::Exception("CvhCfExponents") << "knock-on joint family: radiative row " << i << " (p = " << rr[4]
+                                                 << ") is not the MS row's step (p = " << r[3] << ")";
+        beta[i] = look(wms, ms.idx[i]);
+        alpha[i] = look(wio, sh.rad.idx[i]) * static_cast<double>(rr[10]) * 1e-3;
+      }
+      std::map<int, std::pair<std::array<double, kNTau>, std::array<double, kNTau>>> grp;
+      jointPooled(ms, sh.rad.idx, alpha.data(), beta.data(), in.wantKnockonMap, in.wantGroups, out.S.kjRe,
+                  out.S.kjIm, grp);
+      for (const auto &kv : grp) {
+        Exponents &gsl = groupSlot(out.groups, kv.first);
+        for (int j = 0; j < kNTau; ++j) {
+          gsl.kjRe[j] += kv.second.first[j];
+          gsl.kjIm[j] += kv.second.second[j];
+        }
       }
     }
 
@@ -1605,11 +2086,20 @@ namespace cvhcf {
       // pair a step with its leg's ionisation block, so the weights are
       // collected here (ascending in global index, as `gs` is) and the family
       // is formed after the pooling pass.
-      bool anyNucel = false;
-      for (int k = 0; k < nf; ++k)
+      bool anyNucel = false, anyKx = false, anyKj = false;
+      for (int k = 0; k < nf; ++k) {
         anyNucel = anyNucel || (alive[k] && in[k].wantNucel && in[k].nucel != nullptr);
-      std::vector<std::vector<std::pair<unsigned int, double>>> nucWms(anyNucel ? nf : 0),
-          nucWio(anyNucel ? nf : 0);
+        anyKx = anyKx || (alive[k] && in[k].wantKnockonMap);
+        anyKj = anyKj || (alive[k] && in[k].wantKnockonJoint);
+      }
+      // The knock-on joint family pairs its rows the same way, from the same
+      // block weights.
+      const bool collectW = anyNucel || anyKj;
+      auto wantW = [&](int k) { return (anyNucel && in[k].wantNucel) || (anyKj && in[k].wantKnockonJoint); };
+      std::vector<std::vector<std::pair<unsigned int, double>>> nucWms(collectW ? nf : 0),
+          nucWio(collectW ? nf : 0);
+      std::map<std::pair<int, int>, MapPool> kxPools;
+      std::vector<double> kxw, bufK;
 
       for (int fam = 10; fam <= 11; ++fam) {
         const StepRows &rows = (fam == 10) ? sh.ms : sh.ioni;
@@ -1689,7 +2179,7 @@ namespace cvhcf {
               // the block's share of the STANDARDIZED variance under the
               // fit's Q
               vqblk[k] = vpool[k] / (in[k].sigma * in[k].sigma);
-              if (anyNucel && in[k].wantNucel)
+              if (wantW(k))
                 nucWms[k].emplace_back(g, wact[a]);
             }
 
@@ -1776,7 +2266,7 @@ namespace cvhcf {
               const double sgnblk = (vsig[k] < 0.) ? -1. : 1.;
               wact[a] = in[k].ioniSign * sgnblk * (std::sqrt(vpool[k] / sq2) / in[k].sigma);
               vqblk[k] = vpool[k] / (in[k].sigma * in[k].sigma);
-              if (anyNucel && in[k].wantNucel)
+              if (wantW(k))
                 nucWio[k].emplace_back(g, wact[a]);
             }
 
@@ -1839,6 +2329,42 @@ namespace cvhcf {
               }
             }
 
+            // The knock-on MAP piece of the same block, pooled per (regime,
+            // group), same weight and sign; the pools are per group, so the
+            // split is exact and costs nothing extra.
+            if (anyKx) {
+              mapPools(blk.data(), rows.stride, ns, sh.ioni.groupCol, kxPools);
+              if (!kxPools.empty()) {
+                kxw.assign(nact, 0.);
+                for (int a = 0; a < nact; ++a)
+                  if (in[kact[a]].wantKnockonMap)
+                    kxw[a] = wact[a];
+                bufK.assign(2 * static_cast<std::size_t>(nact) * kNTau, 0.);
+                mapPoolsEval(kxPools, kxw.data(), nact, bufK.data(), bufK.data() + static_cast<std::size_t>(nact) * kNTau,
+                             [&](int gg, int a, const std::complex<double> *v) {
+                               const int k = kact[a];
+                               if (!in[k].wantGroups)
+                                 return;
+                               Exponents &gsl = groupSlot(out[k].groups, gg);
+                               for (int j = 0; j < kNTau; ++j) {
+                                 gsl.kxRe[j] += v[j].real();
+                                 gsl.kxIm[j] += v[j].imag();
+                               }
+                             });
+                for (int a = 0; a < nact; ++a) {
+                  const int k = kact[a];
+                  if (!in[k].wantKnockonMap)
+                    continue;
+                  const double *Re = bufK.data() + static_cast<std::size_t>(a) * kNTau;
+                  const double *Im = Re + static_cast<std::size_t>(nact) * kNTau;
+                  for (int j = 0; j < kNTau; ++j) {
+                    out[k].S.kxRe[j] += Re[j];
+                    out[k].S.kxIm[j] += Im[j];
+                  }
+                }
+              }
+            }
+
             // The radiative channel of the SAME block: same weight, same sign.
             // The join is on the global index VALUE and never on the row
             // position -- the radiative rows are 1:1 with `msmoliv`, not with
@@ -1871,6 +2397,64 @@ namespace cvhcf {
                   for (int j = 0; j < kNTau; ++j) {
                     out[k].S.radRe[j] += Re[j];
                     out[k].S.radIm[j] += Im[j];
+                  }
+                }
+                // the knock-on map piece of the radiative rows, flat, then
+                // per group (a single-group block hands the flat numbers on)
+                if (anyKx) {
+                  kxw.assign(nact, 0.);
+                  for (int a = 0; a < nact; ++a)
+                    if (in[kact[a]].wantKnockonMap)
+                      kxw[a] = wact[a];
+                  const std::size_t off = static_cast<std::size_t>(nact) * kNTau;
+                  bufK.assign(2 * off, 0.);
+                  radMapMulti(rblk.data(), sh.rad.stride, nr, rspec.data(), sh.radvgrid, sh.radnv, kxw.data(), nact,
+                              bufK.data(), bufK.data() + off);
+                  for (int a = 0; a < nact; ++a) {
+                    const int k = kact[a];
+                    if (!in[k].wantKnockonMap)
+                      continue;
+                    const double *Re = bufK.data() + static_cast<std::size_t>(a) * kNTau;
+                    for (int j = 0; j < kNTau; ++j) {
+                      out[k].S.kxRe[j] += Re[j];
+                      out[k].S.kxIm[j] += Re[off + j];
+                    }
+                  }
+                  if (anyGroups) {
+                    std::vector<double> bufG;
+                    for (int gg : gsteps) {
+                      const std::vector<double> *src = &bufK;
+                      if (gsteps.size() > 1) {
+                        grblk.clear();
+                        grspec.clear();
+                        for (int i = 0; i < nr; ++i) {
+                          const float *r = rblk.data() + static_cast<std::size_t>(i) * sh.rad.stride;
+                          if (sh.rad.groupCol >= 0 && static_cast<int>(r[sh.rad.groupCol]) != gg)
+                            continue;
+                          grblk.insert(grblk.end(), r, r + sh.rad.stride);
+                          const float *sp = rspec.data() + static_cast<std::size_t>(i) * 2 * sh.radnv;
+                          grspec.insert(grspec.end(), sp, sp + 2 * sh.radnv);
+                        }
+                        if (grblk.empty())
+                          continue;
+                        bufG.assign(2 * off, 0.);
+                        radMapMulti(grblk.data(), sh.rad.stride, static_cast<int>(grblk.size() / sh.rad.stride),
+                                    grspec.data(), sh.radvgrid, sh.radnv, kxw.data(), nact, bufG.data(),
+                                    bufG.data() + off);
+                        src = &bufG;
+                      }
+                      for (int a = 0; a < nact; ++a) {
+                        const int k = kact[a];
+                        if (!in[k].wantKnockonMap || !in[k].wantGroups)
+                          continue;
+                        Exponents &gsl = groupSlot(out[k].groups, gg);
+                        const double *Re = src->data() + static_cast<std::size_t>(a) * kNTau;
+                        for (int j = 0; j < kNTau; ++j) {
+                          gsl.kxRe[j] += Re[j];
+                          gsl.kxIm[j] += Re[off + j];
+                        }
+                      }
+                    }
                   }
                 }
                 if (anyGroups && gsteps.size() == 1) {
@@ -1926,6 +2510,11 @@ namespace cvhcf {
           if (alive[k] && in[k].wantNucel && in[k].nucel != nullptr)
             nucelFunctional(sh, in[k], nucWms[k], nucWio[k], out[k]);
       }
+      if (anyKj) {
+        for (int k = 0; k < nf; ++k)
+          if (alive[k] && in[k].wantKnockonJoint)
+            knockonJointFunctional(sh, in[k], nucWms[k], nucWio[k], out[k]);
+      }
     }
 
   }  // namespace
@@ -1945,6 +2534,14 @@ namespace cvhcf {
 
   std::string modelTag(bool withNucel) {
     return withNucel ? modelTag() + " nuc=" + nucelTableId() : modelTag();
+  }
+
+  std::string modelTag(bool withNucel, bool knockonMap, bool knockonJoint) {
+    std::string t = modelTag(withNucel);
+    if (knockonMap || knockonJoint)
+      t += std::string(" kx=") + (knockonMap ? "1" : "0") + " kj=" + (knockonJoint ? "1" : "0") +
+           " kjrange=0.35-50MeV kxtlo=1e-4 kpool=block,group";
+    return t;
   }
 
 }  // namespace cvhcf

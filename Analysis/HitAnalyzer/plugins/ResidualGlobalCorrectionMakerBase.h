@@ -1521,6 +1521,25 @@ protected:
   void storeCfNucel(const cvhcf::TrackResult &res);
   cvhcf::NucelMixtures *nucelMixtures();
 
+  // ---- THE HARD KNOCK-ON COLLISION (exportCfKnockon) ---------------------
+  // The functional's `kx` (exact energy -> q/p map) and `kj` (joint law of
+  // loss and deflection) exponents on `cftau` (cvhcf, "THE HARD KNOCK-ON
+  // COLLISION"): `<prefix>_kx_re/_im`, `<prefix>_kj_re/_im`, kNTau each (the
+  // beam-line functional appends its two components), and under
+  // exportCfGroupExponents `<prefix>_grp_kx_re/_im`, `_grp_kj_re/_im`,
+  // n_grp x kNTau row-major, PARALLEL to `<prefix>_grp` (the same groups in
+  // the same order).  `kx` has a nonzero first moment: it is the Jensen
+  // excess of the q/p noise, not a centred family.
+  struct CfKnockonBranches {
+    std::vector<float> kxre, kxim, kjre, kjim;
+    std::vector<float> gkxre, gkxim, gkjre, gkjim;
+    void clear();
+    void append(const cvhcf::TrackResult &res, bool groups);
+    void book(TTree *t, const std::string &prefix, bool groups, int basketSize);
+  };
+  CfKnockonBranches cfKnock_, cfvtxKnock_, cfbsKnock_;
+  void clearCfKnockon();
+
   // Export switches.
   //   exportCfExponents_  -- compute and write the cf* branches at all.
   //   exportStepRecords_  -- write the RAW per-step export the exponents are
@@ -1547,6 +1566,12 @@ protected:
   //                          with it off.
   bool exportCfNucel_ = false;
   bool nucelActive_ = false;
+  //   exportCfKnockon_    -- the HARD KNOCK-ON families of the cf* exponents
+  //                          (cvhcf kx, kj; see CfKnockonBranches), for every
+  //                          functional that exports cf* exponents. OFF by
+  //                          default; the existing branches are unchanged
+  //                          bit for bit either way.
+  bool exportCfKnockon_ = false;
   //   exportPerHitResidual_ -- build and write the per-hit (complement)
   //                          residual block above.  OFF by default: it costs
   //                          `d` extra `cvhcf` evaluations per track.
