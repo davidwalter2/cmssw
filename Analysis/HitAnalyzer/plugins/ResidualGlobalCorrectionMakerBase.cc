@@ -3,6 +3,7 @@
 #include <memory>
 
 #include "ResidualGlobalCorrectionMakerBase.h"
+#include "G4MaterialTableTree.h"
 #include "TrackPropagation/Geant4e/interface/G4UniversalFluctuationForExtrapolator.hh"
 
 // user include files
@@ -222,6 +223,10 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   // material + field fit need it.
   exportCfGroupExponents_ = iConfig.existsAs<bool>("exportCfGroupExponents")
                            ? iConfig.getParameter<bool>("exportCfGroupExponents") : false;
+  // THE NUCLEAR-ELASTIC FAMILY of the cf* exponents (hadron tracks only; see
+  // `nucelActive_`, set by the derived maker from its configured species).
+  exportCfNucel_ = iConfig.existsAs<bool>("exportCfNucel")
+                           ? iConfig.getParameter<bool>("exportCfNucel") : false;
   exportHitResBlocks_ = iConfig.existsAs<bool>("exportHitResBlocks")
                            ? iConfig.getParameter<bool>("exportHitResBlocks") : true;
   // THE PER-HIT (COMPLEMENT) RESIDUAL BLOCK.  New export, off by default so
@@ -585,6 +590,13 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
         // written out for the same reason as `radstepstride` /
         // `ioniurbanstride`: no reader may hard-code the stride
         tree->Branch("msmolistride", &msmolistride);
+        // per-record G4Material index, resolved by the `materials` tree
+        tree->Branch("msmatv", &msmatv);
+        writeMaterialTable_ = true;
+        if (nucelActive_) {
+          // the species the nuclear-elastic family used for each record
+          tree->Branch("mspdgv", &mspdgv);
+        }
         tree->Branch("reseigv", &reseigv);
         tree->Branch("resinfv", &resinfv);
         tree->Branch("resinfbv", &resinfbv);
@@ -627,6 +639,21 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
         }
         tree->Branch((cfprefix_ + "_hitcls").c_str(), &cfhitclsv);
         tree->Branch((cfprefix_ + "_hitv").c_str(), &cfhitvv);
+        if (nucelActive_) {
+          // fail at configuration time, not mid-event, if the table is unusable
+          cvhcf::loadNucelTables();
+          tree->Branch((cfprefix_ + "_nuc_ang").c_str(), &cfnucangv);
+          tree->Branch((cfprefix_ + "_nuc_rec_re").c_str(), &cfnucrecrev);
+          tree->Branch((cfprefix_ + "_nuc_rec_im").c_str(), &cfnucrecimv);
+          tree->Branch("nuc_N", &nucN);
+          if (exportCfGroupExponents_) {
+            tree->Branch((cfprefix_ + "_grp_nuc").c_str(), &cfgrpnucv);
+            tree->Branch((cfprefix_ + "_grp_nuc_ang").c_str(), &cfgrpnucangv, basketSize);
+            tree->Branch((cfprefix_ + "_grp_nuc_rec_re").c_str(), &cfgrpnucrecrev, basketSize);
+            tree->Branch((cfprefix_ + "_grp_nuc_rec_im").c_str(), &cfgrpnucrecimv, basketSize);
+            tree->Branch((cfprefix_ + "_grp_nuc_N").c_str(), &cfgrpnucNv);
+          }
+        }
       }
 
       // THE VERTEX-CONSTRAINT RESIDUAL of the two-track fit. Same structure
@@ -920,6 +947,14 @@ void ResidualGlobalCorrectionMakerBase::endStream()
   // hessval = item.second;
   // hesstree->Fill();
   // }
+
+    // The G4 material table that resolves `msmatv`, once per output file.
+    // Filled here, after the event loop, so the Geant4 geometry (and with it
+    // every material a step can reference) is certain to exist.
+    if (writeMaterialTable_) {
+      TTree *mattree = new TTree("materials", "G4 material table: elements, atomic masses, mass fractions");
+      cvh::fillG4MaterialTree(*mattree);
+    }
 
     fout->Write();
     fout->Close();
@@ -1268,7 +1303,7 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       // (re)armed HERE and not only at branch creation, so a second beginRun
       // does not write an empty grid.
       cftau.assign(cvhcf::tauGrid(), cvhcf::tauGrid() + cvhcf::kNTau);
-      cfmodel = cvhcf::modelTag();
+      cfmodel = cvhcf::modelTag(nucelActive_);
     }
     unsigned int globalidx = 0;
     for (const auto& key: parmset) {
@@ -2236,6 +2271,60 @@ int ResidualGlobalCorrectionMakerBase::hitResClassIndex(int subdet, int sizeX, f
   }
   const int n = std::min(std::max(sizeX, 1), 5);
   return 8 + 2 * (n - 1) + (uProj < 0.25f ? 0 : 1);
+}
+
+void ResidualGlobalCorrectionMakerBase::clearCfNucel() {
+  cfnucangv.clear();
+  cfnucrecrev.clear();
+  cfnucrecimv.clear();
+  nucN = 0.f;
+  cfgrpnucv.clear();
+  cfgrpnucangv.clear();
+  cfgrpnucrecrev.clear();
+  cfgrpnucrecimv.clear();
+  cfgrpnucNv.clear();
+}
+
+void ResidualGlobalCorrectionMakerBase::storeCfNucel(const cvhcf::TrackResult &res) {
+  clearCfNucel();
+  if (!res.nucel) {
+    return;
+  }
+  const int nt = cvhcf::kNTau;
+  cfnucangv.resize(nt);
+  cfnucrecrev.resize(nt);
+  cfnucrecimv.resize(nt);
+  for (int j = 0; j < nt; ++j) {
+    cfnucangv[j] = float(res.nuc.ang[j]);
+    cfnucrecrev[j] = float(res.nuc.recRe[j]);
+    cfnucrecimv[j] = float(res.nuc.recIm[j]);
+  }
+  nucN = float(res.nuc.N);
+  if (!exportCfGroupExponents_) {
+    return;
+  }
+  for (const auto &ge : res.nucGroups) {
+    cfgrpnucv.push_back(static_cast<short>(ge.first));
+    cfgrpnucNv.push_back(float(ge.second.N));
+    for (int j = 0; j < nt; ++j) {
+      cfgrpnucangv.push_back(float(ge.second.ang[j]));
+      cfgrpnucrecrev.push_back(float(ge.second.recRe[j]));
+      cfgrpnucrecimv.push_back(float(ge.second.recIm[j]));
+    }
+  }
+}
+
+cvhcf::NucelMixtures *ResidualGlobalCorrectionMakerBase::nucelMixtures() {
+  if (!nucMix_) {
+    // Resolved lazily and by index from THIS job's Geant4 material table --
+    // indices and compositions are job specific, so nothing per index is
+    // shipped. The table is process-wide and complete once the geometry
+    // exists, which it does by the time a track has been propagated.
+    nucMix_ = std::make_unique<cvhcf::NucelMixtures>([](int idx, cvhcf::NucelComposition &c) {
+      return cvh::g4MaterialComposition(idx, c.Z, c.A, c.W);
+    });
+  }
+  return nucMix_.get();
 }
 
 void ResidualGlobalCorrectionMakerBase::storeCfGroups(const cvhcf::TrackResult &res) {

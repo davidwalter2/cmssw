@@ -39,6 +39,11 @@ globalCorLambda = cms.EDProducer(
     l1Results = cms.InputTag('gtDigis', '', 'RECO'),
     l1Triggers = cms.vstring(),
     doRes = cms.bool(False),
+    # The nuclear-elastic (hadElastic) family of the resolution-CF exponents
+    # (cvhcf NucelExponents, per-element targets, tables
+    # TrackPropagation/Geant4e/data/cvhcf_nucel_v1.bin); needs doRes and the
+    # cf exponents. Off until the family is adopted.
+    exportCfNucel = cms.bool(False),
     useIdealGeometry = cms.bool(True),
     # The luminous-region rows (see the beam-line block in
     # ResidualGlobalCorrectionMakerBase.h) are OFF here because Lambda -> p pi is DISPLACED by construction.
