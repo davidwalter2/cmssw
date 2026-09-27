@@ -48,7 +48,11 @@
 //   * S_nuc  -- hadron tracks only, on request (`TrackInput::wantNucel`):
 //               the nuclear-elastic family, `ks_nucel_cf.step_family` on the
 //               per-element tables `data/cvhcf_nucel_v1.bin` (see
-//               NucelExponents below).
+//               NucelExponents below);
+//   * S_kx, S_kj -- on request (`wantKnockonMap`, `wantKnockonJoint`): the
+//               hard knock-on collision exactly, `cf_knockon.fit_map` /
+//               `map_rad` / `fit_joint` (see "THE HARD KNOCK-ON COLLISION"
+//               below).
 //
 // THE PORTED SWITCH CONFIGURATION is the offline production default and is
 // recorded in `modelTag()` (which the makers write into the runtree, so a file
@@ -111,6 +115,13 @@ namespace cvhcf {
     std::array<double, kNTau> ioIm{};
     std::array<double, kNTau> radRe{};
     std::array<double, kNTau> radIm{};
+    // the hard knock-on collision (TrackInput::wantKnockonMap / _Joint):
+    // the exact energy -> q/p map (kx) and the joint law of loss and
+    // deflection (kj); zero unless requested
+    std::array<double, kNTau> kxRe{};
+    std::array<double, kNTau> kxIm{};
+    std::array<double, kNTau> kjRe{};
+    std::array<double, kNTau> kjIm{};
     void clear();
   };
 
@@ -210,7 +221,75 @@ namespace cvhcf {
     const int *msmat = nullptr;
     const int *mspdg = nullptr;
     NucelMixtures *nucel = nullptr;
+
+    // THE HARD KNOCK-ON COLLISION (see below).  `wantKnockonMap` fills
+    // S.kx from the ionisation and radiative rows; `wantKnockonJoint` fills
+    // S.kj from the MS rows and needs `rad` parallel to `ms` (checked: a
+    // mismatch throws).  The joint piece takes X = T_eff when the map is on.
+    // Both split by material group under `wantGroups`.
+    bool wantKnockonMap = false;
+    bool wantKnockonJoint = false;
   };
+
+  //------------------------------------------------------------------------
+  // THE HARD KNOCK-ON COLLISION  (offline reference: cf_knockon, the
+  // fit-level functions; IONISATION_MODEL.md, "The hard knock-on collision
+  // exactly").
+  //
+  // The model carries a knock-on collision of energy T as an energy loss
+  // mapped LINEARLY into q/p (S_ioni, S_rad) and its deflection as an
+  // INDEPENDENT kick (S_del).  Per collision the truth is one event,
+  //     d(q/p) = q cs T_eff,  T_eff = p^2 T (2E - T) / (E p' (p + p')),
+  //     theta  = sqrt(2 m_e T) / p   (S_del's theta),
+  // and the difference to the exponent splits as
+  //   kx = INT dN [e^{i a T_eff} - e^{i a T}]          (the MAP: the Jensen
+  //        mean and the stretched tail; on the ionisation rows over the
+  //        channel's own exact-delta spectrum [e0, tmax], the part below
+  //        1e-4 tmax in closed form, and on the radiative rows);
+  //   kj = INT dN (e^{i a X} - 1)(J0(b theta) - 1)     (the JOINT law; on the
+  //        MS rows over S_del's range, rate and spin factor, T in
+  //        [0.35, min(Tmax, 50)] MeV, X = T_eff with the map on).
+  // a is the ionisation weight of the step (signed, per MeV), b the MS
+  // block's.  Each row pairs with the ionisation block of the SAME leg at the
+  // SAME step through the parallel radiative rows (as the nuclear-elastic
+  // recoil).  Quadrature: Filon-Simpson (amplitude quadratic per panel,
+  // phase exact), 40 nodes per decade plus 30 in (tmax - T).
+  //
+  // POOLED: the ionisation rows of a block pool per (regime, material
+  // group), the MS rows per (MS block, ionisation block, material group),
+  // into one row with the summed xi and the xi-weighted mean kinematics and
+  // weights -- exactly as the reference does; <= 3e-7 on S from the per-row
+  // form.  The pools are per group, so the flat family is the sum of its
+  // split.  kx has a nonzero mean (S'(0) != 0): consumers must not assume
+  // the family is centred.
+
+  // kx of one pooled ionisation block (`ioniurbanv` rows, stride >= 13;
+  // `groupCol` the material-group column or -1), accumulated.
+  void knockonMapBlock(const float *rows, int stride, int n, int groupCol, double wstdSigned, double *Sre, double *Sim);
+  // kx of the radiative rows of the block (radBlock's arguments).
+  void knockonMapRad(const float *rows,
+                     int stride,
+                     int n,
+                     const float *spec,
+                     const float *vgrid,
+                     int nv,
+                     double wstdSigned,
+                     double *Sre,
+                     double *Sim);
+  // kj of `n` `msmoliv` rows with per-row signed energy weights `alpha`
+  // [z per MeV] and angular weights `beta` [z per rad], pooled by
+  // (msidx, ioniidx, group); `exact` = X = T_eff.
+  void knockonJointRows(const float *rows,
+                        int stride,
+                        int n,
+                        const unsigned int *msidx,
+                        const unsigned int *ioniidx,
+                        int groupCol,
+                        const double *alpha,
+                        const double *beta,
+                        bool exact,
+                        double *Sre,
+                        double *Sim);
 
   //------------------------------------------------------------------------
   // THE NUCLEAR-ELASTIC FAMILY (hadElastic), for hadron tracks.
@@ -470,6 +549,9 @@ namespace cvhcf {
   // (" nuc=cvhcf_nucel_v1") when that family is exported; `modelTag(false)`
   // is `modelTag()`.
   std::string modelTag(bool withNucel);
+  // ... and with the knock-on families' configuration appended
+  // (" kx=1 kj=1 kjrange=0.35-50MeV kxtlo=1e-4 kpool=block,group").
+  std::string modelTag(bool withNucel, bool knockonMap, bool knockonJoint);
 
   // Load the Moliere shape tables. Called automatically on first use; exposed
   // so a job can fail at configuration time rather than mid-event, and so the

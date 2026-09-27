@@ -2144,6 +2144,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       cfhitclsv.clear();
       cfhitvv.clear();
       clearCfNucel();
+      clearCfKnockon();
       resinfcov = 0.;
       resinfcovhit = 0.f;
       resinfcovgrp = 0.f;
@@ -4960,6 +4961,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           cfin.mspdg = mspdgv.data();
           cfin.nucel = nucelMixtures();
         }
+        // the hard knock-on families, on the same rows and weights
+        cfin.wantKnockonMap = exportCfKnockon_;
+        cfin.wantKnockonJoint = exportCfKnockon_;
       }
       if (exportCfExponents_) {
         cvhcf::TrackResult cfres;
@@ -4981,6 +4985,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         storecf(cfres.S.radIm, cfradimv);
         storeCfGroups(cfres);
         storeCfNucel(cfres);
+        if (exportCfKnockon_) {
+          cfKnock_.append(cfres, exportCfGroupExponents_);
+        }
         // Per-hit-class Gaussian shares of the q/p variance, ascending in
         // class. Here `vgauss` (and hence `cfqop_vgf`) IS the sum over the
         // parmtype-8/9 blocks, so `sum_c cfqop_hitv == cfqop_vgf` exactly.
@@ -5468,6 +5475,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             for (int kk = 0; kk < ntot; ++kk) {
               cvhcf::TrackInput ci = cfin;
               ci.wantNucel = false;   // not part of the per-hit components
+              ci.wantKnockonMap = ci.wantKnockonJoint = false;   // nor these
               ci.sigma = 1.;
               ci.ioniSign = refParms[0] >= 0.f ? 1. : -1.;
               if (perHitShareMin_ > 0.) {

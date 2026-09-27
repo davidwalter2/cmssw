@@ -128,6 +128,12 @@ opts.register('exportCfNucel', False, VarParsing.VarParsing.multiplicity.singlet
               '(cf*_nuc_ang, cf*_nuc_rec_re/_im, nuc_N; per material group with '
               'exportCfGroupExponents). Hadron species only: a muon maker '
               'writes nothing extra')
+opts.register('exportCfKnockon', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'add the HARD KNOCK-ON families to the CF exponents: the exact '
+              'energy -> q/p map (cf*_kx_re/_im) and the joint law of loss and '
+              'deflection (cf*_kj_re/_im); per material group with '
+              'exportCfGroupExponents')
 opts.register('exportCfGroupExponents', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'additionally split the CF exponents by parmtype-15 MATERIAL '
@@ -515,6 +521,7 @@ process.globalCor = cms.EDProducer(
     exportCfExponents=cms.bool(bool(opts.exportCfExponents)),
     exportCfGroupExponents=cms.bool(bool(opts.exportCfGroupExponents)),
     exportCfNucel=cms.bool(bool(opts.exportCfNucel)),
+    exportCfKnockon=cms.bool(bool(opts.exportCfKnockon)),
     exportPerHitResidual=cms.bool(bool(opts.exportPerHitResidual)),
     perHitCfGroups=cms.bool(bool(opts.perHitCfGroups)),
     perHitShareMin=cms.double(float(opts.perHitShareMin)),

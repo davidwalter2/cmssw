@@ -227,6 +227,9 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   // `nucelActive_`, set by the derived maker from its configured species).
   exportCfNucel_ = iConfig.existsAs<bool>("exportCfNucel")
                            ? iConfig.getParameter<bool>("exportCfNucel") : false;
+  // THE HARD KNOCK-ON FAMILIES of the cf* exponents (cvhcf kx, kj).
+  exportCfKnockon_ = iConfig.existsAs<bool>("exportCfKnockon")
+                           ? iConfig.getParameter<bool>("exportCfKnockon") : false;
   exportHitResBlocks_ = iConfig.existsAs<bool>("exportHitResBlocks")
                            ? iConfig.getParameter<bool>("exportHitResBlocks") : true;
   // THE PER-HIT (COMPLEMENT) RESIDUAL BLOCK.  New export, off by default so
@@ -639,6 +642,9 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
         }
         tree->Branch((cfprefix_ + "_hitcls").c_str(), &cfhitclsv);
         tree->Branch((cfprefix_ + "_hitv").c_str(), &cfhitvv);
+        if (exportCfKnockon_) {
+          cfKnock_.book(tree, cfprefix_, exportCfGroupExponents_, basketSize);
+        }
         if (nucelActive_) {
           // fail at configuration time, not mid-event, if the table is unusable
           cvhcf::loadNucelTables();
@@ -703,6 +709,9 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
           tree->Branch("cfvtx_rad_im", &cfvtxradimv);
           tree->Branch("cfvtx_hitcls", &vtxhitclsv);
           tree->Branch("cfvtx_hitv", &vtxhitvv);
+          if (exportCfKnockon_) {
+            cfvtxKnock_.book(tree, "cfvtx", exportCfGroupExponents_, basketSize);
+          }
           if (exportCfGroupExponents_) {
             tree->Branch("cfvtx_grp", &cfvtxgrpv);
             tree->Branch("cfvtx_grp_ms", &cfvtxgrpmsv, basketSize);
@@ -772,6 +781,9 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
           tree->Branch("cfbs_hitcls", &cfbshitclsv);
           tree->Branch("cfbs_hitcomp", &cfbshitcompv);
           tree->Branch("cfbs_hitv", &cfbshitvv);
+          if (exportCfKnockon_) {
+            cfbsKnock_.book(tree, "cfbs", exportCfGroupExponents_, basketSize);
+          }
           if (exportCfGroupExponents_) {
             tree->Branch("cfbs_grp", &cfbsgrpv);
             tree->Branch("cfbs_grpcomp", &cfbsgrpcompv);
@@ -1303,7 +1315,7 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       // (re)armed HERE and not only at branch creation, so a second beginRun
       // does not write an empty grid.
       cftau.assign(cvhcf::tauGrid(), cvhcf::tauGrid() + cvhcf::kNTau);
-      cfmodel = cvhcf::modelTag(nucelActive_);
+      cfmodel = cvhcf::modelTag(nucelActive_, exportCfKnockon_, exportCfKnockon_);
     }
     unsigned int globalidx = 0;
     for (const auto& key: parmset) {
@@ -2312,6 +2324,59 @@ void ResidualGlobalCorrectionMakerBase::storeCfNucel(const cvhcf::TrackResult &r
       cfgrpnucrecimv.push_back(float(ge.second.recIm[j]));
     }
   }
+}
+
+void ResidualGlobalCorrectionMakerBase::CfKnockonBranches::clear() {
+  kxre.clear();
+  kxim.clear();
+  kjre.clear();
+  kjim.clear();
+  gkxre.clear();
+  gkxim.clear();
+  gkjre.clear();
+  gkjim.clear();
+}
+
+void ResidualGlobalCorrectionMakerBase::CfKnockonBranches::append(const cvhcf::TrackResult &res, bool groups) {
+  for (int j = 0; j < cvhcf::kNTau; ++j) {
+    kxre.push_back(float(res.S.kxRe[j]));
+    kxim.push_back(float(res.S.kxIm[j]));
+    kjre.push_back(float(res.S.kjRe[j]));
+    kjim.push_back(float(res.S.kjIm[j]));
+  }
+  if (!groups) {
+    return;
+  }
+  for (const auto &g : res.groups) {
+    for (int j = 0; j < cvhcf::kNTau; ++j) {
+      gkxre.push_back(float(g.S.kxRe[j]));
+      gkxim.push_back(float(g.S.kxIm[j]));
+      gkjre.push_back(float(g.S.kjRe[j]));
+      gkjim.push_back(float(g.S.kjIm[j]));
+    }
+  }
+}
+
+void ResidualGlobalCorrectionMakerBase::CfKnockonBranches::book(TTree *t,
+                                                                const std::string &prefix,
+                                                                bool groups,
+                                                                int basketSize) {
+  t->Branch((prefix + "_kx_re").c_str(), &kxre);
+  t->Branch((prefix + "_kx_im").c_str(), &kxim);
+  t->Branch((prefix + "_kj_re").c_str(), &kjre);
+  t->Branch((prefix + "_kj_im").c_str(), &kjim);
+  if (groups) {
+    t->Branch((prefix + "_grp_kx_re").c_str(), &gkxre, basketSize);
+    t->Branch((prefix + "_grp_kx_im").c_str(), &gkxim, basketSize);
+    t->Branch((prefix + "_grp_kj_re").c_str(), &gkjre, basketSize);
+    t->Branch((prefix + "_grp_kj_im").c_str(), &gkjim, basketSize);
+  }
+}
+
+void ResidualGlobalCorrectionMakerBase::clearCfKnockon() {
+  cfKnock_.clear();
+  cfvtxKnock_.clear();
+  cfbsKnock_.clear();
 }
 
 cvhcf::NucelMixtures *ResidualGlobalCorrectionMakerBase::nucelMixtures() {
