@@ -491,6 +491,45 @@ def nanoAOD_addCvhMuonBranches(process, initFile=None, isMC=False, useScalarPot3
 
 
 
+# --- Pixel pathological-hit classes in the CVH refits -----------------------
+# The legacy hit-quality cut demotes pixel hits whose cluster touches the sensor
+# edge or is one pixel wide in local x (27-29 % of the pixel hits on muon tracks
+# in MC, 33-35 % in 2016 data). cvhPixelClassHits re-admits them and registers
+# the per-pixel-module class-correction parameters (parmtypes 16-21: edge-x
+# mean/diff, edge-y mean/diff, sizeX1, sizeY1) whose Jacobian columns then enter
+# globalIdxs/jacRef, so the linear calibration can correct their CPE biases
+# (20-100 um, measured in calibration_studies/pixelhits).
+#
+# The CATALOG CHANGES (8640 parameters appended after the existing blocks, so
+# every existing index is unchanged): the calibration that is applied to this
+# nano must be derived with the same setting on the J/psi grads production.
+#
+# lorentz=True uses the dtanLA physics parameter (22) in place of 16 and 20.
+# Not needed for the linear calibration: 22 is an exact per-module linear
+# combination of the 0 (local-x alignment), 16 and 20 columns, so the empirical
+# set is the superset and the physics model can be imposed at solve time.
+_cvhRefitLabels = ("trackrefit", "trackrefitideal", "trackrefitbs", "trackrefitdimuon")
+
+def cvhPixelClassHits(process, lorentz=False):
+    """Re-admit edge / single-pixel clusters + class-correction columns in
+    every CVH refit maker present in `process`."""
+    nset = 0
+    for label in _cvhRefitLabels:
+        if not hasattr(process, label):
+            continue
+        maker = getattr(process, label)
+        maker.applyHitQuality = cms.bool(True)
+        maker.keepPixelEdgeHits = cms.bool(True)
+        maker.pixelMinSizeX = cms.int32(1)
+        maker.pixelHitClassCorrections = cms.bool(True)
+        maker.pixelLorentzParam = cms.bool(bool(lorentz))
+        nset += 1
+    if nset == 0:
+        raise RuntimeError("cvhPixelClassHits: no CVH refit maker in the process "
+                           "(run it after nanoAOD_addCvhMuon[MC])")
+    return process
+
+
 # Revert back to AK4 CHS jets for Run 2
 run2_muon.toModify(
     ptRatioRelForMu,srcJet="updatedJets"

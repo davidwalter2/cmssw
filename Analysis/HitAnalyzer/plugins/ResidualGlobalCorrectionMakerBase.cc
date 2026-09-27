@@ -354,14 +354,30 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   // mfs/dump_coeffs_for_cmssw.py. The basis (l_max, mode list, Schmidt
   // convention) and the absolute-field starting point come from there;
   // the global fit refines those coefficients through parmtype-14 modes.
-  scalarPotentialInitFile_ = iConfig.getParameter<std::string>("scalarPotentialInitFile");
-  if (scalarPotentialInitFile_.empty()) {
-    throw cms::Exception("Configuration")
-        << "ResidualGlobalCorrectionMakerBase: scalarPotentialInitFile cfi "
-           "parameter must be set to a coefficient dump file path";
+  perModuleBfield_ = iConfig.existsAs<bool>("perModuleBfield")
+      ? iConfig.getParameter<bool>("perModuleBfield") : false;
+  if (perModuleBfield_) {
+    // perStepFieldModes defaults to True for the scalar-potential block;
+    // it has no meaning for leg-constant per-module offsets.
+    if (iConfig.existsAs<bool>("perStepFieldModes") &&
+        iConfig.getParameter<bool>("perStepFieldModes")) {
+      throw cms::Exception("Configuration")
+          << "perModuleBfield=True requires perStepFieldModes=False";
+    }
+    perStepFieldModes_ = false;
   }
-  fieldCorrection_ = std::make_unique<ana_hitanalyzer::ScalarPotentialFieldCorrection>(
-      scalarPotentialInitFile_);
+  scalarPotentialInitFile_ = iConfig.existsAs<std::string>("scalarPotentialInitFile")
+      ? iConfig.getParameter<std::string>("scalarPotentialInitFile") : std::string();
+  if (!perModuleBfield_) {
+    if (scalarPotentialInitFile_.empty()) {
+      throw cms::Exception("Configuration")
+          << "ResidualGlobalCorrectionMakerBase: scalarPotentialInitFile cfi "
+             "parameter must be set to a coefficient dump file path "
+             "(or perModuleBfield=True)";
+    }
+    fieldCorrection_ = std::make_unique<ana_hitanalyzer::ScalarPotentialFieldCorrection>(
+        scalarPotentialInitFile_);
+  }
   if (perStepFieldModes_) {
     // corparms_ is a member, so its address is stable for the maker's
     // lifetime; the provider always sees the current coefficients.
@@ -1141,6 +1157,10 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       if (!globalMaterialModel_) {
         parmset.emplace(7, parmdetid);
       }
+      // per-module Bz (10_6 scheme), same module granularity as parmtype 7
+      if (perModuleBfield_) {
+        parmset.emplace(6, parmdetid);
+      }
       
       if (doRes_) {
         // hit resolution parameters are associated to individual modules
@@ -1165,7 +1185,9 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
 
   // Register global scalar-potential B-field modes as sentinel parmset
   // entries (parmtype = ParmTypeBfieldGlobal, DetId(modeIdx)).
-  fieldCorrection_->appendParmsetEntries(parmset);
+  if (fieldCorrection_) {
+    fieldCorrection_->appendParmsetEntries(parmset);
+  }
 
   // Register global material groups as sentinel parmset entries
   // (parmtype = ParmTypeMaterialGlobal, DetId(groupIdx)), replacing the
@@ -1531,8 +1553,12 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
     std::cout << "nglobalparms = " << detidparms.size() << std::endl;
 
     // Resolve scalar-potential basis global indices now that detidparms is built.
-    fieldCorrection_->resolveGlobalIndices(detidparms);
-    std::cout << "scalar-potential field correction: " << fieldCorrection_->nModes() << " modes" << std::endl;
+    if (fieldCorrection_) {
+      fieldCorrection_->resolveGlobalIndices(detidparms);
+      std::cout << "scalar-potential field correction: " << fieldCorrection_->nModes() << " modes" << std::endl;
+    } else {
+      std::cout << "per-module B-field correction (parmtype 6): one Bz offset per module" << std::endl;
+    }
 
     // Resolve the material groups' global indices (parmtype-15 sentinels).
     matGroupGlobalIdx_.clear();
@@ -1604,7 +1630,7 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
     // corFiles. The other parmtypes (per-module alignment, dxi, etc.) are
     // accumulated as before.
     std::vector<bool> isFieldGlobalIdx(parmset.size(), false);
-    {
+    if (fieldCorrection_) {
       const unsigned int nFieldModes = fieldCorrection_->nModes();
       for (unsigned int imode = 0; imode < nFieldModes; ++imode) {
         isFieldGlobalIdx[fieldCorrection_->basisGlobalIdx(imode)] = true;
@@ -2082,6 +2108,47 @@ GloballyPositioned<double> ResidualGlobalCorrectionMakerBase::surfaceToDouble(co
 
   return res;
 
+}
+
+unsigned int ResidualGlobalCorrectionMakerBase::nFieldSlots() const {
+  return perModuleBfield_ ? 1u : fieldCorrection_->nModes();
+}
+
+Eigen::Vector3d ResidualGlobalCorrectionMakerBase::legFieldCorrection(const GlobalPoint &pos,
+                                                                      const DetId &legdetid,
+                                                                      std::vector<double> &dBxPerSlot,
+                                                                      std::vector<double> &dByPerSlot,
+                                                                      std::vector<double> &dBzPerSlot) const {
+  if (perModuleBfield_) {
+    // one leg-constant Bz offset: basis (0, 0, 1), so the chain rule picks
+    // the dBz column of the transport Jacobian, exactly the 10_6 column
+    dBxPerSlot.assign(1, 0.);
+    dByPerSlot.assign(1, 0.);
+    dBzPerSlot.assign(1, 1.);
+    return Eigen::Vector3d(0., 0., corparms_[detidparms.at(std::make_pair(6, legdetid))]);
+  }
+  if (perStepFieldModes_) {
+    // the provider applies the correction inside the propagator
+    return Eigen::Vector3d::Zero();
+  }
+  fieldCorrection_->getBxBasisAt(pos, dBxPerSlot);
+  fieldCorrection_->getByBasisAt(pos, dByPerSlot);
+  fieldCorrection_->getBzBasisAt(pos, dBzPerSlot);
+  return fieldCorrection_->getCorrectionAt(pos, corparms_);
+}
+
+unsigned int ResidualGlobalCorrectionMakerBase::fieldSlotGlobalIdx(unsigned int islot,
+                                                                   const DetId &legdetid) const {
+  return perModuleBfield_ ? detidparms.at(std::make_pair(6, legdetid))
+                          : fieldCorrection_->basisGlobalIdx(islot);
+}
+
+Eigen::Vector3d ResidualGlobalCorrectionMakerBase::referenceFieldCorrection(const GlobalPoint &refpos,
+                                                                            const DetId &firsthitdetid) const {
+  if (perModuleBfield_) {
+    return Eigen::Vector3d(0., 0., corparms_[detidparms.at(std::make_pair(6, firsthitdetid))]);
+  }
+  return fieldCorrection_->getCorrectionAt(refpos, corparms_);
 }
 
 void ResidualGlobalCorrectionMakerBase::applyAlignment(GloballyPositioned<double> &surface, const DetId &detid) const {

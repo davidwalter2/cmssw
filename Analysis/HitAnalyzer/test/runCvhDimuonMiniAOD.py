@@ -357,6 +357,13 @@ opts.register('edmConvergence', 1e-5, VarParsing.VarParsing.multiplicity.singlet
               VarParsing.VarParsing.varType.float,
               'EDM convergence threshold on the reference-state block '
               '(0 disables early stopping)')
+opts.register('pixelClassHits', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              're-admit pixel edge / single-pixel clusters and emit the '
+              'per-pixel-module class-correction columns (parmtypes 16-21): '
+              'keepPixelEdgeHits=True pixelMinSizeX=1 pixelHitClassCorrections=True. '
+              'All channels of one calibration must use the same setting '
+              '(the parameter catalog changes)')
 opts.register('keepPixelEdgeHits', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'keep pixel hits whose cluster touches the sensor boundary')
@@ -430,7 +437,7 @@ opts.register('useDefaultField', True, VarParsing.VarParsing.multiplicity.single
               'width. Takes precedence over useOpera3D and useScalarPot3D.')
 opts.register('useOpera3D', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
-              'use the full 3D TOSCA volumetric grid (160812) as the baseline '
+              'use the full 3D TOSCA volumetric grid (version: operaVersion) as the baseline '
               'field; reserved as a deliberate injected-field systematic on a '
               'subset, not as the baseline for a closure test.')
 opts.register('useScalarPot3D', True, VarParsing.VarParsing.multiplicity.singleton,
@@ -449,6 +456,20 @@ opts.register('useScalarPot3D', True, VarParsing.VarParsing.multiplicity.singlet
 import TrackPropagation.Geant4e.cvhSwitches as cvhSwitches
 cvhSwitches.register(opts)
 
+opts.register('perModuleBfield', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'per-module B-field corrections (10_6 scheme): one Bz offset per '
+              'module (parmtype 6) instead of the scalar-potential modes '
+              '(parmtype 14, then not registered); forces perStepFieldModes=False '
+              'and needs no scalarPot3DInitFile when the baseline field is not '
+              'ScalarPot3D. The full module-level configuration is '
+              'perModuleBfield=True globalMaterialModel=False useOpera3D=True '
+              '(data; useDefaultField=True for MC where available)')
+opts.register('operaVersion', '160812', VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.string,
+              'OPERA/TOSCA map used by useOpera3D=True: 160812 (release tables) or '
+              '170812 (latest model, DD4hep builder + merged tables on '
+              'CMSSW_SEARCH_PATH, see Analysis/HitAnalyzer/python/cvhOperaField.py)')
 opts.parseArguments()
 
 # TWO-TRACK DEFAULT IS THE Q-MATRIX ESTIMATOR. Under CgfQoPMode >= 1 the
@@ -464,7 +485,7 @@ if opts.CgfQoPMode < 0:
 
 assert opts.input or opts.inputFileList, \
     "must set input=<paths> and/or inputFileList=<file>"
-if not opts.scalarPot3DInitFile:
+if not opts.scalarPot3DInitFile and not opts.perModuleBfield:
     raise SystemExit(
         "scalarPot3DInitFile=<path> is required (coefficient dump file): "
         "the basis evaluator in globalCor needs it for chain-rule columns "
@@ -580,20 +601,11 @@ if opts.useDefaultField:
     # same field as everything else.
     fieldlabel = ""
 elif opts.useOpera3D:
-    from MagneticField.Engine.volumeBasedMagneticField_160812_cfi import \
-        VolumeBasedMagneticFieldESProducer as Opera3DMagneticFieldProducer
-    from MagneticField.Engine.volumeBasedMagneticField_160812_cfi import \
-        magfield as MagneticFieldGeometry
-    process.magfield = MagneticFieldGeometry
-    process.es_prefer_magfield_cvhrefit = cms.ESPrefer("XMLIdealGeometryESSource", "magfield")
-    process.Opera3DMagneticFieldProducer = Opera3DMagneticFieldProducer
-    fieldlabel = "grid_160812_3_8t"
-    process.Opera3DMagneticFieldProducer.label = fieldlabel
-    process.Opera3DMagneticFieldProducer.useParametrizedTrackerField = cms.bool(False)
-    for _cpe in ("stripCPEESProducer", "StripCPEfromTrackAngleESProducer",
-                 "siPixelTemplateDBObjectESProducer", "templates"):
-        if hasattr(process, _cpe):
-            getattr(process, _cpe).MagneticFieldLabel = fieldlabel
+    # OPERA/TOSCA volume-based map as the labelled baseline field (full 3D
+    # grid in the tracker), routed into the CPEs; one implementation shared
+    # with the NanoAOD customise (Analysis/HitAnalyzer/python/cvhOperaField.py).
+    from Analysis.HitAnalyzer.cvhOperaField import setupOpera3DField
+    fieldlabel = setupOpera3DField(process, version=opts.operaVersion)
 elif not opts.useScalarPot3D:
     raise RuntimeError(
         "useScalarPot3D=False is not supported; the legacy non-thread-safe "
@@ -670,7 +682,8 @@ process.trackrefitdimuon = ResidualGlobalCorrectionMakerDiMuonG4e.clone(
     scalarPotentialInitFile=cms.string(opts.scalarPot3DInitFile),
     materialGroupsFile=cms.string(opts.materialGroupsFile),
     globalMaterialModel=cms.bool(bool(opts.globalMaterialModel)),
-    perStepFieldModes=cms.bool(bool(opts.perStepFieldModes)),
+    perStepFieldModes=cms.bool(bool(opts.perStepFieldModes) and not opts.perModuleBfield),
+    perModuleBfield=cms.bool(bool(opts.perModuleBfield)),
     localUpdate=cms.bool(bool(opts.localUpdate)),
     skipHitlessSurfaces=cms.bool(bool(opts.skipHitlessSurfaces)
                                  and bool(opts.globalMaterialModel)),
@@ -717,8 +730,9 @@ process.trackrefitdimuon = ResidualGlobalCorrectionMakerDiMuonG4e.clone(
     doMassConstraint=cms.bool(bool(opts.doMassConstraint)),
     massConstraint=cms.double(float(opts.massConstraint)),
     massConstraintWidth=cms.double(float(opts.massConstraintWidth)),
-    keepPixelEdgeHits=cms.bool(bool(opts.keepPixelEdgeHits)),
-    pixelMinSizeX=cms.int32(int(opts.pixelMinSizeX)),
+    keepPixelEdgeHits=cms.bool(bool(opts.keepPixelEdgeHits) or bool(opts.pixelClassHits)),
+    pixelMinSizeX=cms.int32(1 if opts.pixelClassHits else int(opts.pixelMinSizeX)),
+    pixelHitClassCorrections=cms.bool(bool(opts.pixelClassHits)),
     nIters=cms.uint32(int(opts.nIters)),
     edmConvergence=cms.double(float(opts.edmConvergence)),
     outprefix=cms.untracked.string(opts.outprefix),

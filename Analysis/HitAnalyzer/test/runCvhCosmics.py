@@ -54,6 +54,13 @@ opts.register('propagationDirection', 'anyDirection', VarParsing.VarParsing.mult
               'Geant4ePropagator PropagationDirection (anyDirection = per-leg '
               'forward/backward choice, default; alongMomentum = legacy '
               'forward-only)')
+opts.register('pixelClassHits', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              're-admit pixel edge / single-pixel clusters and emit the '
+              'per-pixel-module class-correction columns (parmtypes 16-21): '
+              'keepPixelEdgeHits=True pixelMinSizeX=1 pixelHitClassCorrections=True. '
+              'All channels of one calibration must use the same setting '
+              '(the parameter catalog changes)')
 opts.register('keepPixelEdgeHits', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'keep pixel hits whose cluster touches the sensor boundary '
@@ -151,8 +158,17 @@ opts.register('goodRunsFile', '', VarParsing.VarParsing.multiplicity.singleton,
               'solenoid was ramped down for parts of era G -- the 3.8T '
               'ScalarPot3D coefficients must not be fit to reduced-field runs '
               '(see repack/goodruns_cosmics_2016GH.txt). Empty = no filter.')
+opts.register('perModuleBfield', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'per-module B-field corrections (10_6 scheme): one Bz offset per '
+              'module (parmtype 6) instead of the scalar-potential modes '
+              '(parmtype 14, then not registered); forces perStepFieldModes=False '
+              'and needs no scalarPot3DInitFile when the baseline field is not '
+              'ScalarPot3D. The full module-level configuration is '
+              'perModuleBfield=True globalMaterialModel=False useOpera3D=True '
+              '(data; useDefaultField=True for MC where available)')
 opts.parseArguments()
-if not opts.scalarPot3DInitFile:
+if not opts.scalarPot3DInitFile and not opts.perModuleBfield:
     raise SystemExit(
         "scalarPot3DInitFile=<path> is required (coefficient dump file)")
 
@@ -246,8 +262,9 @@ process.globalCor = cms.EDProducer(
     useIdealGeometry=cms.bool(bool(opts.useIdealGeometry)),
     bsConstraint=cms.bool(False),
     applyHitQuality=cms.bool(True),
-    keepPixelEdgeHits=cms.bool(bool(opts.keepPixelEdgeHits)),
-    pixelMinSizeX=cms.int32(int(opts.pixelMinSizeX)),
+    keepPixelEdgeHits=cms.bool(bool(opts.keepPixelEdgeHits) or bool(opts.pixelClassHits)),
+    pixelMinSizeX=cms.int32(1 if opts.pixelClassHits else int(opts.pixelMinSizeX)),
+    pixelHitClassCorrections=cms.bool(bool(opts.pixelClassHits)),
     corFiles=cms.vstring(),
     triggers=cms.vstring(),
     MagneticFieldLabel=cms.string(""),
@@ -266,7 +283,8 @@ process.globalCor = cms.EDProducer(
     runFDClosure=cms.bool(bool(opts.runFDClosure)),
     epsilonFDClosure=cms.double(float(opts.epsilonFDClosure)),
     globalMaterialModel=cms.bool(bool(opts.globalMaterialModel)),
-    perStepFieldModes=cms.bool(bool(opts.perStepFieldModes)),
+    perStepFieldModes=cms.bool(bool(opts.perStepFieldModes) and not opts.perModuleBfield),
+    perModuleBfield=cms.bool(bool(opts.perModuleBfield)),
     localUpdate=cms.bool(bool(opts.localUpdate)),
     skipHitlessSurfaces=cms.bool(bool(opts.skipHitlessSurfaces) and bool(opts.globalMaterialModel)),
     materialFDGroup=cms.int32(int(opts.materialFDGroup)),

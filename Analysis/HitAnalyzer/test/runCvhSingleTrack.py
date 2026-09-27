@@ -47,6 +47,22 @@ opts.register('pixelMinSizeX', 2, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.int,
               'minimum pixel cluster size in x for a hit to stay in the fit '
               '(default 2 = baseline sizeX>1 cut; 1 admits all clusters)')
+opts.register('pixelHitClassCorrections', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'register the per-pixel-module pathology-class correction '
+              'parameters (parmtypes 16-21) and emit their Jacobian columns; '
+              'use with keepPixelEdgeHits=True pixelMinSizeX=1')
+opts.register('pixelLorentzParam', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'dtanLA (parmtype 22) replaces edge-x-mean (16) and sizeX1 (20); '
+              'requires pixelHitClassCorrections')
+opts.register('injectLorentzTan', 0., VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'closure test: shift every classified pixel hit by '
+              '(t/2)*w(class)*injectLorentzTan (requires pixelHitClassCorrections)')
+opts.register('corFile', '', VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.string,
+              'optional correction file (parmtree/x in catalog order) applied in-fit')
 opts.register('nIters', 10, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.int,
               'Gauss-Newton iteration cap (default 10 = baseline)')
@@ -137,8 +153,22 @@ opts.register('stepLengthLimit', 10.0, VarParsing.VarParsing.multiplicity.single
 # provenance.
 import TrackPropagation.Geant4e.cvhSwitches as cvhSwitches
 cvhSwitches.register(opts)
+opts.register('perModuleBfield', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'per-module B-field corrections (10_6 scheme): one Bz offset per '
+              'module (parmtype 6) instead of the scalar-potential modes '
+              '(parmtype 14, then not registered); forces perStepFieldModes=False '
+              'and needs no scalarPot3DInitFile when the baseline field is not '
+              'ScalarPot3D. The full module-level configuration is '
+              'perModuleBfield=True globalMaterialModel=False useOpera3D=True '
+              '(data; useDefaultField=True for MC where available)')
+opts.register('operaVersion', '160812', VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.string,
+              'OPERA/TOSCA map used by useOpera3D=True: 160812 (release tables) or '
+              '170812 (latest model, DD4hep builder + merged tables on '
+              'CMSSW_SEARCH_PATH, see Analysis/HitAnalyzer/python/cvhOperaField.py)')
 opts.parseArguments()
-if not opts.scalarPot3DInitFile:
+if not opts.scalarPot3DInitFile and not opts.perModuleBfield:
     raise SystemExit(
         "scalarPot3DInitFile=<path> is required (coefficient dump file)")
 
@@ -243,7 +273,10 @@ process.globalCor = cms.EDProducer(
     applyHitQuality=cms.bool(True),
     keepPixelEdgeHits=cms.bool(bool(opts.keepPixelEdgeHits)),
     pixelMinSizeX=cms.int32(int(opts.pixelMinSizeX)),
-    corFiles=cms.vstring(),
+    pixelHitClassCorrections=cms.bool(bool(opts.pixelHitClassCorrections)),
+    pixelLorentzParam=cms.bool(bool(opts.pixelLorentzParam)),
+    injectLorentzTan=cms.double(float(opts.injectLorentzTan)),
+    corFiles=cms.vstring(*([opts.corFile] if opts.corFile else [])),
     triggers=cms.vstring(*JPSI_TRIGGERS),
     MagneticFieldLabel=cms.string(""),
     scalarPotentialInitFile=cms.string(opts.scalarPot3DInitFile),
@@ -256,7 +289,8 @@ process.globalCor = cms.EDProducer(
     runFDClosure=cms.bool(bool(opts.runFDClosure)),
     epsilonFDClosure=cms.double(float(opts.epsilonFDClosure)),
     globalMaterialModel=cms.bool(bool(opts.globalMaterialModel)),
-    perStepFieldModes=cms.bool(bool(opts.perStepFieldModes)),
+    perStepFieldModes=cms.bool(bool(opts.perStepFieldModes) and not opts.perModuleBfield),
+    perModuleBfield=cms.bool(bool(opts.perModuleBfield)),
     localUpdate=cms.bool(bool(opts.localUpdate)),
     skipHitlessSurfaces=cms.bool(bool(opts.skipHitlessSurfaces) and bool(opts.globalMaterialModel)),
     materialFDGroup=cms.int32(int(opts.materialFDGroup)),
@@ -273,21 +307,11 @@ process.globalCor = cms.EDProducer(
 )
 
 if opts.useOpera3D:
-    from MagneticField.Engine.volumeBasedMagneticField_160812_cfi import \
-        VolumeBasedMagneticFieldESProducer as Opera3DMagneticFieldProducer
-    from MagneticField.Engine.volumeBasedMagneticField_160812_cfi import magfield as MagneticFieldGeometry
-    process.magfield = MagneticFieldGeometry
-    process.es_prefer_magfield_cvhrefit = cms.ESPrefer("XMLIdealGeometryESSource", "magfield")
-    process.Opera3DMagneticFieldProducer = Opera3DMagneticFieldProducer
-    fieldlabel = "grid_160812_3_8t"
-    process.Opera3DMagneticFieldProducer.label = fieldlabel
-    process.Opera3DMagneticFieldProducer.useParametrizedTrackerField = cms.bool(False)
-    # Route the labelled field into the CPEs as in the production data refit
-    # (nano_cff.nanoAOD_customizeData) and the 10_6 cross-release driver.
-    for _cpe in ("stripCPEESProducer", "StripCPEfromTrackAngleESProducer",
-                 "siPixelTemplateDBObjectESProducer", "templates"):
-        if hasattr(process, _cpe):
-            getattr(process, _cpe).MagneticFieldLabel = fieldlabel
+    # OPERA/TOSCA volume-based map as the labelled baseline field (full 3D
+    # grid in the tracker), routed into the CPEs; one implementation shared
+    # with the NanoAOD customise (Analysis/HitAnalyzer/python/cvhOperaField.py).
+    from Analysis.HitAnalyzer.cvhOperaField import setupOpera3DField
+    fieldlabel = setupOpera3DField(process, version=opts.operaVersion)
 elif not opts.useScalarPot3D:
     raise RuntimeError("useScalarPot3D=False not supported; use ScalarPot3D or Opera3D")
 else:

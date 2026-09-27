@@ -37,6 +37,7 @@
 #include "DataFormats/GeometryCommonDetAlgo/interface/MeasurementPoint.h"
 #include "DataFormats/HepMCCandidate/interface/GenParticle.h"
 #include "Geometry/CommonTopologies/interface/StripTopology.h"
+#include "Geometry/CommonTopologies/interface/PixelTopology.h"
 #include "Geometry/CommonTopologies/interface/TkRadialStripTopology.h"
 #include "DataFormats/Math/interface/approx_log.h"
 #include "DataFormats/Math/interface/AlgebraicROOTObjects.h"
@@ -674,6 +675,55 @@ protected:
   std::vector<double> injectFieldModeValues_;
   double injectLorentzWclean_ = -999.;
 
+  // Side-resolved pathology class of a pixel hit: bit 0 = -x edge,
+  // 1 = +x edge, 2 = -y edge, 3 = +y edge, 4 = sizeX==1, 5 = sizeY==1
+  // (0 = clean). `valid` is false when the hit is not a pixel cluster hit
+  // with a PixelTopology (then the class is 0 and no column is emitted).
+  // Same rule as the inline classification of the two-track maker.
+  static int pixelHitClass(const TrackingRecHit &hit, bool &valid) {
+    valid = false;
+    const TrackerSingleRecHit *tkhit = dynamic_cast<const TrackerSingleRecHit *>(&hit);
+    if (tkhit == nullptr || hit.det() == nullptr) {
+      return 0;
+    }
+    const PixelTopology *pixtopo = dynamic_cast<const PixelTopology *>(&hit.det()->topology());
+    if (pixtopo == nullptr || !tkhit->cluster_pixel().isNonnull()) {
+      return 0;
+    }
+    const SiPixelCluster &cl = *tkhit->cluster_pixel();
+    int cls = 0;
+    if (cl.minPixelRow() == 0) cls |= 1 << 0;
+    if (cl.maxPixelRow() == pixtopo->nrows() - 1) cls |= 1 << 1;
+    if (cl.minPixelCol() == 0) cls |= 1 << 2;
+    if (cl.maxPixelCol() == pixtopo->ncolumns() - 1) cls |= 1 << 3;
+    if (cl.sizeX() <= 1) cls |= 1 << 4;
+    if (cl.sizeY() <= 1) cls |= 1 << 5;
+    valid = true;
+    return cls;
+  }
+
+  // Number of class-correction Jacobian columns a pixel hit of class `cls`
+  // contributes: 2 per edge coordinate (mean + diff), 1 each for sizeX1 and
+  // sizeY1; in the dtanLA mode 1 on every classified hit + edge-x-diff +
+  // edge-y mean/diff + sizeY1 (16 and 20 are replaced by 22).
+  unsigned int pixelClassColumnCount(int cls, bool valid) const {
+    if (!pixelHitClassCorrections_ || !valid) {
+      return 0u;
+    }
+    const bool edgeX = cls & 0x3;
+    const bool edgeY = cls & 0xc;
+    if (pixelLorentzParam_) {
+      return 1u + (edgeX ? 1u : 0u) + (edgeY ? 2u : 0u) + ((cls & 0x20) ? 1u : 0u);
+    }
+    return (edgeX ? 2u : 0u) + (edgeY ? 2u : 0u) + ((cls & 0x10) ? 1u : 0u) +
+           ((cls & 0x20) ? 1u : 0u);
+  }
+
+  // dtanLA response weight of a pixel hit of class `cls`.
+  double pixelLorentzWeight(int cls) const {
+    return (cls & 0x10) ? lorentzWsize1_ : ((cls & 0x3) ? lorentzWedge_ : lorentzWclean_);
+  }
+
   bool doRes_ = false;
   bool useIdealGeometry_ = false;
 
@@ -687,6 +737,34 @@ protected:
   // loaded from a coefficient dump file (mfs/dump_coeffs_for_cmssw.py).
   std::string scalarPotentialInitFile_;
   std::unique_ptr<ana_hitanalyzer::ScalarPotentialFieldCorrection> fieldCorrection_;
+
+  // Per-module B-field corrections (the 10_6 / W-mass scheme): one Bz offset
+  // per module (parmtype 6; glued pairs share one, like the parmtype-7
+  // material parameter), applied as a constant Bz shift on the propagation
+  // leg that ends at that module -- the same leg attribution as parmtype 7.
+  // Every tracker module is registered, dead ones included; their legs are
+  // in the fit when skipHitlessSurfaces=False. EXCLUSIVE with the scalar-
+  // potential block: with perModuleBfield=True no parmtype-14 mode is
+  // registered, fieldCorrection_ is not built (scalarPotentialInitFile may
+  // be empty) and perStepFieldModes must be False.
+  bool perModuleBfield_ = false;
+
+  // Field-correction slots on one propagation leg: the scalar-potential
+  // modes, or the single per-module Bz of the leg's module.
+  unsigned int nFieldSlots() const;
+  // Field correction dB applied on the leg starting at `pos` and ending at
+  // module `legdetid` (parmdetid convention), and the per-slot (Bx, By, Bz)
+  // basis for the chain rule of the transport-Jacobian dB columns. The
+  // basis vectors stay empty in the per-step scalar-potential mode.
+  Eigen::Vector3d legFieldCorrection(const GlobalPoint &pos, const DetId &legdetid,
+                                     std::vector<double> &dBxPerSlot,
+                                     std::vector<double> &dByPerSlot,
+                                     std::vector<double> &dBzPerSlot) const;
+  // Global index of field slot `islot` on the leg ending at `legdetid`.
+  unsigned int fieldSlotGlobalIdx(unsigned int islot, const DetId &legdetid) const;
+  // Field correction at a track's reference point: the expansion at `refpos`,
+  // or (per-module scheme, as in 10_6) the Bz of the track's first-hit module.
+  Eigen::Vector3d referenceFieldCorrection(const GlobalPoint &refpos, const DetId &firsthitdetid) const;
 
   // Global material model (the global-material-model design note (kept outside the repository)).
   // materialGroupsFile loads a grouping-tier rules file (Phase A

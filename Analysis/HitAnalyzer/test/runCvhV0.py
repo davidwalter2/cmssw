@@ -88,8 +88,24 @@ opts.register('useStartingState', 'perigee', VarParsing.VarParsing.multiplicity.
 opts.register('eventsToProcess', '', VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string,
               'comma-separated run:event list; empty = all')
+opts.register('pixelClassHits', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              're-admit pixel edge / single-pixel clusters and emit the '
+              'per-pixel-module class-correction columns (parmtypes 16-21): '
+              'keepPixelEdgeHits=True pixelMinSizeX=1 pixelHitClassCorrections=True. '
+              'All channels of one calibration must use the same setting '
+              '(the parameter catalog changes)')
+opts.register('perModuleBfield', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'per-module B-field corrections (10_6 scheme): one Bz offset per '
+              'module (parmtype 6) instead of the scalar-potential modes '
+              '(parmtype 14, then not registered); forces perStepFieldModes=False '
+              'and needs no scalarPot3DInitFile when the baseline field is not '
+              'ScalarPot3D. The full module-level configuration is '
+              'perModuleBfield=True globalMaterialModel=False useOpera3D=True '
+              '(data; useDefaultField=True for MC where available)')
 opts.parseArguments()
-if not opts.scalarPot3DInitFile:
+if not opts.scalarPot3DInitFile and not opts.perModuleBfield:
     raise SystemExit("scalarPot3DInitFile=<path> is required (coefficient dump file)")
 if opts.mode not in ('ks', 'lambda'):
     raise SystemExit("mode must be 'ks' or 'lambda'")
@@ -162,7 +178,8 @@ process.globalCor = _v0maker.clone(
     globalMaterialModel=cms.bool(bool(opts.globalMaterialModel)),
     localUpdate=cms.bool(bool(opts.localUpdate)),
     skipHitlessSurfaces=cms.bool(bool(opts.skipHitlessSurfaces) and bool(opts.globalMaterialModel)),
-    perStepFieldModes=cms.bool(bool(opts.perStepFieldModes)),
+    perStepFieldModes=cms.bool(bool(opts.perStepFieldModes) and not opts.perModuleBfield),
+    perModuleBfield=cms.bool(bool(opts.perModuleBfield)),
     useStartingState=cms.string(opts.useStartingState),
     clampMomentumFloor=cms.double(float(opts.clampMomentumFloor)),
     maxBacktracks=cms.uint32(int(opts.maxBacktracks)),
@@ -170,6 +187,11 @@ process.globalCor = _v0maker.clone(
     outprefix=cms.untracked.string("globalcor_" + opts.mode),
     CvhMaster=CvhMasterPSet.clone(Particles=cms.vstring(*_particles)),
 )
+if opts.pixelClassHits:
+    process.globalCor.applyHitQuality = cms.bool(True)
+    process.globalCor.keepPixelEdgeHits = cms.bool(True)
+    process.globalCor.pixelMinSizeX = cms.int32(1)
+    process.globalCor.pixelHitClassCorrections = cms.bool(True)
 
 # Field label routing (ScalarPot3D as in the J/psi drivers)
 from MagneticField.ParametrizedEngine.parametrizedMagneticField_ScalarPot3D_cfi \

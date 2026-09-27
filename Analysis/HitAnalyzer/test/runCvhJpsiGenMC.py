@@ -329,7 +329,7 @@ opts.register('useScalarPot3D', True, VarParsing.VarParsing.multiplicity.singlet
               'in the CVH refit (default; only model supported in this port)')
 opts.register('useOpera3D', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
-              'use the full 3D TOSCA volumetric grid (160812) as the baseline '
+              'use the full 3D TOSCA volumetric grid (version: operaVersion) as the baseline '
               'field for the propagator + geopro + globalCor; takes precedence '
               'over useScalarPot3D when True.')
 opts.register('useDefaultField', False, VarParsing.VarParsing.multiplicity.singleton,
@@ -447,6 +447,20 @@ opts.register('propagationDirection', 'anyDirection', VarParsing.VarParsing.mult
 import TrackPropagation.Geant4e.cvhSwitches as cvhSwitches
 cvhSwitches.register(opts)
 
+opts.register('perModuleBfield', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'per-module B-field corrections (10_6 scheme): one Bz offset per '
+              'module (parmtype 6) instead of the scalar-potential modes '
+              '(parmtype 14, then not registered); forces perStepFieldModes=False '
+              'and needs no scalarPot3DInitFile when the baseline field is not '
+              'ScalarPot3D. The full module-level configuration is '
+              'perModuleBfield=True globalMaterialModel=False useOpera3D=True '
+              '(data; useDefaultField=True for MC where available)')
+opts.register('operaVersion', '160812', VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.string,
+              'OPERA/TOSCA map used by useOpera3D=True: 160812 (release tables) or '
+              '170812 (latest model, DD4hep builder + merged tables on '
+              'CMSSW_SEARCH_PATH, see Analysis/HitAnalyzer/python/cvhOperaField.py)')
 opts.parseArguments()
 # TWO-TRACK DEFAULT IS THE Q-MATRIX ESTIMATOR. Under CgfQoPMode >= 1 the
 # fluctuation model returns the UNTRUNCATED ionization second cumulant as the
@@ -461,7 +475,7 @@ if opts.CgfQoPMode < 0:
     opts.CgfQoPMode = 0
     print('[cvh] two-track driver: CgfQoPMode not given, defaulting to 0 '
           '(legacy truncated-Q); the two-track maker has no CGF override hooks')
-if not opts.scalarPot3DInitFile:
+if not opts.scalarPot3DInitFile and not opts.perModuleBfield:
     raise SystemExit(
         "scalarPot3DInitFile=<path> is required (coefficient dump file): "
         "the basis evaluator in globalCor needs it for chain-rule columns "
@@ -685,7 +699,8 @@ process.globalCor = cms.EDProducer(
     edmConvergence=cms.double(float(opts.edmConvergence)),
     materialGroupsFile=cms.string(opts.materialGroupsFile),
     globalMaterialModel=cms.bool(bool(opts.globalMaterialModel)),
-    perStepFieldModes=cms.bool(bool(opts.perStepFieldModes)),
+    perStepFieldModes=cms.bool(bool(opts.perStepFieldModes) and not opts.perModuleBfield),
+    perModuleBfield=cms.bool(bool(opts.perModuleBfield)),
     localUpdate=cms.bool(bool(opts.localUpdate)),
     injectFieldModes=cms.vint32(*opts.injectFieldModes),
     injectFieldModeValues=cms.vdouble(*opts.injectFieldModeValues),
@@ -727,26 +742,11 @@ if opts.useDefaultField:
     # so the Lorentz drift uses the same field as everything else.
     fieldlabel = ""
 elif opts.useOpera3D:
-    # Use the full 3D TOSCA volumetric grid (160812) as the baseline field
-    # for the propagator / geopro / globalCor instead of the scalar-potential
-    # ScalarPot3D model. Provided as an alternative field-model option for
-    # cross-checks and B-field studies.
-    from MagneticField.Engine.volumeBasedMagneticField_160812_cfi import \
-        VolumeBasedMagneticFieldESProducer as Opera3DMagneticFieldProducer
-    from MagneticField.Engine.volumeBasedMagneticField_160812_cfi import magfield as MagneticFieldGeometry
-    process.magfield = MagneticFieldGeometry
-    process.es_prefer_magfield_cvhrefit = cms.ESPrefer("XMLIdealGeometryESSource", "magfield")
-    process.Opera3DMagneticFieldProducer = Opera3DMagneticFieldProducer
-    fieldlabel = "grid_160812_3_8t"
-    process.Opera3DMagneticFieldProducer.label = fieldlabel
-    process.Opera3DMagneticFieldProducer.useParametrizedTrackerField = cms.bool(False)
-    # Route the labelled field into the CPEs as in the production data refit
-    # (nano_cff.nanoAOD_customizeData) and the 10_6 cross-release driver:
-    # the Lorentz-drift in the hit re-evaluation then uses the same field.
-    for _cpe in ("stripCPEESProducer", "StripCPEfromTrackAngleESProducer",
-                 "siPixelTemplateDBObjectESProducer", "templates"):
-        if hasattr(process, _cpe):
-            getattr(process, _cpe).MagneticFieldLabel = fieldlabel
+    # OPERA/TOSCA volume-based map as the labelled baseline field (full 3D
+    # grid in the tracker), routed into the CPEs; one implementation shared
+    # with the NanoAOD customise (Analysis/HitAnalyzer/python/cvhOperaField.py).
+    from Analysis.HitAnalyzer.cvhOperaField import setupOpera3DField
+    fieldlabel = setupOpera3DField(process, version=opts.operaVersion)
 elif not opts.useScalarPot3D:
     raise RuntimeError(
         "useScalarPot3D=False is no longer supported; the legacy non-thread-safe "
