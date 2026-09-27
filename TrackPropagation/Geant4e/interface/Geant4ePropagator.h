@@ -139,9 +139,11 @@ public:
                                        nullptr) const;
 
   static void CalculateEffectiveZandA(const G4Material *mate, G4double &effZ, G4double &effA);
-  // Per-element Moliere sums; definitions in MoliereMsStep below.
+  // Per-element Moliere sums; definitions in MoliereMsStep below.  `epm`:
+  // the projectile is an e+-, whose screening Geant4 takes from a different
+  // table (see the definition).
   static void CalculateMoliereSums(const G4Material *mate, double beta,
-                                   double &zzp1OverA, double &lnScreenW);
+                                   double &zzp1OverA, double &lnScreenW, bool epm = false);
 
   bool GetForCVH() const { return forCVH_; }
 
@@ -525,12 +527,16 @@ private:
   mutable std::vector<RadiativeStep> radStepLog_;
 
   // radiative (brems + pair) dE/dx of the current step, in GeV/cm, computed
-  // from the SAME G4 models the mean-loss table is built from. 0 for non-muons.
+  // from the SAME G4 models the mean-loss table is built from (muons, e+-;
+  // hadrons under ReferenceHadronRadiative, 0 otherwise).
   // brems and pair dE/dx separately [GeV/cm]; their sum is what the mean-loss
-  // table adds on top of ionization. 0 for non-muons.
+  // table adds on top of ionization.
   void computeRadiativeDEDX(const G4Track *aTrack, double &dedxBrem, double &dedxPair) const;
 
-  // per-step dN/dv tabulation on the kNRadV grid; no-op for non-muons
+  // per-step dN/dv tabulation on the kNRadV grid, from the models the
+  // simulation runs: muBrems + muPairProd for muons, eBrem (Seltzer-Berger
+  // below 1 GeV, eBremsstrahlungRel above) in the brems slot for e+-; no-op
+  // for hadrons
   void fillRadiativeSpectrum(const G4Track *aTrack, RadiativeStep &rs) const;
 
   // per-step cumulative transport Jacobian log (see setStepTransportLogging)

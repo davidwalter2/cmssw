@@ -104,6 +104,21 @@ public:
   //             that switches on `regime` needs no new columns; one that does
   //             not switch on it must refuse regime 2 rather than read `a3`
   //             as a count.
+  //   regime 4/5: as regime 2, for an e- (4, Moller) or e+ (5, Bhabha)
+  //             projectile -- the cross sections of G4MollerBhabhaModel, which
+  //             is what G4eIonisation runs.  With x = T/tmaxr and tmaxr the
+  //             kinematic ceiling T0 (the projectile's kinetic energy),
+  //                 Moller:  1 + (1-g) x^2 + x^2/(1-x)^2 - g x/(1-x),
+  //                          g = (2 gamma - 1)/gamma^2,  on x <= 1/2
+  //                 Bhabha:  1 + beta^2 (-c1 x + c2 x^2 - c3 x^3 + c4 x^4),
+  //                          y = 1/(1+gamma), c1 = 2 - y^2,
+  //                          c2 = (1-2y)(3+y^2), c4 = (1-2y)^3,
+  //                          c3 = c4 + (1-2y)^2,  on x <= 1
+  //             times xi/T^2 (the derivative in xmax of
+  //             G4MollerBhabhaModel::ComputeCrossSectionPerElectron).  The
+  //             Moller ceiling is T0/2 -- the primary keeps the larger share --
+  //             while tmaxr stays T0, the kinematic ceiling the deflection
+  //             sqrt(2 m_e T (1 - T/T0))/p' is taken from.
   struct UrbanFluctRecord {
     int regime = -1;
     double gsig2 = 0.;
@@ -111,7 +126,7 @@ public:
     double a2 = 0., e2 = 0.;
     double a3 = 0., e0r = 0., tmaxr = 0.;
     double scaling = 1.;
-    double beta2 = 0., etot = 0.;   // regime 2/3 only; physical, unscaled
+    double beta2 = 0., etot = 0.;   // regime >= 2 only; physical, unscaled
   };
   // The alpha quantile at which the delta-ray spectrum is truncated when this
   // class forms a VARIANCE: the CDF fraction of the delta-electron (1/E^2)

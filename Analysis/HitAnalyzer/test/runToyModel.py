@@ -150,6 +150,7 @@ _SPECIES = {
      211: ('pi+', +1.),     -211: ('pi-', -1.),
      321: ('kaon+', +1.),   -321: ('kaon-', -1.),
     2212: ('proton', +1.), -2212: ('anti_proton', -1.),
+      11: ('e-', -1.),        -11: ('e+', +1.),
 }
 _pdg = int(opts.partId)
 if _pdg not in _SPECIES:
@@ -162,7 +163,8 @@ process.cvhMasterESProducer.MagneticFieldLabel = cms.string(fieldlabel)
 # the species pair on top of the always-on mandatory set (gamma/e+/e-/mu+/mu-/
 # proton are registered regardless; see cvhMaster_cfi)
 _pair = {13: ('mu+', 'mu-'), 211: ('pi+', 'pi-'),
-         321: ('kaon+', 'kaon-'), 2212: ('proton', 'anti_proton')}[abs(_pdg)]
+         321: ('kaon+', 'kaon-'), 2212: ('proton', 'anti_proton'),
+         11: ('e+', 'e-')}[abs(_pdg)]
 process.cvhMasterESProducer.Particles = cms.vstring(
     *dict.fromkeys(('gamma', 'e+', 'e-', 'mu+', 'mu-', 'proton') + _pair))
 

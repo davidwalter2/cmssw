@@ -719,9 +719,21 @@ namespace cvhcgf {
     }
   }  // namespace
 
+  // Regimes 4/5 (the e+- Moller/Bhabha knock-on law, UrbanFluctRecord) have
+  // no closed-form block exponent here; the clean-propagation model
+  // (cf_knockon / cf_track_resolution) carries them.  Refused rather than read
+  // as the spin-0 Bethe-Bloch form their `regime >= 2` test would pick.
+  void refuseEpmRegime(const IoniStep &s) {
+    if (s.regime >= 4)
+      throw cms::Exception("CGFQoPBlock")
+          << "ionisation record regime " << s.regime
+          << " (e+- Moller/Bhabha knock-on law) has no block CGF implementation";
+  }
+
   std::complex<double> blockExponent(const Block &blk, double t) {
     double sre = 0., sim = 0.;
     for (const IoniStep &s : blk.ioni) {
+      refuseEpmRegime(s);
       if (s.regime == 0) {
         sre += -0.5 * t * t * s.gsig2 * s.gs * s.gs;
         continue;
@@ -802,6 +814,7 @@ namespace cvhcgf {
     // information built from it, and that is where it is.
     double k2 = 0.;
     for (const IoniStep &s : blk.ioni) {
+      refuseEpmRegime(s);
       if (s.regime == 0) {
         k2 += s.gsig2 * s.gs * s.gs;
         continue;
