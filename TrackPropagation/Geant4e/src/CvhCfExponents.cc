@@ -522,6 +522,10 @@ namespace cvhcf {
         const float *r = rows + static_cast<std::size_t>(i) * stride;
         cvhcgf::IoniStep s;
         s.regime = static_cast<int>(r[0]);
+        if (s.regime >= 4)
+          throw cms::Exception("CvhCfExponents")
+              << "ioniurbanv regime " << s.regime
+              << " (e+- Moller/Bhabha knock-on law) has no in-maker CF implementation";
         s.gsig2 = r[1];
         const double gam = r[9];
         s.a1 = r[2];

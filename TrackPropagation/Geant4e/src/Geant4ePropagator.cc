@@ -64,6 +64,9 @@
 #include <map>
 #include "G4MuBremsstrahlungModel.hh"
 #include "G4MuPairProductionModel.hh"
+#include "G4SeltzerBergerModel.hh"
+#include "G4eBremsstrahlungRelModel.hh"
+#include "G4ProductionCutsTable.hh"
 #include "G4DataVector.hh"
 #include "G4Element.hh"
 
@@ -1247,7 +1250,8 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
       CalculateEffectiveZandA(mate, ms.effZ, ms.effA);
       // per-element Moliere sums (effZ/effA are mass averages and both
       // Moliere parameters are non-linear in Z -- see MoliereMsStep)
-      CalculateMoliereSums(mate, beta, ms.zzp1OverA, ms.lnScreenW);
+      CalculateMoliereSums(mate, beta, ms.zzp1OverA, ms.lnScreenW,
+                           std::abs(trk->GetDynamicParticle()->GetPDGcode()) == 11);
       // areal density rho*d in g/cm^2 (GetDensity in G4 internal units)
       ms.xg = (mate->GetDensity() / (CLHEP::g / CLHEP::cm3)) * thisPathLength;
       ms.pGeV = pGeV;
@@ -2267,6 +2271,33 @@ namespace {
     explicit PairProbe(const G4ParticleDefinition *p) : G4MuPairProductionModel(p) {}
     using G4MuPairProductionModel::ComputeDMicroscopicCrossSection;
   };
+
+  // e+- bremsstrahlung as G4eBremsstrahlung runs it: G4SeltzerBergerModel
+  // below 1 GeV, G4eBremsstrahlungRelModel above
+  // (G4eBremsstrahlung::InitialiseEnergyLossProcess), the same split
+  // G4TablesForExtrapolatorForCVH::ComputeElectronDEDX builds the mean from.
+  // One pair per (thread, particle): the Seltzer-Berger model carries the
+  // positron correction, so e- and e+ need their own instances.  Unrestricted
+  // cuts, as for the muon probes.  LEAKED like them.
+  G4VEmModel *eBremModel(const G4ParticleDefinition *part, double ekin) {
+    static thread_local std::map<const G4ParticleDefinition *, std::pair<G4VEmModel *, G4VEmModel *>> models;
+    auto it = models.find(part);
+    if (it == models.end()) {
+      const size_t n = std::max<size_t>({G4Material::GetNumberOfMaterials(),
+                                         G4ProductionCutsTable::GetProductionCutsTable()->GetTableSize(),
+                                         size_t(1)});
+      G4DataVector cuts(n, DBL_MAX);
+      auto *low = new G4SeltzerBergerModel();
+      auto *high = new G4eBremsstrahlungRelModel();
+      low->Initialise(part, cuts);
+      high->Initialise(part, cuts);
+      low->SetUseBaseMaterials(false);
+      high->SetUseBaseMaterials(false);
+      it = models.emplace(part, std::make_pair(static_cast<G4VEmModel *>(low), static_cast<G4VEmModel *>(high)))
+               .first;
+    }
+    return (ekin < CLHEP::GeV) ? it->second.first : it->second.second;
+  }
 }  // namespace
 
 void Geant4ePropagator::radVGrid(double *v) {
@@ -2278,6 +2309,37 @@ void Geant4ePropagator::radVGrid(double *v) {
 
 void Geant4ePropagator::fillRadiativeSpectrum(const G4Track *aTrack, RadiativeStep &rs) const {
   const G4ParticleDefinition *part = aTrack->GetDynamicParticle()->GetParticleDefinition();
+  if (std::abs(part->GetPDGEncoding()) == 11) {
+    // e+-: the models' differential cross section is not public (private in
+    // Seltzer-Berger), so dSigma/dk is taken from CrossSectionPerVolume over a
+    // narrow window [k(1-d), k(1+d)] -- the function G4VEnergyLossProcess
+    // tabulates the emission rate from, O(d^2) = 1e-6 from the point value.
+    // dN/dv = L * dSigma/dk * etot, exactly the muon slots' normalization.
+    constexpr double kWin = 1e-3;
+    const G4Material *emate = aTrack->GetVolume()->GetLogicalVolume()->GetMaterial();
+    const double epre = aTrack->GetStep()->GetPreStepPoint()->GetKineticEnergy();
+    const double epost = aTrack->GetStep()->GetPostStepPoint()->GetKineticEnergy();
+    const double etkin = 0.5 * (epre + epost);
+    const double eetot = etkin + part->GetPDGMass();
+    const double elen = aTrack->GetStep()->GetStepLength();
+    G4VEmModel *m = eBremModel(part, etkin);
+    double ev[kNRadV];
+    radVGrid(ev);
+    for (int i = 0; i < kNRadV; ++i) {
+      rs.dNdvBrem[i] = 0.;
+      rs.dNdvPair[i] = 0.;
+      const double k = ev[i] * eetot;
+      if (!(k > 0.) || !(k < etkin)) {
+        continue;
+      }
+      const double lo = k * (1. - kWin);
+      const double hi = std::min(k * (1. + kWin), etkin);
+      const double sig = m->CrossSectionPerVolume(emate, part, etkin, lo, hi);
+      const double d = elen * sig / (hi - lo) * eetot;
+      rs.dNdvBrem[i] = (d > 0. && std::isfinite(d)) ? d : 0.;
+    }
+    return;
+  }
   if (std::abs(part->GetPDGEncoding()) != 13) {
     return;
   }
@@ -2334,6 +2396,17 @@ void Geant4ePropagator::computeRadiativeDEDX(const G4Track *aTrack, double &dedx
   dedxBrem = 0.;
   dedxPair = 0.;
   const G4ParticleDefinition *part = aTrack->GetDynamicParticle()->GetParticleDefinition();
+  if (std::abs(part->GetPDGEncoding()) == 11) {
+    // e+-: the bremsstrahlung half of the electron mean-loss table
+    // (G4TablesForExtrapolatorForCVH::ComputeElectronDEDX), same models, same
+    // unrestricted cut; no pair production.
+    const G4Material *emate = aTrack->GetVolume()->GetLogicalVolume()->GetMaterial();
+    const double epre = aTrack->GetStep()->GetPreStepPoint()->GetKineticEnergy();
+    const double epost = aTrack->GetStep()->GetPostStepPoint()->GetKineticEnergy();
+    const double etkin = 0.5 * (epre + epost);
+    dedxBrem = eBremModel(part, etkin)->ComputeDEDXPerVolume(emate, part, etkin, etkin) / (CLHEP::GeV / CLHEP::cm);
+    return;
+  }
   const bool isMuon = (std::abs(part->GetPDGEncoding()) == 13);
   if (!isMuon) {
     // HADRONS. The simulation runs hBrems/hPairProd; the model carried no
@@ -2503,7 +2576,7 @@ double Geant4ePropagator::computeErrorIoni(const G4Track *aTrack, double pforced
 
 //------------------------------------------------------------------------
 void Geant4ePropagator::CalculateMoliereSums(const G4Material *mate, double beta,
-                                             double &zzp1OverA, double &lnScreenW) {
+                                             double &zzp1OverA, double &lnScreenW, bool epm) {
   // Both Moliere parameters are non-linear in Z, and Geant4 evaluates them
   // PER ELEMENT (G4WentzelOKandVIxSection::SetupTarget is called with each
   // element's Z, and the cross sections are summed). Averaging Z first --
@@ -2530,8 +2603,15 @@ void Geant4ePropagator::CalculateMoliereSums(const G4Material *mate, double beta
     const double w = fracVec[ii] * Z * (Z + 1.) / A;     // chi_c,i^2 weight
     if (w <= 0.) continue;
     const double az = kAlpha * Z / b;
+    // e+-: G4WentzelOKandVIxSection builds its Mott cross section for them
+    // and takes the screening radius from ScreenRSquareElec -- the same
+    // afact Z^(2/3) WITHOUT the (1 + exp(-Z^2/1000)) nuclear factor.
+    // Measured with G4's own SetupTarget (msterms_g4driver), 3.1 GeV:
+    // screenZ(e)/screenZ(mu) = 0.504 Be, 0.549 Si, 0.699 Cu, i.e. exactly
+    // 1/(1 + exp(-Z^2/1000)); the transport cross section is 4.6 / 3.9 /
+    // 2.4 % larger for e+- than for mu- at the same momentum.
     const double scr = std::pow(Z, 2. / 3.) * (1.13 + 3.76 * az * az)
-                       * (1. + std::exp(-Z * Z * 1.0e-3));
+                       * (epm ? 1. : (1. + std::exp(-Z * Z * 1.0e-3)));
     zzp1OverA += w;
     lnScreenW += w * std::log(scr);
     wsum += w;

@@ -69,6 +69,7 @@
 #include "G4MollerBhabhaModel.hh"
 #include "G4BetheBlochModel.hh"
 #include "G4eBremsstrahlungRelModel.hh"
+#include "G4SeltzerBergerModel.hh"
 #include "G4MuPairProductionModel.hh"
 #include "G4hBremsstrahlungModel.hh"
 #include "G4hPairProductionModel.hh"
@@ -395,11 +396,21 @@ G4PhysicsTable* G4TablesForExtrapolatorForCVH::PrepareTable(G4PhysicsTable* ptr)
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo....
 
 void G4TablesForExtrapolatorForCVH::ComputeElectronDEDX(const G4ParticleDefinition* part, G4PhysicsTable* table) {
+  // The models G4eIonisation / G4eBremsstrahlung run in the simulation:
+  // G4MollerBhabhaModel, and G4SeltzerBergerModel below 1 GeV with
+  // G4eBremsstrahlungRelModel above (G4eBremsstrahlung::
+  // InitialiseEnergyLossProcess).  `ionOnly` drops the bremsstrahlung mean
+  // exactly as it drops the muon's radiative mean in ComputeMuonDEDX: the
+  // fluctuation model's instance is built ionOnly, and its mean loss sets the
+  // Urban channel weights -- the radiative loss is a separate channel.
   G4MollerBhabhaModel* ioni = new G4MollerBhabhaModel();
+  G4SeltzerBergerModel* bremLow = new G4SeltzerBergerModel();
   G4eBremsstrahlungRelModel* brem = new G4eBremsstrahlungRelModel();
   ioni->Initialise(part, cuts);
+  bremLow->Initialise(part, cuts);
   brem->Initialise(part, cuts);
   ioni->SetUseBaseMaterials(false);
+  bremLow->SetUseBaseMaterials(false);
   brem->SetUseBaseMaterials(false);
 
   mass = electron_mass_c2;
@@ -419,7 +430,11 @@ void G4TablesForExtrapolatorForCVH::ComputeElectronDEDX(const G4ParticleDefiniti
 
     for (G4int j = 0; j <= nbins; ++j) {
       G4double e = aVector->Energy(j);
-      G4double dedx = ioni->ComputeDEDXPerVolume(mat, part, e, e) + brem->ComputeDEDXPerVolume(mat, part, e, e);
+      G4double dedx = ioni->ComputeDEDXPerVolume(mat, part, e, e);
+      if (!ionOnly) {
+        G4VEmModel* b = (e < CLHEP::GeV) ? static_cast<G4VEmModel*>(bremLow) : static_cast<G4VEmModel*>(brem);
+        dedx += b->ComputeDEDXPerVolume(mat, part, e, e);
+      }
       if (1 < verbose) {
         G4cout << "j= " << j << "  e(MeV)= " << e / MeV << " dedx(Mev/cm)= " << dedx * cm / MeV
                << " dedx(Mev.cm2/g)= " << dedx / ((MeV * mat->GetDensity()) / (g / cm2)) << G4endl;

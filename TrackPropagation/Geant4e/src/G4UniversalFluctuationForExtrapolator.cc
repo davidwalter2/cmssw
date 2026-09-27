@@ -215,6 +215,45 @@ namespace {
     }
     return acc * du / 3.;
   }
+
+  // The e+- knock-on laws of G4MollerBhabhaModel (UrbanFluctRecord regimes
+  // 4/5): dN/dT = (xi/T^2) g(x), x = T/T0, T0 the projectile's kinetic energy
+  // (the kinematic ceiling `tmax`).  The three moments the exact-delta branch
+  // needs, in closed form, as antiderivatives in x:
+  //   count  INT dN     = (xi/T0) [F0]      F0 = INT g/x^2 dx
+  //   mean   INT T dN   =  xi     [F1]      F1 = INT g/x   dx
+  //   second INT T^2 dN =  xi T0  [F2]      F2 = INT g     dx
+  // Moller (e-, x <= 1/2):  g = 1 + (1-gg) x^2 + x^2/(1-x)^2 - gg x/(1-x)
+  // Bhabha (e+, x <= 1):    g = 1 + beta^2 (-c1 x + c2 x^2 - c3 x^3 + c4 x^4)
+  struct EpmLaw {
+    bool moller = true;
+    double gg = 0., b2 = 0., c1 = 0., c2 = 0., c3 = 0., c4 = 0.;
+    EpmLaw(bool isElectron, double gam, double beta2) : moller(isElectron), b2(beta2) {
+      gg = (2. * gam - 1.) / (gam * gam);
+      const double y = 1. / (1. + gam), y2 = y * y, y12 = 1. - 2. * y, y122 = y12 * y12;
+      c1 = 2. - y2;
+      c2 = y12 * (3. + y2);
+      c4 = y122 * y12;
+      c3 = c4 + y122;
+    }
+    double ceiling() const { return moller ? 0.5 : 1.; }  // in x
+    double F0(double x) const {
+      if (moller)
+        return -1. / x + (1. - gg) * x + 1. / (1. - x) - gg * std::log(x / (1. - x));
+      return -1. / x + b2 * (-c1 * std::log(x) + c2 * x - c3 * x * x / 2. + c4 * x * x * x / 3.);
+    }
+    double F1(double x) const {
+      if (moller)
+        return std::log(x) + (1. - gg) * x * x / 2. + 1. / (1. - x) + (1. + gg) * std::log(1. - x);
+      return std::log(x) + b2 * (-c1 * x + c2 * x * x / 2. - c3 * x * x * x / 3. + c4 * x * x * x * x / 4.);
+    }
+    double F2(double x) const {
+      if (moller)
+        return 2. * x + (1. - gg) * x * x * x / 3. + 1. / (1. - x) + (2. + gg) * std::log(1. - x) + gg * x;
+      const double x2 = x * x;
+      return x + b2 * (-c1 * x2 / 2. + c2 * x2 * x / 3. - c3 * x2 * x2 / 4. + c4 * x2 * x2 * x / 5.);
+    }
+  };
 }  // namespace
 
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo......
@@ -768,6 +807,13 @@ G4double G4UniversalFluctuationForExtrapolator::SampleFluctuations(
   // simulation by construction rather than by our own physics judgement.
   const G4double pdgSpin = (particle != nullptr) ? particle->GetPDGSpin() : 0.5;
   const G4bool spinHalf = (pdgSpin == 0.5);
+  // e+- projectiles: G4eIonisation runs G4MollerBhabhaModel, not the
+  // Bethe-Bloch spin-1/2 form; `tmax` is their kinetic energy T0 (the
+  // kinematic ceiling), the Moller channel ends at T0/2.  `tlaw` is where the
+  // channel ends, whatever the law.
+  const bool isEpm = (particle == G4Electron::Electron() || particle == G4Positron::Positron());
+  const EpmLaw epm(particle == G4Electron::Electron(), gam, beta2);
+  const G4double tlaw = isEpm ? epm.ceiling() * tmax : tmax;
   G4bool useExact = false;
   G4double xiEx = 0., t0Ex = 0.;
   if (exactDelta && a3 > 0. && (a1 + a2) > 0.) {
@@ -775,7 +821,7 @@ G4double G4UniversalFluctuationForExtrapolator::SampleFluctuations(
     // the sampled loss is multiplied by `scaling` at the end, so xi -- which
     // scales like an energy -- is divided by it here.
     const G4double t0 = (exactT0 > e0) ? exactT0 : e0;
-    if (tmax > t0) {
+    if (tlaw > t0) {
       const G4double etot = ekin + particleMass;
       const G4double xi =
           twopi_mc2_rcl2 * material->GetElectronDensity() * length * chargeSquare / (beta2 * scaling);
@@ -785,6 +831,9 @@ G4double G4UniversalFluctuationForExtrapolator::SampleFluctuations(
       G4double i1 = G4Log(tmax / t0) - beta2 * (tmax - t0) / tmax;
       if (spinHalf) {
         i1 += (tmax * tmax - t0 * t0) / (4. * etot * etot);
+      }
+      if (isEpm) {
+        i1 = epm.F1(tlaw / tmax) - epm.F1(t0 / tmax);
       }
       const G4double eDelta = xi * i1;
       const G4double eExc = a1 * e1 + a2 * e2;
@@ -846,17 +895,24 @@ G4double G4UniversalFluctuationForExtrapolator::SampleFluctuations(
     if (spinHalf) {
       i0 += (tmax - t0Ex) / (2. * etot * etot);
     }
+    if (isEpm) {
+      i0 = (epm.F0(tlaw / tmax) - epm.F0(t0Ex / tmax)) / tmax;
+    }
     const G4double n0 = xiEx * i0;
     const G4double p3 = (n0 > nmaxCont) ? nmaxCont * n0 / (nmaxCont + n0) : n0;
-    G4double ta = 1.0 / ((1. - ioniTruncAlpha_) * p3 / xiEx + 1. / tmax);
-    if (ta > tmax) {
-      ta = tmax;
+    G4double ta = 1.0 / ((1. - ioniTruncAlpha_) * p3 / xiEx + 1. / tlaw);
+    if (ta > tlaw) {
+      ta = tlaw;
     }
     G4double i2 = (ta - t0Ex) - beta2 * (ta * ta - t0Ex * t0Ex) / (2. * tmax);
     G4double i1t = G4Log(ta / t0Ex) - beta2 * (ta - t0Ex) / tmax;
     if (spinHalf) {
       i2 += (ta * ta * ta - t0Ex * t0Ex * t0Ex) / (6. * etot * etot);
       i1t += (ta * ta - t0Ex * t0Ex) / (4. * etot * etot);
+    }
+    if (isEpm) {
+      i2 = tmax * (epm.F2(ta / tmax) - epm.F2(t0Ex / tmax));
+      i1t = epm.F1(ta / tmax) - epm.F1(t0Ex / tmax);
     }
     loss += xiEx * i1t;
     esig2tot += xiEx * i2;
@@ -905,7 +961,7 @@ G4double G4UniversalFluctuationForExtrapolator::SampleFluctuations(
   // above are numerical evaluation devices for the returned variance, NOT
   // part of the model, so they are deliberately not recorded.
   record_ = UrbanFluctRecord{};
-  record_.regime = useExact ? (spinHalf ? 2 : 3) : 1;
+  record_.regime = useExact ? (isEpm ? (particle == G4Electron::Electron() ? 4 : 5) : (spinHalf ? 2 : 3)) : 1;
   // gsig2 in the Glandz regime = the RETURNED (alpha-truncated) variance:
   // the offline CF fit uses it to reproduce the exact standardization the
   // track fit applied, so sigma-replica errors cannot leak into the fitted
