@@ -58,9 +58,10 @@ G4bool G4ErrorEnergyLossForCVH::IsApplicable(const G4ParticleDefinition& aPartic
 }
 
 //-------------------------------------------------------------------
-G4VParticleChange* G4ErrorEnergyLossForCVH::AlongStepDoIt(const G4Track& aTrack, const G4Step& aStep) {
-  aParticleChange.Initialize(aTrack);
-
+G4double G4ErrorEnergyLossForCVH::EnergyAfter(const G4Step& aStep,
+                                              G4double kinEnergyStart,
+                                              const G4Material* aMaterial,
+                                              const G4ParticleDefinition* aParticleDef) {
   G4ErrorPropagatorData* g4edata = G4ErrorPropagatorData::GetErrorPropagatorData();
 
   const G4Field* field = G4TransportationManager::GetTransportationManager()->GetFieldManager()->GetDetectorField();
@@ -114,11 +115,7 @@ G4VParticleChange* G4ErrorEnergyLossForCVH::AlongStepDoIt(const G4Track& aTrack,
 
   const double xifact = std::exp(dxieff);
 
-  G4double kinEnergyStart = aTrack.GetKineticEnergy();
   G4double step_length = aStep.GetStepLength();
-
-  const G4Material* aMaterial = aTrack.GetMaterial();
-  const G4ParticleDefinition* aParticleDef = aTrack.GetDynamicParticle()->GetDefinition();
   G4double kinEnergyEnd = kinEnergyStart;
 
   // backward - energy increased
@@ -150,6 +147,18 @@ G4VParticleChange* G4ErrorEnergyLossForCVH::AlongStepDoIt(const G4Track& aTrack,
     kinEnergyEnd = theELossForExtrapolator->EnergyAfterStep(kinEnergyHalfStep, step_length, aMaterial, aParticleDef);
     kinEnergyEnd = kinEnergyStart - xifact * (kinEnergyHalfStep - kinEnergyEnd);
   }
+
+  return kinEnergyEnd;
+}
+
+//-------------------------------------------------------------------
+G4VParticleChange* G4ErrorEnergyLossForCVH::AlongStepDoIt(const G4Track& aTrack, const G4Step& aStep) {
+  aParticleChange.Initialize(aTrack);
+
+  G4double kinEnergyStart = aTrack.GetKineticEnergy();
+  const G4Material* aMaterial = aTrack.GetMaterial();
+  const G4ParticleDefinition* aParticleDef = aTrack.GetDynamicParticle()->GetDefinition();
+  const G4double kinEnergyEnd = EnergyAfter(aStep, kinEnergyStart, aMaterial, aParticleDef);
 
   G4double edepo = kinEnergyEnd - kinEnergyStart;
 
