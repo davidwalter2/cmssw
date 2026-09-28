@@ -1098,6 +1098,112 @@ protected:
   // skew of the ionization contribution.
   std::vector<float> resinfbv;
 
+  // ======================================================================
+  // KINK INFORMATION AND KINK RESPONSE PER MULTIPLE-SCATTERING BLOCK
+  // (switch `exportKinkResponse`, default False).
+  //
+  // What the survival-weighted nuclear-elastic family needs per MS block b
+  // (Documents/Resolution/NUCLEAR_ELASTIC.md, "Survival of a kick on
+  // reconstructed tracks"): the chi2 a kick costs the track, and how far the
+  // fitted functional moves with it.
+  //
+  // THE BASIS.  A kick at the block is a rotation of the track direction t by
+  // the angles kappa = (kappa_1, kappa_2) about two orthonormal axes
+  // perpendicular to t, plus the transverse displacement xi = (xi_1, xi_2)
+  // it has built up at the block's end surface, xi = L kappa for a kick a
+  // path length L upstream of that surface:
+  //     e_1 = (z^ x t)/|z^ x t|   azimuthal (bending) direction,
+  //                               kappa_1 = cos(lambda) dphi,  xi_1 = x_T
+  //     e_2 = t x e_1             polar direction,
+  //                               kappa_2 = dlambda,           xi_2 = y_T
+  // (lambda, phi, x_T, y_T: the CMS curvilinear parameters of the propagated
+  // state at the block's end surface; kappa in rad, xi in cm).  For a kick
+  // of polar angle theta and azimuth psi about t, kappa = theta (cos psi,
+  // sin psi) with psi measured from e_1.  `T_b` (5 x 4) maps (kappa, xi) to
+  // the block's five constraint rows (the local (q/p, dx/dz, dy/dz, x, y) of
+  // the target surface with localUpdate, the curvilinear rows without), so
+  // a kick is the residual shift delta = T_b (kappa, xi), exactly the
+  // noise the block's multiple-scattering covariance describes
+  // (dV_b = T_b Q_b T_b^T).
+  //
+  // PER BLOCK (one entry per parmtype-10 resolution entry, in fit order):
+  //   kinkblkidx   the block's global MS index (= `msmoliidx` of its steps)
+  //   kinkblkrow   first `msmoliv` row of the block's steps; kinkblknrow rows
+  //   kinkblkhit   valid-hit index of the hit the block ends on (-1: the
+  //                target hit is not valid); two-track: counted per leg
+  //   kinkblkleg   (two-track) the leg, 0/1 = the maker's daughter 1/2
+  //   kinkblkpos   global position of the block's end point (x, y, z) [cm]
+  //   kinkinfv     I_b = T_b^T R T_b, the 4 x 4 kink information (upper
+  //                triangle row-major: 00 01 02 03 11 12 13 22 23 33), R the
+  //                residual weight matrix of the track's OWN hits and
+  //                material, with no vertex / beam-spot / mass constraint
+  //                (what the reconstruction sees).  A kick (kappa, L kappa)
+  //                costs  dchi2 = (kappa, L kappa)^T I_b (kappa, L kappa)
+  //                in the linear model; the angle block (00 01 11) is the
+  //                kink finder's H2/2 in this basis.
+  //   kinkinffitv  (two-track, or a single-track fit with a constraint) the
+  //                same with the fit's own constraints
+  //   kinkmsv      Q_b, the block's multiple-scattering covariance in the
+  //                same basis (same packing): Q_{kappa xi}/Q_{kappa kappa} is
+  //                the block's scattering-weighted lever arm, and the non-zero
+  //                eigenvalues of Q_b I_b^fit are `reseigv`
+  //   kinkrespv    the response of the exported functional to (kappa_1,
+  //                kappa_2, xi_1, xi_2) WITH the fit's constraints: q/p in
+  //                the single-track maker, the candidate mass [GeV] in the
+  //                two-track maker (d functional = kinkrespv . (kappa, xi))
+  //   kinkrespvtxv (two-track, with the vertex residual export) the same for
+  //                the vertex DCA functional
+  bool exportKinkResponse_ = false;
+  bool kinkTwoTrack_ = false;
+  struct KinkBlockRec {
+    unsigned int ires = 0;                   // resolution entry (parmtype 10)
+    Eigen::Matrix<double, 5, 4> T;           // (kappa, xi) -> constraint rows
+    Eigen::Matrix<double, 4, 4> Q;           // MS covariance in the basis
+    Eigen::Vector3d pos;                     // end point [cm]
+    int leg = 0;
+    int validHit = -1;
+    int msrow0 = 0;
+    int nmsrow = 0;
+  };
+  std::vector<KinkBlockRec> kinkRecs_;
+  std::vector<unsigned int> kinkblkidx;
+  std::vector<int> kinkblkrow, kinkblknrow, kinkblkhit;
+  std::vector<short> kinkblkleg;
+  std::vector<float> kinkblkpos, kinkrespv, kinkrespvtxv;
+  // double: the 4 x 4 blocks mix angles and positions (I_kk ~ 1e6, I_xx ~ 1e8)
+  // and nearly cancel along the lever arm a kick is seen with, so float32
+  // storage loses the small eigenvalues (relative 1e-2 at the 1 % quantile)
+  std::vector<double> kinkinfv, kinkinffitv, kinkmsv;
+  // kink injection (validation): at hit kinkInjectLayer (of leg
+  // kinkInjectLeg in the two-track maker) the block's residual is shifted by
+  // T_b (kappa_1, kappa_2, xi_1, xi_2) = kinkInjectBasis on every iteration,
+  // i.e. the track is refitted as if it had taken that kick.
+  int kinkInjectLeg_ = 0;
+  std::vector<double> kinkInjectBasis_;
+  void clearKinkExport();
+  // The basis map at a propagated state: T_curv (5 x 4, curvilinear rows) and
+  // the curvilinear -> basis projection D (4 x 5) of the MS covariance.
+  static Eigen::Matrix<double, 5, 4> kinkBasisCurv(const Eigen::Matrix<double, 7, 1> &state);
+  static Eigen::Matrix<double, 4, 5> kinkCurvToBasis(const Eigen::Matrix<double, 7, 1> &state);
+  // Register the MS block of resolution entry `ires` (called where the
+  // parmtype-10 entry is pushed).  `Hm` the curvilinear -> constraint-row
+  // Jacobian (identity without localUpdate), `dQMScurv` the block's
+  // curvilinear MS covariance.
+  void pushKinkRec(unsigned int ires, const Eigen::Matrix<double, 7, 1> &state,
+                   const Eigen::Matrix<double, 5, 5> &Hm, const Eigen::Matrix<double, 5, 5> &dQMScurv,
+                   int leg, int validHit, int msrow0, int nmsrow);
+  // R = Vinv - Vinv F (F^T Vinv F)^-1 F^T Vinv for a dense sub-problem.
+  static Eigen::MatrixXd profiledResidualWeight(const Eigen::MatrixXd &F, const Eigen::MatrixXd &Vinv);
+  static void packSym4(const Eigen::Matrix<double, 4, 4> &M, std::vector<double> &out);
+  // Fill the per-block branches of every registered block from the
+  // unconstrained residual weight `Runc`, the fit's own `Rfit` (nullptr:
+  // not exported) and the response vectors (rows of the constraint vector;
+  // `wfun` the influence w such that d functional = -w^T d residual).
+  void fillKinkExport(const Eigen::MatrixXd &Runc, const Eigen::MatrixXd *Rfit,
+                      const std::vector<std::array<unsigned int, 2>> &resblockrng,
+                      const std::vector<unsigned int> &resglobidx,
+                      const Eigen::VectorXd *wfun, const Eigen::VectorXd *wvtx);
+
 
   // ======================================================================
   // IN-MAKER RESOLUTION-CF EXPONENTS (cvhcf).

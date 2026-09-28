@@ -177,6 +177,9 @@ private:
   
   bool doVtxConstraint_;
   bool doMassConstraint_;
+  // kink injection (validation of the kink export): hit index within leg
+  // kinkInjectLeg (base) at which the kick kinkInjectBasis is injected
+  int kinkInjectLayerTT_ = -1;
   double massConstraint_;
   double massConstraintWidth_;
   double daughterMass1_;
@@ -809,6 +812,10 @@ ResidualGlobalCorrectionMakerTwoTrackG4e::ResidualGlobalCorrectionMakerTwoTrackG
   // configuration changes its output by a byte.
   exportVtxResidual_ = iConfig.existsAs<bool>("exportVtxResidual")
                            ? iConfig.getParameter<bool>("exportVtxResidual") : false;
+  // the kink export's two-track layout (per-leg information, `kinkblkleg`)
+  kinkTwoTrack_ = true;
+  kinkInjectLayerTT_ = iConfig.existsAs<int>("kinkInjectLayer")
+                           ? iConfig.getParameter<int>("kinkInjectLayer") : -1;
   // Say out loud what the log-det term is doing, and to which families: it
   // changes the meaning of `gradv`/`hesspackedv`/`hessfactorv` and, for the
   // per-module families, the LAYOUT of `globalidxv`.
@@ -873,6 +880,9 @@ ResidualGlobalCorrectionMakerTwoTrackG4e::ResidualGlobalCorrectionMakerTwoTrackG
       for (int q : {1, -1})
         anyHadron = anyHadron || cvhcf::nucelPdg(ana_hitanalyzer::g4ParticleName(*nm, q)) != 0;
     nucelActive_ = exportCfNucel_ && exportCfExponents_ && anyHadron;
+    // the kink export serves the nuclear-elastic survival model: a muon pair
+    // writes exactly what it writes with the switch off
+    exportKinkResponse_ = exportKinkResponse_ && anyHadron;
   }
   // 2D-transverse pointing-angle constraint (V0 channels). Default off.
   doPointingConstraint_ = iConfig.existsAs<bool>("doPointingConstraint")
@@ -1513,6 +1523,16 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
   // `Jpsi_jacVtx` emitter, which runs after the global-index remap. Members
   // for the same reason `covrefmom` is one: the two live in sibling scopes.
   Eigen::VectorXd wvtxinf;
+
+  // THE KINK EXPORT's per-leg sub-problems (exportKinkResponse): the
+  // two-track PCA -> leg-curvilinear Jacobian of the converged iteration, and
+  // each leg's constraint-row range and state columns, so the track's OWN
+  // residual weight can be re-profiled without the vertex / beam-spot / mass
+  // rows (see `fillKinkExport`).
+  Matrix<double, 10, 10> kinkPca2curv_;
+  std::array<std::array<unsigned int, 2>, 2> kinkLegRows_;
+  std::array<unsigned int, 2> kinkLegState0_;
+  std::array<unsigned int, 2> kinkLegNhit_;
 
   // doRes port (per-candidate mass-CF export): the material process-noise
   // derivative blocks dV_b (MS and ionization parts of Q), their row
@@ -2572,6 +2592,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             // content is what the export reads
             dVs.clear();
             resblockrng.clear();
+            kinkRecs_.clear();
             resglobidx.clear();
             resfamily_.clear();
             resvalidhit_.clear();
@@ -2673,6 +2694,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           }
 
           const Matrix<double, 10, 10> twotrackpca2curvref = twoTrackPca2curvJacobianD(refftsarr[0], refftsarr[1], field, dBrefarr[0], dBrefarr[1]);
+          kinkPca2curv_ = twotrackpca2curvref;
 
           
           for (unsigned int id = 0; id < 2; ++id) {
@@ -2684,6 +2706,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             // legs have opposite ones, unlike the mass functional whose sign
             // is -1 for both), so each block has to know which leg it is on.
             resLegStart_[id] = resblockrng.size();
+            kinkLegRows_[id][0] = irow;
 
             Matrix<double, 7, 1> &refFts = refftsarr[id];
             auto &hits = hitsarr[id];
@@ -3023,6 +3046,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               // unconstrained pass feeds the mass-CF export).
               unsigned int msglobalidx = 0;
               unsigned int ioniglobalidx = 0;
+              // the block's step rows, for the kink export
+              const int kinkMsRow0 = int(msmoliidx.size());
               if (dores && icons == 0) {
                 const uint32_t gluedidprop = trackerTopology->glued(hit->geographicalId());
                 const DetId propdetid = gluedidprop ? DetId(gluedidprop) : hit->geographicalId();
@@ -3147,6 +3172,15 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
 
                   dx0 = (localparms - localparmsprop).head<5>();
                 }
+              }
+
+              // Kink injection in the (kappa, xi) basis of the kink export
+              // (validation of kinkinfv / kinkinffitv / kinkrespv).
+              if (!kinkInjectBasis_.empty() && kinkInjectLayerTT_ >= 0 && int(id) == kinkInjectLeg_ &&
+                  int(ihit) == kinkInjectLayerTT_) {
+                const Matrix<double, 5, 5> Hk = dolocalupdate ? Hm : Matrix<double, 5, 5>::Identity();
+                const Matrix<double, 4, 1> kb(kinkInjectBasis_.data());
+                dx0 += Hk * kinkBasisCurv(updtsos) * kb;
               }
 
               // curvilinear to local jacobian
@@ -3440,6 +3474,12 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                     resfamily_.push_back(dQpart == &dQMS ? 10 : 11);
                     resvalidhit_.push_back(-1);   // material block, not a hit
                     rescls_.push_back(-1);
+                    if (exportKinkResponse_ && icons == 0 && dQpart == &dQMS) {
+                      pushKinkRec(resblockrng.size() - 1, updtsos,
+                                  dolocalupdate ? Hm : Matrix<double, 5, 5>::Identity(), dQMScurv, int(id),
+                                  hit->isValid() ? int(nvalidFinalarr[id]) : -1, kinkMsRow0,
+                                  int(msmoliidx.size()) - kinkMsRow0);
+                    }
                   }
                   registerMatGroupNoise(irow);
                 }
@@ -3496,6 +3536,12 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                     resfamily_.push_back(dQpart == &dQMS ? 10 : 11);
                     resvalidhit_.push_back(-1);   // material block, not a hit
                     rescls_.push_back(-1);
+                    if (exportKinkResponse_ && icons == 0 && dQpart == &dQMS) {
+                      pushKinkRec(resblockrng.size() - 1, updtsos,
+                                  dolocalupdate ? Hm : Matrix<double, 5, 5>::Identity(), dQMScurv, int(id),
+                                  hit->isValid() ? int(nvalidFinalarr[id]) : -1, kinkMsRow0,
+                                  int(msmoliidx.size()) - kinkMsRow0);
+                    }
                   }
                   registerMatGroupNoise(irow);
                 }
@@ -4088,6 +4134,9 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               break;
             }
 
+            kinkLegRows_[id][1] = irow;
+            kinkLegState0_[id] = trackstateidx;
+            kinkLegNhit_[id] = tracknhits;
             trackstateidx += 5*tracknhits;
           }
 
@@ -4970,6 +5019,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             cfgrpclosure = 0.f;
             clearCfNucel();
             clearCfKnockon();
+            clearKinkExport();
             if (dores && !dVs.empty()) {
               // ================= THE sqrt(dV_b) CACHE ======================
               // `dV_b^{1/2}` is a property of the BLOCK, not of the
@@ -5902,6 +5952,56 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                     }
                   }
                   Jpsi_bssgnchk[k] = cfresb.ok ? 1.f : 0.f;
+                }
+              }
+
+              // ---- THE KINK INFORMATION AND RESPONSE PER MS BLOCK ---------
+              // (see the member docs in the base class).  Two residual
+              // weights: the fit's own (vertex / beam-spot / pointing rows
+              // included, the mass constraint of this pass not) and each
+              // leg's OWN, re-profiled from its hit and material rows alone
+              // with a free five-parameter origin -- the leg's curvilinear
+              // state at the reference, which the ten PCA columns reach
+              // through `kinkPca2curv_` (full row rank, so the leg's rows
+              // Ffull_vtx = G A give G = Ffull_vtx A^T (A A^T)^-1 exactly).
+              // The responses are the fit's (mass, vertex DCA), with its
+              // constraints.  `reseigv` of every entry, from the fit's own
+              // weight as in the single-track maker, comes with it.
+              if (exportKinkResponse_) {
+                const SparseMatrix<double> FtVinvk = VinvF.transpose();
+                const MatrixXd Rfitk = MatrixXd(Vinvsparse) - VinvF * Cinvd.solve(MatrixXd(FtVinvk));
+                MatrixXd Runck = MatrixXd::Zero(ncons, ncons);
+                for (unsigned int leg = 0; leg < 2; ++leg) {
+                  const unsigned int c0 = kinkLegState0_[leg];
+                  const unsigned int nc = 5 * kinkLegNhit_[leg];
+                  std::vector<Eigen::Index> rows;
+                  for (unsigned int r = kinkLegRows_[leg][0]; r < kinkLegRows_[leg][1]; ++r) {
+                    if (Ffull.row(r).segment(c0, nc).cwiseAbs().maxCoeff() > 0.) {
+                      rows.push_back(r);
+                    }
+                  }
+                  if (rows.empty()) {
+                    continue;
+                  }
+                  const Matrix<double, 5, 10> A = kinkPca2curv_.middleRows<5>(5 * leg);
+                  const Matrix<double, 10, 5> Apinv = A.transpose() * (A * A.transpose()).inverse();
+                  MatrixXd Fl(rows.size(), 5 + nc);
+                  Fl.leftCols(5) = Ffull(rows, Eigen::seqN(0, 10)) * Apinv;
+                  Fl.rightCols(nc) = Ffull(rows, Eigen::seqN(c0, nc));
+                  const MatrixXd Rl = profiledResidualWeight(Fl, Vinvfull(rows, rows));
+                  Runck(rows, rows) = Rl;
+                }
+                const bool havevtx = exportVtxResidual_ && wvtxinf.size() == Eigen::Index(ncons);
+                fillKinkExport(Runck, &Rfitk, resblockrng, resglobidx, &wmass, havevtx ? &wvtxinf : nullptr);
+                reseigv.clear();
+                for (unsigned int ires = 0; ires < dVs.size(); ++ires) {
+                  const unsigned int r0 = resblockrng[ires][0];
+                  const unsigned int nb = resblockrng[ires][1];
+                  const MatrixXd B = ressqrtdV[ires] * Rfitk.block(r0, r0, nb, nb) * ressqrtdV[ires];
+                  const SelfAdjointEigenSolver<MatrixXd> eigB(B);
+                  for (unsigned int j = 0; j < 5; ++j) {
+                    reseigv.push_back(j < nb ? float(std::max(eigB.eigenvalues()(nb - 1 - j), 0.)) : 0.f);
+                  }
                 }
               }
             }

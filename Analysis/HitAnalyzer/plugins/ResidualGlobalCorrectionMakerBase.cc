@@ -3,6 +3,7 @@
 #include <memory>
 
 #include "ResidualGlobalCorrectionMakerBase.h"
+#include <Eigen/Cholesky>
 #include "G4MaterialTableTree.h"
 #include "TrackPropagation/Geant4e/interface/G4UniversalFluctuationForExtrapolator.hh"
 #include "TrackPropagation/Geant4e/interface/CGFQoPBlock.h"
@@ -235,6 +236,17 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
                            ? iConfig.getParameter<bool>("cfQopExact") : true;
   cfQopLog_ = iConfig.existsAs<bool>("cfQopLog")
                            ? iConfig.getParameter<bool>("cfQopLog") : true;
+  // THE KINK INFORMATION AND RESPONSE PER MS BLOCK (see the member docs).
+  // Export only, off by default: with it off every branch is unchanged.
+  exportKinkResponse_ = iConfig.existsAs<bool>("exportKinkResponse")
+                           ? iConfig.getParameter<bool>("exportKinkResponse") : false;
+  kinkInjectLeg_ = iConfig.existsAs<int>("kinkInjectLeg")
+                           ? iConfig.getParameter<int>("kinkInjectLeg") : 0;
+  kinkInjectBasis_ = iConfig.existsAs<std::vector<double>>("kinkInjectBasis")
+                           ? iConfig.getParameter<std::vector<double>>("kinkInjectBasis") : std::vector<double>();
+  if (!kinkInjectBasis_.empty() && kinkInjectBasis_.size() != 4) {
+    throw cms::Exception("Configuration") << "kinkInjectBasis must hold 4 numbers (kappa_1, kappa_2, xi_1, xi_2)";
+  }
   exportHitResBlocks_ = iConfig.existsAs<bool>("exportHitResBlocks")
                            ? iConfig.getParameter<bool>("exportHitResBlocks") : true;
   // THE PER-HIT (COMPLEMENT) RESIDUAL BLOCK.  New export, off by default so
@@ -610,6 +622,25 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
         tree->Branch("reseigv", &reseigv);
         tree->Branch("resinfv", &resinfv);
         tree->Branch("resinfbv", &resinfbv);
+      }
+      if (exportKinkResponse_) {
+        tree->Branch("kinkblkidx", &kinkblkidx);
+        tree->Branch("kinkblkrow", &kinkblkrow);
+        tree->Branch("kinkblknrow", &kinkblknrow);
+        tree->Branch("kinkblkhit", &kinkblkhit);
+        tree->Branch("kinkblkpos", &kinkblkpos);
+        tree->Branch("kinkinfv", &kinkinfv);
+        tree->Branch("kinkmsv", &kinkmsv);
+        tree->Branch("kinkrespv", &kinkrespv);
+        if (kinkTwoTrack_) {
+          tree->Branch("kinkblkleg", &kinkblkleg);
+          tree->Branch("kinkinffitv", &kinkinffitv);
+          if (exportVtxResidual_) {
+            tree->Branch("kinkrespvtxv", &kinkrespvtxv);
+          }
+        } else if (bsConstraint_) {
+          tree->Branch("kinkinffitv", &kinkinffitv);
+        }
       }
       tree->Branch("reseigidx", &reseigidx);
       tree->Branch("reshitidx", &reshitidx);
@@ -2296,6 +2327,115 @@ int ResidualGlobalCorrectionMakerBase::hitResClassIndex(int subdet, int sizeX, f
   }
   const int n = std::min(std::max(sizeX, 1), 5);
   return 8 + 2 * (n - 1) + (uProj < 0.25f ? 0 : 1);
+}
+
+// ---- kink information and response per MS block (exportKinkResponse) ----
+
+void ResidualGlobalCorrectionMakerBase::clearKinkExport() {
+  kinkblkidx.clear();
+  kinkblkrow.clear();
+  kinkblknrow.clear();
+  kinkblkhit.clear();
+  kinkblkleg.clear();
+  kinkblkpos.clear();
+  kinkinfv.clear();
+  kinkinffitv.clear();
+  kinkmsv.clear();
+  kinkrespv.clear();
+  kinkrespvtxv.clear();
+}
+
+Eigen::Matrix<double, 5, 4> ResidualGlobalCorrectionMakerBase::kinkBasisCurv(const Eigen::Matrix<double, 7, 1> &state) {
+  // curvilinear (q/p, lambda, phi, x_T, y_T): d t/d phi = cos(lambda) e_1,
+  // d t/d lambda = e_2, d x/d x_T = e_1, d x/d y_T = e_2 (curv2cartJacobianAltD)
+  const double pt = std::hypot(state[3], state[4]);
+  const double coslam = pt / state.segment<3>(3).norm();
+  Eigen::Matrix<double, 5, 4> T = Eigen::Matrix<double, 5, 4>::Zero();
+  T(2, 0) = 1. / coslam;
+  T(1, 1) = 1.;
+  T(3, 2) = 1.;
+  T(4, 3) = 1.;
+  return T;
+}
+
+Eigen::Matrix<double, 4, 5> ResidualGlobalCorrectionMakerBase::kinkCurvToBasis(const Eigen::Matrix<double, 7, 1> &state) {
+  const double pt = std::hypot(state[3], state[4]);
+  const double coslam = pt / state.segment<3>(3).norm();
+  Eigen::Matrix<double, 4, 5> D = Eigen::Matrix<double, 4, 5>::Zero();
+  D(0, 2) = coslam;
+  D(1, 1) = 1.;
+  D(2, 3) = 1.;
+  D(3, 4) = 1.;
+  return D;
+}
+
+void ResidualGlobalCorrectionMakerBase::pushKinkRec(unsigned int ires, const Eigen::Matrix<double, 7, 1> &state,
+                                                    const Eigen::Matrix<double, 5, 5> &Hm,
+                                                    const Eigen::Matrix<double, 5, 5> &dQMScurv, int leg,
+                                                    int validHit, int msrow0, int nmsrow) {
+  KinkBlockRec &k = kinkRecs_.emplace_back();
+  k.ires = ires;
+  k.T = Hm * kinkBasisCurv(state);
+  const Eigen::Matrix<double, 4, 5> D = kinkCurvToBasis(state);
+  k.Q = D * dQMScurv * D.transpose();
+  k.pos = state.head<3>();
+  k.leg = leg;
+  k.validHit = validHit;
+  k.msrow0 = msrow0;
+  k.nmsrow = nmsrow;
+}
+
+Eigen::MatrixXd ResidualGlobalCorrectionMakerBase::profiledResidualWeight(const Eigen::MatrixXd &F,
+                                                                         const Eigen::MatrixXd &Vinv) {
+  const Eigen::MatrixXd VinvF = Vinv * F;
+  const Eigen::LDLT<Eigen::MatrixXd> C(F.transpose() * VinvF);
+  return Vinv - VinvF * C.solve(VinvF.transpose());
+}
+
+void ResidualGlobalCorrectionMakerBase::packSym4(const Eigen::Matrix<double, 4, 4> &M, std::vector<double> &out) {
+  for (int i = 0; i < 4; ++i) {
+    for (int j = i; j < 4; ++j) {
+      out.push_back(0.5 * (M(i, j) + M(j, i)));
+    }
+  }
+}
+
+void ResidualGlobalCorrectionMakerBase::fillKinkExport(const Eigen::MatrixXd &Runc, const Eigen::MatrixXd *Rfit,
+                                                       const std::vector<std::array<unsigned int, 2>> &resblockrng,
+                                                       const std::vector<unsigned int> &resglobidx,
+                                                       const Eigen::VectorXd *wfun, const Eigen::VectorXd *wvtx) {
+  clearKinkExport();
+  for (const KinkBlockRec &k : kinkRecs_) {
+    const unsigned int r0 = resblockrng[k.ires][0];
+    kinkblkidx.push_back(resglobidx[k.ires]);
+    kinkblkrow.push_back(k.msrow0);
+    kinkblknrow.push_back(k.nmsrow);
+    kinkblkhit.push_back(k.validHit);
+    if (kinkTwoTrack_) {
+      kinkblkleg.push_back(static_cast<short>(k.leg));
+    }
+    for (int i = 0; i < 3; ++i) {
+      kinkblkpos.push_back(float(k.pos[i]));
+    }
+    packSym4(k.T.transpose() * Runc.block<5, 5>(r0, r0) * k.T, kinkinfv);
+    if (Rfit != nullptr) {
+      packSym4(k.T.transpose() * Rfit->block<5, 5>(r0, r0) * k.T, kinkinffitv);
+    }
+    packSym4(k.Q, kinkmsv);
+    // d functional = -w^T d residual, and a kick is d residual = T (kappa, xi)
+    if (wfun != nullptr) {
+      const Eigen::Matrix<double, 4, 1> g = -k.T.transpose() * wfun->segment<5>(r0);
+      for (int i = 0; i < 4; ++i) {
+        kinkrespv.push_back(float(g[i]));
+      }
+    }
+    if (wvtx != nullptr) {
+      const Eigen::Matrix<double, 4, 1> g = -k.T.transpose() * wvtx->segment<5>(r0);
+      for (int i = 0; i < 4; ++i) {
+        kinkrespvtxv.push_back(float(g[i]));
+      }
+    }
+  }
 }
 
 void ResidualGlobalCorrectionMakerBase::clearCfNucel() {

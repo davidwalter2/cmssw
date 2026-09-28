@@ -433,9 +433,12 @@ ResidualGlobalCorrectionMakerG4e::ResidualGlobalCorrectionMakerG4e(const edm::Pa
   trackMass_ = ana_hitanalyzer::getParticleProperties(trackParticleName_).mass;
   // The nuclear-elastic family exists for a hadron species only (either
   // charge; the charge then picks pi+/pi-, K+/K-, p/pbar per track).
-  nucelActive_ = exportCfNucel_ && exportCfExponents_ &&
-                 (cvhcf::nucelPdg(ana_hitanalyzer::g4ParticleName(trackParticleName_, 1)) != 0 ||
-                  cvhcf::nucelPdg(ana_hitanalyzer::g4ParticleName(trackParticleName_, -1)) != 0);
+  const bool hadronSpecies = cvhcf::nucelPdg(ana_hitanalyzer::g4ParticleName(trackParticleName_, 1)) != 0 ||
+                             cvhcf::nucelPdg(ana_hitanalyzer::g4ParticleName(trackParticleName_, -1)) != 0;
+  nucelActive_ = exportCfNucel_ && exportCfExponents_ && hadronSpecies;
+  // the kink export serves the nuclear-elastic survival model: hadrons only,
+  // so a muon maker writes exactly what it writes with the switch off
+  exportKinkResponse_ = exportKinkResponse_ && hadronSpecies;
 
   // Convergence knobs, mirroring the two-track maker (existsAs-guarded so
   // legacy cfis keep the baseline behaviour: 10 iterations, EDM < 1e-5).
@@ -2150,6 +2153,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       resinfcovgrp = 0.f;
       resinfbv.clear();
       resblockrng.clear();
+      kinkRecs_.clear();
       resglobidx.clear();
       
       validdxeigjac = MatrixXd::Zero(2*nvalid, nstateparms);
@@ -2834,6 +2838,14 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               dx0[2] += kinkInjectDydz_;
             }
           }
+          // Kink injection in the (kappa, xi) basis of the kink export: the
+          // track is refitted as if it had taken the kick T_b (kappa, xi) at
+          // this block (validation of kinkinfv / kinkrespv).
+          if (!kinkInjectBasis_.empty() && kinkInjectLayer_ >= 0 && int(ihit) == kinkInjectLayer_) {
+            const Matrix<double, 5, 5> Hk = dolocalupdate ? Hm : Matrix<double, 5, 5>::Identity();
+            const Matrix<double, 4, 1> kb(kinkInjectBasis_.data());
+            dx0 += Hk * kinkBasisCurv(updtsos) * kb;
+          }
 
           // ------------------------------------------------------------------
           // IRLS RE-CENTRING of the q/p process-noise row (CVH_CGF_QOP=3).
@@ -3151,8 +3163,14 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             // Phase B export: Moliere raw step data of the same leg (log
             // sync argument as for the Urban export below).
             const int nucPdg = cvhcf::nucelPdg(g4PartName);
+            const int msrow0 = int(msmoliidx.size());
             for (auto const &ms : g4prop->msStepLog()) {
               pushMsMoliStep(msglobalidx, ms, nucPdg);
+            }
+            if (exportKinkResponse_) {
+              pushKinkRec(resblockrng.size() - 1, updtsos,
+                          dolocalupdate ? Hm : Matrix<double, 5, 5>::Identity(), dQMScurv, 0,
+                          hit->isValid() ? int(ivalidhit) : -1, msrow0, int(msmoliidx.size()) - msrow0);
             }
           }
 
@@ -4818,6 +4836,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     phcfhitcomp.clear();
     phcfhitcls.clear();
     phcfhitv.clear();
+    clearKinkExport();
 
     if (dores && fillTrackTree_ && (fillGrads_ || fillGradsFactored_)) {
       // Influence of the noise on the 5 reference parameters:
@@ -4839,6 +4858,23 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         }
       }
       const VectorXd wqop = W5.col(0);
+
+      // The kink information and response per MS block (see the member
+      // docs).  Without a constraint the fit's own residual weight IS the
+      // track's own; with the beam-spot rows or a frozen (gen) reference it
+      // is re-profiled over every state from the hit and material rows alone.
+      if (exportKinkResponse_) {
+        if (!bsConstraint_ && !dogen) {
+          fillKinkExport(R, nullptr, resblockrng, resglobidx, &wqop, nullptr);
+        } else {
+          const int nbs = bsConstraint_ ? 3 : 0;
+          const int nr = int(ncons) - nbs;
+          MatrixXd Runc = MatrixXd::Zero(ncons, ncons);
+          Runc.block(nbs, nbs, nr, nr) =
+              profiledResidualWeight(Ffull.bottomRows(nr), Vinvfull.block(nbs, nbs, nr, nr));
+          fillKinkExport(Runc, &R, resblockrng, resglobidx, &wqop, nullptr);
+        }
+      }
 
       for (unsigned int ires = 0; ires < dVs.size(); ++ires) {
         const unsigned int r0 = resblockrng[ires][0];
