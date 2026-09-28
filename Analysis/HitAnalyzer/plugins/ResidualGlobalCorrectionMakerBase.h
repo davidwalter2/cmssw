@@ -1652,6 +1652,10 @@ protected:
   //                          threshold; the exact energy -> q/p map of the
   //                          knock-on and radiative channels), default ON as
   //                          offline;
+  //   cfQopLog_              -- cf_knockon.QOP_LOG: that map's q/p variable on
+  //                          a logarithmic scale (per collision q ln(p/p')/p,
+  //                          exact under repeated radiation), default ON as
+  //                          offline;
   //   Kokoulin's correction  -- from the propagator's own IoniKokoulin
   //                          switch (cvhcgf::ioniKokoulinEnabled), the one the
   //                          fit's variance was built with, as the offline
@@ -1660,6 +1664,7 @@ protected:
   // runtree's `cfmodel`.
   bool cfKnockonJoint_ = true;
   bool cfQopExact_ = true;
+  bool cfQopLog_ = true;
   cvhcf::RowConfig cfRowConfig_;
   //   exportPerHitResidual_ -- build and write the per-hit (complement)
   //                          residual block above.  OFF by default: it costs

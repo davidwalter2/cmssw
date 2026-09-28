@@ -233,6 +233,8 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
                            ? iConfig.getParameter<bool>("cfKnockonJoint") : true;
   cfQopExact_ = iConfig.existsAs<bool>("cfQopExact")
                            ? iConfig.getParameter<bool>("cfQopExact") : true;
+  cfQopLog_ = iConfig.existsAs<bool>("cfQopLog")
+                           ? iConfig.getParameter<bool>("cfQopLog") : true;
   exportHitResBlocks_ = iConfig.existsAs<bool>("exportHitResBlocks")
                            ? iConfig.getParameter<bool>("exportHitResBlocks") : true;
   // THE PER-HIT (COMPLEMENT) RESIDUAL BLOCK.  New export, off by default so
@@ -1324,6 +1326,7 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       cfRowConfig_ = cvhcf::productionRowConfig();
       cfRowConfig_.knockonJoint = cfKnockonJoint_;
       cfRowConfig_.qopExact = cfQopExact_;
+      cfRowConfig_.qopLog = cfQopLog_;
       cfRowConfig_.ioniKokoulin = cvhcgf::ioniKokoulinEnabled() ? 1.0 : 0.0;
       cfmodel = cvhcf::modelTag(cfRowConfig_, nucelActive_);
     }
