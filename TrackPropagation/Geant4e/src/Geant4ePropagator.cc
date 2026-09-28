@@ -22,6 +22,11 @@
 
 // Geant4
 #include "G4Box.hh"
+#include "G4AffineTransform.hh"
+#include "G4NavigationHistory.hh"
+#include "G4Navigator.hh"
+#include "G4Step.hh"
+#include "G4VTouchable.hh"
 #include "G4ErrorCylSurfaceTarget.hh"
 #include "G4ErrorFreeTrajState.hh"
 #include "G4ErrorPlaneSurfaceTarget.hh"
@@ -170,6 +175,7 @@ Geant4ePropagator::~Geant4ePropagator() {
               << "   exit6[fieldbound]=" << propFailCounts_[5]
               << "   backwardLegs=" << propBackwardLegs_
               << "   targetResumes=" << propTargetResumes_
+              << "   qopRow=layerChord(steps=" << layerSteps_ << ", noChord=" << layerNoChord_ << ")"
               << std::endl;
   }
 
@@ -899,6 +905,12 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
 
   // bookkeeping: count every entry to this function
   ++propTotalCalls_;
+  if (propTotalCalls_ == 1ULL) {
+    std::cout << "[cvh] Geant4ePropagator effective: stepLength=" << stepLengthLimit_
+              << " mm, q/p step Jacobian = layer chord (the step's mean loss times d ln L of its "
+                 "volume's chord along the track; no curvilinear-plane path term)"
+              << std::endl;
+  }
 
   // Set the mode of propagation according to the propagation direction
   G4ErrorMode mode = G4ErrorMode_PropForwards;
@@ -1196,7 +1208,41 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
                 << " accum=" << finalPathLength << std::endl;
     }
 
-    const Matrix<double, 5, 9> transportJac = transportJacobianBxByBzD(statepre, thisPathLength, dEdx, mass, dBstep);
+    Matrix<double, 5, 9> transportJac = transportJacobianBxByBzD(statepre, thisPathLength, dEdx, mass, dBstep);
+
+    // THE ENERGY LOSS'S DIRECTION DEPENDENCE.  The helix transport maps
+    // between curvilinear planes: q/p at the end is f(qop0, s), and the path s
+    // to the plane perpendicular to the nominal end direction moves with every
+    // input, so the q/p row's (lam0, phi0, xt0, yt0) and field entries are
+    // dE/dx times that change of path -- the loss of a UNIFORM medium.  In
+    // layered material the loss is set by the path inside the step's volume,
+    // between its own boundaries, which a deviation changes differently: a
+    // slab of thickness t crossed at incidence alpha is traversed over
+    // t / cos(alpha), whatever the curvilinear planes do.  So those entries
+    // are replaced by the first-order change of the step's mean loss with the
+    // chord L of its volume along the track,
+    //     d(q/p)_end = q cs dE_step d ln L(lam, phi, xt, yt),   cs = E/p^3,
+    // L through the step midpoint (`layerLossRow`).  The energy loss's own
+    // q/p dependence (column qop0) and the material column are untouched.
+    // Every Jacobian the fit uses is built from this one (the transports, the
+    // per-step log, the process-noise transport, the CGF block).
+    transportJac.block<1, 4>(0, 1).setZero();
+    transportJac.block<1, 3>(0, 5).setZero();
+    {
+      const double dEstep = ePre - ePost;
+      if (dEstep != 0. && thisPathLength > 0.) {
+        const G4Step *lstep = g4eTrajState.GetG4Track()->GetStep();
+        const double lp = (lstep->GetPreStepPoint()->GetMomentum() / CLHEP::GeV).mag();
+        const double lcs = (lp > 0.) ? ePre / (lp * lp * lp) : 0.;
+        Matrix<double, 1, 4> g;
+        if (layerLossRow(lstep, statepre, charge * lcs * dEstep, g)) {
+          transportJac.block<1, 4>(0, 1) = g;
+          ++layerSteps_;
+        } else {
+          ++layerNoChord_;
+        }
+      }
+    }
 
     // transport contribution to error
     g4errorEnd = (transportJac.leftCols<5>() * g4errorEnd * transportJac.leftCols<5>().transpose()).eval();
@@ -2628,6 +2674,100 @@ void Geant4ePropagator::CalculateEffectiveZandA(const G4Material *mate, G4double
     effZ += mate->GetElement(ii)->GetZ() * fracVec[ii];
     effA += mate->GetElement(ii)->GetA() * fracVec[ii] / CLHEP::g * CLHEP::mole;
   }
+}
+
+// The q/p row of one step's transport from the chord of its volume (the step
+// loop explains the physics): g = scale * d ln L / d(lam, phi, xt, yt), with L
+// the extent along the track of the step's own material region through the
+// step midpoint p: the distance to its next boundary along d plus that along
+// -d, from a private navigator on the tracking world -- so a mother volume's
+// daughters bound the chord (a volume's solid alone would not know them: a
+// beam-pipe wall whose solid contains the vacuum inside it).  d is the step's
+// chord direction oriented along the state's momentum.  The derivatives are
+// central differences in the curvilinear conventions of the transport (lam,
+// phi rotate d; xt, yt move p along U = z x d / |z x d| and V = d x U),
+// one-sided where a displaced point leaves the step's volume.  Any solid and
+// any hierarchy: only the Geant4 navigation interface is used.  False where
+// the chord is undefined.
+bool Geant4ePropagator::layerLossRow(const G4Step *step,
+                                     const Eigen::Matrix<double, 7, 1> &start,
+                                     double scale,
+                                     Eigen::Matrix<double, 1, 4> &g) const {
+  const G4StepPoint *pre = step->GetPreStepPoint();
+  const G4StepPoint *post = step->GetPostStepPoint();
+  const G4VTouchable *tch = pre->GetTouchable();
+  if (tch == nullptr || tch->GetHistory() == nullptr || tch->GetVolume() == nullptr)
+    return false;
+  if (!chordNav_) {
+    G4VPhysicalVolume *world =
+        G4TransportationManager::GetTransportationManager()->GetNavigatorForTracking()->GetWorldVolume();
+    if (world == nullptr)
+      return false;
+    chordNav_ = std::make_unique<G4Navigator>();
+    chordNav_->SetWorldVolume(world);
+  }
+  G4Navigator &nav = *chordNav_;
+  const G4VPhysicalVolume *vol = tch->GetVolume();
+  const G4ThreeVector volOrigin = tch->GetHistory()->GetTopTransform().InverseTransformPoint(G4ThreeVector());
+  G4ThreeVector d = post->GetPosition() - pre->GetPosition();
+  if (!(d.mag2() > 0.))
+    return false;
+  d = d.unit();
+  if (d.x() * start[3] + d.y() * start[4] + d.z() * start[5] < 0.)
+    d = -d;
+  const G4ThreeVector mid = 0.5 * (pre->GetPosition() + post->GetPosition());
+  const double lam = std::asin(std::clamp(d.z(), -1., 1.));
+  const double phi = std::atan2(d.y(), d.x());
+  const G4ThreeVector U(-std::sin(phi), std::cos(phi), 0.);
+  const G4ThreeVector V = d.cross(U);
+  auto dirOf = [](double l, double f) {
+    return G4ThreeVector(std::cos(l) * std::cos(f), std::cos(l) * std::sin(f), std::sin(l));
+  };
+  bool located = false;
+  // ln of the chord through the step's volume at p along dir; false where p
+  // is not in that volume (the same physical volume at the same placement)
+  auto lnChord = [&](const G4ThreeVector &p, const G4ThreeVector &dir, double &out) {
+    double L = 0.;
+    for (const double sgn : {1., -1.}) {
+      const G4ThreeVector dd = sgn * dir;
+      const G4VPhysicalVolume *pv = nav.LocateGlobalPointAndSetup(p, &dd, located, false);
+      located = true;
+      if (pv != vol ||
+          (nav.GetGlobalToLocalTransform().InverseTransformPoint(G4ThreeVector()) - volOrigin).mag2() > 1e-12)
+        return false;
+      G4double safety = 0.;
+      const G4double sd = nav.ComputeStep(p, dd, kInfinity, safety);
+      if (!(sd < kInfinity))
+        return false;
+      L += sd;
+    }
+    if (!(L > 0.))
+      return false;
+    out = std::log(L);
+    return true;
+  };
+  double l0 = 0.;
+  if (!lnChord(mid, d, l0))
+    return false;
+  constexpr double hAngle = 1e-4;           // rad
+  constexpr double hPos = 1e-3 * CLHEP::cm;  // 10 um; the derivative is per cm
+  auto deriv = [&](auto &&shifted, double h, double per) {
+    double lp = 0., lm = 0.;
+    const bool okp = shifted(h, lp), okm = shifted(-h, lm);
+    if (okp && okm)
+      return (lp - lm) / (2. * h) * per;
+    if (okp)
+      return (lp - l0) / h * per;
+    if (okm)
+      return (l0 - lm) / h * per;
+    return 0.;
+  };
+  g(0) = deriv([&](double h, double &o) { return lnChord(mid, dirOf(lam + h, phi), o); }, hAngle, 1.);
+  g(1) = deriv([&](double h, double &o) { return lnChord(mid, dirOf(lam, phi + h), o); }, hAngle, 1.);
+  g(2) = deriv([&](double h, double &o) { return lnChord(mid + h * U, d, o); }, hPos, CLHEP::cm);
+  g(3) = deriv([&](double h, double &o) { return lnChord(mid + h * V, d, o); }, hPos, CLHEP::cm);
+  g *= scale;
+  return true;
 }
 
 Eigen::Matrix<double, 5, 9> Geant4ePropagator::transportJacobianBxByBzD(
