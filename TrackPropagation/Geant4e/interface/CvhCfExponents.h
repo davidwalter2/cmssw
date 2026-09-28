@@ -9,17 +9,16 @@
 // two-track candidate's mass error -- by the CHARACTERISTIC FUNCTION of the
 // sum of its independent process-noise blocks:
 //
-//     phi_z(t) = phi_hit(t) * exp( S_ms(t) + S_ioni(t) + S_rad(t) + S_del(t) )
+//     phi_z(t) = phi_hit(t) * exp( S_ms + S_ioni + S_rad + S_kx + S_kj (+ S_nuc) )
 //
 // with z the residual standardized by the fit's own sigma. Each S is a
-// compound-Poisson log-CF built from the Geant4 STEP RECORDS of the block and
-// the block's scalar standardized weight `wstd = sqrt(v_b/sq2)/sigma`.
+// compound-Poisson log-CF built from the Geant4 STEP RECORDS of the blocks
+// and each block's scalar standardized weight `wstd = sqrt(v_b/sq2)/sigma`.
 //
 // Building the exponents offline instead would mean exporting every step
 // record -- `ioniurbanv`, `msmoliv`, `radstepv`/`radstepspecv`, `reseigv`,
-// `resinfv` -- at 430 kB and 2.2 s per candidate, i.e. 16 TB and 24k
-// core-hours at the 40M candidates the full calibration needs, to carry what
-// is in the end 6 x 64 floats.
+// `resinfv` -- at 430 kB per candidate, i.e. 16 TB at the 40M candidates the
+// full calibration needs, to carry what is in the end a few x 64 floats.
 //
 // The weights are known only AFTER the fit converges (they are the fit's own
 // influence coefficients), so this runs in the makers' doRes pass, from the
@@ -28,51 +27,46 @@
 // in-maker pooling identical BY CONSTRUCTION to the offline `extract()` join,
 // including the ~1/3 of blocks that pool two legs under one global index.
 //
-// FIDELITY
-// --------
-// This is a port of, and is validated against, the offline reference:
-//   * S_ms   -- `cf_track_resolution.ms_step_exponent` (Moliere compound
-//               Poisson with the universal shape G(tau; ymax), the Z:Z^2
-//               nuclear/electron split and the electron kinematic ceiling),
-//               with `cf_ms_exact.moliere_params` / `gshape_elec`;
-//   * S_ioni -- `cf_track_resolution.ioni_step_exponent` (Urban regimes 0/1
-//               plus the exact spin-1/2 and spin-0 knock-on channels), which
-//               is ALREADY implemented in `cvhcgf` for the in-fit Fisher
-//               weight and is reused here rather than duplicated;
-//   * S_rad  -- `cf_brems_exact.rad_exponent`, on the propagator's own
-//               tabulated brems/pair spectra (`cvhcgf::makeRadSpectrum`);
-//   * S_del  -- `cf_delta_ray.delta_step_exponent` minus `carve_factor`
-//               times S_ms of the same block (the discrete delta-ray recoil
-//               REPLACES part of Moliere's continuous Z(Z+1), it does not
-//               add to it);
-//   * S_nuc  -- hadron tracks only, on request (`TrackInput::wantNucel`):
-//               the nuclear-elastic family, `ks_nucel_cf.step_family` on the
-//               per-element tables `data/cvhcf_nucel_v1.bin` (see
-//               NucelExponents below);
-//   * S_kx, S_kj -- on request (`wantKnockonMap`, `wantKnockonJoint`): the
-//               hard knock-on collision exactly, `cf_knockon.fit_map` /
-//               `map_rad` / `fit_joint` (see "THE HARD KNOCK-ON COLLISION"
-//               below).
+// ONE IMPLEMENTATION OF EVERY CHANNEL
+// -----------------------------------
+// The physics is the offline ROW API, calibration_studies/resolution/
+// cf_rows.py, ported function by function ("THE ROW FUNCTIONS" below):
+//   * scattering   -- `ms_rows` -> cf_track_resolution.ms_step_exponent
+//                     (Moliere with G(tau; ymax), the Z:Z^2 split, the
+//                     electron ceiling, which stops at the e- production
+//                     threshold under the knock-on joint law);
+//   * ionisation   -- `ioni_rows` -> ioni_step_exponent (Urban regimes 0/1,
+//                     the exact Bethe-Bloch knock-on spectrum with Kokoulin's
+//                     correction for muons, Moller and Bhabha for e+-);
+//   * radiation    -- `rad_rows` -> cf_brems_exact.rad_exponent (spectra
+//                     refined `refine_spectra`, the exact 1/p map, the
+//                     primary's recoil against the photon);
+//   * knock-on     -- `knockon_rows` -> cf_knockon (the hard collision as one
+//                     event: exact map and joint deflection);
+//   * nuclear elastic, hadrons only -- NucelExponents below;
+// and the fit-level assembly is `cf_rows.fit_families` (`trackExponents`).
+// The clean-propagation closure evaluates its model through these same
+// functions (calibration_studies/resolution/cvhcf_rows.py), so it tests the
+// model the makers export; cxx/gate_cvhcf_rows.py measures the port against
+// the Python reference: bit for bit on the knock-on quadrature and the
+// spectrum refinement, to rounding elsewhere.
 //
-// THE PORTED SWITCH CONFIGURATION is the offline production default and is
-// recorded in `modelTag()` (which the makers write into the runtree, so a file
-// says which model produced its exponents):
-//     MS_ELEC_TMAX = 1, MS_ELEC_EDGE = 1, MS_FINE_G = 1, MS_SNAP_YMAX = 0,
-//     MS_WVI_SPLIT = 0, IONI_KOKOULIN = 0, IONI_A3_SCALE = IONI_EXC_SCALE =
-//     IONI_TMAX_SCALE = 1, CF_DELTA = 1 (tcut 0.35 MeV, tmax cap 50 MeV).
-// The diagnostic knobs the offline module carries (MS_WVI_SPLIT, MS_ELEC_EDGE
-// 0/0.5/2/3, the a3/excitation gauges, Kokoulin) are NOT ported: they exist to
-// SIZE a systematic on a small sample, which is exactly the case where the
-// offline extractor is still affordable. Porting them would put four dead
-// branches in the inner loop of a 40M-candidate production.
+// THE SWITCHES are the reference modules' globals, carried by `RowConfig`
+// and recorded in `modelTag()` (which the makers write into the runtree, so a
+// file says which model produced its exponents).  The scattering channel's
+// diagnostic knobs (MS_WVI_SPLIT, MS_ELEC_EDGE 0/0.5/2/3, MS_SNAP_YMAX) are
+// not ported: the port is MS_ELEC_TMAX = MS_ELEC_EDGE = MS_FINE_G = 1,
+// MS_SNAP_YMAX = MS_WVI_SPLIT = 0, and the offline binding refuses anything
+// else.
 //
 // THE MOLIERE SHAPE TABLES are not rebuilt here. `cf_ms_exact._build_elec_
 // tables` is 5.8e8 evaluations of J0(x)-1 on a 141 x 1600 x 2560 grid; both
 // the ~20 s of startup and the dependence on WHICH J0 the toolchain ships
-// (libstdc++'s is not Cephes, which is what scipy uses) are avoided by loading
-// the reference's own table from `data/cvhcf_gshape_elec_v1.bin`, written by
-// `data/make_cvhcf_gshape_tables.py`. The C++ then does the identical linear
-// interpolation on the identical numbers.
+// are avoided by loading the reference's own table from
+// `data/cvhcf_gshape_elec_v2.bin`, written by `data/make_cvhcf_gshape_tables.py`.
+// The C++ then does the identical linear interpolation on the identical
+// numbers.  The J0 and K1 the other channels evaluate are Cephes' (scipy's),
+// ported (`besselJ0`, `besselK1`).
 
 #include <array>
 #include <cstddef>
@@ -107,17 +101,194 @@ namespace cvhcf {
 
   class NucelMixtures;  // the nuclear-elastic kernels, below
 
-  // One block's / one track's exponents, on `tauGrid()`.
+  //------------------------------------------------------------------------
+  // THE ROW FUNCTIONS  (offline reference: calibration_studies/resolution/
+  // cf_rows.py and what it calls).
+  //
+  // Every process-noise channel as a function of the exported Geant4 step
+  // RECORDS -- `ioniurbanv` (ionisation, knock-on), `msmoliv` (scattering),
+  // `radstepv` + spectrum (radiation) -- and a list of ENTRIES, each
+  // (record index rid, q/p weight wq, angular weight wb, fraction frac):
+  //
+  //   wq    z per unit q/p, the track charge included (the records' q/p maps
+  //         are for a positive charge);
+  //   wb    z per radian, the length of the projected angular weight
+  //         (w_lambda, w_phi / cos lambda): the kicks are isotropic in 2D, so
+  //         a channel sees only that length;
+  //   frac  the entry's share of the record's material / rate (1/NSUB for a
+  //         sub-step, 1 for a whole record).
+  //
+  // The SAME functions serve the clean-propagation closure (rows at the exact
+  // transport weights of each step, expanded into sub-steps) and the fit-level
+  // CF of the makers (rows at the fit's block influence weights, one entry
+  // per record, `trackExponents`), so the closure tests exactly the model the
+  // makers export.  They take an ARBITRARY tau array (the makers use
+  // `tauGrid()`) and the records as doubles (the makers widen the floats the
+  // tree carries, which is exact), and ACCUMULATE into their outputs.
+  //
+  // The model's switches are the reference modules' globals, carried by
+  // `RowConfig` so that the offline side can hand its module state over
+  // (the shim) and the makers run `productionRowConfig()`.
+  struct RowConfig {
+    // cf_knockon: the joint law of loss and deflection (KNOCKON_JOINT), the
+    // exact energy -> q/p map (QOP_EXACT; also the radiative channel's map),
+    // the knock-on quadrature's nodes per decade for ordinary and thin steps
+    // (KNOCKON_NPERDEC, KNOCKON_NPERDEC_THIN), the thin-step threshold as a
+    // fraction of the row set's largest xi (KNOCKON_THIN), the joint law's
+    // lower limit [MeV] (KNOCKON_TCUT) and the p' floor (PMIN_FRAC)
+    bool knockonJoint = true;
+    bool qopExact = true;
+    int knockonNPerDec = 40;
+    int knockonNPerDecThin = 10;
+    double knockonThin = 1e-2;
+    double knockonTcut = 0.99e-3;
+    double pminFrac = 1e-3;
+    // cf_brems_exact: the refinement of the exported radiative spectra
+    // (RAD_NSUB)
+    int radNsub = 4;
+    // cf_track_resolution: Geant4's Kokoulin correction to the muon knock-on
+    // spectrum (IONI_KOKOULIN, its lower limit IONI_KOKOULIN_TCUT [MeV]; its
+    // quadrature takes the knock-on nodes, knockonNPerDec) and the diagnostic
+    // gauges IONI_A3_SCALE, IONI_EXC_SCALE, IONI_TMAX_SCALE
+    double ioniKokoulin = 1.0;
+    double ioniKokoulinTcut = 0.0;
+    double ioniA3Scale = 1.0;
+    double ioniExcScale = 1.0;
+    double ioniTmaxScale = 1.0;
+    // cf_nucel_exact: the nuclear-elastic recoil family (NUCEL_RECOIL) and
+    // the joint law of one collision's deflection and recoil (NUCEL_JOINT,
+    // with the recoil only)
+    bool nucelRecoil = true;
+    bool nucelJoint = true;
+    bool knockonActive() const { return knockonJoint || qopExact; }
+  };
+  // The offline modules' defaults.
+  const RowConfig &productionRowConfig();
+
+  // scipy.special's j0 and k1 (Cephes), evaluated by the joint knock-on law
+  // and the heavy species' photon-angle law.
+  double besselJ0(double x);
+  double besselK1(double x);
+
+  // The projectile's mass [GeV] of a radiative record, sqrt(E^2 - p^2)
+  // snapped to the nearest charged species (e, mu, pi, K, p) -- the float32
+  // (E, p) of a maker's record carry it only to a few MeV
+  // (cf_brems_exact.species_mass).
+  double speciesMass(double E, double p);
+
+  // The ionisation channel (cf_rows.ioni_rows): Urban excitations and each
+  // record's knock-on law -- 1/E^2 (regime 1), Bethe-Bloch spin 1/2 and 0
+  // with Kokoulin for muons (2/3), Moller (4) and Bhabha (5) -- mapped
+  // LINEARLY into q/p, each row at its own weight wq[i] (n rows, stride
+  // >= 11; >= 13 for regimes 2-5).  Complex, centred.
+  void ioniRows(const double *tau,
+                int nt,
+                const double *rows,
+                int stride,
+                int n,
+                const double *wq,
+                const RowConfig &cfg,
+                double *Sre,
+                double *Sim);
+
+  // Multiple scattering (cf_rows.ms_rows): one isotropic 2D Moliere kick per
+  // entry, the entry's share of the record's material (`msmoliv`, stride >=
+  // 8) at angular weight wb; entries with wb <= 0 carry nothing.  Under the
+  // knock-on joint law (cfg.knockonJoint) the electron term stops at the e-
+  // production threshold cfg.knockonTcut: the collisions above it are the
+  // knock-on channel's.  Real.
+  void msRows(const double *tau,
+              int nt,
+              const double *rows,
+              int stride,
+              int n,
+              const int *rid,
+              const double *wb,
+              const double *frac,
+              int ne,
+              double scale,
+              const RowConfig &cfg,
+              double *S);
+
+  // The exported radiative spectra (48 points, brems then pair per row, on
+  // `vg`) on a grid `nsub` times finer (cf_brems_exact.refine_spectra):
+  // log-log between points, the last interval continued to the step's
+  // kinematic end point (the mass `speciesMass` takes from the record) with
+  // an area-preserving straddling node.  `vf` gets
+  // the (nv-1)*nsub+1 fine nodes, `specf` n rows of 2*vf.size().
+  void refineSpectra(const double *recs,
+                     int rstride,
+                     int n,
+                     const double *spec,
+                     const double *vg,
+                     int nv,
+                     int nsub,
+                     std::vector<double> &vf,
+                     std::vector<double> &specf);
+
+  // Radiation (cf_rows.rad_rows / cf_brems_exact.rad_exponent) on REFINED
+  // spectra (`spec`: 2*nv per record on `vg`): each emission the joint event
+  // of its q/p change (the exact 1/p map under `exactQop`, linear otherwise)
+  // and the primary's recoil against the photon at angular weight wb
+  // (ModifiedTsai for e+-, ModifiedMephi for every heavier species); frac
+  // scales the step length.  Complex, centred on the linear mean.
+  void radRows(const double *tau,
+               int nt,
+               const double *recs,
+               int rstride,
+               int n,
+               const double *spec,
+               const double *vg,
+               int nv,
+               const int *rid,
+               const double *wq,
+               const double *wb,
+               const double *frac,
+               int ne,
+               bool exactQop,
+               double *Sre,
+               double *Sim);
+
+  // The hard knock-on collision exactly (cf_rows.knockon_rows /
+  // cf_knockon.knockon_rows) on the IONISATION rows: the collisions above the
+  // e- production threshold as ONE event each -- the energy loss with the
+  // exact 1/p map and the deflection jointly -- as the correction of the
+  // ionisation channel's linear map, per record's law (regimes 2-5).  The
+  // scattering channel's electron term stops at the threshold when the joint
+  // law is on (msRows), so the deflection above it is carried here alone.
+  //   kAll    INT dN [e^{i a X} J - e^{i a T}]
+  //   kMap    INT dN [e^{i a X} - e^{i a T}]           (zero unless qopExact)
+  //   kJoint  INT dN e^{i a X} (J - 1)                  (zero unless knockonJoint)
+  // X = T_eff under qopExact, J = J0(b theta) under knockonJoint.  The
+  // thin-step node density is set by the largest xi of the `n` rows passed.
+  enum class KnockonPart { kAll = 0, kMap = 1, kJoint = 2 };
+  void knockonRows(const double *tau,
+                   int nt,
+                   const double *rows,
+                   int stride,
+                   int n,
+                   const int *rid,
+                   const double *wq,
+                   const double *wb,
+                   const double *frac,
+                   int ne,
+                   KnockonPart part,
+                   const RowConfig &cfg,
+                   double *Sre,
+                   double *Sim);
+
+  // One track's (or candidate's) families, on `tauGrid()`: cf_rows.
+  // fit_families' Sms (real), Sio, Srad, Skx and Skj (complex).
   struct Exponents {
     std::array<double, kNTau> ms{};
-    std::array<double, kNTau> del{};
     std::array<double, kNTau> ioRe{};
     std::array<double, kNTau> ioIm{};
     std::array<double, kNTau> radRe{};
     std::array<double, kNTau> radIm{};
-    // the hard knock-on collision (TrackInput::wantKnockonMap / _Joint):
-    // the exact energy -> q/p map (kx) and the joint law of loss and
-    // deflection (kj); zero unless requested
+    // the hard knock-on collision on the ionisation rows: the exact energy ->
+    // q/p map (kx, a nonzero mean: the Jensen excess) and the joint law of
+    // loss and deflection (kj); zero with the switches off or without
+    // `TrackInput::wantKnockon`
     std::array<double, kNTau> kxRe{};
     std::array<double, kNTau> kxIm{};
     std::array<double, kNTau> kjRe{};
@@ -192,8 +363,6 @@ namespace cvhcf {
     // `s_i = +1`, so the sum is `vpool > 0`).
     const float *ressgn = nullptr;
 
-    bool wantDelta = true;  // the discrete delta-ray recoil family
-
     // SPLIT THE EXPONENTS BY MATERIAL GROUP as well as accumulating the flat
     // ones.  This is what lets the offline fit float the AMOUNT of material
     // per group instead of four per-family k knobs: every step-level exponent
@@ -202,14 +371,10 @@ namespace cvhcf {
     //     S_f(tau; k) = S_f^fixed(tau) + sum_g A(k_g) S_{f,g}(tau)
     //
     // is exact with the fit's influence weights held fixed.  Off by default:
-    // ~22 live groups per candidate
-    // multiply the 1.4 kB flat export by ~20.
+    // ~22 live groups per candidate multiply the flat export by ~20.  With
+    // it, the flat families are formed as the sum of the group parts, so the
+    // two agree bit for bit.
     bool wantGroups = false;
-    // Include the delta-recoil family in the per-group split.  The q/p
-    // functional's model uses `S_del`; the mass functional's reference
-    // (`cf_mass_likelihood.build_pairs_tt`) does not, so the two-track maker
-    // leaves it out of the per-group arrays and saves a sixth of them.
-    bool wantGroupDelta = false;
 
     // THE NUCLEAR-ELASTIC FAMILY (see NucelExponents).  Computed only when
     // `wantNucel` and `nucel` are set; then `msmat` and `mspdg` must be
@@ -222,74 +387,15 @@ namespace cvhcf {
     const int *mspdg = nullptr;
     NucelMixtures *nucel = nullptr;
 
-    // THE HARD KNOCK-ON COLLISION (see below).  `wantKnockonMap` fills
-    // S.kx from the ionisation and radiative rows; `wantKnockonJoint` fills
-    // S.kj from the MS rows and needs `rad` parallel to `ms` (checked: a
-    // mismatch throws).  The joint piece takes X = T_eff when the map is on.
-    // Both split by material group under `wantGroups`.
-    bool wantKnockonMap = false;
-    bool wantKnockonJoint = false;
+    // THE KNOCK-ON FAMILIES kx, kj (under the model's switches).  A
+    // functional that does not use them -- the per-hit components, whose
+    // offline reference carries them only on request -- skips their cost.
+    bool wantKnockon = true;
+
+    // The model's switches (`productionRowConfig()` when null).  Shared by
+    // every functional of a multi-functional pass.
+    const RowConfig *rowConfig = nullptr;
   };
-
-  //------------------------------------------------------------------------
-  // THE HARD KNOCK-ON COLLISION  (offline reference: cf_knockon, the
-  // fit-level functions; IONISATION_MODEL.md, "The hard knock-on collision
-  // exactly").
-  //
-  // The model carries a knock-on collision of energy T as an energy loss
-  // mapped LINEARLY into q/p (S_ioni, S_rad) and its deflection as an
-  // INDEPENDENT kick (S_del).  Per collision the truth is one event,
-  //     d(q/p) = q cs T_eff,  T_eff = p^2 T (2E - T) / (E p' (p + p')),
-  //     theta  = sqrt(2 m_e T) / p   (S_del's theta),
-  // and the difference to the exponent splits as
-  //   kx = INT dN [e^{i a T_eff} - e^{i a T}]          (the MAP: the Jensen
-  //        mean and the stretched tail; on the ionisation rows over the
-  //        channel's own exact-delta spectrum [e0, tmax], the part below
-  //        1e-4 tmax in closed form, and on the radiative rows);
-  //   kj = INT dN (e^{i a X} - 1)(J0(b theta) - 1)     (the JOINT law; on the
-  //        MS rows over S_del's range, rate and spin factor, T in
-  //        [0.35, min(Tmax, 50)] MeV, X = T_eff with the map on).
-  // a is the ionisation weight of the step (signed, per MeV), b the MS
-  // block's.  Each row pairs with the ionisation block of the SAME leg at the
-  // SAME step through the parallel radiative rows (as the nuclear-elastic
-  // recoil).  Quadrature: Filon-Simpson (amplitude quadratic per panel,
-  // phase exact), 40 nodes per decade plus 30 in (tmax - T).
-  //
-  // POOLED: the ionisation rows of a block pool per (regime, material
-  // group), the MS rows per (MS block, ionisation block, material group),
-  // into one row with the summed xi and the xi-weighted mean kinematics and
-  // weights -- exactly as the reference does; <= 3e-7 on S from the per-row
-  // form.  The pools are per group, so the flat family is the sum of its
-  // split.  kx has a nonzero mean (S'(0) != 0): consumers must not assume
-  // the family is centred.
-
-  // kx of one pooled ionisation block (`ioniurbanv` rows, stride >= 13;
-  // `groupCol` the material-group column or -1), accumulated.
-  void knockonMapBlock(const float *rows, int stride, int n, int groupCol, double wstdSigned, double *Sre, double *Sim);
-  // kx of the radiative rows of the block (radBlock's arguments).
-  void knockonMapRad(const float *rows,
-                     int stride,
-                     int n,
-                     const float *spec,
-                     const float *vgrid,
-                     int nv,
-                     double wstdSigned,
-                     double *Sre,
-                     double *Sim);
-  // kj of `n` `msmoliv` rows with per-row signed energy weights `alpha`
-  // [z per MeV] and angular weights `beta` [z per rad], pooled by
-  // (msidx, ioniidx, group); `exact` = X = T_eff.
-  void knockonJointRows(const float *rows,
-                        int stride,
-                        int n,
-                        const unsigned int *msidx,
-                        const unsigned int *ioniidx,
-                        int groupCol,
-                        const double *alpha,
-                        const double *beta,
-                        bool exact,
-                        double *Sre,
-                        double *Sim);
 
   //------------------------------------------------------------------------
   // THE NUCLEAR-ELASTIC FAMILY (hadElastic), for hadron tracks.
@@ -301,22 +407,28 @@ namespace cvhcf {
   // weights, which stay frozen (a Gaussian variance for a rare large kick
   // would outweigh multiple scattering and inflate every hadron's errors).
   //
-  //   angular:  S_ang(tau) = sum_b sum_{s in b} N_s ( g_{m(s)}(p_s; w_b tau) - 1 )
+  //   angular:  S_ang(tau) = sum_s N_s ( g_{m(s)}(p_s; wb_s tau) - 1 )
   //   recoil:   S_rec(tau) = sum_s N_s ( h_{m(s)}(p_s; wq_s tau) - 1 )
+  //   joint:    S_jnt(tau) = sum_s N_s J_{m(s)}(p_s; wb_s tau, wq_s tau)
   //
   // over the `msmoliv` rows s, with N_s = mu_{m(s)}(p_s) xg_s the expected
   // collisions of the step (rate mu in cm^2/g, xg in g/cm^2), g the projected
   // single-collision CF of the deflection and h the CF of the kinetic energy
-  // given to the recoiling nucleus [MeV].  m(s) is the step's material with ONE
-  // TARGET PER ELEMENT: a compound's kernel is the rate-weighted mixture of its
+  // given to the recoiling nucleus [MeV].  One collision's CF is
+  // E[J0(b theta) e^{i a X(dE)}]; the two families carry E[J0(b theta)] +
+  // E[e^{i a dE}] - 1, and J is the difference -- the recoil is a function of
+  // the deflection (two-body kinematics; on hydrogen a pion loses ~15 % of its
+  // momentum at ~37 deg), and X is the exact 1/p map of the loss under
+  // `RowConfig::qopExact`.  m(s) is the step's material with ONE TARGET PER
+  // ELEMENT: a compound's kernel is the rate-weighted mixture of its
   // elements' kernels (hydrogen in the tracker composites is ~3x wider in
   // angle and ~12x harder in recoil than carbon).
   //
-  //   * w_b is the MS block's own weight sqrt(v_b / sum_s thp2_s) / sigma --
-  //     a collision is an isotropic 2D kick at a point in the step, like a
-  //     Moliere one, so it rides on the same weight.  Real, not centred (the
-  //     kick's mean projection is zero).
-  //   * wq_s is the ionisation weight of the SAME leg at the SAME step:
+  //   * wb_s: in the fit, the MS block's own weight sqrt(v_b / sum thp2) /
+  //     sigma -- a collision is an isotropic 2D kick at a point in the step,
+  //     like a Moliere one, so it rides on the same weight.  Real, not
+  //     centred (the kick's mean projection is zero).
+  //   * wq_s: the ionisation weight of the SAME leg at the SAME step,
   //     wq_s = w_io(block) * cs_s * 1e-3, with w_io the leg's ionisation block
   //     weight (it carries `ioniSign`: the charge for q/p, -1 for a mass),
   //     cs_s = E/p^3 of the step and 1e-3 for the MeV of the recoil against
@@ -326,16 +438,16 @@ namespace cvhcf {
   //     a step without a valid Urban record has none -- so they can never be
   //     paired by row).  Not centred: the Geant4e reference energy loss
   //     carries no elastic recoil, so no mean was subtracted.
-  //   * The angular and recoil parts are treated as independent (they are
-  //     correlated through dE = (p theta)^2 / 2M); the recoil moves q/p, the
-  //     angle enters a q/p functional only through the transport.
   //
-  // THE TABLES are `data/cvhcf_nucel_v1.bin` (writer
+  // THE TABLES are `data/cvhcf_nucel_v2.bin` (writer
   // `data/make_cvhcf_nucel_tables.py`, whose docstring is the byte layout and
   // the evaluation rules implemented here): per (species, element, momentum
-  // node) from Geant4's own species-specific elastic model and cross section.
-  // Offline reference: calibration_studies resolution/ksclosure/nucel/
-  // nucel_tables.py (`Table`) and ks_nucel_cf.py (`step_family`).
+  // node) from Geant4's own species-specific elastic model and cross section,
+  // with the joint (theta, dE) law of the same collisions.  Offline
+  // reference: calibration_studies resolution/ksclosure/nucel/nucel_tables.py
+  // (`Table.rows`, read from the same file), through which both the
+  // clean-propagation closure (`cf_nucel_exact.rows_exponent`) and the
+  // fit-level family (`ks_nucel_cf.step_family`) evaluate.
   //
   // SPECIES come from the maker's configured particle and the track charge
   // (p and pbar share a mass, not a model).  Muons and electrons have no
@@ -358,7 +470,7 @@ namespace cvhcf {
   // first caller wins as for the shape tables).  Throws cms::Exception if the
   // file is unusable.
   void loadNucelTables(const std::string &path = std::string());
-  // The table id recorded in `modelTag(true)`: "cvhcf_nucel_v1".
+  // The table id recorded in `modelTag(cfg, true)`.
   const std::string &nucelTableId();
 
   // The per-(species, material) mixture kernels, built on first use from the
@@ -389,24 +501,45 @@ namespace cvhcf {
     std::array<double, kNTau> ang{};
     std::array<double, kNTau> recRe{};
     std::array<double, kNTau> recIm{};
+    std::array<double, kNTau> jntRe{};
+    std::array<double, kNTau> jntIm{};
     double N = 0.;  // expected collisions, sum_s N_s over the hadron rows
     void clear();
   };
 
-  // THE PER-STEP PRIMITIVE.  Accumulates the family of `n` `msmoliv` rows
-  // into `out`: row i has species `pdg[i]` (0: skipped), material `mat[i]`,
-  // angular weight `wAng[i]` (0: no angular term) and signed recoil weight
-  // `wRec[i]` [z per MeV] (0: no recoil term).  N accumulates over every row
-  // with a species, whatever its weights.  Public for the validation.
-  void nucelSteps(const float *rows,
-                  int stride,
-                  int n,
-                  const int *mat,
-                  const int *pdg,
-                  const double *wAng,
-                  const double *wRec,
-                  NucelMixtures &mix,
-                  NucelExponents &out);
+  // THE ROW FUNCTION (`nucel_tables.Table.rows`), in the entry convention of
+  // the other row functions.  Over `n` `msmoliv` rows (xg column 2, p column
+  // 3) with material `mat[s]`, species `pdg[s]` (0: no channel) and mass
+  // `mass[s]` [GeV], ACCUMULATES
+  //   ang       per entry e (row rid[e], angular weight wb[e], share frac[e]
+  //             of the row's collisions): N_s frac (g(|wb| tau) - 1);
+  //   rec       per row at the signed weight wqRow[s] [z per MeV] under
+  //             cfg.nucelRecoil: N_s (h(wq tau) - 1);
+  //   jnt       per row at (|wbMid[s]|, wqRow[s]) under cfg.nucelJoint (with
+  //             the recoil): N_s J, X = T_eff(dE) under cfg.qopExact;
+  // on an arbitrary tau array; a zero weight carries no term.  Returns
+  // sum_s N_s over the rows with a species.
+  double nucelRows(const double *tau,
+                   int nt,
+                   const double *rows,
+                   int stride,
+                   int n,
+                   const int *mat,
+                   const int *pdg,
+                   const double *mass,
+                   const int *rid,
+                   const double *wb,
+                   const double *frac,
+                   int ne,
+                   const double *wqRow,
+                   const double *wbMid,
+                   const RowConfig &cfg,
+                   NucelMixtures &mix,
+                   double *ang,
+                   double *recRe,
+                   double *recIm,
+                   double *jntRe,
+                   double *jntIm);
 
   // One material group's share of a track's exponents.
   struct GroupExponents {
@@ -415,7 +548,7 @@ namespace cvhcf {
     // THE FIT'S OWN Q VARIANCE for this group, in units of `sigma^2` -- i.e.
     // the group's share of the standardized functional's variance under the
     // MODEL THE FIT USED (Rossi's `thp2` for multiple scattering, `ioniSq2`
-    // for ionization, and nothing for the radiative or delta channels,
+    // for ionization, and nothing for the radiative and knock-on families,
     // because the fit's `Q` has neither).  It is what the Gaussian chi2 the
     // whole exercise is measured against actually assumes, and it cannot be
     // recovered from the exponents: those carry the MODEL's (full Moliere)
@@ -435,9 +568,9 @@ namespace cvhcf {
     int nblockms = 0, nblockioni = 0, npooled = 0;
     Exponents S;
     // The per-group split of `S`, ascending in `group`; empty unless
-    // `TrackInput::wantGroups`.  `sum_g groups[i].S == S` to float64
-    // round-off -- they are the same per-step sums associated differently,
-    // NOT two models -- which is the validation gate the makers report.
+    // `TrackInput::wantGroups`, and then `sum_g groups[i].S == S` exactly
+    // (the flat families are formed as that sum), which is the closure the
+    // makers report.
     std::vector<GroupExponents> groups;
     // The nuclear-elastic family; filled only under `TrackInput::wantNucel`
     // (`nucel` false otherwise), and its per-material-group split, ascending
@@ -448,110 +581,38 @@ namespace cvhcf {
     std::vector<std::pair<int, NucelExponents>> nucGroups;
   };
 
-  // THE ENTRY POINT. Pools by global parameter index exactly as
-  // `cf_track_resolution.extract` does and accumulates the four families.
+  // THE ENTRY POINT: cf_rows.fit_families of one track (or candidate) from
+  // the export arrays, with the pooling of `cf_track_resolution.extract`
+  // (section 7 of the source describes both).
   void trackExponents(const TrackInput &in, TrackResult &out);
 
   // THE MULTI-FUNCTIONAL ENTRY POINT: `nfunc` functionals of the SAME fit in
-  // ONE pass over the step records.
-  //
-  // The two-track maker forms four linear functionals of one converged fit --
-  // the candidate MASS, the vertex DCA, and the two whitened BEAM-LINE pulls.
-  // They share every block and every step record and differ only in the
-  // per-block scalar weight they give it,
-  //
+  // one pass.  The two-track maker forms four linear functionals of one
+  // converged fit -- the candidate MASS, the vertex DCA, and the two whitened
+  // BEAM-LINE pulls -- which share every block and every step record and
+  // differ only in the per-block weight they give it,
   //     w_{b,k} = s_{b,k} sqrt(v_{b,k}/sq2_b) / sigma_k ,
-  //
-  // and in the ionization sign they carry. EVERY exponent primitive here
-  // depends on (weight, tau) ONLY through the product w tau -- the Moliere
-  // shape is read at `sqrt(chi_a^2) w tau`, the delta and ionization channels
-  // at `gs w tau`, the radiative one at `cs w tau` -- so the k functionals are
-  // the SAME primitive evaluated on the CONCATENATED argument list
-  // { w_{b,k} tau_j }_{k,j}. Everything that does not depend on the weight --
-  // the pooling by global index, the block gather, `sq2`, the Moliere step
-  // parameters and the `gshape_elec` row they interpolate, the radiative
-  // spectra `makeRadSpectrum` builds, the per-group row selections -- is then
-  // done ONCE instead of `nfunc` times.
-  //
-  // This is EXACT, not an approximation: phi_{aU}(tau) = phi_U(a tau) is an
-  // identity, and the products `w_{b,k} tau_j` are formed by the same
-  // expression, in the same association, that the single-functional path forms
-  // them with. Each functional's exponents are therefore BITWISE what one call
-  // per functional would have produced; the concatenation changes WHICH points
-  // are evaluated, never how.
+  // and in the ionisation sign they carry.  The weight-independent work (the
+  // pooling, the widened records, the refined radiative spectra, the Moliere
+  // step parameters) is done once; each functional's families are what its
+  // own call would have produced.
   //
   // `in[k]` may differ in `resvarv`, `ressgn`, `nres`, `sigma`, `ioniSign`,
-  // `wantDelta`, `wantGroups` and `wantGroupDelta`. The STEP RECORDS (`ms`,
-  // `ioni`, `qsc`, `rad`, `radspec`, `radvgrid`, `radnv`) and the
-  // (`resglobidx`, `resfamily`) arrays are shared and are read from the first
-  // usable entry; passing entries that disagree on them is a caller error.
-  // `out` must have `nfunc` elements. `nfunc == 1` is bit-identical to the
-  // single-functional entry point, which is implemented as exactly that call.
+  // `wantGroups`, `wantNucel` and `wantKnockon`.  The STEP RECORDS (`ms`,
+  // `ioni`, `qsc`, `rad`, `radspec`, `radvgrid`, `radnv`), the (`resglobidx`,
+  // `resfamily`) arrays and `rowConfig` are shared and are read from the
+  // first usable entry; passing entries that disagree on them is a caller
+  // error.  `out` must have `nfunc` elements.
   void trackExponents(const TrackInput *in, int nfunc, TrackResult *out);
-
-  //------------------------------------------------------------------------
-  // THE PER-BLOCK PRIMITIVES.
-  //
-  // Public because the validation runs through them: the offline reference is
-  // written per block (`ms_step_exponent(steps, wstd, tau)` and friends), so a
-  // like-for-like comparison needs the same entry points, and going through
-  // the full `trackExponents` would confound a formula error with a pooling
-  // error. They are built into a ctypes shim for that comparison, exactly as
-  // `cvhcgf`'s primitives already are.
-  //
-  // Every one of them ACCUMULATES into its output (length kNTau), and every
-  // one takes the rows as the FLOATS the tree carries, so no conversion
-  // convention can differ between the maker and the reader.
-
-  // One pooled multiple-scattering block: `rows` are its `msmoliv` records.
-  // `Sms` gets the Moliere exponent; `Sdel`, when non-null, gets the discrete
-  // delta-ray recoil MINUS the carve (i.e. the family as the cache stores it).
-  void msBlock(const float *rows, int stride, int n, double wstd, double *Sms, double *Sdel);
 
   // `cf_track_resolution.ioni_sq2`: the block variance the FIT used.
   // `qsc` are the [scale, nsteps] pairs of the legs sharing the block (may be
   // null), `nqsc` their count.
   double ioniSq2(const float *rows, int stride, int n, const float *qsc, int nqsc);
 
-  // One pooled ionization block at an ALREADY SIGNED standardized weight.
-  void ioniBlock(const float *rows, int stride, int n, double wstdSigned, double *Sre, double *Sim);
-
-  // THE BLOCK'S DELTA-RECOIL CARVE FACTOR, `clip(v_delta/v_moliere, 0, 0.5)`.
-  // `msBlock` computes and applies its own; a per-group split has to reuse
-  // the WHOLE block's, because the carve is a RATIO: per-group ratios would
-  // not sum back to the block's exponent, whereas
-  //   S_del,g = delta(steps_g) - carve(steps_ALL) * S_ms,g
-  // does, exactly.
-  double delCarveFactor(const float *rows, int stride, int n);
-
-  // The delta-recoil family at an externally supplied carve factor. `Sms`
-  // must be the exponent of the SAME rows (the group's own, not the block's).
-  void delBlockCarved(
-      const float *rows, int stride, int n, double wstd, const double *Sms, double carve, double *Sdel);
-
-  // The radiative channel of the same block: `rows` are its `radstepv`
-  // records, `spec` its `radstepspecv` rows (2*nv floats each), `vgrid` the
-  // shared v grid. Same weight and sign as the ionization block.
-  void radBlock(const float *rows,
-                int stride,
-                int n,
-                const float *spec,
-                const float *vgrid,
-                int nv,
-                double wstdSigned,
-                double *Sre,
-                double *Sim);
-
-  // Provenance: the ported switch configuration and the shape-table id, for
-  // the runtree. Stable for a given model; changes only when the model does.
-  const std::string &modelTag();
-  // The same with the nuclear-elastic table id appended
-  // (" nuc=cvhcf_nucel_v1") when that family is exported; `modelTag(false)`
-  // is `modelTag()`.
-  std::string modelTag(bool withNucel);
-  // ... and with the knock-on families' configuration appended
-  // (" kx=1 kj=1 kjrange=0.35-50MeV kxtlo=1e-4 kpool=block,group").
-  std::string modelTag(bool withNucel, bool knockonMap, bool knockonJoint);
+  // Provenance for the runtree: the model's switches, the shape table, and
+  // the nuclear-elastic table id when that family is exported.
+  std::string modelTag(const RowConfig &cfg = productionRowConfig(), bool withNucel = false);
 
   // Load the Moliere shape tables. Called automatically on first use; exposed
   // so a job can fail at configuration time rather than mid-event, and so the

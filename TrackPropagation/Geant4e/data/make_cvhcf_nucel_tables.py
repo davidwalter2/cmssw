@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Write the nuclear-elastic (hadElastic) kernel tables that `cvhcf` reads:
-`cvhcf_nucel_v1.bin`, one record per (species, ELEMENT, momentum node).
+`cvhcf_nucel_v2.bin`, one record per (species, ELEMENT, momentum node).
 
 WHAT THE TABLES ARE.  For each of pi+, pi-, K+, K-, p, pbar and each element of
 the job's Geant4 material table, Geant4's own elastic model and cross-section
@@ -14,11 +14,14 @@ reduced to
   * the projected single-collision CF of the deflection, g(u) = E[J0(u theta)],
   * the distribution of the kinetic energy the projectile gives to the
     recoiling nucleus, dE [MeV],
-  * the moments <theta>, <theta^2>, <dE>, <dE^2>.
+  * the moments <theta>, <theta^2>, <dE>, <dE^2>,
+  * the joint (theta, dE) law of the same collisions on 200 log-theta bins.
 Built by `calibration_studies/resolution/ksclosure/nucel/nucel_tables.py`
 (build + assemble); that module's `Table` class is the offline reference
 implementation of every evaluation rule below and reads THIS file, so the
-reference and the in-maker port evaluate identical numbers.
+references -- the fit-level `ks_nucel_cf.step_family` and the
+clean-propagation `cf_nucel_exact.rows_exponent` -- and the in-maker port
+evaluate identical numbers.
 
 WHY THIS FORM.  The in-maker family needs, per MS step s of block b, the
 angular kernel at the argument w_b * tau * (momentum rescale) -- a continuous,
@@ -60,7 +63,7 @@ v <dE> <= 20 and 3.3e-5 out to v = 1e3/MeV (the phase v * mu_b of recoils of
 BINARY LAYOUT (little-endian, no padding; i4 = int32, f4 = float32, f8 = float64)
 
   offset 0     char[8]  magic "CVHNUCEL"
-               i4       version = 1
+               i4       version = 2
                i4       nS     number of species (6)
                i4       nE     number of elements (37)
                i4       nU     angular grid points (241)
@@ -104,6 +107,12 @@ BINARY LAYOUT (little-endian, no padding; i4 = int32, f4 = float32, f8 = float64
                              free of the float32 cancellation of a variance formed from raw
                              moments); bins outside [b0, b0+nb) are zero.
      (P_low + sum_b P_b = 1; no recoil reaches deEdges[nD].)
+  then         i4[nRec]      nJ: the record's number of joint bins
+  then         f4[sum nJ * 3]  per record in order, three blocks of nJ values:
+                             theta_k [rad], dE_k [MeV], w_k -- the k-th nonempty
+                             log-theta bin's mean deflection, mean recoil and
+                             share of ALL the record's collisions (zero
+                             deflections are in no bin); sum_k w_k <= 1.
   then         char[8]  trailer "CVHNUEND"; the file ends there.
 
 EVALUATION (what `nucel_tables.Table` does, and what the port must do)
@@ -150,21 +159,42 @@ EVALUATION (what `nucel_tables.Table` does, and what the port must do)
   variance), so
      h = P_low + i v M1_low - v^2 M2_low / 2
          + sum_{b: P_b > 0} P_b exp(i v mu_b) sinc(v a_b),   sinc(x) = sin(x)/x (1 at 0).
+  The family needs h - 1, which is formed without cancellation and
+  normalised exactly (P_low + sum_b P_b = 1 drops the constant; the float32
+  P's sum to 1 only to their precision):
+     h - 1 = i v M1_low - v^2 M2_low / 2 + sum_b P_b [e^{i v mu_b} sinc(v a_b) - 1],
+     e^{ix} s - 1 = -2 sin^2(x/2) s + (s - 1) + i sin(x) s,
+  with sinc - 1 by its Taylor series below |v a_b| = 1.
   At momentum p: h(p; v) = (1-f) h_j(v) + f h_{j+1}(v), each node's (material)
   record evaluated on its own; no argument rescale: the recoil t/2M is
   momentum independent at fixed momentum transfer.
 
-  The family then is S_ang(tau) = sum_s N_s (g(p_s; w_b tau) - 1) and
-  S_rec(tau) = sum_s N_s (h(p_s; wq_s tau) - 1) (ksclosure/nucel/ks_nucel_cf.py).
+  Joint bins of a (material) node: the concatenation of its elements' bins,
+  element i's weights times its collision share r_i(n) / sum_j r_j(n);
+  elements with a share below 1e-5 are left out (trace elements).  At
+  momentum p the two nodes' bins with weights (1-f, f), each deflection
+  rescaled to fixed momentum transfer (theta p_j / p), the recoil not.  The
+  joint term of one collision at angular argument b and recoil argument a is
+     J = sum_k W_k [(J0(b theta_k) - 1)(e^{i a X_k} - 1) + (e^{i a X_k} - e^{i a dE_k})],
+  X_k = T_eff(dE_k) (the exact 1/p map at the step's E, p) under the exact
+  map, dE_k otherwise -- and for a recoil beyond the knock-on channel's p'
+  floor (cf_knockon.PMIN_FRAC: the upper node's recoils near the kinematic
+  end point can exceed the step's kinetic energy, the recoil being carried at
+  fixed momentum transfer).
+
+  The family then is S_ang(tau) = sum_s N_s (g(p_s; w_b tau) - 1),
+  S_rec(tau) = sum_s N_s (h(p_s; wq_s tau) - 1) and
+  S_jnt(tau) = sum_s N_s J(p_s; w_b tau, wq_s tau) (ksclosure/nucel/ks_nucel_cf.py,
+  cf_nucel_exact.rows_exponent).
 
 MODEL TAG.  The format and content id is the file name stem,
-"cvhcf_nucel_v1"; `modelTag()` should carry "nuc=cvhcf_nucel_v1" when the
-family is exported.  Bump the version (and the file name) for any change of
+"cvhcf_nucel_v2"; `modelTag()` carries "nuc=cvhcf_nucel_v2" when the family
+is exported.  Bump the version (and the file name) for any change of
 layout, grids, species, elements or sampling.
 
 usage:
     source /work/submit/david_w/ZMass/calibration_studies/setup_env.sh
-    python3 make_cvhcf_nucel_tables.py [--npz <assembled table.npz>] [-o cvhcf_nucel_v1.bin]
+    python3 make_cvhcf_nucel_tables.py [--npz <assembled table.npz>] [-o cvhcf_nucel_v2.bin]
 """
 import argparse
 import hashlib
@@ -175,17 +205,17 @@ import sys
 import numpy as np
 
 NUCEL = "/work/submit/david_w/ZMass/calibration_studies/resolution/ksclosure/nucel"
-NPZ = "/ceph/submit/data/user/d/david_w/ZMass/cvh/nucel_trackfit_260926/tables/nucel_table_v1.npz"
+NPZ = "/ceph/submit/data/user/d/david_w/ZMass/cvh/nucel_trackfit_260927_v2/nucel_table_v2.npz"
 MAGIC = b"CVHNUCEL"
 TAIL = b"CVHNUEND"
-VERSION = 1
+VERSION = 2
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--npz", default=NPZ, help="nucel_tables.py assemble output")
     ap.add_argument("-o", "--out", default=os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "cvhcf_nucel_v1.bin"))
+        os.path.dirname(os.path.abspath(__file__)), "cvhcf_nucel_v2.bin"))
     a = ap.parse_args()
 
     sys.path.insert(0, NUCEL)
@@ -236,12 +266,36 @@ def main():
                                         pde.reshape(pde.shape[:-2] + (-1,))], axis=-1))
         f.write(np.asarray(idx, "<i4").tobytes())
         f.write(np.ascontiguousarray(np.concatenate(data), "<f4").tobytes())
+        # the joint bins: count of every record, then its (theta, dE, w)
+        jn, jdata, joints = [], [], []
+        for pdg in species:
+            cnt = z[f"{pdg}_jcnt"]
+            th, de, w = z[f"{pdg}_jth"], z[f"{pdg}_jde"], z[f"{pdg}_jw"]
+            off = np.concatenate([[0], np.cumsum(cnt.ravel())])
+            assert off[-1] == len(th) == len(de) == len(w)
+            k = 0
+            for e in range(nE):
+                for n in range(cnt.shape[1]):
+                    a0, a1 = off[k], off[k + 1]
+                    jn.append(a1 - a0)
+                    jdata.append(np.concatenate([th[a0:a1], de[a0:a1], w[a0:a1]]))
+                    joints.append((th[a0:a1], de[a0:a1], w[a0:a1]))
+                    k += 1
+        f.write(np.asarray(jn, "<i4").tobytes())
+        f.write(np.ascontiguousarray(np.concatenate(jdata), "<f4").tobytes())
         f.write(TAIL)
 
     # read back with the offline reference's reader
     t = nt.read_bin(a.out)
+    k = 0
     for s in range(nS):
         assert np.array_equal(t["rec"][s], recs[s].astype(np.float32).astype(np.float64))
+        for e in range(nE):
+            for n in range(len(t["nodes"][s])):
+                for q in range(3):
+                    assert np.array_equal(t["joint"][s][e][n][q],
+                                          joints[k][q].astype(np.float32).astype(np.float64))
+                k += 1
     assert np.array_equal(t["logmu"], z["logmu"]) and np.array_equal(t["ug"], ug)
     n = os.path.getsize(a.out)
     md5 = hashlib.md5(open(a.out, "rb").read()).hexdigest()

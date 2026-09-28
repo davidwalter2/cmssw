@@ -1102,10 +1102,11 @@ protected:
   // ======================================================================
   // IN-MAKER RESOLUTION-CF EXPONENTS (cvhcf).
   //
-  // The four family exponents of this track / candidate on the 64-point
-  // standardized tau grid, computed in the doRes pass from the SAME flat
-  // arrays above -- see TrackPropagation/Geant4e/interface/CvhCfExponents.h
-  // for why they are computed here and not offline.
+  // The families of this track / candidate on the 64-point standardized tau
+  // grid (cf_rows.fit_families: scattering, ionisation, radiation and the
+  // hard knock-on collision's kx/kj, below), computed in the doRes pass from
+  // the SAME flat arrays above -- see TrackPropagation/Geant4e/interface/
+  // CvhCfExponents.h for why they are computed here and not offline.
   //
   // Branch names carry `cfprefix_`: `cfqop_*` in the single-track maker (the
   // q/p functional) and `cfmass_*` in the two-track one (the candidate-mass
@@ -1114,7 +1115,6 @@ protected:
   // radiative weights carry -- so they must not share a name.
   std::string cfprefix_ = "cfqop";
   std::vector<float> cfmsv;     // S_ms   (real)
-  std::vector<float> cfdelv;    // S_del  (real, delta-ray recoil minus carve)
   std::vector<float> cfiorev;   // Re S_ioni
   std::vector<float> cfioimv;   // Im S_ioni
   std::vector<float> cfradrev;  // Re S_rad
@@ -1158,13 +1158,12 @@ protected:
   std::vector<short> cfgrpv;      // ascending material-group id
   // THE FIT'S OWN Q variance of each group, in units of the functional's
   // sigma^2 (Rossi's `thp2` for MS, `ioniSq2` for ionization, nothing for the
-  // radiative and delta channels the fit's Q does not have). It is what the
+  // radiative and knock-on families the fit's Q does not have). It is what the
   // Gaussian chi2 the whole exercise is measured against actually assumes,
   // and it cannot be recovered from the exponents -- those carry the MODEL's
   // full Moliere second moment, 14 % larger. `sum_g (vqms+vqio) + vgf == 1`.
   std::vector<float> cfgrpvqmsv, cfgrpvqiov;
   std::vector<float> cfgrpmsv;    // S_ms per group
-  std::vector<float> cfgrpdelv;   // S_del per group (single-track only)
   std::vector<float> cfgrpiorev;  // Re S_ioni per group
   std::vector<float> cfgrpioimv;  // Im S_ioni per group
   std::vector<float> cfgrpradrev; // Re S_rad per group
@@ -1184,13 +1183,11 @@ protected:
   void storeCfGroupsTo(const cvhcf::TrackResult &res,
                        std::vector<short> &grpv,
                        std::vector<float> &msv,
-                       std::vector<float> &delv,
                        std::vector<float> &iorev,
                        std::vector<float> &ioimv,
                        std::vector<float> &radrev,
                        std::vector<float> &radimv,
                        float &closure,
-                       bool wantDelta,
                        std::vector<float> *vqms = nullptr,
                        std::vector<float> *vqio = nullptr);
 
@@ -1233,7 +1230,7 @@ protected:
   bool Jpsi_vtxfirstplus = false;
   // The variance shares of sigma_v^2 by FAMILY: hits (parmtype 8/9), multiple
   // scattering (10) and ionization (11).  They sum to 1 (the fit's Q has no
-  // radiative or delta channel, which is why the CF is wider than 1).
+  // radiative or knock-on family, which is why the CF is wider than 1).
   float Jpsi_vtxvhit = 0.f, Jpsi_vtxvms = 0.f, Jpsi_vtxvioni = 0.f;
   // the same split for the MASS functional, for the side-by-side composition
   float Jpsi_massvms = 0.f, Jpsi_massvioni = 0.f;
@@ -1263,10 +1260,9 @@ protected:
   std::vector<float> vtxsgnv;     // the per-block ionization sign
   std::vector<short> vtxhitclsv;  // per-hit-class Gaussian shares of sigma_v^2
   std::vector<float> vtxhitvv;
-  std::vector<float> cfvtxmsv, cfvtxdelv, cfvtxiorev, cfvtxioimv, cfvtxradrev, cfvtxradimv;
+  std::vector<float> cfvtxmsv, cfvtxiorev, cfvtxioimv, cfvtxradrev, cfvtxradimv;
   std::vector<short> cfvtxgrpv;
-  std::vector<float> cfvtxgrpmsv, cfvtxgrpdelv, cfvtxgrpiorev, cfvtxgrpioimv, cfvtxgrpradrev,
-      cfvtxgrpradimv;
+  std::vector<float> cfvtxgrpmsv, cfvtxgrpiorev, cfvtxgrpioimv, cfvtxgrpradrev, cfvtxgrpradimv;
   std::vector<float> cfvtxgrpvqmsv, cfvtxgrpvqiov;
   float cfvtxgrpclosure = 0.f;
   // d theta_6^unconstrained / d(global params), aligned with `globalidxv`
@@ -1471,15 +1467,14 @@ protected:
   // BeamWidthYError as read) -- the prior width for the two scales
   std::array<float, 2> Jpsi_bswidtherr = {{0.f, 0.f}};
   // CF exponents at the two beam weights, component major [2 * kNTau]
-  std::vector<float> cfbsmsv, cfbsdelv, cfbsiorev, cfbsioimv, cfbsradrev, cfbsradimv;
+  std::vector<float> cfbsmsv, cfbsiorev, cfbsioimv, cfbsradrev, cfbsradimv;
   std::vector<short> cfbshitclsv;   // (component, class) pairs: comp in cfbshitcompv
   std::vector<short> cfbshitcompv;
   std::vector<float> cfbshitvv;
   // per-material-group exponents at the two beam weights; the group key is
   // (component, group) via `cfbsgrpcompv` / `cfbsgrpv`
   std::vector<short> cfbsgrpv, cfbsgrpcompv;
-  std::vector<float> cfbsgrpmsv, cfbsgrpdelv, cfbsgrpiorev, cfbsgrpioimv, cfbsgrpradrev,
-      cfbsgrpradimv;
+  std::vector<float> cfbsgrpmsv, cfbsgrpiorev, cfbsgrpioimv, cfbsgrpradrev, cfbsgrpradimv;
   std::vector<float> cfbsgrpvqmsv, cfbsgrpvqiov;
   std::array<float, 2> cfbsgrpclosure = {{0.f, 0.f}};
   std::array<float, 2> Jpsi_bssgnchk = {{0.f, 0.f}};
@@ -1554,17 +1549,19 @@ protected:
   // `|phresvarv|`, so this is redundant for the likelihood; it exists for the
   // fourth CROSS cumulant between components, which needs `A_b[j] . A_b[k]`.
   std::vector<float> phresbv;
-  // The per-component CF exponents, same six families and same `cftau` grid
-  // as the `cf*` block, laid out [d * kNTau].
-  std::vector<float> phcfmsv, phcfdelv, phcfiorev, phcfioimv, phcfradrev, phcfradimv;
+  // The per-component CF exponents, the same families and the same `cftau`
+  // grid as the `cf*` block, laid out [d * kNTau]; the knock-on pair only
+  // under `perHitKnockon_`.
+  std::vector<float> phcfmsv, phcfiorev, phcfioimv, phcfradrev, phcfradimv;
+  std::vector<float> phcfkxrev, phcfkximv, phcfkjrev, phcfkjimv;
   std::vector<float> phcfvgf;  // [d] the parmtype-8/9 (Gaussian) share
   // The per-(component, material group) split: `phcfgrpcomp` and `phcfgrpv`
   // are the (k, group) key of each slot, the arrays are [nslot * kNTau].
   std::vector<short> phcfgrpcomp, phcfgrpv;
-  std::vector<float> phcfgrpmsv, phcfgrpdelv, phcfgrpiorev, phcfgrpioimv, phcfgrpradrev, phcfgrpradimv;
+  std::vector<float> phcfgrpmsv, phcfgrpiorev, phcfgrpioimv, phcfgrpradrev, phcfgrpradimv;
   // per slot: the group's share of the component's variance under the FIT'S
   // OWN Q (Rossi `thp2` for MS, `ioniSq2` for ionization, nothing radiative
-  // or delta -- the fit's Q has neither).  This is what the Gaussian hit-chi2
+  // or knock-on -- the fit's Q has neither).  This is what the Gaussian hit-chi2
   // assumes, and it is NOT recoverable from the exponents, which carry the
   // model's full Moliere second moment (14 % larger).  Closure:
   // `sum_slots(vqms + vqio) + phcf_vgf == 1` for every component.
@@ -1583,14 +1580,15 @@ protected:
 
   // ---- THE NUCLEAR-ELASTIC FAMILY (exportCfNucel) ------------------------
   // The functional's hadElastic exponents on `cftau` (see cvhcf
-  // NucelExponents): the angular part (real), the recoil part (complex), and
-  // the expected number of collisions of the track / candidate. Per material
+  // NucelExponents): the angular part (real), the recoil part (complex), the
+  // joint law of one collision's deflection and recoil (complex), and the
+  // expected number of collisions of the track / candidate. Per material
   // group under exportCfGroupExponents, sparse as `cf*_grp`: `_grp_nuc` is
   // the ascending group id and each array is n_grp x kNTau, row-major.
-  std::vector<float> cfnucangv, cfnucrecrev, cfnucrecimv;
+  std::vector<float> cfnucangv, cfnucrecrev, cfnucrecimv, cfnucjntrev, cfnucjntimv;
   float nucN = 0.f;
   std::vector<short> cfgrpnucv;
-  std::vector<float> cfgrpnucangv, cfgrpnucrecrev, cfgrpnucrecimv, cfgrpnucNv;
+  std::vector<float> cfgrpnucangv, cfgrpnucrecrev, cfgrpnucrecimv, cfgrpnucjntrev, cfgrpnucjntimv, cfgrpnucNv;
   // The per-(species, material) mixture kernels, built lazily from this
   // job's own Geant4 material table (G4Material::GetMaterialTable, resolved
   // by index); one per stream, like the maker.
@@ -1599,15 +1597,16 @@ protected:
   void storeCfNucel(const cvhcf::TrackResult &res);
   cvhcf::NucelMixtures *nucelMixtures();
 
-  // ---- THE HARD KNOCK-ON COLLISION (exportCfKnockon) ---------------------
+  // ---- THE HARD KNOCK-ON COLLISION ---------------------------------------
   // The functional's `kx` (exact energy -> q/p map) and `kj` (joint law of
-  // loss and deflection) exponents on `cftau` (cvhcf, "THE HARD KNOCK-ON
-  // COLLISION"): `<prefix>_kx_re/_im`, `<prefix>_kj_re/_im`, kNTau each (the
-  // beam-line functional appends its two components), and under
+  // loss and deflection) families on `cftau` (cvhcf `knockonRows`, on the
+  // ionisation rows): `<prefix>_kx_re/_im`, `<prefix>_kj_re/_im`, kNTau each
+  // (the beam-line functional appends its two components), and under
   // exportCfGroupExponents `<prefix>_grp_kx_re/_im`, `_grp_kj_re/_im`,
   // n_grp x kNTau row-major, PARALLEL to `<prefix>_grp` (the same groups in
-  // the same order).  `kx` has a nonzero first moment: it is the Jensen
-  // excess of the q/p noise, not a centred family.
+  // the same order).  Written with every cf* block: they are part of the
+  // model.  `kx` has a nonzero first moment: it is the Jensen excess of the
+  // q/p noise, not a centred family.
   struct CfKnockonBranches {
     std::vector<float> kxre, kxim, kjre, kjim;
     std::vector<float> gkxre, gkxim, gkjre, gkjim;
@@ -1635,7 +1634,8 @@ protected:
   bool exportCfGroupExponents_ = false;
   //   exportCfNucel_      -- the NUCLEAR-ELASTIC family of the cf* exponents
   //                          (cvhcf NucelExponents): `<cfprefix>_nuc_ang`,
-  //                          `_nuc_rec_re/_im`, `nuc_N`, and per material
+  //                          `_nuc_rec_re/_im`, `_nuc_jnt_re/_im`, `nuc_N`,
+  //                          and per material
   //                          group under exportCfGroupExponents. OFF by
   //                          default. It is ACTIVE (`nucelActive_`) only when
   //                          the maker's configured species include a hadron
@@ -1644,12 +1644,23 @@ protected:
   //                          with it off.
   bool exportCfNucel_ = false;
   bool nucelActive_ = false;
-  //   exportCfKnockon_    -- the HARD KNOCK-ON families of the cf* exponents
-  //                          (cvhcf kx, kj; see CfKnockonBranches), for every
-  //                          functional that exports cf* exponents. OFF by
-  //                          default; the existing branches are unchanged
-  //                          bit for bit either way.
-  bool exportCfKnockon_ = false;
+  // THE CF MODEL'S SWITCHES (cvhcf::RowConfig): the offline defaults, with
+  //   cfKnockonJoint_ / cfQopExact_ -- cf_knockon.KNOCKON_JOINT / QOP_EXACT
+  //                          (the joint law of a knock-on's loss and
+  //                          deflection, which also stops the scattering
+  //                          channel's electron term at the e- production
+  //                          threshold; the exact energy -> q/p map of the
+  //                          knock-on and radiative channels), default ON as
+  //                          offline;
+  //   Kokoulin's correction  -- from the propagator's own IoniKokoulin
+  //                          switch (cvhcgf::ioniKokoulinEnabled), the one the
+  //                          fit's variance was built with, as the offline
+  //                          IONI_KOKOULIN mirrors it.
+  // Set at beginRun (after the propagator is configured) and recorded in the
+  // runtree's `cfmodel`.
+  bool cfKnockonJoint_ = true;
+  bool cfQopExact_ = true;
+  cvhcf::RowConfig cfRowConfig_;
   //   exportPerHitResidual_ -- build and write the per-hit (complement)
   //                          residual block above.  OFF by default: it costs
   //                          `d` extra `cvhcf` evaluations per track.
@@ -1670,6 +1681,12 @@ protected:
   //                          the only consumer is the cross-cumulant sizing
   //                          of the composite-likelihood approximation.
   bool perHitInfluenceBlocks_ = true;
+  //   perHitKnockon_     -- also the knock-on families kx, kj per component
+  //                          (`phcf_kx_*`, `phcf_kj_*`).  OFF by default, as
+  //                          the offline per-hit extraction carries them only
+  //                          on request (extract_res5 --knockon): they are the
+  //                          dominant cost of a component.
+  bool perHitKnockon_ = false;
   //   perHitShareMin_    -- zero a block's share of a component when it is
   //                          below this FRACTION of that component's unit
   //                          variance, so `cvhcf` skips it.  A controlled
@@ -1677,10 +1694,6 @@ protected:
   //                          most the dropped share), 0 = keep everything,
   //                          which is the default and what the gates run at.
   double perHitShareMin_ = 0.;
-  // Does this maker's functional use the delta-recoil family? The q/p one
-  // does; the mass one's offline reference (`build_pairs_tt`) does not, so
-  // the two-track maker does not pay for a sixth per-group array.
-  bool cfGroupDelta_ = true;
   //   exportHitResBlocks_ -- register the parmtype-8/9 HIT-RESOLUTION dV
   //                          blocks in the two-track maker, which is what
   //                          makes the per-hit-class resolution parameters

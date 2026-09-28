@@ -632,6 +632,22 @@ namespace cvhcgf {
   // of e0, i.e. exactly cf_track_resolution._delta_term_2d(a, w).
   std::complex<double> deltaTerm(double a, double w);
 
+  // The exact knock-on channel's three integrals J0, J1, J2 at alpha = a e0,
+  // w = tmax/e0 (cf_track_resolution._delta_terms_exact), and its centred
+  // exponent xi/e0 [J0 - (beta^2 e0/tmax) J1 (+ spin 1/2: e0^2/(2E^2) J2)] at
+  // `at` = gs t (exact_delta_exponent; zero unless e0 > 0, tmax > e0, xi != 0).
+  // Shared with the in-maker resolution CF (cvhcf's ionisation rows).
+  void deltaTermsExact(
+      double a, double w, std::complex<double> &J0, std::complex<double> &J1, std::complex<double> &J2);
+  std::complex<double> exactDeltaExponent(
+      double xi, double e0, double tmax, double beta2, double etot, double at, bool spinHalf);
+  // Kokoulin's radiative correction f_K(T) of G4MuBetheBlochModel (1 below
+  // 100 keV and above the kinematic end), and its contribution to the
+  // exponent of one regime-2/3 step at `at` = gs t over `nbin` log-T buckets
+  // (cf_track_resolution._kokoulin_exponent; zero for a non-muon record).
+  double kokoulinFactor(double T, double etot);
+  std::complex<double> kokoulinExponent(const IoniStep &s, double at, int nbin);
+
   // Block CF exponent S(t): phi(t) = exp(S(t)). Centred (mean subtracted),
   // which is the convention the propagator's mean-loss table implies.
   //

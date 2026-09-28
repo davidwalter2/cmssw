@@ -788,7 +788,6 @@ ResidualGlobalCorrectionMakerTwoTrackG4e::ResidualGlobalCorrectionMakerTwoTrackG
   // functional, not the single-track q/p one: different standardization,
   // different ionization sign. They must not share a branch name with it.
   cfprefix_ = "cfmass";
-  cfGroupDelta_ = false;
   // Which |pdgId| counts as "the resonance" for the pre-FSR gen mass. The Z
   // is 23, prompt charmonium 443/100443, bottomonium 553/100553/200553.
   genResonancePdgIds_ = iConfig.existsAs<std::vector<int>>("genResonancePdgIds")
@@ -4948,7 +4947,6 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             reseigv.clear();
             resinfbv.clear();
             cfmsv.clear();
-            cfdelv.clear();
             cfiorev.clear();
             cfioimv.clear();
             cfradrev.clear();
@@ -4959,7 +4957,6 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             cfnpooled = 0;
             cfgrpv.clear();
             cfgrpmsv.clear();
-            cfgrpdelv.clear();
             cfgrpiorev.clear();
             cfgrpioimv.clear();
             cfgrpradrev.clear();
@@ -5120,17 +5117,12 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               // The candidate MASS, the vertex DCA and the two whitened
               // BEAM-LINE pulls are four linear functionals of the SAME
               // converged fit: the same blocks, the same step records, and
-              // different per-block weights.  Every `cvhcf` exponent
-              // primitive depends on (weight, tau) ONLY through the product
-              // `w tau`, so the four are ONE `cvhcf::trackExponents` pass on
-              // the concatenated argument list { w_{b,k} tau_j } instead of
-              // four passes over the same records -- and the pooling by
-              // global index, the Moliere step parameters, the `gshape_elec`
-              // rows and the radiative spectra are then built once rather
-              // than four times.  It is EXACT: `phi_{aU}(tau) = phi_U(a tau)`
-              // is an identity and the products are formed by the same
-              // expression a single call forms them with, so each
-              // functional's arrays are bitwise what its own call wrote.
+              // different per-block weights, so the four are ONE
+              // `cvhcf::trackExponents` pass: the pooling by global index,
+              // the widened records, the refined radiative spectra and the
+              // Moliere step parameters are built once rather than four
+              // times, and each functional's families are what its own call
+              // would have produced.
               //
               // Each site below REGISTERS its weights here, in the order the
               // exported branches expect, and reads its results back from the
@@ -5176,16 +5168,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                 ci.radnv = int(radvgrid.size());
                 ci.sigma = sigma;
                 ci.ioniSign = ioniSign;
-                ci.wantDelta = true;
                 ci.wantGroups = exportCfGroupExponents_;
-                // No functional's reference model splits the DELTA-RAY family
-                // per group (`cf_mass_likelihood.build_pairs_tt` carries the
-                // flat `Sdel` only), so the flat delta family is exported but
-                // is not split.
-                ci.wantGroupDelta = false;
-                // the hard knock-on families, for every functional
-                ci.wantKnockonMap = exportCfKnockon_;
-                ci.wantKnockonJoint = exportCfKnockon_;
+                ci.rowConfig = &cfRowConfig_;
                 cfins.push_back(ci);
                 return int(cfins.size()) - 1;
               };
@@ -5203,11 +5187,6 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               // an arbitrary noise-eigenvector convention, +1 on 50.5 % of
               // candidates -- cancelled the skew and moved the unbinned scale
               // by 0.1e-3.)
-              //
-              // The DELTA-RAY family is computed and exported flat, as the
-              // reference mass cache carries it (`build_pairs_tt` `Sdel`);
-              // the mass model adds it only when asked (`--kdel`), and the
-              // knock-on joint family requires it.
               if (exportCfExponents_) {
                 cfslotmass = cfRegister(resinfvarv.data(), int(resinfvarv.size()), nullptr, Jpsi_sigmamass, -1.);
                 // the nuclear-elastic family, for the MASS functional only:
@@ -5485,14 +5464,12 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                 // per block, so `ioniSign` is 1 and `ressgn` carries
                 // everything.
                 cfvtxmsv.clear();
-                cfvtxdelv.clear();
                 cfvtxiorev.clear();
                 cfvtxioimv.clear();
                 cfvtxradrev.clear();
                 cfvtxradimv.clear();
                 cfvtxgrpv.clear();
                 cfvtxgrpmsv.clear();
-                cfvtxgrpdelv.clear();
                 cfvtxgrpiorev.clear();
                 cfvtxgrpioimv.clear();
                 cfvtxgrpradrev.clear();
@@ -5567,7 +5544,6 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                 resinfbsv.clear();
                 bsvarv.clear();
                 cfbsmsv.clear();
-                cfbsdelv.clear();
                 cfbsiorev.clear();
                 cfbsioimv.clear();
                 cfbsradrev.clear();
@@ -5578,7 +5554,6 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                 cfbsgrpv.clear();
                 cfbsgrpcompv.clear();
                 cfbsgrpmsv.clear();
-                cfbsgrpdelv.clear();
                 cfbsgrpiorev.clear();
                 cfbsgrpioimv.clear();
                 cfbsgrpradrev.clear();
@@ -5851,41 +5826,33 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                   cfnblock = cfres.nblockms + cfres.nblockioni;
                   cfnpooled = cfres.npooled;
                   storecf(cfres.S.ms, cfmsv);
-                  storecf(cfres.S.del, cfdelv);
                   storecf(cfres.S.ioRe, cfiorev);
                   storecf(cfres.S.ioIm, cfioimv);
                   storecf(cfres.S.radRe, cfradrev);
                   storecf(cfres.S.radIm, cfradimv);
                   storeCfGroups(cfres);
                   storeCfNucel(cfres);
-                  if (exportCfKnockon_) {
-                    cfKnock_.append(cfres, exportCfGroupExponents_);
-                  }
+                  cfKnock_.append(cfres, exportCfGroupExponents_);
                 }
 
                 if (cfslotvtx >= 0) {
                   const cvhcf::TrackResult &cfresv = cfress[cfslotvtx];
                   Jpsi_vtxok = cfresv.ok;
                   storecf(cfresv.S.ms, cfvtxmsv);
-                  storecf(cfresv.S.del, cfvtxdelv);
                   storecf(cfresv.S.ioRe, cfvtxiorev);
                   storecf(cfresv.S.ioIm, cfvtxioimv);
                   storecf(cfresv.S.radRe, cfvtxradrev);
                   storecf(cfresv.S.radIm, cfvtxradimv);
-                  if (exportCfKnockon_) {
-                    cfvtxKnock_.append(cfresv, exportCfGroupExponents_);
-                  }
+                  cfvtxKnock_.append(cfresv, exportCfGroupExponents_);
                   if (exportCfGroupExponents_) {
                     storeCfGroupsTo(cfresv,
                                     cfvtxgrpv,
                                     cfvtxgrpmsv,
-                                    cfvtxgrpdelv,
                                     cfvtxgrpiorev,
                                     cfvtxgrpioimv,
                                     cfvtxgrpradrev,
                                     cfvtxgrpradimv,
                                     cfvtxgrpclosure,
-                                    false,
                                     &cfvtxgrpvqmsv,
                                     &cfvtxgrpvqiov);
                   }
@@ -5903,20 +5870,16 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                       v.push_back(float(a[j]));
                   };
                   appendcf(cfresb.S.ms, cfbsmsv);
-                  appendcf(cfresb.S.del, cfbsdelv);
                   appendcf(cfresb.S.ioRe, cfbsiorev);
                   appendcf(cfresb.S.ioIm, cfbsioimv);
                   appendcf(cfresb.S.radRe, cfbsradrev);
                   appendcf(cfresb.S.radIm, cfbsradimv);
-                  if (exportCfKnockon_) {
-                    cfbsKnock_.append(cfresb, exportCfGroupExponents_);
-                  }
+                  cfbsKnock_.append(cfresb, exportCfGroupExponents_);
                   if (exportCfGroupExponents_) {
                     std::vector<short> gtmpv;
-                    std::vector<float> gms, gdel, giore, gioim, gradre, gradim, gvqms, gvqio;
+                    std::vector<float> gms, giore, gioim, gradre, gradim, gvqms, gvqio;
                     float gclos = 0.f;
-                    storeCfGroupsTo(cfresb, gtmpv, gms, gdel, giore, gioim, gradre, gradim,
-                                    gclos, false, &gvqms, &gvqio);
+                    storeCfGroupsTo(cfresb, gtmpv, gms, giore, gioim, gradre, gradim, gclos, &gvqms, &gvqio);
                     cfbsgrpclosure[k] = gclos;
                     for (std::size_t ig = 0; ig < gtmpv.size(); ++ig) {
                       cfbsgrpv.push_back(gtmpv[ig]);
