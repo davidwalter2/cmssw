@@ -550,7 +550,10 @@ private:
   // hadrons under ReferenceHadronRadiative, 0 otherwise).
   // brems and pair dE/dx separately [GeV/cm]; their sum is what the mean-loss
   // table adds on top of ionization.
-  void computeRadiativeDEDX(const G4Track *aTrack, double &dedxBrem, double &dedxPair) const;
+  // the radiative mean loss of the track's current step, at the step's mean
+  // kinetic energy times `ekinScale` (1: the step's own; the step Jacobian
+  // differentiates it in energy)
+  void computeRadiativeDEDX(const G4Track *aTrack, double &dedxBrem, double &dedxPair, double ekinScale = 1.0) const;
 
   // per-step dN/dv tabulation on the kNRadV grid, from the models the
   // simulation runs: muBrems + muPairProd for muons, eBrem (Seltzer-Berger

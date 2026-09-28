@@ -138,6 +138,11 @@ namespace cvhcf {
     // lower limit [MeV] (KNOCKON_TCUT) and the p' floor (PMIN_FRAC)
     bool knockonJoint = true;
     bool qopExact = true;
+    // cf_knockon.QOP_LOG: the exact map's q/p variable on a logarithmic scale,
+    // |q/p|_ref ln(|q/p|/|q/p|_ref), whose per-collision changes q ln(p/p')/p
+    // add over successive collisions exactly (repeated radiation compounds
+    // without error); with qopExact only
+    bool qopLog = false;
     int knockonNPerDec = 40;
     int knockonNPerDecThin = 10;
     double knockonThin = 1e-2;
@@ -247,7 +252,8 @@ namespace cvhcf {
                int ne,
                bool exactQop,
                double *Sre,
-               double *Sim);
+               double *Sim,
+               bool qopLog = false);
 
   // The hard knock-on collision exactly (cf_rows.knockon_rows /
   // cf_knockon.knockon_rows) on the IONISATION rows: the collisions above the
