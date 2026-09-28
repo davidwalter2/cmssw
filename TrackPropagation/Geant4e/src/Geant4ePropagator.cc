@@ -3,6 +3,9 @@
 
 // Geant4e
 #include "TrackPropagation/Geant4e/interface/ConvertFromToCLHEP.h"
+#include "G4ProcessManager.hh"
+#include "G4ProcessVector.hh"
+#include "TrackPropagation/Geant4e/interface/G4ErrorEnergyLossForCVH.h"
 #include "TrackPropagation/Geant4e/interface/Geant4ePropagator.h"
 #include "TrackPropagation/Geant4e/interface/G4ErrorPhysicsListForCVH.h"
 #include "TrackPropagation/Geant4e/interface/MaterialGroupModel.h"
@@ -1236,26 +1239,37 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
     // THE MEAN LOSS'S ENERGY DEPENDENCE.  The helix transport carries the
     // step's loss as a constant dE/dx, so a q/p deviation at the start keeps
     // its energy offset to the end: d(q/p)_end/d(q/p)_start = (p/p_end)^2.
-    // The radiative mean scales with the energy (bremsstrahlung ~ E/X0), so an
-    // offset shrinks with it: dE_end/dE_start = 1 - L d(dE/dx)_rad/dE, which
-    // over a path makes the element p/p_end -- the transport under which the
-    // radiative channel's per-emission ln(p/p') adds exactly (cf_knockon.
-    // QOP_LOG).  Negligible for muons and hadrons (3e-5 over the tracker for
-    // a 48 GeV muon), most of the q/p transport for e+-.  Only when the
-    // reference subtracts the radiative mean.
-    if (thisPathLength > 0. && !cvhcgf::referenceIsIonOnly()) {
+    // The reference loss depends on the energy -- the radiative mean scales
+    // with it (bremsstrahlung ~ E/X0), ionisation rises as 1/beta^2 at low
+    // beta gamma -- so the q/p element is multiplied by dE_end/dE_start, the
+    // central difference at E(1 +- 1e-3) of the G4e loss process's own end
+    // energy (G4ErrorEnergyLossForCVH::EnergyAfter: extrapolator, material
+    // offset, direction).  For e+- this makes the element ~p/p_end, the
+    // transport under which the radiative channel's per-emission ln(p/p')
+    // adds exactly (cf_knockon.QOP_LOG); for a 48 GeV muon it moves it by
+    // 6e-5.
+    if (thisPathLength > 0.) {
       const G4Track *dtrk = g4eTrajState.GetG4Track();
       const G4Step *dstep = dtrk->GetStep();
-      const double ek = 0.5 * (dstep->GetPreStepPoint()->GetKineticEnergy() +
-                               dstep->GetPostStepPoint()->GetKineticEnergy()) /
-                        CLHEP::GeV;
-      if (ek > 0.) {
+      const G4ParticleDefinition *dpart = dtrk->GetDefinition();
+      static thread_local std::map<const G4ParticleDefinition *, G4ErrorEnergyLossForCVH *> elossProc;
+      auto it = elossProc.find(dpart);
+      if (it == elossProc.end()) {
+        G4ErrorEnergyLossForCVH *pr = nullptr;
+        if (G4ProcessManager *pm = dpart->GetProcessManager()) {
+          G4ProcessVector *pv = pm->GetProcessList();
+          for (std::size_t ip = 0; pv != nullptr && ip < pv->size() && pr == nullptr; ++ip)
+            pr = dynamic_cast<G4ErrorEnergyLossForCVH *>((*pv)[ip]);
+        }
+        it = elossProc.emplace(dpart, pr).first;
+      }
+      const double e0 = dstep->GetPreStepPoint()->GetKineticEnergy();
+      if (it->second != nullptr && e0 > 0.) {
         constexpr double kH = 1e-3;
-        double bUp = 0., pUp = 0., bDn = 0., pDn = 0.;
-        computeRadiativeDEDX(dtrk, bUp, pUp, 1.0 + kH);
-        computeRadiativeDEDX(dtrk, bDn, pDn, 1.0 - kH);
-        const double dRate = ((bUp + pUp) - (bDn + pDn)) / (2.0 * kH * ek);  // [1/cm]
-        transportJac(0, 0) *= (1.0 - thisPathLength * dRate);
+        const G4Material *dmat = dstep->GetPreStepPoint()->GetMaterial();
+        const double eUp = it->second->EnergyAfter(*dstep, e0 * (1.0 + kH), dmat, dpart);
+        const double eDn = it->second->EnergyAfter(*dstep, e0 * (1.0 - kH), dmat, dpart);
+        transportJac(0, 0) *= (eUp - eDn) / (2.0 * kH * e0);
       }
     }
     {
@@ -2481,10 +2495,7 @@ void Geant4ePropagator::fillRadiativeSpectrum(const G4Track *aTrack, RadiativeSt
   }
 }
 
-void Geant4ePropagator::computeRadiativeDEDX(const G4Track *aTrack,
-                                             double &dedxBrem,
-                                             double &dedxPair,
-                                             double ekinScale) const {
+void Geant4ePropagator::computeRadiativeDEDX(const G4Track *aTrack, double &dedxBrem, double &dedxPair) const {
   dedxBrem = 0.;
   dedxPair = 0.;
   const G4ParticleDefinition *part = aTrack->GetDynamicParticle()->GetParticleDefinition();
@@ -2495,7 +2506,7 @@ void Geant4ePropagator::computeRadiativeDEDX(const G4Track *aTrack,
     const G4Material *emate = aTrack->GetVolume()->GetLogicalVolume()->GetMaterial();
     const double epre = aTrack->GetStep()->GetPreStepPoint()->GetKineticEnergy();
     const double epost = aTrack->GetStep()->GetPostStepPoint()->GetKineticEnergy();
-    const double etkin = 0.5 * (epre + epost) * ekinScale;
+    const double etkin = 0.5 * (epre + epost);
     dedxBrem = eBremModel(part, etkin)->ComputeDEDXPerVolume(emate, part, etkin, etkin) / (CLHEP::GeV / CLHEP::cm);
     return;
   }
@@ -2533,7 +2544,7 @@ void Geant4ePropagator::computeRadiativeDEDX(const G4Track *aTrack,
     const G4Material *hmate = aTrack->GetVolume()->GetLogicalVolume()->GetMaterial();
     const double hpre = aTrack->GetStep()->GetPreStepPoint()->GetKineticEnergy();
     const double hpost = aTrack->GetStep()->GetPostStepPoint()->GetKineticEnergy();
-    const double hekin = 0.5 * (hpre + hpost) * ekinScale;
+    const double hekin = 0.5 * (hpre + hpost);
     const double hu = CLHEP::GeV / CLHEP::cm;
     dedxBrem = it->second.first->ComputeDEDXPerVolume(hmate, part, hekin, hekin) / hu;
     dedxPair = it->second.second->ComputeDEDXPerVolume(hmate, part, hekin, hekin) / hu;
@@ -2562,7 +2573,7 @@ void Geant4ePropagator::computeRadiativeDEDX(const G4Track *aTrack,
   const G4Material *mate = aTrack->GetVolume()->GetLogicalVolume()->GetMaterial();
   const double ePre = aTrack->GetStep()->GetPreStepPoint()->GetKineticEnergy();
   const double ePost = aTrack->GetStep()->GetPostStepPoint()->GetKineticEnergy();
-  const double ekin = 0.5 * (ePre + ePost) * ekinScale;
+  const double ekin = 0.5 * (ePre + ePost);
 
   // ComputeDEDXPerVolume(material, particle, kineticEnergy, cut); the table
   // passes e for both energy and cut, i.e. unrestricted -- matched here.

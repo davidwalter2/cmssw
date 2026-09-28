@@ -59,6 +59,13 @@ public:
   G4VParticleChange* AlongStepDoIt(const G4Track& aTrack, const G4Step& aStep) override;
   // This is the method implementing the energy loss process.
 
+  // The kinetic energy at the end of `aStep` for a start kinetic energy
+  // `kinEnergyStart`, exactly as AlongStepDoIt forms it (the extrapolator's
+  // loss at the half step, the step's material offset, the propagation
+  // direction).  The step Jacobian differentiates it in kinEnergyStart.
+  G4double EnergyAfter(const G4Step& aStep, G4double kinEnergyStart, const G4Material* aMaterial,
+                       const G4ParticleDefinition* aParticleDef);
+
   // Get and Set methods
   inline G4double GetStepLimit() const { return theStepLimit; }
   inline void SetStepLimit(G4double val) { theStepLimit = val; }
