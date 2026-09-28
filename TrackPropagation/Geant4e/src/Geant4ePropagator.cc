@@ -2313,9 +2313,16 @@ namespace {
     explicit BremProbe(const G4ParticleDefinition *p) : G4MuBremsstrahlungModel(p) {}
     using G4MuBremsstrahlungModel::ComputeDMicroscopicCrossSection;
   };
+  // G4MuPairProductionModel caches the target's Z^(1/3), Z^(2/3) and ln Z
+  // (the screening) and refreshes them only in MaxSecondaryEnergyForElement;
+  // ComputeDMicroscopicCrossSection reads the cache.  A probe that never set
+  // it evaluates every element unscreened (Z^(1/3) = ln Z = 0): 725x the
+  // cross section on silicon at 50 GeV, and a spectrum that puts 4x too many
+  // pairs at 5 MeV.  `element` sets it -- before every call.
   struct PairProbe : public G4MuPairProductionModel {
     explicit PairProbe(const G4ParticleDefinition *p) : G4MuPairProductionModel(p) {}
     using G4MuPairProductionModel::ComputeDMicroscopicCrossSection;
+    void element(double tkin, double Z) { MaxSecondaryEnergyForElement(tkin, Z); }
   };
 
   // e+- bremsstrahlung as G4eBremsstrahlung runs it: G4SeltzerBergerModel
@@ -2430,6 +2437,7 @@ void Geant4ePropagator::fillRadiativeSpectrum(const G4Track *aTrack, RadiativeSt
         const double Z = (*elems)[ie]->GetZ();
         const double w = natoms[ie] * stepLen * etot;
         sb += w * brem->ComputeDMicroscopicCrossSection(tkin, Z, eps);
+        pair->element(tkin, Z);
         sp += w * pair->ComputeDMicroscopicCrossSection(tkin, Z, eps);
       }
     }

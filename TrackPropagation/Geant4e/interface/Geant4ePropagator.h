@@ -327,14 +327,14 @@ public:
     // G4MuBremsstrahlungModel / G4MuPairProductionModel differential cross
     // sections.
     //
-    // NOTE these carry the SHAPE only. ComputeDMicroscopicCrossSection's
-    // absolute normalization convention does not match a naive dsigma/deps
-    // reading -- integrating it against eps overshoots that model's own
-    // ComputeDEDXPerVolume by ~365x for pair production (brems is close but
-    // not exact). So each shape must be normalized offline to its OWN
-    // process mean, dedxBrem / dedxPair above. Doing it per process rather
-    // than on the sum is what makes the brems/pair mixture right, which is
-    // the thing a single hand-built shape got wrong by ~2.5x.
+    // Each shape is normalized offline to its OWN process mean, dedxBrem /
+    // dedxPair above, which absorbs the tabulation's quadrature and its
+    // kinematic endpoint (a few per cent) and keeps the modelled mean equal to
+    // the one the reference subtracts. Doing it per process rather than on
+    // the sum is what makes the brems/pair mixture right, which is the thing a
+    // single hand-built shape got wrong by ~2.5x. The pair model's screening
+    // is per element and must be set before each evaluation (PairProbe in
+    // Geant4ePropagator.cc).
     //
     // Tabulating rather than reimplementing is deliberate: a hand-built
     // brems-shaped spectrum normalized to the combined mean under-predicted

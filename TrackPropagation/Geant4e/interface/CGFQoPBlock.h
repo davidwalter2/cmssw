@@ -518,11 +518,9 @@ namespace cvhcgf {
   //
   // Each process is normalized to its OWN mean because that is what fixes the
   // mixture; normalizing the sum does not. The normalization also absorbs
-  // ComputeDMicroscopicCrossSection's absolute-normalization convention
-  // (measured: 1.051 for brems, 1.63e-3 for pair, both constant to ~1 %, i.e.
-  // an offset and not a shape error) and the v-grid cutoff, so the modelled
-  // mean equals the mean the reference trajectory subtracted -- which is what
-  // makes the CENTRED exponent below leave no residual bias.
+  // the tabulation's quadrature and v-grid cutoff (a few per cent), so the
+  // modelled mean equals the mean the reference trajectory subtracted --
+  // which is what makes the CENTRED exponent below leave no residual bias.
   //
   // `v`, `shapeBrem`, `shapePair` and `out` are all `nv` long; `dEBrem` and
   // `dEPair` are this step's mean losses in MeV; `etot` in MeV.
