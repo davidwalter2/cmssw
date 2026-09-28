@@ -2686,9 +2686,19 @@ void Geant4ePropagator::CalculateEffectiveZandA(const G4Material *mate, G4double
 // chord direction oriented along the state's momentum.  The derivatives are
 // central differences in the curvilinear conventions of the transport (lam,
 // phi rotate d; xt, yt move p along U = z x d / |z x d| and V = d x U),
-// one-sided where a displaced point leaves the step's volume.  Any solid and
-// any hierarchy: only the Geant4 navigation interface is used.  False where
-// the chord is undefined.
+// one-sided where a displaced point leaves the step's volume.
+//
+// A perturbed track meets the layer at a different ARC LENGTH: the chord's
+// midpoint along the perturbed line moves by ds, and over ds the real track
+// has bent, dT/ds = (q/p) T x B.  So every perturbed chord is taken along
+// d + ds (q/p) d x B, the direction the track has where it crosses the
+// layer.  This is what makes a rigid rotation about the field axis -- which
+// in curvilinear coordinates is a phi, xt AND yt change -- leave the chord of
+// a coaxial shell unchanged, as it must; the straight line alone gives the
+// x_T derivative twice its value at 40 degrees incidence.
+//
+// Any solid and any hierarchy: only the Geant4 navigation interface is used.
+// False where the chord is undefined.
 bool Geant4ePropagator::layerLossRow(const G4Step *step,
                                      const Eigen::Matrix<double, 7, 1> &start,
                                      double scale,
@@ -2724,10 +2734,10 @@ bool Geant4ePropagator::layerLossRow(const G4Step *step,
     return G4ThreeVector(std::cos(l) * std::cos(f), std::cos(l) * std::sin(f), std::sin(l));
   };
   bool located = false;
-  // ln of the chord through the step's volume at p along dir; false where p
-  // is not in that volume (the same physical volume at the same placement)
-  auto lnChord = [&](const G4ThreeVector &p, const G4ThreeVector &dir, double &out) {
-    double L = 0.;
+  // the chord through the step's volume at p along dir: the distances to its
+  // boundaries forward (sf) and backward (sb); false where p is not in that
+  // volume (the same physical volume at the same placement)
+  auto chord = [&](const G4ThreeVector &p, const G4ThreeVector &dir, double &sf, double &sb) {
     for (const double sgn : {1., -1.}) {
       const G4ThreeVector dd = sgn * dir;
       const G4VPhysicalVolume *pv = nav.LocateGlobalPointAndSetup(p, &dd, located, false);
@@ -2739,16 +2749,32 @@ bool Geant4ePropagator::layerLossRow(const G4Step *step,
       const G4double sd = nav.ComputeStep(p, dd, kInfinity, safety);
       if (!(sd < kInfinity))
         return false;
-      L += sd;
+      (sgn > 0. ? sf : sb) = sd;
     }
-    if (!(L > 0.))
+    return sf + sb > 0.;
+  };
+  double sf0 = 0., sb0 = 0.;
+  if (!chord(mid, d, sf0, sb0))
+    return false;
+  const double l0 = std::log(sf0 + sb0);
+  // the track's curvature vector per mm: dT/ds = (q/p) T x B, B in 1/GeV/cm
+  const GlobalVector Bi = theField->inInverseGeV(
+      GlobalPoint(mid.x() / CLHEP::cm, mid.y() / CLHEP::cm, mid.z() / CLHEP::cm));
+  const double qop = start[6] / start.segment<3>(3).norm();
+  const G4ThreeVector Bv(Bi.x(), Bi.y(), Bi.z());
+  // ln of the chord of the perturbed track (p, dir), taken along the direction
+  // it has where it crosses the layer (the midpoint shift ds, see above)
+  auto lnChord = [&](const G4ThreeVector &p, const G4ThreeVector &dir, double &out) {
+    double sf = 0., sb = 0.;
+    if (!chord(p, dir, sf, sb))
       return false;
-    out = std::log(L);
+    const double ds = 0.5 * ((sf - sb) - (sf0 - sb0));            // mm, along dir
+    const G4ThreeVector bent = (dir + (ds / CLHEP::cm) * qop * dir.cross(Bv)).unit();
+    if (!chord(p, bent, sf, sb))
+      return false;
+    out = std::log(sf + sb);
     return true;
   };
-  double l0 = 0.;
-  if (!lnChord(mid, d, l0))
-    return false;
   constexpr double hAngle = 1e-4;           // rad
   constexpr double hPos = 1e-3 * CLHEP::cm;  // 10 um; the derivative is per cm
   auto deriv = [&](auto &&shifted, double h, double per) {
