@@ -145,6 +145,12 @@ opts.register('perHitKnockon', False, VarParsing.VarParsing.multiplicity.singlet
               VarParsing.VarParsing.varType.bool,
               'with exportPerHitResidual: the knock-on families per component '
               '(phcf_kx_*, phcf_kj_*), the dominant cost of a component')
+opts.register('exportKinkResponse', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'per MS block: the kink information of the track (kinkinfv), the '
+              'MS covariance (kinkmsv) and the q/p kink response (kinkrespv) in '
+              'the (kappa, xi) basis of ResidualGlobalCorrectionMakerBase.h, '
+              'with the block bookkeeping kinkblk*. Export only')
 opts.register('exportCfGroupExponents', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'additionally split the CF exponents by parmtype-15 MATERIAL '
@@ -536,6 +542,7 @@ process.globalCor = cms.EDProducer(
     cfQopExact=cms.bool(bool(opts.cfQopExact)),
     cfQopLog=cms.bool(bool(opts.cfQopLog)),
     perHitKnockon=cms.bool(bool(opts.perHitKnockon)),
+    exportKinkResponse=cms.bool(bool(opts.exportKinkResponse)),
     exportPerHitResidual=cms.bool(bool(opts.exportPerHitResidual)),
     perHitCfGroups=cms.bool(bool(opts.perHitCfGroups)),
     perHitShareMin=cms.double(float(opts.perHitShareMin)),

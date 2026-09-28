@@ -39,6 +39,12 @@
 //                   4 stopped by ionisation, 5 left the scoring volume, 6 other;
 //                   types 1/2: 1 if the primary is still alive after the step
 //
+// DIRECTIONS (optional, `writeDirections = True`): a parallel file
+// `<output>.dir` with 6 float64 per record, the pre- and post-step momentum
+// DIRECTIONS (unit vectors, x y z each) -- the kick's azimuth about the
+// incoming direction, which theta alone does not carry.  Row i of the
+// sidecar belongs to record i of `output`.
+//
 // A step defined by hadElastic is NOT always a collision: G4HadronicProcess
 // uses the integral method and rejects at the candidate point with probability
 // 1 - xs/xs_max, returning the track unchanged (NUCLEAR_ELASTIC.md, "Geant4
@@ -70,6 +76,7 @@
 #include "G4ParticleDefinition.hh"
 #include "G4SystemOfUnits.hh"
 
+#include <array>
 #include <cmath>
 #include <fstream>
 #include <iostream>
@@ -87,8 +94,11 @@ public:
   explicit HadElasticTruthWatcher(const edm::ParameterSet &p)
       : out_(p.getUntrackedParameter<std::string>("output", "hadeltruth.bin")),
         rmax_(p.getUntrackedParameter<double>("rmax", 120.0)),
-        zmax_(p.getUntrackedParameter<double>("zmax", 300.0)) {
+        zmax_(p.getUntrackedParameter<double>("zmax", 300.0)),
+        writeDir_(p.getUntrackedParameter<bool>("writeDirections", false)) {
     fh_.open(out_.c_str(), std::ios::binary | std::ios::trunc);
+    if (writeDir_)
+      fd_.open((out_ + ".dir").c_str(), std::ios::binary | std::ios::trunc);
     std::cout << "[hadeltruth] writing " << out_ << "  rmax=" << rmax_ << " cm  zmax=" << zmax_ << " cm"
               << (fh_.is_open() ? "" : "  *** COULD NOT OPEN ***") << std::endl;
   }
@@ -131,12 +141,17 @@ private:
     rec_[20] = pre->GetMaterial() != nullptr ? (double)pre->GetMaterial()->GetIndex() : -1.;
     rec_[21] = t->GetTrackLength() / CLHEP::cm;
     rec_[22] = pre->GetKineticEnergy() / CLHEP::MeV;
+    const G4ThreeVector &d0 = pre->GetMomentumDirection();
+    const G4ThreeVector &d1 = post->GetMomentumDirection();
+    dir_ = {{d0.x(), d0.y(), d0.z(), d1.x(), d1.y(), d1.z()}};
     if (pre->GetMaterial() != nullptr)
       materials_.insert(pre->GetMaterial());
   }
 
   void write() {
     fh_.write(reinterpret_cast<const char *>(rec_.data()), NREC * sizeof(double));
+    if (writeDir_)
+      fd_.write(reinterpret_cast<const char *>(dir_.data()), dir_.size() * sizeof(double));
     ++nrec_;
   }
 
@@ -253,6 +268,8 @@ private:
     closed_ = true;
     if (fh_.is_open())
       fh_.close();
+    if (fd_.is_open())
+      fd_.close();
     std::ofstream mf((out_ + ".materials.txt").c_str(), std::ios::trunc);
     for (const G4Material *m : materials_)
       mf << m->GetIndex() << " " << m->GetName() << " " << m->GetDensity() / (CLHEP::g / CLHEP::cm3) << "\n";
@@ -262,6 +279,9 @@ private:
   const std::string out_;
   const double rmax_, zmax_;
   std::ofstream fh_;
+  const bool writeDir_;
+  std::ofstream fd_;
+  std::array<double, 6> dir_{};
   bool closed_ = false;
   long nrec_ = 0;
   double evtId_ = -1;

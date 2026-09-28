@@ -39,6 +39,13 @@ globalCorJpsiKKaon = cms.EDProducer(
     # TrackPropagation/Geant4e/data/cvhcf_nucel_v2.bin); needs doRes and the
     # cf exponents. Off until the family is adopted.
     exportCfNucel = cms.bool(False),
+    # Per MS block, the kink information of the track's own hits (no vertex /
+    # beam-spot / mass constraint), the MS covariance and the fitted
+    # functional's kink response, in the (kappa, xi) basis documented in
+    # ResidualGlobalCorrectionMakerBase.h (kinkblk*, kinkinfv, kinkmsv,
+    # kinkrespv): the inputs of the survival-weighted nuclear-elastic family.
+    # Needs doRes. Export only.
+    exportKinkResponse = cms.bool(False),
     # False by default: True together with the default empty corFiles is the
     # broken Stage-1-only configuration (ideal geometry, no corrections)
     # the maker itself warns about. The driver overrides per leg.
