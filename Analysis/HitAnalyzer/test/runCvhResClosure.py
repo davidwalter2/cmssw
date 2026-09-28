@@ -137,6 +137,10 @@ opts.register('cfQopExact', True, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'the CF model\'s cf_knockon.QOP_EXACT: the exact energy -> q/p map '
               'of the knock-on (cf*_kx_re/_im) and radiative channels')
+opts.register('cfQopLog', True, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'the CF model\'s cf_knockon.QOP_LOG: the exact map\'s q/p variable '
+              'on a logarithmic scale (per collision q ln(p/p\')/p)')
 opts.register('perHitKnockon', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'with exportPerHitResidual: the knock-on families per component '
@@ -530,6 +534,7 @@ process.globalCor = cms.EDProducer(
     exportCfNucel=cms.bool(bool(opts.exportCfNucel)),
     cfKnockonJoint=cms.bool(bool(opts.cfKnockonJoint)),
     cfQopExact=cms.bool(bool(opts.cfQopExact)),
+    cfQopLog=cms.bool(bool(opts.cfQopLog)),
     perHitKnockon=cms.bool(bool(opts.perHitKnockon)),
     exportPerHitResidual=cms.bool(bool(opts.exportPerHitResidual)),
     perHitCfGroups=cms.bool(bool(opts.perHitCfGroups)),

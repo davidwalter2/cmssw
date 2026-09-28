@@ -141,8 +141,8 @@ namespace cvhcf {
     // cf_knockon.QOP_LOG: the exact map's q/p variable on a logarithmic scale,
     // |q/p|_ref ln(|q/p|/|q/p|_ref), whose per-collision changes q ln(p/p')/p
     // add over successive collisions exactly (repeated radiation compounds
-    // without error); with qopExact only
-    bool qopLog = false;
+    // without error); with qopExact only.  The default, as offline.
+    bool qopLog = true;
     int knockonNPerDec = 40;
     int knockonNPerDecThin = 10;
     double knockonThin = 1e-2;
