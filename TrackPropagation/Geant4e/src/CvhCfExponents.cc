@@ -881,13 +881,34 @@ namespace cvhcf {
       }
     }
 
+    // The q/p-variable change of an energy loss T at (E, p) with outgoing
+    // momentum pp, in units of the linear one (cf_knockon.qop_map): p^2 T (2E
+    // - T) / (E pp (p + pp)) for q/p itself, (p^2/E) ln(p/pp) under qopLog --
+    // ln(p/pp) = -log1p(r)/2 with r = T (T - 2E)/p^2 unless pp is floored
+    // (pp^2 above the unfloored value), then r = pp^2/p^2 - 1.
+    inline double qopMapX(double T, double E, double p, double pp, bool logMap) {
+      if (logMap) {
+        double r = T * (T - 2.0 * E) / (p * p);
+        if (pp * pp > (p * p) * (1.0 + r) * (1.0 + 1e-9) + 1e-300)
+          r = pp * pp / (p * p) - 1.0;
+        return (p * p / E) * (-0.5 * std::log1p(r));
+      }
+      return p * p * T * (2.0 * E - T) / (E * pp * (p + pp));
+    }
+    // d qopMapX / dT (pp unfloored; cf_knockon.dqop_map)
+    inline double qopMapDX(double T, double E, double p, double pp, bool logMap) {
+      if (logMap)
+        return (p * p / E) * (E - T) / (pp * pp);
+      return (std::pow(p, 3.0) / E) * (E - T) / std::pow(pp, 3.0);
+    }
+
     // The q/p-equivalent of a recoil energy loss T [MeV] at the step's E, p
-    // [MeV] under the exact 1/p map (cf_knockon.t_eff).
-    inline double nucelTEff(double T, double E, double p) {
+    // [MeV] under the exact map (cf_knockon.t_eff).
+    inline double nucelTEff(double T, double E, double p, bool logMap) {
       const double M2 = E * E - p * p;
       const double d = E - T;
       const double pp = std::sqrt(std::max(d * d - M2, 1e-300));
-      return p * p * T * (2.0 * E - T) / (E * pp * (p + pp));
+      return qopMapX(T, E, p, pp, logMap);
     }
 
     // ADDS c x the joint term of node n (`Table.joint_node`) at the arguments
@@ -909,6 +930,7 @@ namespace cvhcf {
                           double bw,
                           double aw,
                           bool exact,
+                          bool logMap,
                           double pminFrac,
                           double E,
                           double p,
@@ -930,7 +952,7 @@ namespace cvhcf {
       const double tcap = Em - std::sqrt(Em * Em - pm * pm + q * q);
       for (int i = 0; i < nb; ++i) {
         thp[i] = m.jTh[k0 + i] * sc;
-        X[i] = (exact && de[i] < tcap) ? nucelTEff(de[i], Em, pm) : de[i];
+        X[i] = (exact && de[i] < tcap) ? nucelTEff(de[i], Em, pm, logMap) : de[i];
       }
       for (int j = 0; j < nt; ++j) {
         const double b = bw * tau[j], a = aw * tau[j];
@@ -1103,6 +1125,7 @@ namespace cvhcf {
                            bw,
                            wqRow[s],
                            cfg.qopExact,
+                           cfg.qopExact && cfg.qopLog,
                            cfg.pminFrac,
                            E,
                            R.p,
@@ -2483,7 +2506,8 @@ namespace cvhcf {
                int ne,
                bool exactQop,
                double *Sre,
-               double *Sim) {
+               double *Sim,
+               bool qopLog) {
     if (recs == nullptr || spec == nullptr || vg == nullptr || n <= 0 || ne <= 0 || nv < 2 || nt <= 0)
       return;
     if (rstride < 11)
@@ -2542,7 +2566,7 @@ namespace cvhcf {
           const double d = E - Ti;
           const double pp = std::sqrt(std::max(d * d - M * M, (1e-3 * p) * (1e-3 * p)));
           c[i] = Ti / pp * M / E;
-          X[i] = exactQop ? p * p * Ti * (2.0 * E - Ti) / (E * pp * (p + pp)) : Ti;
+          X[i] = exactQop ? qopMapX(Ti, E, p, pp, qopLog) : Ti;
           qb[i] = wtrap[i] * dNb[i];
         }
         const double *tb = tau;
@@ -2570,7 +2594,7 @@ namespace cvhcf {
         for (int i = 0; i < nv; ++i) {
           const double d = E - T[i];
           const double pp = std::sqrt(std::max(d * d - M * M, (1e-3 * p) * (1e-3 * p)));
-          X[i] = p * p * T[i] * (2.0 * E - T[i]) / (E * pp * (p + pp));
+          X[i] = qopMapX(T[i], E, p, pp, qopLog);
         }
         for (int j = 0; j < nt; ++j) {
           double sr = 0., si = 0.;
@@ -2709,8 +2733,8 @@ namespace cvhcf {
       for (std::size_t i = 0; i < nn; ++i) {
         const double pp = ppOfT(T[i], k.E, k.p);
         if (exact) {
-          X[i] = k.p * k.p * T[i] * (2.0 * k.E - T[i]) / (k.E * pp * (k.p + pp));
-          dX[i] = (std::pow(k.p, 3.0) / k.E) * (k.E - T[i]) / std::pow(pp, 3.0);
+          X[i] = qopMapX(T[i], k.E, k.p, pp, cfg.qopLog);
+          dX[i] = qopMapDX(T[i], k.E, k.p, pp, cfg.qopLog);
         } else {
           X[i] = T[i];
           dX[i] = 1.0;
@@ -3350,7 +3374,7 @@ namespace cvhcf {
               std::fill(re.begin(), re.end(), 0.);
               std::fill(im.begin(), im.end(), 0.);
               radRows(tau, kNTau, rowsd.data(), RD.stride, np, specsub.data(), vf.data(), nvf, rid.data(), wq.data(),
-                      wb.data(), ones.data(), np, cfg.qopExact, re.data(), im.data());
+                      wb.data(), ones.data(), np, cfg.qopExact, re.data(), im.data(), cfg.qopLog);
               addTo(R.S.radRe, re.data());
               addTo(R.S.radIm, im.data());
               if (grp) {
@@ -3423,6 +3447,8 @@ namespace cvhcf {
                   c.pminFrac,
                   c.radNsub);
     std::string t(b);
+    if (c.qopExact && c.qopLog)
+      t += " knockon:qopLog=1";
     if (withNucel)
       t += " nuc=" + nucelTableId() + ":recoil=" + std::to_string(int(c.nucelRecoil)) +
            ",joint=" + std::to_string(int(c.nucelJoint));
