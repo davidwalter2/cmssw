@@ -2520,7 +2520,13 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           cgfCacheRes[ihit] = g4prop->cgfBlock();
         }
         const Matrix<double, 5, 9> FdFmcurv = std::get<3>(propresult);
-        const double dEdxlast = std::get<4>(propresult);
+        // The measurement Jacobian's energy-loss term (curv2localJacobianAltelossD)
+        // charges dE/dx over the extra path a displaced track needs to reach the
+        // tilted sensor plane -- a uniform medium.  The planes are sensor mid-planes
+        // inside parallel-faced layers, where a displacement along the plane does not
+        // change the path through the layer (its chord is set by the direction, which
+        // the propagator's step Jacobians carry), so the term is 0.
+        constexpr double dEdxAtPlane = 0.;
         const Matrix<double, 5, 5> dQMScurv = std::get<5>(propresult);
         const Matrix<double, 5, 5> dQIcurv = std::get<6>(propresult);
 // const Matrix<double, 5, 5> dQcurv = Qcurv;
@@ -2629,7 +2635,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           Qtot = Qcurv;
         }
 
-        const Matrix<double, 5, 5> Hm = curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, trackmass, dB);
+        const Matrix<double, 5, 5> Hm = curv2localJacobianAltelossD(updtsos, field, surface, dEdxAtPlane, trackmass, dB);
         
         
         const float enext = simhit == nullptr ? -99. : std::sqrt(std::pow(simhit->pabs(), 2) + trackmass*trackmass) - 0.5*simhit->energyLoss();        
@@ -2706,7 +2712,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             //save current parameters
 
             Matrix<double, 7, 1>& oldtsos = layerStates[ihit];
-            const Matrix<double, 5, 5> Hold = curv2localJacobianAltelossD(oldtsos, field, surface, dEdxlast, trackmass, dB);
+            const Matrix<double, 5, 5> Hold = curv2localJacobianAltelossD(oldtsos, field, surface, dEdxAtPlane, trackmass, dB);
             const Matrix<double, 5, 1> dxlocal = Hold*dxfull.segment<5>(5*(ihit+1));
 
             localparms = globalToLocal(oldtsos, surface);
@@ -2784,7 +2790,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         Matrix<double, 5, 5> Hp = Hm;
         
         if (dolocalupdate) {
-          Hp = curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, trackmass, dB);
+          Hp = curv2localJacobianAltelossD(updtsos, field, surface, dEdxAtPlane, trackmass, dB);
         }
 
         Matrix<double, 5, 5> Q = Qcurv;

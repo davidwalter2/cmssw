@@ -21,6 +21,8 @@
 #include "TrackPropagation/Geant4e/interface/CGFQoPBlock.h"
 
 class MaterialGroupModel;
+class G4Navigator;
+class G4Step;
 
 /** Propagator based on the Geant4e package. Uses the Propagator class
  *  in the TrackingTools/GeomPropagators package to define the interface.
@@ -407,6 +409,11 @@ private:
   // of the momentum-flipped frame conversion stays observable per job.
   mutable unsigned long long propBackwardLegs_{0ULL};
   mutable unsigned long long propTargetResumes_{0ULL};
+  // Steps whose q/p transport row carries the layer term, and steps with a
+  // loss whose volume gave no chord (the row is then zero; both in the
+  // destructor's summary).
+  mutable unsigned long long layerSteps_{0ULL};
+  mutable unsigned long long layerNoChord_{0ULL};
 
   // Geant4 11.1 made G4ErrorPropagatorManager / G4ErrorPropagatorData
   // singletons G4ThreadLocal. Fetch them per-call via the static accessors
@@ -493,6 +500,18 @@ private:
 
   Eigen::Matrix<double, 5, 9> transportJacobianBxByBzD(
       const Eigen::Matrix<double, 7, 1> &start, double s, double dEdx, double mass, const Eigen::Vector3d &dB) const;
+
+  // The q/p row of a step's transport in layered material: scale times
+  // d ln L / d(lam, phi, xt, yt) at the step start, L the chord of the step's
+  // volume along the track through its midpoint (the step loop in
+  // propagateGenericWithJacobianAltD).  False where the chord is undefined.
+  bool layerLossRow(const G4Step *step,
+                    const Eigen::Matrix<double, 7, 1> &start,
+                    double scale,
+                    Eigen::Matrix<double, 1, 4> &g) const;
+  // The navigator the chords are measured with (created on first use, on the
+  // tracking world of the thread that propagates).
+  mutable std::unique_ptr<G4Navigator> chordNav_;
 
   // mutable: allocation deferred from ctors to the first-call init block
   // in propagateGeneric / propagateGenericWithJacobianAltD (both const

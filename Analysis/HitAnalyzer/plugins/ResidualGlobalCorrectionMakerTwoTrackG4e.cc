@@ -3108,10 +3108,16 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                           << std::endl;
               }
               const Matrix<double, 5, 9> FdFm = std::get<3>(propresult);
-              const double dEdxlast = std::get<4>(propresult);
+              // The measurement Jacobian's energy-loss term (curv2localJacobianAltelossD)
+              // charges dE/dx over the extra path a displaced track needs to reach the
+              // tilted sensor plane -- a uniform medium.  The planes are sensor mid-planes
+              // inside parallel-faced layers, where a displacement along the plane does not
+              // change the path through the layer (its chord is set by the direction, which
+              // the propagator's step Jacobians carry), so the term is 0.
+              constexpr double dEdxAtPlane = 0.;
 
               const Matrix<double, 5, 5> Hm =
-                  curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, trackMass[id], dB);
+                  curv2localJacobianAltelossD(updtsos, field, surface, dEdxAtPlane, trackMass[id], dB);
               
               const Matrix<double, 6, 1> localparmsprop = globalToLocal(updtsos, surface);
 
@@ -3128,7 +3134,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                   
                   Matrix<double, 7, 1>& oldtsos = layerStates[ihit];
                   const Matrix<double, 5, 5> Hold =
-                      curv2localJacobianAltelossD(oldtsos, field, surface, dEdxlast, trackMass[id], dB);
+                      curv2localJacobianAltelossD(oldtsos, field, surface, dEdxAtPlane, trackMass[id], dB);
                   const Matrix<double, 5, 1> dxlocal = Hold*dxfull.segment<5>(trackstateidx + 5*ihit);
 
                   localparms = globalToLocal(oldtsos, surface);
@@ -3144,10 +3150,10 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               }
 
               // curvilinear to local jacobian
-              // const Matrix<double, 5, 5> &Hp = dolocalupdate ? curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, mmu, dB) : Hm;
+              // const Matrix<double, 5, 5> &Hp = dolocalupdate ? curv2localJacobianAltelossD(updtsos, field, surface, dEdxAtPlane, mmu, dB) : Hm;
               Matrix<double, 5, 5> Hp = Hm;
               if (dolocalupdate) {
-                Hp = curv2localJacobianAltelossD(updtsos, field, surface, dEdxlast, trackMass[id], dB);
+                Hp = curv2localJacobianAltelossD(updtsos, field, surface, dEdxAtPlane, trackMass[id], dB);
               }
               
               // const Matrix<double, 5, 5> &Q = dolocalupdate ? Hm*Qcurv*Hm.transpose() : Qcurv;
