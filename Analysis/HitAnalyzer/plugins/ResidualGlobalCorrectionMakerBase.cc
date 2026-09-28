@@ -5,6 +5,7 @@
 #include "ResidualGlobalCorrectionMakerBase.h"
 #include "G4MaterialTableTree.h"
 #include "TrackPropagation/Geant4e/interface/G4UniversalFluctuationForExtrapolator.hh"
+#include "TrackPropagation/Geant4e/interface/CGFQoPBlock.h"
 
 // user include files
 #include "FWCore/Framework/interface/Frameworkfwd.h"
@@ -227,9 +228,11 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   // `nucelActive_`, set by the derived maker from its configured species).
   exportCfNucel_ = iConfig.existsAs<bool>("exportCfNucel")
                            ? iConfig.getParameter<bool>("exportCfNucel") : false;
-  // THE HARD KNOCK-ON FAMILIES of the cf* exponents (cvhcf kx, kj).
-  exportCfKnockon_ = iConfig.existsAs<bool>("exportCfKnockon")
-                           ? iConfig.getParameter<bool>("exportCfKnockon") : false;
+  // THE CF MODEL'S KNOCK-ON SWITCHES (cf_knockon.KNOCKON_JOINT, QOP_EXACT).
+  cfKnockonJoint_ = iConfig.existsAs<bool>("cfKnockonJoint")
+                           ? iConfig.getParameter<bool>("cfKnockonJoint") : true;
+  cfQopExact_ = iConfig.existsAs<bool>("cfQopExact")
+                           ? iConfig.getParameter<bool>("cfQopExact") : true;
   exportHitResBlocks_ = iConfig.existsAs<bool>("exportHitResBlocks")
                            ? iConfig.getParameter<bool>("exportHitResBlocks") : true;
   // THE PER-HIT (COMPLEMENT) RESIDUAL BLOCK.  New export, off by default so
@@ -242,6 +245,8 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
                            ? iConfig.getParameter<bool>("perHitRefComponents") : true;
   perHitInfluenceBlocks_ = iConfig.existsAs<bool>("perHitInfluenceBlocks")
                            ? iConfig.getParameter<bool>("perHitInfluenceBlocks") : true;
+  perHitKnockon_ = iConfig.existsAs<bool>("perHitKnockon")
+                           ? iConfig.getParameter<bool>("perHitKnockon") : false;
   perHitShareMin_ = iConfig.existsAs<double>("perHitShareMin")
                            ? iConfig.getParameter<double>("perHitShareMin") : 0.;
   exportMaterialNoise_ = iConfig.existsAs<bool>("exportMaterialNoise")
@@ -617,7 +622,6 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
       // completeness flag: 1.6 kB/candidate against the 430 kB above.
       if (exportCfExponents_) {
         tree->Branch((cfprefix_ + "_ms").c_str(), &cfmsv);
-        tree->Branch((cfprefix_ + "_del").c_str(), &cfdelv);
         tree->Branch((cfprefix_ + "_ioni_re").c_str(), &cfiorev);
         tree->Branch((cfprefix_ + "_ioni_im").c_str(), &cfioimv);
         tree->Branch((cfprefix_ + "_rad_re").c_str(), &cfradrev);
@@ -633,30 +637,29 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
           tree->Branch((cfprefix_ + "_grp_ioni_im").c_str(), &cfgrpioimv, basketSize);
           tree->Branch((cfprefix_ + "_grp_rad_re").c_str(), &cfgrpradrev, basketSize);
           tree->Branch((cfprefix_ + "_grp_rad_im").c_str(), &cfgrpradimv, basketSize);
-          if (cfGroupDelta_) {
-            tree->Branch((cfprefix_ + "_grp_del").c_str(), &cfgrpdelv, basketSize);
-          }
           tree->Branch((cfprefix_ + "_grp_vqms").c_str(), &cfgrpvqmsv);
           tree->Branch((cfprefix_ + "_grp_vqio").c_str(), &cfgrpvqiov);
           tree->Branch((cfprefix_ + "_grp_closure").c_str(), &cfgrpclosure);
         }
         tree->Branch((cfprefix_ + "_hitcls").c_str(), &cfhitclsv);
         tree->Branch((cfprefix_ + "_hitv").c_str(), &cfhitvv);
-        if (exportCfKnockon_) {
-          cfKnock_.book(tree, cfprefix_, exportCfGroupExponents_, basketSize);
-        }
+        cfKnock_.book(tree, cfprefix_, exportCfGroupExponents_, basketSize);
         if (nucelActive_) {
           // fail at configuration time, not mid-event, if the table is unusable
           cvhcf::loadNucelTables();
           tree->Branch((cfprefix_ + "_nuc_ang").c_str(), &cfnucangv);
           tree->Branch((cfprefix_ + "_nuc_rec_re").c_str(), &cfnucrecrev);
           tree->Branch((cfprefix_ + "_nuc_rec_im").c_str(), &cfnucrecimv);
+          tree->Branch((cfprefix_ + "_nuc_jnt_re").c_str(), &cfnucjntrev);
+          tree->Branch((cfprefix_ + "_nuc_jnt_im").c_str(), &cfnucjntimv);
           tree->Branch("nuc_N", &nucN);
           if (exportCfGroupExponents_) {
             tree->Branch((cfprefix_ + "_grp_nuc").c_str(), &cfgrpnucv);
             tree->Branch((cfprefix_ + "_grp_nuc_ang").c_str(), &cfgrpnucangv, basketSize);
             tree->Branch((cfprefix_ + "_grp_nuc_rec_re").c_str(), &cfgrpnucrecrev, basketSize);
             tree->Branch((cfprefix_ + "_grp_nuc_rec_im").c_str(), &cfgrpnucrecimv, basketSize);
+            tree->Branch((cfprefix_ + "_grp_nuc_jnt_re").c_str(), &cfgrpnucjntrev, basketSize);
+            tree->Branch((cfprefix_ + "_grp_nuc_jnt_im").c_str(), &cfgrpnucjntimv, basketSize);
             tree->Branch((cfprefix_ + "_grp_nuc_N").c_str(), &cfgrpnucNv);
           }
         }
@@ -702,16 +705,13 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
         tree->Branch("resinfvtxv", &resinfvtxv, basketSize);
         if (exportCfExponents_) {
           tree->Branch("cfvtx_ms", &cfvtxmsv);
-          tree->Branch("cfvtx_del", &cfvtxdelv);
           tree->Branch("cfvtx_ioni_re", &cfvtxiorev);
           tree->Branch("cfvtx_ioni_im", &cfvtxioimv);
           tree->Branch("cfvtx_rad_re", &cfvtxradrev);
           tree->Branch("cfvtx_rad_im", &cfvtxradimv);
           tree->Branch("cfvtx_hitcls", &vtxhitclsv);
           tree->Branch("cfvtx_hitv", &vtxhitvv);
-          if (exportCfKnockon_) {
-            cfvtxKnock_.book(tree, "cfvtx", exportCfGroupExponents_, basketSize);
-          }
+          cfvtxKnock_.book(tree, "cfvtx", exportCfGroupExponents_, basketSize);
           if (exportCfGroupExponents_) {
             tree->Branch("cfvtx_grp", &cfvtxgrpv);
             tree->Branch("cfvtx_grp_ms", &cfvtxgrpmsv, basketSize);
@@ -773,7 +773,6 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
         tree->Branch("resinfbsv", &resinfbsv, basketSize);
         if (exportCfExponents_) {
           tree->Branch("cfbs_ms", &cfbsmsv);
-          tree->Branch("cfbs_del", &cfbsdelv);
           tree->Branch("cfbs_ioni_re", &cfbsiorev);
           tree->Branch("cfbs_ioni_im", &cfbsioimv);
           tree->Branch("cfbs_rad_re", &cfbsradrev);
@@ -781,9 +780,7 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
           tree->Branch("cfbs_hitcls", &cfbshitclsv);
           tree->Branch("cfbs_hitcomp", &cfbshitcompv);
           tree->Branch("cfbs_hitv", &cfbshitvv);
-          if (exportCfKnockon_) {
-            cfbsKnock_.book(tree, "cfbs", exportCfGroupExponents_, basketSize);
-          }
+          cfbsKnock_.book(tree, "cfbs", exportCfGroupExponents_, basketSize);
           if (exportCfGroupExponents_) {
             tree->Branch("cfbs_grp", &cfbsgrpv);
             tree->Branch("cfbs_grpcomp", &cfbsgrpcompv);
@@ -827,7 +824,6 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
         tree->Branch("phresvarv", &phresvarv, basketSize);
         tree->Branch("phresbv", &phresbv, basketSize);
         tree->Branch("phcf_ms", &phcfmsv, basketSize);
-        tree->Branch("phcf_del", &phcfdelv, basketSize);
         tree->Branch("phcf_ioni_re", &phcfiorev, basketSize);
         tree->Branch("phcf_ioni_im", &phcfioimv, basketSize);
         tree->Branch("phcf_rad_re", &phcfradrev, basketSize);
@@ -835,11 +831,16 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
         tree->Branch("phcf_vgf", &phcfvgf);
         tree->Branch("phcf_nok", &phcfnok);
         tree->Branch("phcf_msec", &phcfms);
+        if (perHitKnockon_) {
+          tree->Branch("phcf_kx_re", &phcfkxrev, basketSize);
+          tree->Branch("phcf_kx_im", &phcfkximv, basketSize);
+          tree->Branch("phcf_kj_re", &phcfkjrev, basketSize);
+          tree->Branch("phcf_kj_im", &phcfkjimv, basketSize);
+        }
         if (perHitCfGroups_) {
           tree->Branch("phcf_grpcomp", &phcfgrpcomp);
           tree->Branch("phcf_grp", &phcfgrpv);
           tree->Branch("phcf_grp_ms", &phcfgrpmsv, basketSize);
-          tree->Branch("phcf_grp_del", &phcfgrpdelv, basketSize);
           tree->Branch("phcf_grp_ioni_re", &phcfgrpiorev, basketSize);
           tree->Branch("phcf_grp_ioni_im", &phcfgrpioimv, basketSize);
           tree->Branch("phcf_grp_rad_re", &phcfgrpradrev, basketSize);
@@ -1315,7 +1316,16 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       // (re)armed HERE and not only at branch creation, so a second beginRun
       // does not write an empty grid.
       cftau.assign(cvhcf::tauGrid(), cvhcf::tauGrid() + cvhcf::kNTau);
-      cfmodel = cvhcf::modelTag(nucelActive_, exportCfKnockon_, exportCfKnockon_);
+    }
+    if (exportCfExponents_ || exportPerHitResidual_) {
+      // THE CF MODEL: the offline defaults, the maker's knock-on switches,
+      // and Kokoulin's correction as the propagator (configured by now)
+      // applies it to the fit's variance
+      cfRowConfig_ = cvhcf::productionRowConfig();
+      cfRowConfig_.knockonJoint = cfKnockonJoint_;
+      cfRowConfig_.qopExact = cfQopExact_;
+      cfRowConfig_.ioniKokoulin = cvhcgf::ioniKokoulinEnabled() ? 1.0 : 0.0;
+      cfmodel = cvhcf::modelTag(cfRowConfig_, nucelActive_);
     }
     unsigned int globalidx = 0;
     for (const auto& key: parmset) {
@@ -2289,11 +2299,15 @@ void ResidualGlobalCorrectionMakerBase::clearCfNucel() {
   cfnucangv.clear();
   cfnucrecrev.clear();
   cfnucrecimv.clear();
+  cfnucjntrev.clear();
+  cfnucjntimv.clear();
   nucN = 0.f;
   cfgrpnucv.clear();
   cfgrpnucangv.clear();
   cfgrpnucrecrev.clear();
   cfgrpnucrecimv.clear();
+  cfgrpnucjntrev.clear();
+  cfgrpnucjntimv.clear();
   cfgrpnucNv.clear();
 }
 
@@ -2306,10 +2320,14 @@ void ResidualGlobalCorrectionMakerBase::storeCfNucel(const cvhcf::TrackResult &r
   cfnucangv.resize(nt);
   cfnucrecrev.resize(nt);
   cfnucrecimv.resize(nt);
+  cfnucjntrev.resize(nt);
+  cfnucjntimv.resize(nt);
   for (int j = 0; j < nt; ++j) {
     cfnucangv[j] = float(res.nuc.ang[j]);
     cfnucrecrev[j] = float(res.nuc.recRe[j]);
     cfnucrecimv[j] = float(res.nuc.recIm[j]);
+    cfnucjntrev[j] = float(res.nuc.jntRe[j]);
+    cfnucjntimv[j] = float(res.nuc.jntIm[j]);
   }
   nucN = float(res.nuc.N);
   if (!exportCfGroupExponents_) {
@@ -2322,6 +2340,8 @@ void ResidualGlobalCorrectionMakerBase::storeCfNucel(const cvhcf::TrackResult &r
       cfgrpnucangv.push_back(float(ge.second.ang[j]));
       cfgrpnucrecrev.push_back(float(ge.second.recRe[j]));
       cfgrpnucrecimv.push_back(float(ge.second.recIm[j]));
+      cfgrpnucjntrev.push_back(float(ge.second.jntRe[j]));
+      cfgrpnucjntimv.push_back(float(ge.second.jntIm[j]));
     }
   }
 }
@@ -2398,7 +2418,6 @@ void ResidualGlobalCorrectionMakerBase::storeCfGroups(const cvhcf::TrackResult &
     cfgrpvqiov.clear();
     cfgrpv.clear();
     cfgrpmsv.clear();
-    cfgrpdelv.clear();
     cfgrpiorev.clear();
     cfgrpioimv.clear();
     cfgrpradrev.clear();
@@ -2409,13 +2428,11 @@ void ResidualGlobalCorrectionMakerBase::storeCfGroups(const cvhcf::TrackResult &
   storeCfGroupsTo(res,
                   cfgrpv,
                   cfgrpmsv,
-                  cfgrpdelv,
                   cfgrpiorev,
                   cfgrpioimv,
                   cfgrpradrev,
                   cfgrpradimv,
                   cfgrpclosure,
-                  cfGroupDelta_,
                   &cfgrpvqmsv,
                   &cfgrpvqiov);
 }
@@ -2423,18 +2440,15 @@ void ResidualGlobalCorrectionMakerBase::storeCfGroups(const cvhcf::TrackResult &
 void ResidualGlobalCorrectionMakerBase::storeCfGroupsTo(const cvhcf::TrackResult &res,
                                                         std::vector<short> &grpv,
                                                         std::vector<float> &msv,
-                                                        std::vector<float> &delv,
                                                         std::vector<float> &iorev,
                                                         std::vector<float> &ioimv,
                                                         std::vector<float> &radrev,
                                                         std::vector<float> &radimv,
                                                         float &closure,
-                                                        bool wantDelta,
                                                         std::vector<float> *vqms,
                                                         std::vector<float> *vqio) {
   grpv.clear();
   msv.clear();
-  delv.clear();
   iorev.clear();
   ioimv.clear();
   radrev.clear();
@@ -2456,11 +2470,8 @@ void ResidualGlobalCorrectionMakerBase::storeCfGroupsTo(const cvhcf::TrackResult
   ioimv.reserve(nf);
   radrev.reserve(nf);
   radimv.reserve(nf);
-  if (wantDelta) {
-    delv.reserve(nf);
-  }
   // sum_g, in double, for the closure figure
-  std::array<double, cvhcf::kNTau> sms{}, sdel{}, siore{}, sioim{}, sradre{}, sradim{};
+  std::array<double, cvhcf::kNTau> sms{}, siore{}, sioim{}, sradre{}, sradim{};
   for (auto const &g : res.groups) {
     grpv.push_back(static_cast<short>(g.group));
     if (vqms) {
@@ -2480,10 +2491,6 @@ void ResidualGlobalCorrectionMakerBase::storeCfGroupsTo(const cvhcf::TrackResult
       sioim[j] += g.S.ioIm[j];
       sradre[j] += g.S.radRe[j];
       sradim[j] += g.S.radIm[j];
-      if (wantDelta) {
-        delv.push_back(float(g.S.del[j]));
-        sdel[j] += g.S.del[j];
-      }
     }
   }
   double dmax = 0., smax = 0.;
@@ -2498,9 +2505,6 @@ void ResidualGlobalCorrectionMakerBase::storeCfGroupsTo(const cvhcf::TrackResult
   cmp(sioim, res.S.ioIm);
   cmp(sradre, res.S.radRe);
   cmp(sradim, res.S.radIm);
-  if (wantDelta) {
-    cmp(sdel, res.S.del);
-  }
   closure = (smax > 0.) ? float(dmax / smax) : 0.f;
 }
 

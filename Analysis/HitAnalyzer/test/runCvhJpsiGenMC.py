@@ -272,15 +272,18 @@ opts.register('exportHitResBlocks', True, VarParsing.VarParsing.multiplicity.sin
 opts.register('exportCfNucel', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'add the NUCLEAR-ELASTIC (hadElastic) family to the CF exponents '
-              '(cf*_nuc_ang, cf*_nuc_rec_re/_im, nuc_N; per material group with '
+              '(cf*_nuc_ang, cf*_nuc_rec_re/_im, cf*_nuc_jnt_re/_im, nuc_N; per material group with '
               'exportCfGroupExponents). Hadron species only: a muon maker '
               'writes nothing extra')
-opts.register('exportCfKnockon', False, VarParsing.VarParsing.multiplicity.singleton,
+opts.register('cfKnockonJoint', True, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
-              'add the HARD KNOCK-ON families to the CF exponents: the exact '
-              'energy -> q/p map (cf*_kx_re/_im) and the joint law of loss and '
-              'deflection (cf*_kj_re/_im); per material group with '
-              'exportCfGroupExponents')
+              'the CF model\'s cf_knockon.KNOCKON_JOINT: a knock-on collision\'s '
+              'loss and deflection as one event (cf*_kj_re/_im), the scattering '
+              'channel\'s electron term stopping at the e- production threshold')
+opts.register('cfQopExact', True, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'the CF model\'s cf_knockon.QOP_EXACT: the exact energy -> q/p map '
+              'of the knock-on (cf*_kx_re/_im) and radiative channels')
 opts.register('exportCfGroupExponents', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'additionally split the CF exponents by parmtype-15 MATERIAL '
@@ -650,7 +653,8 @@ process.globalCor = cms.EDProducer(
     exportCfExponents=cms.bool(bool(opts.exportCfExponents)),
     exportCfGroupExponents=cms.bool(bool(opts.exportCfGroupExponents)),
     exportCfNucel=cms.bool(bool(opts.exportCfNucel)),
-    exportCfKnockon=cms.bool(bool(opts.exportCfKnockon)),
+    cfKnockonJoint=cms.bool(bool(opts.cfKnockonJoint)),
+    cfQopExact=cms.bool(bool(opts.cfQopExact)),
     exportHitResBlocks=cms.bool(bool(opts.exportHitResBlocks)),
     exportMaterialNoise=cms.bool(bool(opts.exportMaterialNoise)),
     exportVarianceGrads=cms.bool(bool(opts.exportVarianceGrads)),

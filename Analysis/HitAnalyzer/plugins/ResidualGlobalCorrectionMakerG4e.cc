@@ -4791,16 +4791,18 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     phresvarv.clear();
     phresbv.clear();
     phcfmsv.clear();
-    phcfdelv.clear();
     phcfiorev.clear();
     phcfioimv.clear();
     phcfradrev.clear();
     phcfradimv.clear();
+    phcfkxrev.clear();
+    phcfkximv.clear();
+    phcfkjrev.clear();
+    phcfkjimv.clear();
     phcfvgf.clear();
     phcfgrpcomp.clear();
     phcfgrpv.clear();
     phcfgrpmsv.clear();
-    phcfgrpdelv.clear();
     phcfgrpiorev.clear();
     phcfgrpioimv.clear();
     phcfgrpradrev.clear();
@@ -4911,8 +4913,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       // are the FIT's own influence coefficients and do not exist until it has
       // converged -- which is also why the raw step records had to be exported
       // at all. Everything the offline extractor reads is in scope now, so the
-      // 6 x 64 floats it would have spent 2.2 s and 430 kB producing cost a
-      // few ms here.
+      // families are evaluated here without the 430 kB of records.
       //
       // The inputs are the EXPORT ARRAYS, not the propagator's logs, so the
       // pooling is identical to `cf_track_resolution.extract`'s join by
@@ -4950,9 +4951,8 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
         // radiative) step weight is charge-signed -- the same factor
         // `Geant4ePropagator` puts into the in-fit CGF block's `gs`.
         cfin.ioniSign = refParms[0] >= 0.f ? 1. : -1.;
-        cfin.wantDelta = true;
         cfin.wantGroups = exportCfGroupExponents_;
-        cfin.wantGroupDelta = true;   // the q/p functional's model uses S_del
+        cfin.rowConfig = &cfRowConfig_;
         // the nuclear-elastic family, on the same MS blocks and the same
         // legs' ionisation weights (the charge sign above)
         if (nucelActive_) {
@@ -4961,9 +4961,6 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           cfin.mspdg = mspdgv.data();
           cfin.nucel = nucelMixtures();
         }
-        // the hard knock-on families, on the same rows and weights
-        cfin.wantKnockonMap = exportCfKnockon_;
-        cfin.wantKnockonJoint = exportCfKnockon_;
       }
       if (exportCfExponents_) {
         cvhcf::TrackResult cfres;
@@ -4978,16 +4975,13 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             v[j] = float(a[j]);
         };
         storecf(cfres.S.ms, cfmsv);
-        storecf(cfres.S.del, cfdelv);
         storecf(cfres.S.ioRe, cfiorev);
         storecf(cfres.S.ioIm, cfioimv);
         storecf(cfres.S.radRe, cfradrev);
         storecf(cfres.S.radIm, cfradimv);
         storeCfGroups(cfres);
         storeCfNucel(cfres);
-        if (exportCfKnockon_) {
-          cfKnock_.append(cfres, exportCfGroupExponents_);
-        }
+        cfKnock_.append(cfres, exportCfGroupExponents_);
         // Per-hit-class Gaussian shares of the q/p variance, ascending in
         // class. Here `vgauss` (and hence `cfqop_vgf`) IS the sum over the
         // parmtype-8/9 blocks, so `sum_c cfqop_hitv == cfqop_vgf` exactly.
@@ -5420,7 +5414,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               // 0 IS the q/p functional (see (3b)), so it must reproduce the
               // validated `cfqop_ioni_im` / `cfqop_rad_im`, and with the
               // signed coefficient `W_b . u` it does, to the 1.2e-7 of their
-              // float32 storage.  The even families (`ms`, `del`, `ioni_re`,
+              // float32 storage.  The even families (`ms`, `ioni_re`,
               // `rad_re`) are insensitive to the sign, as they must be.
               VectorXd udir = VectorXd::Zero(nb);
               if (fam == 11 && nb > 0) {
@@ -5475,7 +5469,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             for (int kk = 0; kk < ntot; ++kk) {
               cvhcf::TrackInput ci = cfin;
               ci.wantNucel = false;   // not part of the per-hit components
-              ci.wantKnockonMap = ci.wantKnockonJoint = false;   // nor these
+              ci.wantKnockon = perHitKnockon_;
               ci.sigma = 1.;
               ci.ioniSign = refParms[0] >= 0.f ? 1. : -1.;
               if (perHitShareMin_ > 0.) {
@@ -5488,9 +5482,7 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               ci.resvarv = shares[kk].data();
               ci.ressgn = signs[kk].data();
               ci.nres = nresi;
-              ci.wantDelta = true;
               ci.wantGroups = perHitCfGroups_;
-              ci.wantGroupDelta = true;
               cvhcf::TrackResult cr;
               cvhcf::trackExponents(ci, cr);
               if (cr.ok) {
@@ -5498,15 +5490,20 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               }
               for (int j = 0; j < cvhcf::kNTau; ++j) {
                 phcfmsv.push_back(float(cr.S.ms[j]));
-                phcfdelv.push_back(float(cr.S.del[j]));
                 phcfiorev.push_back(float(cr.S.ioRe[j]));
                 phcfioimv.push_back(float(cr.S.ioIm[j]));
                 phcfradrev.push_back(float(cr.S.radRe[j]));
                 phcfradimv.push_back(float(cr.S.radIm[j]));
+                if (perHitKnockon_) {
+                  phcfkxrev.push_back(float(cr.S.kxRe[j]));
+                  phcfkximv.push_back(float(cr.S.kxIm[j]));
+                  phcfkjrev.push_back(float(cr.S.kjRe[j]));
+                  phcfkjimv.push_back(float(cr.S.kjIm[j]));
+                }
               }
               phcfvgf.push_back(float(cr.vgauss));
               if (perHitCfGroups_) {
-                std::array<double, cvhcf::kNTau> sms{}, sdel{}, sre{}, sim{}, srre{}, srim{};
+                std::array<double, cvhcf::kNTau> sms{}, sre{}, sim{}, srre{}, srim{};
                 for (auto const &gg : cr.groups) {
                   phcfgrpcomp.push_back(static_cast<short>(kk));
                   phcfgrpv.push_back(static_cast<short>(gg.group));
@@ -5514,13 +5511,11 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                   phcfgrpvqio.push_back(float(gg.vqio));
                   for (int j = 0; j < cvhcf::kNTau; ++j) {
                     phcfgrpmsv.push_back(float(gg.S.ms[j]));
-                    phcfgrpdelv.push_back(float(gg.S.del[j]));
                     phcfgrpiorev.push_back(float(gg.S.ioRe[j]));
                     phcfgrpioimv.push_back(float(gg.S.ioIm[j]));
                     phcfgrpradrev.push_back(float(gg.S.radRe[j]));
                     phcfgrpradimv.push_back(float(gg.S.radIm[j]));
                     sms[j] += gg.S.ms[j];
-                    sdel[j] += gg.S.del[j];
                     sre[j] += gg.S.ioRe[j];
                     sim[j] += gg.S.ioIm[j];
                     srre[j] += gg.S.radRe[j];
@@ -5536,7 +5531,6 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
                   }
                 };
                 cmp(sms, cr.S.ms);
-                cmp(sdel, cr.S.del);
                 cmp(sre, cr.S.ioRe);
                 cmp(sim, cr.S.ioIm);
                 cmp(srre, cr.S.radRe);

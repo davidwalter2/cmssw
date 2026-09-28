@@ -41,7 +41,7 @@ globalCorLambda = cms.EDProducer(
     doRes = cms.bool(False),
     # The nuclear-elastic (hadElastic) family of the resolution-CF exponents
     # (cvhcf NucelExponents, per-element targets, tables
-    # TrackPropagation/Geant4e/data/cvhcf_nucel_v1.bin); needs doRes and the
+    # TrackPropagation/Geant4e/data/cvhcf_nucel_v2.bin); needs doRes and the
     # cf exponents. Off until the family is adopted.
     exportCfNucel = cms.bool(False),
     useIdealGeometry = cms.bool(True),
