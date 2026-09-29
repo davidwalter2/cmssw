@@ -35,6 +35,11 @@ opts.register('seed', 1, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.int, 'Geant4 random seed (the ONLY thing to vary across tasks)')
 opts.register('output', 'simstates.root', VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string, 'output ntuple')
+opts.register('prodCut', 0.0, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.float,
+              'global production cut [cm] with CutsPerRegion off; <= 0 keeps the CMS '
+              'region cuts. 1e-4 puts every threshold at the Geant4 floor (990 eV), '
+              'which the CF model\'s knock-on channel starts from')
 opts.parseArguments()
 
 process = cms.Process('CLEANSIM', Run2_2016)
@@ -150,6 +155,12 @@ process.VtxSmeared = cms.EDProducer(
 process.RandomNumberGeneratorService.generator.initialSeed = 1
 process.RandomNumberGeneratorService.VtxSmeared.initialSeed = 1
 process.RandomNumberGeneratorService.g4SimHits.initialSeed = 100000 + int(opts.seed)
+if opts.prodCut > 0.0:
+    process.g4SimHits.Physics.CutsPerRegion = cms.bool(False)
+    process.g4SimHits.Physics.DefaultCutValue = cms.double(float(opts.prodCut))
+print('[cleanprop] production cut: %s' % ('DefaultCutValue = %g cm, CutsPerRegion off'
+                                          % opts.prodCut if opts.prodCut > 0.0
+                                          else 'CMS regions'))
 
 # --- ntuple ------------------------------------------------------------------
 _SIMHIT_TAGS = [
