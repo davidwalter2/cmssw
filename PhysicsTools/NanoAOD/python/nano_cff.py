@@ -716,6 +716,47 @@ def nanoAOD_wmassLowPU5TeV(process):
     return nanoAOD_wmassLowPUTriggers(process)
 
 
+def nanoAOD_beamSpotFromTag(process, tag):
+    """Re-make offlineBeamSpot in this process from the BeamSpotObjectsRcd
+    payload of `tag` (a GlobalTag override), for MC whose input files carry a
+    beamspot that does not describe the simulated collisions.
+
+    Every module that reads 'offlineBeamSpot' without a process name then gets
+    this one instead of the input file's: the BeamSpot and PVBS tables, the
+    beamspot-constrained muon pt, the lepton/tau impact points (refittedPV),
+    the dxybs sign of the lepton updaters, the electron ID conversion veto,
+    the low-pt electrons, the secondary vertices of the re-run DeepJet, the
+    PV-robust PUPPI fallback point and the CVH refits (reference point of the
+    single-track states, beamspot constraint of trackrefitbs and of the dimuon
+    common vertex). Quantities computed upstream with the old beamspot and only
+    read here are NOT corrected: the primary vertices of the input file and, in
+    the nano from MiniAOD, the magnitudes of the pat::Muon / pat::Electron
+    dB(BS2D) (dxybs; the tag-and-probe nano runs PAT in the same job and
+    recomputes them with the new beamspot)."""
+    process.offlineBeamSpot = cms.EDProducer("BeamSpotProducer")
+    process.GlobalTag.toGet.append(cms.PSet(
+        record = cms.string("BeamSpotObjectsRcd"),
+        tag = cms.string(tag),
+    ))
+    process.nanoBeamSpotOverrideTask = cms.Task(process.offlineBeamSpot)
+    process.schedule.associate(process.nanoBeamSpotOverrideTask)
+    return process
+
+
+def nanoAOD_beamSpotEarly2018MC(process):
+    """MC generated with the 2018 vertex smearing (Realistic25ns13TeVEarly2018Collision:
+    x, y = +108, +417 um, 7 um wide) but reconstructed with the 2017 MC beamspot
+    (BeamSpotObjects_Realistic25ns_13TeVCollisions_Early2017_v1_mc of
+    106X_mc2017_realistic_v9For2017H_v1: -248, +693 um), i.e. the POWHEG-MiNNLO
+    W/Z, ttbar and single-top samples of RunIILowPUSummer20UL17 (McM wmLHEGS
+    requests; the pomflux samples of the campaign were generated with the 2017
+    smearing and are consistent). Their MiniAOD offlineBeamSpot is ~450 um off
+    the collisions, which biases every beamspot-constrained quantity (e.g. the
+    CVH dimuon mass by -1.9%). The 2018 MC beamspot tag describes the generated
+    vertices (checked against genParticles:xyz0)."""
+    return nanoAOD_beamSpotFromTag(process, "BeamSpotObjects_Realistic25ns_13TeVCollisions_Early2018_v1_mc")
+
+
 def nanoAOD_wmassLowPUTriggers(process):
     """Trigger objects of the HI-style menu of the 2017 low-PU runs (2017G at
     5.02 TeV, 2017H at 13 TeV): the Electron and Muon selections carry the
