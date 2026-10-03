@@ -1064,7 +1064,13 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     trackCov.fill(0.);
     //use eigen to fill raw memory
     Map<Vector5f>(trackParms.data()) = Map<const Vector5d>(tkparms.Array()).cast<float>();
-    Map<Matrix<float, 5, 5, RowMajor> >(trackCov.data()).triangularView<Upper>() = Map<const Matrix<double, 5, 5, RowMajor> >(tkcov.Array()).cast<float>().triangularView<Upper>();
+    // the track covariance is a symmetric SMatrix with PACKED storage (15
+    // elements), so it cannot be mapped as a 5x5: copy the upper triangle by element
+    for (unsigned int i = 0; i < 5; ++i) {
+      for (unsigned int j = i; j < 5; ++j) {
+        trackCov[5 * i + j] = tkcov(i, j);
+      }
+    }
     
 // std::cout << "track charge: " << track.charge() << " trackorig charge " << trackOrig.charge() << "inner state charge " << tms.back().updatedState().charge() << std::endl;
     
