@@ -314,6 +314,9 @@ run2_HLTconditions_2016.toModify(
             mksel("filter('hltL3cr*IsoFiltered0p09')","Iso"),
             mksel("filter('*OverlapFilter*IsoMu*PFTau*')","OverlapFilter PFTau"),
             mksel("filter('hltL3f*IsoFiltered0p09')","IsoTkMu"),
+            # dedicated bits for the two 2016 single-muon paths (W-mass nano, 10_6 064933864e4)
+            mksel("filter('hltL3crIsoL1sMu22L1f0L2f10QL3f24QL3trkIsoFiltered0p09')","IsoMu24", bit=4),
+            mksel("filter('hltL3fL1sMu22L1f0Tkf24QL3trkIsoFiltered0p09')","IsoTkMu24", bit=5),
             mksel(["hltL3fL1sMu*L3Filtered50*","hltL3fL1sMu*TkFiltered50*"],"1mu (Mu50)", bit=10)
     )
 ).toModify(

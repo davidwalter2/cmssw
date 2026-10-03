@@ -52,6 +52,10 @@ void TrackProducerBase<T>::initTrackProducerBase(const edm::ParameterSet& conf,
   if (useSimpleMF) {
     mfName = conf_.getParameter<std::string>("SimpleMagneticField");
   }
+  if (conf_.exists("MagneticFieldLabel")) {
+    mfName = conf_.getParameter<std::string>("MagneticFieldLabel");
+  }
+
   mfSrc_ = cc.esConsumes(edm::ESInputTag("", mfName));
 
   std::string fitterName = conf_.getParameter<std::string>("Fitter");

@@ -1,0 +1,10 @@
+<lcgdict>
+  <!-- <class name="vector<ROOT::Math::SMatrix<double,2,2,ROOT::Math::MatRepStd<double,2,2> >>"/> -->
+  <class name="edm::ValueMap<std::vector<int>>"/>
+  <class name = "edm::Wrapper<edm::ValueMap<std::vector<int> > >" />
+  <!-- <class name="edm::ValueMap<std::vector<float>>"/> -->
+  <!-- <class name = "edm::Wrapper<edm::ValueMap<std::vector<float> > >" /> -->
+  <class name = "edm::Association<std::vector<pat::Muon> >" /> 
+  <class name = "edm::Wrapper<edm::Association<std::vector<pat::Muon> > >" />
+  <class name = "edm::RefProd<std::vector<pat::Muon> >"/> 
+</lcgdict>

@@ -1,0 +1,195 @@
+//
+// ********************************************************************
+// * License and Disclaimer                                           *
+// *                                                                  *
+// * The  Geant4 software  is  copyright of the Copyright Holders  of *
+// * the Geant4 Collaboration.  It is provided  under  the terms  and *
+// * conditions of the Geant4 Software License,  included in the file *
+// * LICENSE and available at  http://cern.ch/geant4/license .  These *
+// * include a list of copyright holders.                             *
+// *                                                                  *
+// * Neither the authors of this software system, nor their employing *
+// * institutes,nor the agencies providing financial support for this *
+// * work  make  any representation or  warranty, express or implied, *
+// * regarding  this  software system or assume any liability for its *
+// * use.  Please see the license in the file  LICENSE  and URL above *
+// * for the full disclaimer and the limitation of liability.         *
+// *                                                                  *
+// * This  code  implementation is the result of  the  scientific and *
+// * technical work of the GEANT4 collaboration.                      *
+// * By using,  copying,  modifying or  distributing the software (or *
+// * any work based  on the software)  you  agree  to acknowledge its *
+// * use  in  resulting  scientific  publications,  and indicate your *
+// * acceptance of all terms of the Geant4 Software license.          *
+// ********************************************************************
+//
+
+#include "TrackPropagation/Geant4e/interface/G4ErrorEnergyLossForCVH.h"
+#include "TrackPropagation/Geant4e/interface/G4EnergyLossForExtrapolatorForCVH.h"
+#include "G4TransportationManager.hh"
+#include "G4FieldManager.hh"
+
+#include "SimG4Core/MagneticField/interface/Field.h"
+#include "G4ErrorPropagatorData.hh"
+
+#include <cstdlib>
+
+//-------------------------------------------------------------------
+G4ErrorEnergyLossForCVH::G4ErrorEnergyLossForCVH(const G4String& processName, G4ProcessType type)
+    : G4VContinuousProcess(processName, type) {
+  if (verboseLevel > 2) {
+    G4cout << GetProcessName() << " is created " << G4endl;
+  }
+
+  theELossForExtrapolator = new G4EnergyLossForExtrapolatorForCVH;
+  theStepLimit = 1. * CLHEP::mm;
+}
+
+//-------------------------------------------------------------------
+void G4ErrorEnergyLossForCVH::InstantiateEforExtrapolator() {}
+
+//-------------------------------------------------------------------
+G4ErrorEnergyLossForCVH::~G4ErrorEnergyLossForCVH() { delete theELossForExtrapolator; }
+
+//-------------------------------------------------------------------
+
+G4bool G4ErrorEnergyLossForCVH::IsApplicable(const G4ParticleDefinition& aParticleType) {
+  return (aParticleType.GetPDGCharge() != 0);
+}
+
+//-------------------------------------------------------------------
+G4double G4ErrorEnergyLossForCVH::EnergyAfter(const G4Step& aStep,
+                                              G4double kinEnergyStart,
+                                              const G4Material* aMaterial,
+                                              const G4ParticleDefinition* aParticleDef) {
+  G4ErrorPropagatorData* g4edata = G4ErrorPropagatorData::GetErrorPropagatorData();
+
+  const G4Field* field = G4TransportationManager::GetTransportationManager()->GetFieldManager()->GetDetectorField();
+  const sim::Field* cmsField = static_cast<const sim::Field*>(field);
+  double dxieff = cmsField->GetMaterialOffset();
+  // Global material model: volume-resolved scaling on top of the
+  // leg-constant offset. The step's group is resolved from the pre-step
+  // volume and the step midpoint (see MaterialGroupModel).
+  if (const sim::MaterialOffsetProvider* prov = cmsField->GetMaterialOffsetProvider()) {
+    const G4StepPoint* pre = aStep.GetPreStepPoint();
+    const G4StepPoint* post = aStep.GetPostStepPoint();
+    const G4ThreeVector mid = 0.5 * (pre->GetPosition() + post->GetPosition());
+    const G4LogicalVolume* lv = pre->GetTouchableHandle()->GetVolume()->GetLogicalVolume();
+    dxieff += prov->materialOffset(lv, mid.perp() / CLHEP::cm, mid.z() / CLHEP::cm);
+  }
+
+  // NESTED-CYLINDER INFLUENCE PROBE -- DIAGNOSTIC ONLY (2026-08-14).
+  //
+  // CVH_ELOSS_CYL_R / _Z (cm) + CVH_ELOSS_CYL_EPS: add eps to the log-scale
+  // mean-loss offset for every step INSIDE the cylinder (r < R, |z| < Z).
+  // A nested family of cylinders gives the cumulative influence profile
+  //     Lambda(u) = sum_{steps inside u} w_i mu_i   (from the p_fit response)
+  //     M(u)      = sum_{steps inside u} mu_i       (from the dEref response)
+  // whose derivative w(u) = dLambda/dM is the fit's influence weight as a
+  // function of position along the trajectory. Unlike the material-group
+  // probe this is unambiguous to map onto a cleanprop plane, which carries
+  // (refglobr, refglobz) but no logical-volume name.
+  //
+  // It lives HERE rather than in MaterialGroupModel because this hook is the
+  // MEAN-loss path only -- the step's MS and ionisation variance never see it,
+  // so the probe is mean-only by construction with nothing to switch off.
+  static const double _cylR = []() {
+    const char* v = getenv("CVH_ELOSS_CYL_R");
+    return v ? atof(v) : -1.;
+  }();
+  static const double _cylZ = []() {
+    const char* v = getenv("CVH_ELOSS_CYL_Z");
+    return v ? atof(v) : -1.;
+  }();
+  static const double _cylEps = []() {
+    const char* v = getenv("CVH_ELOSS_CYL_EPS");
+    return v ? atof(v) : 0.;
+  }();
+  if (_cylR > 0. && _cylEps != 0.) {
+    const G4ThreeVector mid =
+        0.5 * (aStep.GetPreStepPoint()->GetPosition() + aStep.GetPostStepPoint()->GetPosition());
+    if (mid.perp() / CLHEP::cm < _cylR && std::abs(mid.z() / CLHEP::cm) < _cylZ) {
+      dxieff += _cylEps;
+    }
+  }
+
+  const double xifact = std::exp(dxieff);
+
+  G4double step_length = aStep.GetStepLength();
+  G4double kinEnergyEnd = kinEnergyStart;
+
+  // backward - energy increased
+  if (g4edata->GetMode() == G4ErrorMode(G4ErrorMode_PropBackwards)) {
+    kinEnergyEnd = theELossForExtrapolator->EnergyBeforeStep(kinEnergyStart, step_length, aMaterial, aParticleDef);
+    kinEnergyEnd = kinEnergyStart - xifact * (kinEnergyStart - kinEnergyEnd);
+    G4double kinEnergyHalfStep = (kinEnergyStart + kinEnergyEnd) * 0.5;
+
+#ifdef G4VERBOSE
+    if (G4ErrorPropagatorData::verbose() >= 3)
+      G4cout << " G4ErrorEnergyLossForCVH BCKD end " << kinEnergyEnd << " halfstep " << kinEnergyHalfStep << G4endl;
+#endif
+
+    //--- rescale to energy lost at 1/2 step
+    kinEnergyEnd = theELossForExtrapolator->EnergyBeforeStep(kinEnergyHalfStep, step_length, aMaterial, aParticleDef);
+    kinEnergyEnd = kinEnergyStart - xifact * (kinEnergyHalfStep - kinEnergyEnd);
+
+    // forward - energy decreased
+  } else {
+    kinEnergyEnd = theELossForExtrapolator->EnergyAfterStep(kinEnergyStart, step_length, aMaterial, aParticleDef);
+    kinEnergyEnd = kinEnergyStart - xifact * (kinEnergyStart - kinEnergyEnd);
+    G4double kinEnergyHalfStep = (kinEnergyStart + kinEnergyEnd) * 0.5;
+#ifdef G4VERBOSE
+    if (G4ErrorPropagatorData::verbose() >= 3)
+      G4cout << " G4ErrorEnergyLossForCVH FWD  end " << kinEnergyEnd << " halfstep " << kinEnergyHalfStep << G4endl;
+#endif
+
+    //--- rescale to energy lost at 1/2 step
+    kinEnergyEnd = theELossForExtrapolator->EnergyAfterStep(kinEnergyHalfStep, step_length, aMaterial, aParticleDef);
+    kinEnergyEnd = kinEnergyStart - xifact * (kinEnergyHalfStep - kinEnergyEnd);
+  }
+
+  return kinEnergyEnd;
+}
+
+//-------------------------------------------------------------------
+G4VParticleChange* G4ErrorEnergyLossForCVH::AlongStepDoIt(const G4Track& aTrack, const G4Step& aStep) {
+  aParticleChange.Initialize(aTrack);
+
+  G4double kinEnergyStart = aTrack.GetKineticEnergy();
+  const G4Material* aMaterial = aTrack.GetMaterial();
+  const G4ParticleDefinition* aParticleDef = aTrack.GetDynamicParticle()->GetDefinition();
+  const G4double kinEnergyEnd = EnergyAfter(aStep, kinEnergyStart, aMaterial, aParticleDef);
+
+  G4double edepo = kinEnergyEnd - kinEnergyStart;
+
+#ifdef G4VERBOSE
+  if (G4ErrorPropagatorData::verbose() >= 2)
+    G4cout << "AlongStepDoIt Estart= " << kinEnergyStart << " Eend " << kinEnergyEnd << " Ediff "
+           << kinEnergyStart - kinEnergyEnd << " step= " << step_length << " mate= " << aMaterial->GetName()
+           << " particle= " << aParticleDef->GetParticleName() << G4endl;
+#endif
+
+  aParticleChange.ClearDebugFlag();
+  aParticleChange.ProposeLocalEnergyDeposit(edepo);
+  aParticleChange.SetNumberOfSecondaries(0);
+
+  aParticleChange.ProposeEnergy(kinEnergyEnd);
+
+  return &aParticleChange;
+}
+
+//-------------------------------------------------------------------
+G4double G4ErrorEnergyLossForCVH::GetContinuousStepLimit(const G4Track& aTrack, G4double, G4double, G4double&) {
+  G4double ekin = aTrack.GetKineticEnergy();
+  const G4Material* mat = aTrack.GetMaterial();
+  const G4ParticleDefinition* part = aTrack.GetDynamicParticle()->GetDefinition();
+  G4double range = theELossForExtrapolator->ComputeRange(ekin, part, mat);
+  G4double delta = std::max(range * theFractionLimit, theStepLimit);
+#ifdef G4VERBOSE
+  if (G4ErrorPropagatorData::verbose() >= 2) {
+    G4cout << " G4ErrorEnergyLossForCVH: limiting Step " << delta << " energy(GeV) " << ekin / CLHEP::GeV << " for "
+           << part->GetParticleName() << G4endl;
+  }
+#endif
+  return delta;
+}

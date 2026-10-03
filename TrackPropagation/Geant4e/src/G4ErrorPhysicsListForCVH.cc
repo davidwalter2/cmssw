@@ -1,0 +1,315 @@
+//
+// ********************************************************************
+// * License and Disclaimer                                           *
+// *                                                                  *
+// * The  Geant4 software  is  copyright of the Copyright Holders  of *
+// * the Geant4 Collaboration.  It is provided  under  the terms  and *
+// * conditions of the Geant4 Software License,  included in the file *
+// * LICENSE and available at  http://cern.ch/geant4/license .  These *
+// * include a list of copyright holders.                             *
+// *                                                                  *
+// * Neither the authors of this software system, nor their employing *
+// * institutes,nor the agencies providing financial support for this *
+// * work  make  any representation or  warranty, express or implied, *
+// * regarding  this  software system or assume any liability for its *
+// * use.  Please see the license in the file  LICENSE  and URL above *
+// * for the full disclaimer and the limitation of liability.         *
+// *                                                                  *
+// * This  code  implementation is the result of  the  scientific and *
+// * technical work of the GEANT4 collaboration.                      *
+// * By using,  copying,  modifying or  distributing the software (or *
+// * any work based  on the software)  you  agree  to acknowledge its *
+// * use  in  resulting  scientific  publications,  and indicate your *
+// * acceptance of all terms of the Geant4 Software license.          *
+// ********************************************************************
+//
+//
+// ------------------------------------------------------------
+//      GEANT 4 class implementation file
+// ------------------------------------------------------------
+
+#include <iostream>
+#include <cstdlib>
+#include "G4MscStepLimitType.hh"
+#include "G4EmParameters.hh"
+#include "TrackPropagation/Geant4e/interface/CGFQoPBlock.h"
+#include "globals.hh"
+
+#include "G4PhysicalConstants.hh"
+#include "G4SystemOfUnits.hh"
+
+#include "TrackPropagation/Geant4e/interface/G4ErrorPhysicsListForCVH.h"
+#include "G4ComptonScattering.hh"
+#include "G4GammaConversion.hh"
+#include "G4PhotoElectricEffect.hh"
+
+#include "G4eIonisation.hh"
+#include "G4eBremsstrahlung.hh"
+#include "G4eplusAnnihilation.hh"
+
+#include "G4MuIonisation.hh"
+#include "G4MuBremsstrahlung.hh"
+#include "G4MuPairProduction.hh"
+
+#include "G4hIonisation.hh"
+
+#include "G4MuIonisation.hh"
+#include "G4MuBremsstrahlung.hh"
+#include "G4MuPairProduction.hh"
+
+#include "G4hIonisation.hh"
+
+#include "G4ParticleDefinition.hh"
+#include "G4ProcessManager.hh"
+#include "G4ProcessVector.hh"
+#include "G4ParticleTypes.hh"
+#include "G4ParticleTable.hh"
+#include "G4Material.hh"
+#include "G4MaterialTable.hh"
+#include "G4ios.hh"
+#include "G4PhysicsTable.hh"
+#include "G4Transportation.hh"
+
+#include "TrackPropagation/Geant4e/interface/G4ErrorEnergyLossForCVH.h"
+
+#include <mutex>
+
+//------------------------------------------------------------------------
+namespace {
+  // Full canonical CVH particle set: matches the hardcoded list used
+  // by all callers before particleNames_ became configurable. Used as
+  // the default for the no-arg ctor when no set has been registered.
+  const std::vector<std::string> kFullParticleList = {
+      "gamma",
+      "e+", "e-",
+      "mu+", "mu-",
+      "pi+", "pi-",
+      "kaon+", "kaon-",
+      "proton", "anti_proton",
+  };
+
+  // Job-wide particle set. All physics-list instances in a job MUST agree
+  // on the particle set: ConstructProcess runs once per worker thread (see
+  // the thread_local guard below), so a later instance with a LARGER set
+  // would define extra particles that never get processes -- they would
+  // abort in G4SteppingManager on first use. The first explicitly
+  // configured set (CvhMaster's, from the CvhMaster.Particles parameter)
+  // is recorded here and reused by every no-arg construction (the
+  // propagator's per-thread G4Error init).
+  std::mutex jobParticleSetMutex;
+  std::vector<std::string> jobParticleSet;
+
+  std::vector<std::string> jobParticleSetOrFull() {
+    std::lock_guard<std::mutex> lk(jobParticleSetMutex);
+    return jobParticleSet.empty() ? kFullParticleList : jobParticleSet;
+  }
+}  // namespace
+
+//------------------------------------------------------------------------
+G4ErrorPhysicsListForCVH::G4ErrorPhysicsListForCVH()
+    : G4ErrorPhysicsListForCVH(jobParticleSetOrFull()) {}
+
+//------------------------------------------------------------------------
+G4ErrorPhysicsListForCVH::G4ErrorPhysicsListForCVH(
+    const std::vector<std::string>& particleNames)
+    : G4VUserPhysicsList(), particleNames_(particleNames) {
+  defaultCutValue = 1.0E+9 * cm;  // set big step so that AlongStep computes all the energy
+  // Register the first constructed set as the job-wide set (see above).
+  std::lock_guard<std::mutex> lk(jobParticleSetMutex);
+  if (jobParticleSet.empty()) {
+    jobParticleSet = particleNames_;
+  }
+}
+
+//------------------------------------------------------------------------
+G4ErrorPhysicsListForCVH::~G4ErrorPhysicsListForCVH() {}
+
+//------------------------------------------------------------------------
+void G4ErrorPhysicsListForCVH::ConstructParticle() {
+  // Mandatory particles -- always defined regardless of the user list:
+  //   gamma, e+, e- -- G4PhysicsListHelper::CheckParticleList in G4 11+
+  //     aborts with Run0101 ("Missing EM basic particle") otherwise.
+  //   mu+, mu-, proton -- referenced by G4TablesForExtrapolatorForCVH's
+  //     ctor for dE/dx / range / inv-range table generation (the
+  //     master-side G4EnergyLossForExtrapolatorForCVH::tables and the
+  //     ionOnly-mode tables in G4UniversalFluctuationForExtrapolator).
+  //     Without them, race conditions at high thread count produce
+  //     Run0271 / PART10116 ("ProcessManager is being set without proper
+  //     initialization of TLS pointer vector") on workers.
+  // These are cheap (just G4ParticleDefinition + ProcessManager); the
+  // memory-heavy stock G4 EM processes (Compton/conv/photoelectric on
+  // gamma; dE/dx tables on charged) are only attached in ConstructEM
+  // for the optional list below.
+  G4Gamma::GammaDefinition();
+  G4Electron::ElectronDefinition();
+  G4Positron::PositronDefinition();
+  G4MuonPlus::MuonPlusDefinition();
+  G4MuonMinus::MuonMinusDefinition();
+  G4Proton::ProtonDefinition();
+
+  // Optional particles -- everything else the caller asked for. Each
+  // entry is a canonical G4 particle name; unknown names abort with
+  // G4Exception so typos don't silently disable a daughter category at
+  // runtime. Mandatory names listed above are accepted here as no-ops.
+  for (const auto& name : particleNames_) {
+    if (name == "gamma" || name == "e+" || name == "e-" ||
+        name == "mu+" || name == "mu-" || name == "proton") {
+      // already defined unconditionally above
+    } else if (name == "pi+") {
+      G4PionPlus::PionPlusDefinition();
+    } else if (name == "pi-") {
+      G4PionMinus::PionMinusDefinition();
+    } else if (name == "kaon+") {
+      G4KaonPlus::KaonPlusDefinition();
+    } else if (name == "kaon-") {
+      G4KaonMinus::KaonMinusDefinition();
+    } else if (name == "anti_proton") {
+      G4AntiProton::AntiProtonDefinition();
+    } else {
+      G4Exception("G4ErrorPhysicsListForCVH::ConstructParticle",
+                  "UnknownParticle",
+                  FatalException,
+                  ("Unknown G4 particle name '" + name +
+                   "' in CvhMaster.Particles. Recognised: gamma, e+, e-, "
+                   "mu+, mu-, pi+, pi-, kaon+, kaon-, proton, anti_proton.").c_str());
+    }
+  }
+}
+
+//------------------------------------------------------------------------
+void G4ErrorPhysicsListForCVH::ConstructProcess() {
+  // EmHarmonise (Geant4ePropagator PSet; diagnostic, default OFF).
+  //
+  // WHERE THIS HAS TO LIVE, learned by two failures. G4EmParameters is a
+  // global singleton that LOCKS once physics is initialised, and its setters
+  // then do nothing AND SAY NOTHING -- an attempt from
+  // G4TablesForExtrapolatorForCVH::Initialisation() printed its banner,
+  // changed not one of the 58 values, and would have reported a false "no
+  // impact" had the dump not been re-read afterwards. A second attempt in
+  // Geant4ePropagator's G4State_PreInit branch never ran at all: that branch
+  // is not reached in the export job. ConstructProcess runs during
+  // G4State_Init, where the singleton is still writable.
+  //
+  // This list otherwise sets NO EM parameter, so the model job inherits Geant4
+  // defaults where the sim takes CMS values -- 12 of 58 differ. Setting the
+  // sim's measured values here answers "does that reach anything we use?" by
+  // comparing exports. It is a diagnostic, not a fix.
+  if (cvhcgf::switches().emHarmonise) {
+    G4EmParameters *emp = G4EmParameters::Instance();
+    emp->SetApplyCuts(true);
+    emp->SetGeneralProcessActive(true);
+    emp->SetLowestElectronEnergy(25 * CLHEP::keV);
+    emp->SetLowestMuHadEnergy(25 * CLHEP::keV);
+    emp->SetStepFunction(0.8, 1 * CLHEP::mm);
+    emp->SetMscRangeFactor(0.2);
+    emp->SetMscStepLimitType(fMinimal);
+    std::cout << "### CVH_EM_HARMONISE: applied in ConstructProcess" << std::endl;
+  }
+
+  // MT-safe re-entry guard. G4VUserPhysicsList::InitializeWorker (called by
+  // G4WorkerRunManagerKernel::InitializePhysics on each worker thread)
+  // re-invokes ConstructProcess on the same physics-list instance, plus
+  // G4ErrorPropagatorManager::InitGeant4e (called by the propagator's
+  // first-call init) also calls it via /run/initialize. Each call adds a
+  // FRESH G4Transportation / eLoss / step-length / B-field process to
+  // every particle's ProcessManager -- visible as "G4ProcessVector
+  // inconsistent" aborts on the first track step. A thread_local flag
+  // keeps the construction one-shot per worker thread without affecting
+  // single-thread builds.
+  static thread_local bool constructProcessDoneOnThisThread = false;
+  if (constructProcessDoneOnThisThread) {
+    return;
+  }
+  constructProcessDoneOnThisThread = true;
+
+  G4Transportation* theTransportationProcess = new G4Transportation();
+
+#ifdef G4VERBOSE
+  if (verboseLevel >= 4) {
+    G4cout << "G4VUserPhysicsList::ConstructProcess()  " << G4endl;
+  }
+#endif
+
+  // loop over all particles in G4ParticleTable
+  auto myParticleIterator = GetParticleIterator();
+  myParticleIterator->reset();
+  while ((*myParticleIterator)()) {  // Loop checking, 06.08.2015, G.Cosmo
+    G4ParticleDefinition* particle = myParticleIterator->value();
+    G4ProcessManager* pmanager = particle->GetProcessManager();
+    if (!particle->IsShortLived()) {
+      // Add transportation process for all particles other than  "shortlived"
+      if (pmanager == nullptr) {
+        // Error !! no process manager
+        G4String particleName = particle->GetParticleName();
+        G4Exception("G4ErrorPhysicsListForCVH::ConstructProcess", "No process manager", RunMustBeAborted, particleName);
+      } else {
+        // add transportation with ordering = ( -1, "first", "first" )
+        pmanager->AddProcess(theTransportationProcess);
+        pmanager->SetProcessOrderingToFirst(theTransportationProcess, idxAlongStep);
+        pmanager->SetProcessOrderingToFirst(theTransportationProcess, idxPostStep);
+      }
+    } else {
+      // shortlived particle case
+    }
+  }
+
+  ConstructEM();
+}
+
+//------------------------------------------------------------------------
+#include "G4eBremsstrahlung.hh"
+#include "G4eIonisation.hh"
+
+#include "G4eIonisation.hh"
+
+#include "G4MuBremsstrahlung.hh"
+#include "G4MuIonisation.hh"
+#include "G4MuPairProduction.hh"
+
+#include "G4PhysicsTable.hh"
+
+#include "G4MuIonisation.hh"
+
+#include "G4ErrorStepLengthLimitProcess.hh"
+#include "G4ErrorMagFieldLimitProcess.hh"
+#include "TrackPropagation/Geant4e/interface/G4ErrorMessengerForCVH.h"
+
+void G4ErrorPhysicsListForCVH::ConstructEM() {
+  G4ErrorEnergyLossForCVH* eLossProcess = new G4ErrorEnergyLossForCVH;
+  G4ErrorStepLengthLimitProcess* stepLengthLimitProcess = new G4ErrorStepLengthLimitProcess;
+  G4ErrorMagFieldLimitProcess* magFieldLimitProcess = new G4ErrorMagFieldLimitProcess;
+  new G4ErrorMessengerForCVH(stepLengthLimitProcess, magFieldLimitProcess, eLossProcess);
+
+  auto myParticleIterator = GetParticleIterator();
+  myParticleIterator->reset();
+  while ((*myParticleIterator)()) {  // Loop checking, 06.08.2015, G.Cosmo
+    G4ParticleDefinition* particle = myParticleIterator->value();
+    G4ProcessManager* pmanager = particle->GetProcessManager();
+    G4String particleName = particle->GetParticleName();
+
+    if (pmanager == nullptr) {
+      continue;
+    }
+    // No per-particle MT re-entry check here -- the thread_local guard at
+    // the top of ConstructProcess (the only place this is invoked from)
+    // makes the whole physics-list construction one-shot per thread.
+
+    if (particleName == "gamma") {
+      pmanager->AddDiscreteProcess(new G4GammaConversion());
+      pmanager->AddDiscreteProcess(new G4ComptonScattering());
+      pmanager->AddDiscreteProcess(new G4PhotoElectricEffect());
+
+    } else if (!particle->IsShortLived() && particle->GetPDGCharge() != 0) {
+      pmanager->AddContinuousProcess(eLossProcess, 1);
+      pmanager->AddDiscreteProcess(stepLengthLimitProcess, 2);
+      pmanager->AddDiscreteProcess(magFieldLimitProcess, 3);
+    }
+  }
+}
+
+//------------------------------------------------------------------------
+void G4ErrorPhysicsListForCVH::SetCuts() {
+  //  " G4VUserPhysicsList::SetCutsWithDefault" method sets
+  //   the default cut value or all particle types
+  SetCutsWithDefault();
+}

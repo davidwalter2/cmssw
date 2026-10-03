@@ -7,5 +7,10 @@
   <use name="Alignment/TwoBodyDecay"/>
   <use name="Alignment/ReferenceTrajectories"/>
   <use name="TrackingTools/GsfTracking"/>
+  <!-- deps of the WMass additions (TrackProducerFromPatMuons, GlobalIdxProducer,
+       TrackExtraRekeyer) -->
+  <use name="DataFormats/PatCandidates"/>
+  <use name="DataFormats/MuonReco"/>
+  <use name="MagneticField/VolumeBasedEngine"/>
   <flags EDM_PLUGIN="1"/>
 </library>

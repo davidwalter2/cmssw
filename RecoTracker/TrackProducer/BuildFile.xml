@@ -22,6 +22,7 @@
 <use name="TrackingTools/TrackFitters"/>
 <use name="TrackingTools/TrajectoryState"/>
 <use name="TrackingTools/KalmanUpdators"/>
+<use name="DataFormats/PatCandidates"/>
 <export>
   <lib name="1"/>
 </export>

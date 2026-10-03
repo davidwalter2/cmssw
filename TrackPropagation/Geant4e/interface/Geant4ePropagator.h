@@ -2,6 +2,8 @@
 #define TrackPropagation_Geant4ePropagator_h
 
 #include <memory>
+#include <utility>
+#include <vector>
 
 // CMS includes
 // - Propagator
@@ -12,6 +14,16 @@
 #include "G4ErrorPropagatorManager.hh"
 #include "G4ErrorSurfaceTarget.hh"
 
+#include <Eigen/Core>
+
+#include "TrackPropagation/Geant4e/interface/G4UniversalFluctuationForExtrapolator.hh"
+#include "SimG4Core/MagneticField/interface/Field.h"
+#include "TrackPropagation/Geant4e/interface/CGFQoPBlock.h"
+
+class MaterialGroupModel;
+class G4Navigator;
+class G4Step;
+
 /** Propagator based on the Geant4e package. Uses the Propagator class
  *  in the TrackingTools/GeomPropagators package to define the interface.
  *  See that class for more details.
@@ -19,6 +31,7 @@
 
 class Geant4ePropagator : public Propagator {
 public:
+  typedef ROOT::Math::SMatrix<double, 5, 7, ROOT::Math::MatRepStd<double, 5, 7>> AlgebraicMatrix57;
   /** Constructor. Takes as arguments:
    *  * The magnetic field
    *  * The particle name whose properties will be used in the propagation.
@@ -28,7 +41,10 @@ public:
   Geant4ePropagator(const MagneticField *field = nullptr,
                     std::string particleName = "mu",
                     PropagationDirection dir = alongMomentum,
-                    double plimit = 1.0);
+                    double plimit = 1.0,
+                    bool forCVH = false,
+                    double ioniTruncAlpha = 0.999,
+                    double stepLengthLimit = 10.0);   // mm
 
   ~Geant4ePropagator() override;
 
@@ -51,9 +67,322 @@ public:
   std::pair<TrajectoryStateOnSurface, double> propagateWithPath(const TrajectoryStateOnSurface &,
                                                                 const Cylinder &) const override;
 
+  // Deep-copy ctor: allocates an independent fluct so each Propagator
+  // instance has its own per-event state. Required for Tier-3 MT: per-stream
+  // residual-makers clone the ES-supplied propagator in produce() so no
+  // mutable state is shared across streams.
+  Geant4ePropagator(const Geant4ePropagator &other);
+  Geant4ePropagator &operator=(const Geant4ePropagator &) = delete;
+
   Geant4ePropagator *clone() const override { return new Geant4ePropagator(*this); }
 
   const MagneticField *magneticField() const override { return theField; }
+
+  // Optional `particleNameOverride` selects the Geant4 particle hypothesis
+  // for this propagation step (e.g. "pi+", "pi-", "kaon+", "kaon-",
+  // "proton", "anti_proton"). Empty string falls back to the propagator's
+  // default `theParticleName` (set in the constructor; "mu" → "mu+"/"mu-").
+  // Used by the V0 CVH ntuplizer so pion / proton / kaon daughters are
+  // propagated with the correct dE/dx and energy-loss fluctuation rather
+  // than as muons.
+  // dB: 3-vector field offset (dBx, dBy, dBz) in Tesla applied to the field
+  // along the propagation step. Replaces the older scalar dBz arg as part of
+  // the scalar-potential B-field correction. The transport Jacobian exposes
+  // dBx, dBy, dBz columns (cols 5,6,7); chain-rule scaling for the
+  // scalar-potential modes is applied by the caller.
+  std::tuple<bool,
+             Eigen::Matrix<double, 7, 1>,
+             Eigen::Matrix<double, 5, 5>,
+             Eigen::Matrix<double, 5, 9>,
+             double,
+             Eigen::Matrix<double, 5, 5>,
+             Eigen::Matrix<double, 5, 5>,
+             double,
+             double>
+  propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 7, 1> &ftsStart,
+                                   const GloballyPositioned<double> &pDest,
+                                   const Eigen::Vector3d &dB = Eigen::Vector3d::Zero(),
+                                   double dxi = 0.,
+                                   double dms = 0.,
+                                   double dioni = 0.,
+                                   double pforced = -1.,
+                                   const std::string &particleNameOverride = std::string(),
+                                   // Global material model (Phase A): when matGroups is set,
+                                   // the energy loss of every step is scaled by the step
+                                   // volume's group value k_g (on top of dxi), and, when
+                                   // groupJacOut is also set, the per-group transported
+                                   // d(state)/dk_g columns are accumulated into it (the sum
+                                   // over groups equals the integrated dxi column of the 5x9
+                                   // Jacobian exactly). See the global-material-model design note (kept outside the repository).
+                                   const MaterialGroupModel *matGroups = nullptr,
+                                   std::vector<std::pair<int, Eigen::Matrix<double, 5, 1>>>
+                                       *groupJacOut = nullptr,
+                                   // Per-step field modes (leg-structure-free attribution):
+                                   // when fieldModes is set, the correction field is applied
+                                   // per step (evaluated at the step start, on top of the
+                                   // constant dB argument) and, when modeJacOut is also set,
+                                   // the per-mode transported d(state)/dc_i columns are
+                                   // accumulated with the basis evaluated at each step
+                                   // midpoint -- replacing the maker-side per-leg chain rule.
+                                   // Per-group PROCESS NOISE, the width counterpart of
+                                   // groupJacOut's mean.  k_g scales the step's MS covariance
+                                   // AND its ionization variance (the `matStepFact` in the M1
+                                   // block), so dQ/dk_g of group g is the sum of THAT GROUP's
+                                   // steps' (errMS + errI), transported exactly as dQ/dQ2 are.
+                                   // sum_g equals dQ + dQ2 to the last bit, by construction.
+                                   // Without it the fit's quadratic term measures a material
+                                   // group's MEAN LOSS only, while the mass CF measures its
+                                   // WIDTH -- two functionals of one parameter, one of them
+                                   // blind.
+                                   std::vector<std::pair<int, Eigen::Matrix<double, 5, 5>>>
+                                       *groupQOut = nullptr,
+                                   const sim::FieldModeProvider *fieldModes = nullptr,
+                                   std::vector<Eigen::Matrix<double, 5, 1>> *modeJacOut =
+                                       nullptr) const;
+
+  static void CalculateEffectiveZandA(const G4Material *mate, G4double &effZ, G4double &effA);
+  // Per-element Moliere sums; definitions in MoliereMsStep below.  `epm`:
+  // the projectile is an e+-, whose screening Geant4 takes from a different
+  // table (see the definition).
+  static void CalculateMoliereSums(const G4Material *mate, double beta,
+                                   double &zzp1OverA, double &lnScreenW, bool epm = false);
+
+  bool GetForCVH() const { return forCVH_; }
+
+  // Per-step Urban-model log for the physics-CF export (doRes): one entry
+  // per Geant4 step that produced a nonzero ionization-fluctuation
+  // contribution during the LAST propagateGenericWithJacobianAltD call
+  // (cleared at entry when logging is enabled). cs = Etot/p^3 [GeV^-2] is
+  // the linear map from the step's energy loss (record energies in MeV) to
+  // the local q/p noise: delta(q/p) = cs * 1e-3 * dE[MeV].
+  struct UrbanIoniStep {
+    G4UniversalFluctuationForExtrapolator::UrbanFluctRecord rec;
+    double cs = 0.;
+    // material-group id of the step (MaterialGroupModel::classify; -1 when no
+    // global material model is active), the SAME value `MoliereMsStep::
+    // stepGroup` carries for the same step.
+    //
+    // It is here so that the ionization channel of the per-group CF export can
+    // be split EXACTLY.  The Urban log is an order-preserving SUBSEQUENCE of
+    // the Moliere one -- `SampleFluctuations` returns without a record when
+    // `meanLoss = length * dedx < minLoss` -- so the two cannot be paired by
+    // position, and recovering the correspondence downstream could only ever
+    // be a heuristic.  Carrying the group costs 4 bytes.
+    int stepGroup = -1;
+  };
+  void setIoniStepLogging(bool on) { ioniStepLogging_ = on; }
+  const std::vector<UrbanIoniStep> &ioniStepLog() const { return ioniStepLog_; }
+
+  // CGF q/p block of the LAST propagate call (CVH_CGF_QOP; see the block
+  // comment in propagateGenericWithJacobianAltD). Same accessor idiom as the
+  // step logs above: the caller reads it immediately after the propagate, so
+  // it is in sync with the leg whose noise matrices it just consumed.
+  //
+  // `cgfBlockSigma` is the internal standardization scale, i.e. the leg's
+  // NOMINAL Gaussian q/p sigma, needed to convert the score table's z back to
+  // physical q/p. It is NOT a modelling quantity.
+  // Cached-weight override for the next propagate call (CVH_CGF_QOP).
+  // >= 0 : use this value for Qcurv(0,0) and SKIP the inversion entirely --
+  //        standard IRLS, fixed weights and a moving centre. `I` is a property
+  //        of the block's distribution, and at the fixed point it enters only
+  //        as a PRECONDITIONER (the stationarity condition
+  //        hit_grad + F^T psi(r) = 0 contains no I at all), so freezing it
+  //        cannot move the fixed point -- only the path to it.
+  // <  0 : compute it (the default).
+  // One-shot: consumed and reset at the top of the next propagate call.
+  void setCgfOverride(double q) const { cgfOverrideQ_ = q; }
+
+  const cvhcgf::Result &cgfBlock() const { return cgfLastResult_; }
+  double cgfBlockSigma() const { return cgfLastSigma_; }
+  bool cgfBlockValid() const { return cgfLastResult_.ok; }
+
+  // THE FACTOR BY WHICH THE LAST PROPAGATE SCALED ITS IONIZATION BLOCK.
+  //
+  //   cgfQScale() = Q_ioni_applied(0,0) / dQ2_pre(0,0)
+  //
+  // i.e. the ratio between the ionization process-noise matrix this call
+  // actually RETURNED (tuple element 6, `dQ2`) and the one the per-step Urban
+  // records add up to. It is exactly 1.0 whenever no substitution happened --
+  // CgfQoPMode = 0, any propagate that computes no block, and any leg that
+  // fails -- and equals the CGF substitution's `sc` otherwise, in BOTH the
+  // cached (`setCgfOverride`) and the uncached branch.
+  //
+  // WHY IT HAS TO BE EXPORTED. The maker's `ioniurbanv` carries the record's
+  // own `gsig2`, which under CgfQoPMode >= 1 is the UNTRUNCATED second
+  // cumulant (`G4UniversalFluctuationForExtrapolator::SampleFluctuations`
+  // returns `blockKappa2Of(record_)` in that mode), while the matrix that went
+  // into the fit is the Fisher-weighted one. Offline code that recovers the
+  // block's scalar weight as sqrt(v_b / sum_steps gsig2 cs^2) is therefore
+  // wrong by sqrt(this factor) -- measured ~400x too small in the exponent --
+  // unless it multiplies the step sum by it. Nothing else in the exports can
+  // reconstruct it: the two quantities live on opposite sides of the
+  // substitution.
+  //
+  // Reset to 1.0 at the top of every propagate call, so it is never stale.
+  double cgfQScale() const { return cgfQScaleLast_; }
+
+  // Phase B: per-step raw material/kinematic data for the offline Moliere
+  // (screened-Rutherford compound-Poisson) model of the multiple-scattering
+  // tail. Deliberately raw -- chi_c^2 / screening-angle formulas and the CF
+  // live offline where they can be iterated without rebuilds.
+  //   effZ, effA : effective Z, A of the step material
+  //   xg         : areal density rho*d of the step [g/cm^2]
+  //   pGeV, beta : momentum [GeV] and velocity at the step
+  //   thp2       : projected-angle variance ACTUALLY entering Q for this
+  //                step (incl. msfact), i.e. errMSIout(lambda,lambda)
+  //   dOverX0    : step thickness in radiation lengths
+  // Gated by the same setIoniStepLogging flag and cleared per propagate
+  // call together with the Urban log.
+  struct MoliereMsStep {
+    double effZ = 0., effA = 0., xg = 0.;
+    double pGeV = 0., beta = 0.;
+    double thp2 = 0., dOverX0 = 0.;
+    // PER-ELEMENT Moliere parameters (added 2026-08-08). effZ/effA are
+    // MASS-FRACTION averages, but both Moliere parameters are NON-LINEAR in
+    // Z, so evaluating them at effZ is wrong for compounds:
+    //   chi_c^2 ~ Z(Z+1)/A  -- effZ(effZ+1)/effA != sum_i w_i Z_i(Z_i+1)/A_i
+    //   chi_a^2 ~ Z^(2/3)(1.13+3.76(alpha Z/beta)^2)(1+exp(-Z^2/1000))
+    // and Geant4 evaluates BOTH per element and sums the cross sections
+    // (G4WentzelOKandVIxSection::SetupTarget is called per element).
+    // Measured 2026-08-07: using effZ for the screening term over-corrects
+    // by ~30% for the CMS tracker mix (an empirical f=0.7 was needed).
+    //
+    // zzp1OverA = sum_i massfrac_i * Z_i(Z_i+1)/A_i        -> chi_c^2
+    // lnScreenW = sum_i w_i ln[Z_i^(2/3)(1.13+3.76(alpha Z_i/beta)^2)
+    //                          (1+exp(-Z_i^2/1000))] / sum_i w_i,
+    //             w_i = massfrac_i Z_i(Z_i+1)/A_i          -> chi_a^2
+    // The weighted GEOMETRIC mean is the right one for chi_a because the
+    // exponent depends on it only through ln(chi_a):
+    //   S ~ -(chi_c^2 tau^2/2)[ln(2/(tau chi_a)) - gamma + 1/2]
+    // so summing per element gives ln(chi_a,eff) = sum_i chi_c,i^2 ln(chi_a,i)
+    // / sum_i chi_c,i^2.  Offline: chi_a^2 = (4.214e-6)^2/p^2 * exp(lnScreenW).
+    double zzp1OverA = 0., lnScreenW = 0.;
+    // material-group id of the step (MaterialGroupModel::classify; -1 when
+    // no global material model is active) -- lets the offline fit tie the
+    // MS scale to the parmtype-15 material groups
+    int stepGroup = -1;
+    // G4Material::GetIndex() of the step's medium (-1 = not recorded). The
+    // effZ/effA/zzp1OverA summaries cannot be inverted to a composition, and
+    // a channel whose kernel is non-linear in Z per ELEMENT (nuclear elastic:
+    // a hydrogen target is ~3x wider in angle and ~12x harder in recoil than
+    // carbon) needs the element list itself. The index keys into the
+    // material table the exporter writes alongside the step records.
+    int materialIndex = -1;
+  };
+  const std::vector<MoliereMsStep> &msStepLog() const { return msStepLog_; }
+
+  // Per-step raw data for the offline RADIATIVE (bremsstrahlung + pair
+  // production) energy-loss model.
+  //
+  // Why this is needed at all: the mean and the fluctuation are treated
+  // INCONSISTENTLY today. The mean dE/dx table is built with ionOnly=false
+  // (G4EnergyLossForExtrapolatorForCVH), so the reference trajectory DOES
+  // subtract the radiative mean; the fluctuation tables are built with
+  // ionOnly=true (G4UniversalFluctuationForExtrapolator), so the noise is
+  // ionization-only. The typical muon radiates nothing but has the mean
+  // radiative loss subtracted anyway -- a mean-vs-mode bias that grows with
+  // momentum, on top of the Landau one.
+  //
+  // Excluding radiative loss from the VARIANCE was correct: for dsigma/dnu ~
+  // 1/nu the second moment is dominated by nu -> 1, so a radiative variance
+  // describes the rare catastrophic radiator, not the 99.9% that do not
+  // radiate. The fix is not a variance but a CF term, which is what these
+  // records feed.
+  //
+  //   effZ, effA : effective Z, A of the step material
+  //   xg         : areal density rho*d of the step [g/cm^2]
+  //   etotGeV    : total energy at the step (radiative spectra scale with E)
+  //   pGeV       : momentum at the step [GeV]
+  //   dOverX0    : step thickness in radiation lengths
+  //   stepCm     : step length [cm]
+  //   dedxRad    : radiative dE/dx [GeV/cm] as the propagator's own mean-loss
+  //                table subtracts it. Exported rather than recomputed
+  //                offline so that the CF can be centred on EXACTLY the mean
+  //                that was removed -- an independently computed value would
+  //                trade the missing fluctuation for a residual bias.
+  //   cs         : Etot/p^3 [GeV^-2], the same dE -> d(q/p) map as UrbanIoniStep
+  //
+  // Zero for non-muons: radiative loss scales as 1/m^2, so for the pi/K used
+  // in the multi-species tests it is far below the ionization straggling.
+  // Gated by setIoniStepLogging and cleared with the other physics logs.
+  // Number of log-spaced points, and the range, of the per-step radiative
+  // SPECTRUM tabulation below. The grid is in v = eps/E so it is universal
+  // (kinematics enter only through the model evaluation), which keeps the
+  // offline reader trivial.
+  static constexpr int kNRadV = 48;
+  static constexpr double kRadVMin = 1e-6;
+  static constexpr double kRadVMax = 1.0;
+
+  struct RadiativeStep {
+    double effZ = 0., effA = 0., xg = 0.;
+    double etotGeV = 0., pGeV = 0.;
+    double dOverX0 = 0., stepCm = 0.;
+    double dedxRad = 0.;   // = dedxBrem + dedxPair, i.e. exactly the radiative
+                           // part the mean-loss table subtracts
+    double dedxBrem = 0.;  // per-process means, used to normalize the two
+    double dedxPair = 0.;  // tabulated shapes independently (see below)
+    double cs = 0.;
+    // dN/dv SHAPE for THIS step, summed over the material's elements with
+    // their true atom densities (not effZ), from Geant4's own
+    // G4MuBremsstrahlungModel / G4MuPairProductionModel differential cross
+    // sections.
+    //
+    // Each shape is normalized offline to its OWN process mean, dedxBrem /
+    // dedxPair above, which absorbs the tabulation's quadrature and its
+    // kinematic endpoint (a few per cent) and keeps the modelled mean equal to
+    // the one the reference subtracts. Doing it per process rather than on
+    // the sum is what makes the brems/pair mixture right, which is the thing a
+    // single hand-built shape got wrong by ~2.5x. The pair model's screening
+    // is per element and must be set before each evaluation (PairProbe in
+    // Geant4ePropagator.cc).
+    //
+    // Tabulating rather than reimplementing is deliberate: a hand-built
+    // brems-shaped spectrum normalized to the combined mean under-predicted
+    // the simulated radiative rate by ~2.5x at 5-15 GeV, because pair
+    // production dominates b but is SOFTER in v. Both processes are now
+    // tabulated separately and summed here, so no shape is assumed.
+    double dNdvBrem[kNRadV] = {0.};
+    double dNdvPair[kNRadV] = {0.};
+    // material-group id of the step, as in MoliereMsStep::stepGroup. The
+    // radiative log is pushed under the SAME guard as the Moliere one, so the
+    // two are 1:1 within a block and the group could be inherited by position
+    // -- but only as long as that guard stays shared. Carrying it is 4 bytes
+    // and removes the coupling.
+    int stepGroup = -1;
+  };
+  const std::vector<RadiativeStep> &radStepLog() const { return radStepLog_; }
+  // the shared v grid (same for every step)
+  static void radVGrid(double *v);
+
+  // Per-step cumulative transport Jacobian, for the clean-propagation-test
+  // model (Analysis/HitAnalyzer/plugins/G4ePropagationExport.cc).
+  //
+  // The step loop transports the accumulated noise and THEN adds the step's
+  // own contribution, so the noise generated at step s is subsequently
+  // transported by steps s+1..N only. Writing Jacc_s for the cumulative
+  // transport from the leg start through the end of step s (the point where
+  // n_s is injected), the exact transport of that noise to the end of the
+  // leg is
+  //     A_s = Jacc_N * Jacc_s^{-1}
+  // which offline turns the per-step Urban/Moliere records into EXACT
+  // per-step weights for any linear functional of the final state -- as
+  // opposed to the RMS-matched scalar weight per pooled block that the fit
+  // exports (resinfv) have to use. That distinction matters precisely in the
+  // tails, which is what the clean test exists to probe.
+  //
+  // One entry per Geant4 step, unconditionally, so that nMs/nIoni (the sizes
+  // of the two physics logs AFTER this step) give an unambiguous mapping
+  // from a physics-log index back to its step: physics entry j belongs to the
+  // first step whose n exceeds j. Separate flag and separate storage from the
+  // Urban/Moliere logs so that existing consumers of those records see no
+  // change in layout.
+  struct StepTransport {
+    double jacc[25] = {0.};  // cumulative 5x5 (row-major), curvilinear
+    int nMs = 0;
+    int nIoni = 0;
+  };
+  void setStepTransportLogging(bool on) { stepTransportLogging_ = on; }
+  const std::vector<StepTransport> &stepTransportLog() const { return stepTransportLog_; }
 
 private:
   typedef std::pair<TrajectoryStateOnSurface, double> TsosPP;
@@ -65,15 +394,41 @@ private:
   // Name of the particle whose properties will be used in the propagation
   std::string theParticleName;
 
-  // The Geant4e manager. Does the real propagation
-  G4ErrorPropagatorManager *theG4eManager;
-  G4ErrorPropagatorData *theG4eData;
+  // Per-exit-point failure counters for propagateGenericWithJacobianAltD.
+  // Indices: 0 = configurePropagation (p < plimit), 1 = Geant4 step ierr != 0,
+  // 2 = max path length / max iterations, 3 = in-flight momentum drain
+  // below plimit (runaway leg ground down by material before reaching the
+  // target plane), 4 = propagation reported success but the final state is
+  // off the destination plane (e.g. pinned at the G4 world boundary),
+  // 5 = state left the field model's validity region (all tracker modules
+  // lie inside it, so exiting is unambiguous proof of a runaway leg --
+  // fires earliest of the runaway guards). Dumped from the destructor.
+  mutable std::array<unsigned long long, 6> propFailCounts_{{0ULL, 0ULL, 0ULL, 0ULL, 0ULL, 0ULL}};
+  mutable unsigned long long propTotalCalls_{0ULL};
+  // Successful backward legs (anyDirection mode): counted so the frequency
+  // of the momentum-flipped frame conversion stays observable per job.
+  mutable unsigned long long propBackwardLegs_{0ULL};
+  mutable unsigned long long propTargetResumes_{0ULL};
+  // Steps whose q/p transport row carries the layer term, and steps with a
+  // loss whose volume gave no chord (the row is then zero; both in the
+  // destructor's summary).
+  mutable unsigned long long layerSteps_{0ULL};
+  mutable unsigned long long layerNoChord_{0ULL};
+
+  // Geant4 11.1 made G4ErrorPropagatorManager / G4ErrorPropagatorData
+  // singletons G4ThreadLocal. Fetch them per-call via the static accessors
+  // instead of caching pointers at construction (which would alias the
+  // construction-thread's TLS instance from any other thread that uses
+  // this propagator).
   double plimit_;
 
   // Transform a CMS Reco detector surface into a Geant4 Target for the error
   // propagation
   template <class SurfaceType>
   ErrorTargetPair transformToG4SurfaceTarget(const SurfaceType &pDest, bool moveTargetToEndOfSurface) const;
+
+  template <class SurfaceType>
+  ErrorTargetPair transformToG4SurfaceTargetD(const SurfaceType &pDest, bool moveTargetToEndOfSurface) const;
 
   // generates the Geant4 name for a particle from the
   // string stored in theParticleName ( set via constructor )
@@ -117,6 +472,7 @@ private:
   // This can be necessary, when Geant4 needs to read in a new MagneticField
   // object, which changed during lumi section crossing
   void ensureGeant4eIsInitilized(bool forceInit) const;
+  void ensureGeant4eIsInitilizedForCVH(bool forceInit) const;
 
   // returns the name of the SurfaceType. Mostly for debug outputs
   template <class SurfaceType>
@@ -135,6 +491,76 @@ private:
                              GlobalVector const &cmsInitMom,
                              CLHEP::Hep3Vector const &g4InitMom,
                              const SurfaceType &pDest) const;
+
+  Eigen::Matrix<double, 5, 5> PropagateErrorMSC(const G4Track *aTrack, double pforced = -1.) const;
+
+  std::pair<double, double> computeLandau(const G4Track *aTrack) const;
+
+  double computeErrorIoni(const G4Track *aTrack, double pforced = -1.) const;
+
+  Eigen::Matrix<double, 5, 9> transportJacobianBxByBzD(
+      const Eigen::Matrix<double, 7, 1> &start, double s, double dEdx, double mass, const Eigen::Vector3d &dB) const;
+
+  // The q/p row of a step's transport in layered material: scale times
+  // d ln L / d(lam, phi, xt, yt) at the step start, L the chord of the step's
+  // volume along the track through its midpoint (the step loop in
+  // propagateGenericWithJacobianAltD).  False where the chord is undefined.
+  bool layerLossRow(const G4Step *step,
+                    const Eigen::Matrix<double, 7, 1> &start,
+                    double scale,
+                    Eigen::Matrix<double, 1, 4> &g) const;
+  // The navigator the chords are measured with (created on first use, on the
+  // tracking world of the thread that propagates).
+  mutable std::unique_ptr<G4Navigator> chordNav_;
+
+  // mutable: allocation deferred from ctors to the first-call init block
+  // in propagateGeneric / propagateGenericWithJacobianAltD (both const
+  // methods). Allocating in the ctors aborted on MT worker threads where
+  // the G4 navigator's world had not yet been set up by CvhWorker.
+  mutable G4UniversalFluctuationForExtrapolator *fluct = nullptr;
+  // The delta-ray truncation quantile, used ONLY when `CgfQoPMode == 0`
+  // selects the legacy Gaussian weight (see the return of
+  // G4UniversalFluctuationForExtrapolator::SampleFluctuations). Inert under
+  // the Fisher weight, which needs no cut.
+  double ioniTruncAlpha_ = 0.999;
+  bool forCVH_ = false;
+
+  // Maximum Geant4e step, applied via "/geant4e/limits/stepLength" [mm].
+  // Was hard-coded to 10.0 mm in two places. It is a real ceiling, not a
+  // physics scale: in a homogeneous medium the model sits exactly ON it
+  // (measured: 25-95th percentile of step lengths = 1.0000 cm), while Geant4
+  // in the SIM steps far more finely, and Moliere's log term is not additive
+  // between the two. That mismatch was the whole homogeneous-toy failure.
+  double stepLengthLimit_ = 10.0;
+
+  // Urban step logging (see setIoniStepLogging); log is mutable because
+  // computeErrorIoni is const.
+  bool ioniStepLogging_ = false;
+  mutable std::vector<UrbanIoniStep> ioniStepLog_;
+  mutable cvhcgf::Result cgfLastResult_;
+  mutable double cgfLastSigma_ = 0.;
+  mutable double cgfOverrideQ_ = -1.;
+  // see cgfQScale(); 1.0 means "no substitution was applied to dQ2"
+  mutable double cgfQScaleLast_ = 1.;
+  mutable std::vector<MoliereMsStep> msStepLog_;
+  mutable std::vector<RadiativeStep> radStepLog_;
+
+  // radiative (brems + pair) dE/dx of the current step, in GeV/cm, computed
+  // from the SAME G4 models the mean-loss table is built from (muons, e+-;
+  // hadrons under ReferenceHadronRadiative, 0 otherwise).
+  // brems and pair dE/dx separately [GeV/cm]; their sum is what the mean-loss
+  // table adds on top of ionization.
+  void computeRadiativeDEDX(const G4Track *aTrack, double &dedxBrem, double &dedxPair) const;
+
+  // per-step dN/dv tabulation on the kNRadV grid, from the models the
+  // simulation runs: muBrems + muPairProd for muons, eBrem (Seltzer-Berger
+  // below 1 GeV, eBremsstrahlungRel above) in the brems slot for e+-; no-op
+  // for hadrons
+  void fillRadiativeSpectrum(const G4Track *aTrack, RadiativeStep &rs) const;
+
+  // per-step cumulative transport Jacobian log (see setStepTransportLogging)
+  bool stepTransportLogging_ = false;
+  mutable std::vector<StepTransport> stepTransportLog_;
 };
 
 #endif

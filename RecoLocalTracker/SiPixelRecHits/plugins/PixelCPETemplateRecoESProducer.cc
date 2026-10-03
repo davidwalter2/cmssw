@@ -33,6 +33,7 @@ private:
   edm::ParameterSet pset_;
   bool doLorentzFromAlignment_;
   bool useLAFromDB_;
+  std::string fieldlabel_;
 };
 
 using namespace edm;
@@ -44,8 +45,9 @@ PixelCPETemplateRecoESProducer::PixelCPETemplateRecoESProducer(const edm::Parame
   doLorentzFromAlignment_ = p.getParameter<bool>("doLorentzFromAlignment");
 
   pset_ = p;
+  fieldlabel_ = p.getParameter<std::string>("MagneticFieldLabel");
   auto c = setWhatProduced(this, myname);
-  magfieldToken_ = c.consumes();
+  magfieldToken_ = c.consumes(edm::ESInputTag("", fieldlabel_));
   pDDToken_ = c.consumes();
   hTTToken_ = c.consumes();
   templateDBobjectToken_ = c.consumes();
@@ -86,6 +88,7 @@ void PixelCPETemplateRecoESProducer::fillDescriptions(edm::ConfigurationDescript
 
   // specific to PixelCPETemplateRecoESProducer
   desc.add<std::string>("ComponentName", "PixelCPETemplateReco");
+  desc.add<std::string>("MagneticFieldLabel", "");
   descriptions.add("_templates_default", desc);
 }
 

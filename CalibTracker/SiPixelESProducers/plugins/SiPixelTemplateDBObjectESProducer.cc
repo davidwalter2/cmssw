@@ -19,6 +19,8 @@
 
 #include "FWCore/Framework/interface/ESProducer.h"
 #include "FWCore/ParameterSet/interface/ParameterSet.h"
+#include "FWCore/ParameterSet/interface/ParameterSetDescription.h"
+#include "FWCore/ParameterSet/interface/ConfigurationDescriptions.h"
 #include "FWCore/Utilities/interface/ESProductTag.h"
 #include "FWCore/Utilities/interface/do_nothing_deleter.h"
 
@@ -34,13 +36,16 @@ class SiPixelTemplateDBObjectESProducer : public edm::ESProducer {
 public:
   SiPixelTemplateDBObjectESProducer(const edm::ParameterSet& iConfig);
   std::shared_ptr<const SiPixelTemplateDBObject> produce(const SiPixelTemplateDBObjectESProducerRcd&);
+  static void fillDescriptions(edm::ConfigurationDescriptions& descriptions);
 
 private:
+  const std::string fieldlabel_;
   edm::ESGetToken<MagneticField, IdealMagneticFieldRecord> magfieldToken_;
   edm::ESGetToken<SiPixelTemplateDBObject, SiPixelTemplateDBObjectRcd> templateToken_;
 };
 
-SiPixelTemplateDBObjectESProducer::SiPixelTemplateDBObjectESProducer(const edm::ParameterSet& iConfig) {
+SiPixelTemplateDBObjectESProducer::SiPixelTemplateDBObjectESProducer(const edm::ParameterSet& iConfig)
+    : fieldlabel_(iConfig.getParameter<std::string>("MagneticFieldLabel")) {
   auto cc = setWhatProduced(this);
   cc.setMayConsume(
       templateToken_,
@@ -55,8 +60,14 @@ SiPixelTemplateDBObjectESProducer::SiPixelTemplateDBObjectESProducer(const edm::
           return get("", "");
         }
       },
-      edm::ESProductTag<MagneticField, IdealMagneticFieldRecord>("", ""));
+      edm::ESProductTag<MagneticField, IdealMagneticFieldRecord>("", fieldlabel_));
   magfieldToken_ = cc.consumes();
+}
+
+void SiPixelTemplateDBObjectESProducer::fillDescriptions(edm::ConfigurationDescriptions& descriptions) {
+  edm::ParameterSetDescription desc;
+  desc.add<std::string>("MagneticFieldLabel", "");
+  descriptions.addDefault(desc);
 }
 
 std::shared_ptr<const SiPixelTemplateDBObject> SiPixelTemplateDBObjectESProducer::produce(

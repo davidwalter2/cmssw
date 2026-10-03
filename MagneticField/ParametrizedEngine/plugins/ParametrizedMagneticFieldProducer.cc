@@ -25,11 +25,16 @@ ParametrizedMagneticFieldProducer::ParametrizedMagneticFieldProducer(const edm::
 
 ParametrizedMagneticFieldProducer::~ParametrizedMagneticFieldProducer() {}
 
-std::unique_ptr<MagneticField> ParametrizedMagneticFieldProducer::produce(const IdealMagneticFieldRecord& iRecord) {
-  string version = pset.getParameter<string>("version");
-  ParameterSet parameters = pset.getParameter<ParameterSet>("parameters");
+std::shared_ptr<MagneticField> ParametrizedMagneticFieldProducer::produce(const IdealMagneticFieldRecord& iRecord) {
+  if (!field_) {
+    string version = pset.getParameter<string>("version");
+    ParameterSet parameters = pset.getParameter<ParameterSet>("parameters");
 
-  return ParametrizedMagneticFieldFactory::get(version, parameters);
+    field_ = ParametrizedMagneticFieldFactory::get(version, parameters);
+  }
+  // Same object for every IOV: the field is a pure function of the job
+  // configuration (see header comment).
+  return field_;
 }
 
 #include "FWCore/Framework/interface/ModuleFactory.h"
