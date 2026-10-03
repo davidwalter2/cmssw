@@ -367,6 +367,33 @@ CVH_OPERA_VERSION = "170812"
 _CVH_REFITS = ("trackrefit", "trackrefitideal", "trackrefitbs", "trackrefitdimuon")
 
 
+def _cvhSimGeometry(process):
+    """The sim geometry (DDD) of the detector era of the process, for the G4
+    world of the CVH refit: ("db", <GeometryFileRcd tag>) for Run 2 -- the
+    XML blob the MC global tags of the era carry as "Extended" -- or
+    ("xml", <XMLIdealGeometryESSource cfi>) for Run 3."""
+    from Configuration.Eras.Modifier_phase1Pixel_cff import phase1Pixel
+    from Configuration.Eras.Modifier_run2_HCAL_2018_cff import run2_HCAL_2018
+    from Configuration.Eras.Modifier_run3_common_cff import run3_common
+    from Configuration.Eras.Modifier_run3_egamma_2023_cff import run3_egamma_2023
+    from Configuration.Eras.Modifier_stage2L1Trigger_2024_cff import stage2L1Trigger_2024
+    from Configuration.Eras.Modifier_run3_SiPixel_2025_cff import run3_SiPixel_2025
+    uses = process.isUsingModifier
+    if not uses(phase1Pixel):
+        return "db", "XMLFILE_Geometry_2016_81YV1_Extended2016_mc"
+    if not uses(run3_common):
+        if uses(run2_HCAL_2018):
+            return "db", "XMLFILE_Geometry_101YV4_Extended2018_mc"
+        return "db", "XMLFILE_Geometry_92YV5_Extended2017Plan1_mc"
+    if uses(run3_SiPixel_2025):
+        return "xml", "Geometry.CMSCommonData.cmsExtendedGeometry2025XML_cfi"
+    if uses(stage2L1Trigger_2024):
+        return "xml", "Geometry.CMSCommonData.cmsExtendedGeometry2024XML_cfi"
+    if uses(run3_egamma_2023):
+        return "xml", "Geometry.CMSCommonData.cmsExtendedGeometry2023XML_cfi"
+    return "xml", "Geometry.CMSCommonData.cmsExtendedGeometry2021XML_cfi"
+
+
 def setup3DFieldForRefit(process, initFile=None, useScalarPot3D=True, correctionModel=None):
     """Set up the Geant4e propagator + shared G4 master the CVH muon refit needs,
     choose the correction model of every refit maker, and choose the baseline
@@ -407,16 +434,24 @@ def setup3DFieldForRefit(process, initFile=None, useScalarPot3D=True, correction
     # provides the DB reco tracker geometry, not the DDD sim geometry, so load
     # it here (matches the standalone drivers). Additive: DDCompactView is a
     # different data type in IdealGeometryRecord than the DB GeometricDet.
-    process.load("Configuration.StandardSequences.GeometrySimDB_cff")
-    process.GlobalTag.toGet.append(
-        cms.PSet(
-            record=cms.string("GeometryFileRcd"),
-            tag=cms.string("XMLFILE_Geometry_2016_81YV1_Extended2016_mc"),
-            label=cms.untracked.string("Extended"),
+    # The detector of the era: the data GTs carry no "Extended" sim geometry,
+    # and the 2016 one must not be used for the Phase-1 tracker (2017 on).
+    _geoKind, _geoSource = _cvhSimGeometry(process)
+    if _geoKind == "db":
+        process.load("Configuration.StandardSequences.GeometrySimDB_cff")
+        process.GlobalTag.toGet.append(
+            cms.PSet(
+                record=cms.string("GeometryFileRcd"),
+                tag=cms.string(_geoSource),
+                label=cms.untracked.string("Extended"),
+            )
         )
-    )
-    if hasattr(process, "XMLFromDBSource"):
-        process.XMLFromDBSource.label = cms.string("Extended")
+        if hasattr(process, "XMLFromDBSource"):
+            process.XMLFromDBSource.label = cms.string("Extended")
+    else:
+        # Run 3: the DB only has DD4hep-format blobs from 2023 on; the release's
+        # DDD XML of the same detector feeds the DDD G4 world
+        process.load(_geoSource)
 
     process.load("TrackPropagation.Geant4e.geantRefit_cff")
 
@@ -468,6 +503,12 @@ def setup3DFieldForRefit(process, initFile=None, useScalarPot3D=True, correction
     from TrackPropagation.Geant4e.cvhMasterESProducer_cfi import cvhMasterESProducer
     process.cvhMasterESProducer = cvhMasterESProducer.clone()
     process.cvhMasterESProducer.MagneticFieldLabel = cms.string(fieldlabel)
+    # The G4 world is built from the DDD sim geometry loaded above, also in the
+    # Run 3 eras, whose dd4hep process modifier would switch the master and the
+    # propagator to a cms::DDCompactView this job does not provide.
+    process.cvhMasterESProducer.g4GeometryDD4hepSource = cms.bool(False)
+    if hasattr(process, "geopro"):
+        process.geopro.GeoFromDD4hep = cms.bool(False)
 
     # Activate the CVH-specific propagator path (custom fluctuation table) and
     # the per-leg forward/backward propagation choice.
@@ -633,9 +674,7 @@ def nanoAOD_wmassLowPU(process):
     only the low-PU-specific content of that era is left, as a customise
     (Category H of the migration):
 
-    * trigger objects of the HI-style menu of the run: the Electron and Muon
-      selections carry the Ele20 / Ele17HI and Mu17 filters (the 10_6
-      selections_lowPU) instead of the standard-menu bits
+    * trigger objects of the HI-style menu of the run (nanoAOD_wmassLowPUTriggers)
     * DeepMET re-run with the low-PU models (deepmet_lowPU[_Resp].pb, leptons
       removed from the inputs and added back), replacing the stock
       DeepMETResolutionTune / DeepMETResponseTune tables, which would carry
@@ -645,12 +684,46 @@ def nanoAOD_wmassLowPU(process):
     the puppiIsoId / softMva removal, the Run2017_LowPU_v2 electron
     scale/smearing file and the ecalCorr column (a workaround of the 94X
     MiniAODv2 E/p bug; the UL2017 file of the era applies), the lhcInfoTable
-    removal. As in 10_6 there is no CVH refit for low-PU: the production
-    scripts do not add nanoAOD_addCvhMuon.
+    removal. Unlike 10_6, the production adds the CVH refit
+    (nanoAOD_addCvhMuon[MC]) to the low-PU runs as to every other campaign.
     """
+    process = nanoAOD_wmassLowPUTriggers(process)
+
+    from RecoMET.METPUSubtraction.deepMETProducer_cfi import deepMETProducer
+    process.deepMETsResolutionTuneLowPU = deepMETProducer.clone(
+        graph_path = "PhysicsTools/NanoAOD/data/deepmetmodel/deepmet_lowPU.pb",
+        ignore_leptons = True,
+    )
+    process.deepMETsResponseTuneLowPU = deepMETProducer.clone(
+        graph_path = "PhysicsTools/NanoAOD/data/deepmetmodel/deepmet_lowPU_Resp.pb",
+        ignore_leptons = True,
+    )
+    for table, producer in (("deepMetResolutionTuneTable", "deepMETsResolutionTuneLowPU"),
+                            ("deepMetResponseTuneTable", "deepMETsResponseTuneLowPU")):
+        mod = getattr(process, table)
+        mod.src = cms.InputTag(producer)
+        mod.variables.pt = Var("pt", float, doc=mod.variables.pt.doc.value() + " (low-PU model, leptons excluded from the inputs)", precision=-1)
+        mod.variables.phi = Var("phi", float, doc=mod.variables.phi.doc.value() + " (low-PU model, leptons excluded from the inputs)", precision=12)
+    process.metTablesTask.add(process.deepMETsResolutionTuneLowPU, process.deepMETsResponseTuneLowPU)
+    return process
+
+
+def nanoAOD_wmassLowPU5TeV(process):
+    """The 2017 pp reference run at 5.02 TeV (2017G) on the UL re-reconstruction
+    (RunIISummer20UL17pp5TeVMiniAODv2 / Run2017G-UL2017_MiniAODv2): the
+    trigger objects of its HI-style menu (the same paths as 2017H), stock
+    DeepMET."""
+    return nanoAOD_wmassLowPUTriggers(process)
+
+
+def nanoAOD_wmassLowPUTriggers(process):
+    """Trigger objects of the HI-style menu of the 2017 low-PU runs (2017G at
+    5.02 TeV, 2017H at 13 TeV): the Electron and Muon selections carry the
+    Ele20 / Ele17HI and Mu17 filters (the 10_6 selections_lowPU) instead of
+    the standard-menu bits."""
     from PhysicsTools.NanoAOD.triggerObjects_cff import mksel
     process.triggerObjectTable.selections.Electron = cms.PSet(
-        doc = cms.string("PixelMatched e/gamma, low-PU 2017H menu"),  # this may also select photons!
+        doc = cms.string("PixelMatched e/gamma, low-PU 2017 menu"),  # this may also select photons!
         id = cms.int32(11),
         sel = cms.string("type(92) && pt > 7 && coll('hltEgammaCandidates') && filter('*PixelMatchFilter')"),
         l1seed = cms.string("type(-98)"), l1deltaR = cms.double(0.3),
@@ -670,23 +743,6 @@ def nanoAOD_wmassLowPU(process):
             mksel("filter('hltL3fL1sMu10lqL1f0L2f10L3Filtered17')", "Mu17"),
         ),
     )
-
-    from RecoMET.METPUSubtraction.deepMETProducer_cfi import deepMETProducer
-    process.deepMETsResolutionTuneLowPU = deepMETProducer.clone(
-        graph_path = "PhysicsTools/NanoAOD/data/deepmetmodel/deepmet_lowPU.pb",
-        ignore_leptons = True,
-    )
-    process.deepMETsResponseTuneLowPU = deepMETProducer.clone(
-        graph_path = "PhysicsTools/NanoAOD/data/deepmetmodel/deepmet_lowPU_Resp.pb",
-        ignore_leptons = True,
-    )
-    for table, producer in (("deepMetResolutionTuneTable", "deepMETsResolutionTuneLowPU"),
-                            ("deepMetResponseTuneTable", "deepMETsResponseTuneLowPU")):
-        mod = getattr(process, table)
-        mod.src = cms.InputTag(producer)
-        mod.variables.pt = Var("pt", float, doc=mod.variables.pt.doc.value() + " (low-PU model, leptons excluded from the inputs)", precision=-1)
-        mod.variables.phi = Var("phi", float, doc=mod.variables.phi.doc.value() + " (low-PU model, leptons excluded from the inputs)", precision=12)
-    process.metTablesTask.add(process.deepMETsResolutionTuneLowPU, process.deepMETsResponseTuneLowPU)
     return process
 
 
