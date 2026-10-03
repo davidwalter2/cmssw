@@ -2,6 +2,7 @@
 #define HitAnalyzer_ResidualGlobalCorrectionMakerBase_h
 
 
+#include <array>
 #include <cmath>
 #include <memory>
 #include <unordered_set>
@@ -211,7 +212,7 @@ protected:
 
   GloballyPositioned<double> surfaceToDouble(const Surface &surface, const Basic3DVector<double> &gz) const;
 
-  void applyAlignment(GloballyPositioned<double> &surface, const DetId &detid) const;
+  void applyAlignment(GloballyPositioned<double> &surface, const DetId &detid, const std::array<bool, 6> &dofs) const;
 
   Matrix<double, 6, 1> globalToLocal(const Matrix<double, 7, 1> &state, const GloballyPositioned<double> &surface) const;
 

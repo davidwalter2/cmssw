@@ -1866,8 +1866,6 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
 
       Matrix<double, 2, 2> Rglued = Matrix<double, 2, 2>::Identity();
       
-      //TODO restore alignment application functionality
-      
       if (isglued) {
         GloballyPositioned<double> surfaceGlued = surfaceToDouble(parmDet->surface());
 
@@ -1971,7 +1969,11 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
             }
           }
 
-          //TODO apply partial alignment to surfaceGlued here
+          // corFile alignment: the out-of-plane dofs (w, alpha, beta) of a glued pair
+          // belong to the composite frame; the components follow it rigidly below
+          if (alignGlued_ && !corparmsIncremental_.empty()) {
+            applyAlignment(surfaceGlued, parmdetid, {{false, false, true, true, true, false}});
+          }
 
           // recreate plane using relative position and orientation from ideal geometry, enforcing that the plane is parallel to the glued one (but preserving the relative orientation of the local z axis in case they are flipped)
           // only the out-of-plane DOF's are preserved (ie the spacing of the planes), whereas the in-plane DOF's (position and orientation of local x and y axes) are left as-is from the nominal geometry
@@ -2010,7 +2012,13 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
           
           surfaceD = GloballyPositioned<double>(posglobal, tkrot);
           
-          //TODO apply partial alignment to surfaceD here
+          // corFile alignment of the component: its in-plane dofs (u, v, gamma), or
+          // all six without composite-frame alignment
+          if (!corparmsIncremental_.empty()) {
+            applyAlignment(surfaceD, det->geographicalId(),
+                           alignGlued_ ? std::array<bool, 6>{{true, true, false, false, false, true}}
+                                       : std::array<bool, 6>{{true, true, true, true, true, true}});
+          }
           
           const Vector3DBase<double, GlobalTag> uxglued(surfaceGlued.rotation().x());
           const Vector3DBase<double, GlobalTag> uyglued(surfaceGlued.rotation().y());
@@ -2027,6 +2035,9 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
         }
         
         surfacemapD_[parmdetid] = surfaceGlued;
+      } else if (!corparmsIncremental_.empty()) {
+        // corFile alignment of a single module: all six dofs in its own frame
+        applyAlignment(surfaceD, det->geographicalId(), {{true, true, true, true, true, true}});
       }
 
       surfacemapD_[det->geographicalId()] = surfaceD;
@@ -2195,50 +2206,77 @@ Eigen::Vector3d ResidualGlobalCorrectionMakerBase::referenceFieldCorrection(cons
   return fieldCorrection_->getCorrectionAt(refpos, corparms_);
 }
 
-void ResidualGlobalCorrectionMakerBase::applyAlignment(GloballyPositioned<double> &surface, const DetId &detid) const {
-
-  using RotationT = GloballyPositioned<double>::RotationType;
-
-  const int idx = detidparms.at(std::make_pair(0, detid));
-  const int idz = detidparms.at(std::make_pair(2, detid));
-  const int idthetax = detidparms.at(std::make_pair(3, detid));
-  const int idthetay = detidparms.at(std::make_pair(4, detid));
-  const int idthetaz = detidparms.at(std::make_pair(5, detid));
-
-  int idy = -1;
-  auto const &dyiter = detidparms.find(std::make_pair(1, detid));
-  if (dyiter != detidparms.end()) {
-    idy = dyiter->second;
+void ResidualGlobalCorrectionMakerBase::applyAlignment(GloballyPositioned<double> &surface,
+                                                       const DetId &detid,
+                                                       const std::array<bool, 6> &dofs) const {
+  // Moves `surface` by the alignment parameters (parmtypes 0-5) of `detid` in
+  // the corFiles, in the convention of the alignment Jacobian of the makers
+  // (dr/da with the hit fixed in the module frame, see "alignment jacobian" in
+  // the G4e makers): translations (u, v, w) along the frame's own local axes,
+  // rotations (alpha, beta, gamma) right-handed about the frame's own local x,
+  // y, z axes, i.e. for gamma x' = x + gamma y, y' = y - gamma x of a fixed
+  // point. Each corFile is an increment on top of the previous ones (iterative
+  // derivation), so they are applied in order. `dofs` selects the parameters
+  // (the out-of-plane ones of glued modules belong to the composite frame).
+  std::array<int, 6> idx;
+  bool any = false;
+  for (unsigned int i = 0; i < 6; ++i) {
+    idx[i] = -1;
+    if (!dofs[i]) {
+      continue;
+    }
+    auto const it = detidparms.find(std::make_pair(int(i), detid));
+    if (it != detidparms.end()) {
+      idx[i] = it->second;
+      any = true;
+    }
+  }
+  if (!any) {
+    return;
   }
 
   for (auto const &icorparms : corparmsIncremental_) {
-    const double dx = icorparms[idx];
-    const double dy = idy >= 0 ? icorparms[idy] : 0.;
-    const double dz = icorparms[idz];
-    const double dthetax = icorparms[idthetax];
-    const double dthetay = icorparms[idthetay];
-    const double dthetaz = icorparms[idthetaz];
+    double a[6];
+    bool nonzero = false;
+    for (unsigned int i = 0; i < 6; ++i) {
+      a[i] = idx[i] >= 0 ? icorparms[idx[i]] : 0.;
+      nonzero |= a[i] != 0.;
+    }
+    if (!nonzero) {
+      continue;
+    }
 
-    const Vector3DBase<double, LocalTag> dxlocal(dx, dy, dz);
-    const Vector3DBase<double, GlobalTag> dxglobal = surface.toGlobal(dxlocal);
+    const Vector3DBase<double, GlobalTag> dxglobal = surface.toGlobal(Vector3DBase<double, LocalTag>(a[0], a[1], a[2]));
+    const Point3DBase<double, GlobalTag> posnew = surface.position() + dxglobal;
 
-    const RotationT rx(surface.rotation().x(), dthetax);
-    const RotationT ry(surface.rotation().y(), dthetay);
-    const RotationT rz(surface.rotation().x(), dthetaz);
+    // old local axes (rows) in global coordinates
+    const auto &rot = surface.rotation();
+    Matrix<double, 3, 3> F;
+    F << rot.xx(), rot.xy(), rot.xz(),
+         rot.yx(), rot.yy(), rot.yz(),
+         rot.zx(), rot.zy(), rot.zz();
 
-    surface.move(dxglobal);
+    // new axes in terms of the old ones (rows); order irrelevant at first order
+    const double ca = std::cos(a[3]), sa = std::sin(a[3]);
+    const double cb = std::cos(a[4]), sb = std::sin(a[4]);
+    const double cg = std::cos(a[5]), sg = std::sin(a[5]);
+    Matrix<double, 3, 3> Qx, Qy, Qz;
+    Qx << 1., 0., 0.,
+          0., ca, sa,
+          0., -sa, ca;
+    Qy << cb, 0., -sb,
+          0., 1., 0.,
+          sb, 0., cb;
+    Qz << cg, sg, 0.,
+          -sg, cg, 0.,
+          0., 0., 1.;
+    const Matrix<double, 3, 3> Fnew = Qz*Qy*Qx*F;
 
-    // order is arbitrary since these angles are implicitly derived under an assumption of infinitesimal rotations. The ambiguity will be sorted out as part of the iteration process
-    surface.rotate(rx);
-    surface.rotate(ry);
-    surface.rotate(rz);
-
-
-
-
+    const TkRotation<double> rotnew(Fnew(0, 0), Fnew(0, 1), Fnew(0, 2),
+                                    Fnew(1, 0), Fnew(1, 1), Fnew(1, 2),
+                                    Fnew(2, 0), Fnew(2, 1), Fnew(2, 2));
+    surface = GloballyPositioned<double>(posnew, rotnew);
   }
-
-
 }
 
 
