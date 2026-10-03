@@ -49,7 +49,10 @@ jpsiXCandidatePreselectorForCorrections = cms.EDProducer(
     muonEtaMax=cms.double(2.4),
     bachelorPtMin=cms.double(0.1),
     bachelorPtMax=cms.double(1e4),   # analysis uses 8.0; effectively off here
-    bachelorEtaMax=cms.double(2.4),
+    # The bachelor is a tracker-only leg: no muon-system |eta| < 2.4 limit, so
+    # it goes to the AlCaReco maxBachelorEta, where the TEC coverage ends
+    # (2016 loses the pixel disk-1 hit above ~2.45).
+    bachelorEtaMax=cms.double(2.5),
     dimuonPtMin=cms.double(0.0),   # analysis uses 7.0; dropped nominally
 
     # --- correctness, not tuning -------------------------------------------
