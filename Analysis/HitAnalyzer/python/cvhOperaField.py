@@ -7,19 +7,20 @@ routed into the strip/pixel CPEs so the Lorentz drift of the hit
 re-evaluation uses the same field. The caller routes the returned label into
 the propagator, the refit makers and the shared G4 master.
 
-version "170812" (default): the latest OPERA model (corrected ss400 steel BH
+version "170812": the latest OPERA model (corrected ss400 steel BH
   curves; inside the tracker it agrees with 160812 to <= 1e-5 T). Built with
   the DD4hep builder, which in CMSSW_15_0 is the one that reads the MERGED
   tables grid_170812_3_8t/merged.{bin,index} (76 MB; byte-identical to
   cms-data/MagneticField-Interpolation#5, which is not in the 15_0 data
   package). The tables must be on CMSSW_SEARCH_PATH -- see TABLES_HELP.
-version "160812": the release tables (XML/DDD builder), as in WMass/cmssw#42.
+version "160812" (default): the release tables (XML/DDD builder), as in
+  WMass/cmssw#42.
 """
 import os
 
 import FWCore.ParameterSet.Config as cms
 
-OPERA_DEFAULT_VERSION = "170812"
+OPERA_DEFAULT_VERSION = "160812"
 
 _CPE_PRODUCERS = ("stripCPEESProducer", "StripCPEfromTrackAngleESProducer",
                   "siPixelTemplateDBObjectESProducer", "templates")

@@ -41,10 +41,10 @@ ResidualGlobalCorrectionMakerMuonG4e = cms.EDProducer(
     fillTrackTree = cms.bool(False),
     fillGrads = cms.bool(False),
     fillJac = cms.bool(True),
-    # Muon_cvhJacRef rows: 3 = d(qop,lambda,phi)/d(globalparms), all the
-    # single-track refit needs downstream (WRemnants CVHCorrectorSingle<3>).
-    # 5 adds dxy/dsz (B+ -> J/psi K displacement cuts) at +2/3 payload.
-    jacRefRows = cms.int32(3),
+    # Muon_cvhJacRef rows: 5 = d(qop,lambda,phi,dxy,dsz)/d(globalparms); 3
+    # (momentum only, all the single-track refit needs downstream --
+    # WRemnants CVHCorrectorSingle<3>) cuts the payload by 2/5.
+    jacRefRows = cms.int32(5),
     fillRunTree = cms.bool(False),
     doGen = cms.bool(False),
     doSim = cms.bool(False),

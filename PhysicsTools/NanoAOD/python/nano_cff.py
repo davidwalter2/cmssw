@@ -353,8 +353,9 @@ _DEFAULT_SCALARPOT_INITFILE = _resolveInPath(_SCALARPOT_INITFILE_REL)
 #   "module"  one Bz offset (parmtype 6) and one material scale (parmtype 7) per
 #             tracker module, dead modules included (their hitless surfaces stay
 #             in the fit) -- the 10_6 / W-mass scheme. DATA baseline field: the
-#             OPERA/TOSCA finite-element map CVH_OPERA_VERSION (default 170812,
-#             the latest model) as the full 3D grid, without the tracker
+#             OPERA/TOSCA finite-element map CVH_OPERA_VERSION (default 160812,
+#             the release tables; 170812 is the latest model) as the full 3D
+#             grid, without the tracker
 #             parametrization (Analysis/HitAnalyzer/python/cvhOperaField.py; the
 #             170812 tables must be on CMSSW_SEARCH_PATH, see TABLES_HELP there).
 #             No scalar-potential or material-group Jacobians.
@@ -362,8 +363,8 @@ _DEFAULT_SCALARPOT_INITFILE = _resolveInPath(_SCALARPOT_INITFILE_REL)
 #             material groups (parmtype 15); DATA baseline field: ScalarPot3D.
 #
 # MC always keeps the default field (the one the simulation used).
-CVH_CORRECTION_MODEL = "module"
-CVH_OPERA_VERSION = "170812"
+CVH_CORRECTION_MODEL = "global"
+CVH_OPERA_VERSION = "160812"
 _CVH_REFITS = ("trackrefit", "trackrefitideal", "trackrefitbs", "trackrefitdimuon")
 
 

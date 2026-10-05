@@ -549,7 +549,7 @@ process.globalCorJpsiKKaon = globalCorJpsiKKaon.clone(
     # Muon-keyed jacRef rows: the full 5-row reference state whenever the
     # joint N-body arm or the jacobian export runs (displacement cuts need
     # dxy/dsz); 3 momentum rows otherwise. Only matters with muon association.
-    jacRefRows=cms.int32(5 if (opts.jointCvh or opts.emitRefJacobian) else 3),
+    jacRefRows=cms.int32(5),
     CvhMaster=CvhMasterPSet.clone(
         Particles=cms.vstring('mu+', 'mu-', 'kaon+', 'kaon-')),
     **_calib_pset,
@@ -584,7 +584,7 @@ if opts.emitRefitTracks:
         # Muon-keyed jacRef rows: the full 5-row reference state whenever the
         # joint N-body arm or the jacobian export runs (displacement cuts need
         # dxy/dsz); 3 momentum rows otherwise. Only matters with muon association.
-        jacRefRows=cms.int32(5 if (opts.jointCvh or opts.emitRefJacobian) else 3),
+        jacRefRows=cms.int32(5),
         CvhMaster=CvhMasterPSet.clone(
             Particles=cms.vstring('mu+', 'mu-', 'kaon+', 'kaon-')),
         **_calib_pset,

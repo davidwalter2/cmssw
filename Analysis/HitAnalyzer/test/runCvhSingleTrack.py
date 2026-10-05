@@ -162,11 +162,11 @@ opts.register('perModuleBfield', False, VarParsing.VarParsing.multiplicity.singl
               'ScalarPot3D. The full module-level configuration is '
               'perModuleBfield=True globalMaterialModel=False useOpera3D=True '
               '(data; useDefaultField=True for MC where available)')
-opts.register('operaVersion', '170812', VarParsing.VarParsing.multiplicity.singleton,
+opts.register('operaVersion', '160812', VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string,
-              'OPERA/TOSCA map used by useOpera3D=True: 170812 (latest model, '
-              'DD4hep builder + merged tables on CMSSW_SEARCH_PATH, see '
-              'Analysis/HitAnalyzer/python/cvhOperaField.py) or 160812 (release tables)')
+              'OPERA/TOSCA map used by useOpera3D=True: 160812 (release tables) or '
+              '170812 (latest model, DD4hep builder + merged tables on '
+              'CMSSW_SEARCH_PATH, see Analysis/HitAnalyzer/python/cvhOperaField.py)')
 opts.parseArguments()
 if not opts.scalarPot3DInitFile and not opts.perModuleBfield:
     raise SystemExit(
