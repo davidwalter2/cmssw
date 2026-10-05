@@ -127,7 +127,7 @@ private:
   // refit needs downstream (WRemnants CVHCorrectorSingle<3>); 5 = the full
   // reference state incl. dxy, dsz, needed when displacement quantities are
   // corrected (B+ -> J/psi K selection). Default follows emitRefJacobian.
-  int jacRefRows_ = 3;
+  int jacRefRows_ = 5;
   edm::EDPutTokenT<edm::ValueMap<std::vector<int>>> outputTrkGlobalIdxs_;
   edm::EDPutTokenT<edm::ValueMap<std::vector<float>>> outputTrkJacRef_;
   edm::EDPutTokenT<edm::ValueMap<std::vector<float>>> outputTrkMomCov_;
@@ -543,7 +543,7 @@ ResidualGlobalCorrectionMakerG4e::ResidualGlobalCorrectionMakerG4e(const edm::Pa
   emitRefJacobian_ = iConfig.existsAs<bool>("emitRefJacobian")
       ? iConfig.getParameter<bool>("emitRefJacobian") : false;
   jacRefRows_ = iConfig.existsAs<int>("jacRefRows")
-      ? iConfig.getParameter<int>("jacRefRows") : (emitRefJacobian_ ? 5 : 3);
+      ? iConfig.getParameter<int>("jacRefRows") : 5;
   if (jacRefRows_ != 3 && jacRefRows_ != 5) {
     throw cms::Exception("Configuration")
         << "ResidualGlobalCorrectionMakerG4e: jacRefRows must be 3 or 5, got "
