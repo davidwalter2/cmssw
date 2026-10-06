@@ -357,17 +357,17 @@ opts.register('edmConvergence', 1e-5, VarParsing.VarParsing.multiplicity.singlet
               VarParsing.VarParsing.varType.float,
               'EDM convergence threshold on the reference-state block '
               '(0 disables early stopping)')
-opts.register('pixelClassHits', False, VarParsing.VarParsing.multiplicity.singleton,
+opts.register('pixelClassHits', True, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               're-admit pixel edge / single-pixel clusters and emit the '
               'per-pixel-module class-correction columns (parmtypes 16-21): '
               'keepPixelEdgeHits=True pixelMinSizeX=1 pixelHitClassCorrections=True. '
               'All channels of one calibration must use the same setting '
               '(the parameter catalog changes)')
-opts.register('keepPixelEdgeHits', False, VarParsing.VarParsing.multiplicity.singleton,
+opts.register('keepPixelEdgeHits', True, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'keep pixel hits whose cluster touches the sensor boundary')
-opts.register('pixelMinSizeX', 2, VarParsing.VarParsing.multiplicity.singleton,
+opts.register('pixelMinSizeX', 1, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.int,
               'minimum pixel cluster size in x for a hit to stay in the fit')
 
@@ -385,9 +385,9 @@ opts.register('propagationDirection', 'anyDirection',
               'forward/backward per leg from the target-plane geometry, '
               'recovering legs whose target plane is marginally behind the '
               'state; "alongMomentum" is the legacy forward-only behaviour.')
-opts.register('propagationPtotLimit', 0.2, VarParsing.VarParsing.multiplicity.singleton,
+opts.register('propagationPtotLimit', 0.05, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.float,
-              'G4e propagation momentum floor [GeV]; the cfi default is 1.0')
+              'G4e propagation momentum floor [GeV]; the cfi default is 0.05')
 opts.register('clampMomentumFloor', -1.0, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.float,
               'Gauss-Newton momentum floor [GeV] for the refit step clamp. '

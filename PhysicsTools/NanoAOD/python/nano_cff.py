@@ -558,8 +558,9 @@ def nanoAOD_addCvhMuonMC(process, initFile=None):
 def nanoAOD_cvhPixelClassHits(process):
     """cmsDriver add-on, chained AFTER nanoAOD_addCvhMuon[MC]: re-admit the
     pixel edge / single-pixel hits in every CVH refit and emit their class-
-    correction columns (parmtypes 16-21). The calibration applied to the
-    resulting nano must be derived with the same setting (catalog +8640).
+    correction columns (parmtypes 16-21). This is now the makers' default;
+    the add-on sets it explicitly. The calibration applied to the resulting
+    nano must be derived with the same setting (catalog +8640).
 
         --customise PhysicsTools/NanoAOD/nano_cff.nanoAOD_addCvhMuon,PhysicsTools/NanoAOD/nano_cff.nanoAOD_cvhPixelClassHits
     """

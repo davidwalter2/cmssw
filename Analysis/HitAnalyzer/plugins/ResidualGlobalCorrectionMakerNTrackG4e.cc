@@ -516,10 +516,11 @@ private:
   mutable unsigned long long stepBtChi2Events_ = 0ULL;   // individual chi2 step halvings
   mutable unsigned long long stepPrints_ = 0ULL;         // printouts emitted (rate limit)
   mutable unsigned long long fitSeedInflated_ = 0ULL;    // iteration-0 seed-momentum inflations (retries)
-  // Momentum floor for the Gauss-Newton step clamp (GeV). 2 GeV suits
-  // J/psi muons (as in the single-track maker); V0 drivers lower it to
-  // sit above the propagation floor but below the soft-daughter spectrum.
-  double clampMomentumFloor_ = 2.0;
+  // Momentum floor for the Gauss-Newton step clamp (GeV). Default 1.25 x the
+  // default PropagationPtotLimit (0.05 GeV), as in the single-track and
+  // two-track makers: above the propagation floor, below the soft-daughter
+  // spectrum.
+  double clampMomentumFloor_ = 0.0625;
   // Relative Gauss-Newton step damping. Per iteration a track's momentum may
   // change by at most this factor (default 2). Effective floor
   // max(clampMomentumFloor_, p_ref/f) plus the symmetric upward cap p_ref*f;
@@ -956,7 +957,7 @@ ResidualGlobalCorrectionMakerNTrackG4e::ResidualGlobalCorrectionMakerNTrackG4e(
   edmConvergence_ = iConfig.existsAs<double>("edmConvergence")
       ? iConfig.getParameter<double>("edmConvergence") : 1.e-5;
   clampMomentumFloor_ = iConfig.existsAs<double>("clampMomentumFloor")
-      ? iConfig.getParameter<double>("clampMomentumFloor") : 2.0;
+      ? iConfig.getParameter<double>("clampMomentumFloor") : 0.0625;
   maxMomentumStepFactor_ = iConfig.existsAs<double>("maxMomentumStepFactor")
       ? iConfig.getParameter<double>("maxMomentumStepFactor") : 2.0;
   stepBacktracking_ = iConfig.existsAs<bool>("stepBacktracking")
@@ -3968,8 +3969,8 @@ void ResidualGlobalCorrectionMakerNTrackG4e::produce(edm::Event &iEvent, const e
                 const double qopupd = qopref + dqop;
                 // ABSOLUTE-FLOOR GUARD (maxMomentumStepFactor_ <= 1). The
                 // floor must never sit ABOVE where the track already is.
-                // clampMomentumFloor_ (2 GeV) suits muon channels where
-                // p_ref >> floor. A bachelor kaon starts at
+                // A large clampMomentumFloor_ (e.g. 2 GeV) suits muon channels
+                // where p_ref >> floor. A bachelor kaon starts at
                 // p ~ 0.5-1.5 GeV, i.e. already under it -- the "scale back up
                 // to the floor" arithmetic then returns a negative s, which
                 // max(s, 0) turns into a HARD ZERO step, freezing the whole

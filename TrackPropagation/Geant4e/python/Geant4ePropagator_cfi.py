@@ -17,7 +17,7 @@ Geant4ePropagator = cms.ESProducer("GeantPropagatorESProducer",
                                    # physical frame in propagateGenericWithJacobianAltD.
                                    PropagationDirection=cms.string("anyDirection"),
                                    ParticleName=cms.string("mu"),
-                                   PropagationPtotLimit = cms.double(1.0), ## GeV/c
+                                   PropagationPtotLimit = cms.double(0.05), ## GeV/c; low enough for soft hadrons (pT ~ 0.2 GeV kaons)
                                    MagneticFieldLabel = cms.string(""),
                                    ForCVH=cms.bool(False),
                                    # The CDF fraction of the delta-electron

@@ -70,8 +70,9 @@ ResidualGlobalCorrectionMakerDiMuonG4e = cms.EDProducer(
     # beam line at that vertex's z), their influence weights and CF exponents
     exportBsResidual = cms.bool(False),
     applyHitQuality = cms.bool(True),
-    keepPixelEdgeHits = cms.bool(False),
-    pixelMinSizeX = cms.int32(2),
+    keepPixelEdgeHits = cms.bool(True),
+    pixelMinSizeX = cms.int32(1),
+    pixelHitClassCorrections = cms.bool(True),
     doVtxConstraint = cms.bool(True),
     # Minimum size of a pair, required BEFORE the fit (see
     # ResidualGlobalCorrectionMakerTwoTrackG4e.cc). ndof = nvalid +

@@ -54,18 +54,18 @@ opts.register('propagationDirection', 'anyDirection', VarParsing.VarParsing.mult
               'Geant4ePropagator PropagationDirection (anyDirection = per-leg '
               'forward/backward choice, default; alongMomentum = legacy '
               'forward-only)')
-opts.register('pixelClassHits', False, VarParsing.VarParsing.multiplicity.singleton,
+opts.register('pixelClassHits', True, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               're-admit pixel edge / single-pixel clusters and emit the '
               'per-pixel-module class-correction columns (parmtypes 16-21): '
               'keepPixelEdgeHits=True pixelMinSizeX=1 pixelHitClassCorrections=True. '
               'All channels of one calibration must use the same setting '
               '(the parameter catalog changes)')
-opts.register('keepPixelEdgeHits', False, VarParsing.VarParsing.multiplicity.singleton,
+opts.register('keepPixelEdgeHits', True, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'keep pixel hits whose cluster touches the sensor boundary '
               '(isOnEdge) in the fit instead of demoting them to inactive')
-opts.register('pixelMinSizeX', 2, VarParsing.VarParsing.multiplicity.singleton,
+opts.register('pixelMinSizeX', 1, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.int,
               'minimum pixel cluster size in x for a hit to stay in the fit')
 opts.register('nIters', 10, VarParsing.VarParsing.multiplicity.singleton,

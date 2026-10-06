@@ -189,9 +189,9 @@ opts.register('exportCfExponents', True, VarParsing.VarParsing.multiplicity.sing
               'compute the resolution-CF exponents in the maker and write them '
               'on the 64-point tau grid (cfqop_* single-track, cfmass_* '
               'two-track). Default True')
-opts.register('propagationPtotLimit', 0.2, VarParsing.VarParsing.multiplicity.singleton,
+opts.register('propagationPtotLimit', 0.05, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.float,
-              'G4e propagation momentum floor [GeV]; cfi default was 1.0')
+              'G4e propagation momentum floor [GeV]; the cfi default is 0.05')
 opts.register('maxMomentumStepFactor', 2.0, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.float,
               'RELATIVE Gauss-Newton step damping: the max factor by which a '
@@ -304,15 +304,15 @@ opts.register('propagationDirection', 'anyDirection', VarParsing.VarParsing.mult
               'Geant4ePropagator PropagationDirection (anyDirection = per-leg '
               'forward/backward choice, default; alongMomentum = legacy '
               'forward-only)')
-opts.register('keepPixelEdgeHits', False, VarParsing.VarParsing.multiplicity.singleton,
+opts.register('keepPixelEdgeHits', True, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'keep pixel hits whose cluster touches the sensor boundary '
-              '(default False = baseline exclusion; the 2022 attempt predates '
-              'this cut, so the baseline is the interesting configuration)')
-opts.register('pixelMinSizeX', 2, VarParsing.VarParsing.multiplicity.singleton,
+              '(default True; False = the 10_6 exclusion, which the 2022 '
+              'attempt predates)')
+opts.register('pixelMinSizeX', 1, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.int,
               'minimum pixel cluster size in x for a hit to stay in the fit '
-              '(default 2 = baseline sizeX>1 cut; 1 admits all clusters)')
+              '(default 1 admits all clusters; 2 = the 10_6 sizeX>1 cut)')
 opts.register('globalTag', '106X_mcRun2_asymptotic_v17',
               VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string,

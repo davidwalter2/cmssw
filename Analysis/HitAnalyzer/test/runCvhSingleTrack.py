@@ -37,17 +37,17 @@ opts.register('propagationDirection', 'anyDirection', VarParsing.VarParsing.mult
               'Geant4ePropagator PropagationDirection (anyDirection = per-leg '
               'forward/backward choice, default; alongMomentum = legacy '
               'forward-only)')
-opts.register('keepPixelEdgeHits', False, VarParsing.VarParsing.multiplicity.singleton,
+opts.register('keepPixelEdgeHits', True, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'keep pixel hits whose cluster touches the sensor boundary '
               '(isOnEdge) in the fit instead of demoting them to inactive; '
               'the pixelMinSizeX CPE-quality cut applies independently '
-              '(default False = baseline)')
-opts.register('pixelMinSizeX', 2, VarParsing.VarParsing.multiplicity.singleton,
+              '(default True; False = the 10_6 edge-hit veto)')
+opts.register('pixelMinSizeX', 1, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.int,
               'minimum pixel cluster size in x for a hit to stay in the fit '
-              '(default 2 = baseline sizeX>1 cut; 1 admits all clusters)')
-opts.register('pixelHitClassCorrections', False, VarParsing.VarParsing.multiplicity.singleton,
+              '(default 1 admits all clusters; 2 = the 10_6 sizeX>1 cut)')
+opts.register('pixelHitClassCorrections', True, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'register the per-pixel-module pathology-class correction '
               'parameters (parmtypes 16-21) and emit their Jacobian columns; '

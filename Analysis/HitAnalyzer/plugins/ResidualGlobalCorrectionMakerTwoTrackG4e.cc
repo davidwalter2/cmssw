@@ -238,13 +238,13 @@ private:
   // keep the state out of the propagator's refusal region
   // (Geant4ePropagator.PropagationPtotLimit), so it must sit just above that
   // limit and below the soft-daughter spectrum -- the drivers derive it from
-  // the limit, and must re-derive it whenever the limit moves. The 2.0 GeV
-  // built-in default sits far above the current 0.2 GeV limit, and there it
-  // PINS every daughter below 2 GeV at 2 GeV (momentum-high, chi2/ndof>>1,
-  // and, when p_ref is already under the floor, a scale-to-zero frozen step).
-  // On the flat-pT J/psi gun that is 12 % of candidates, carrying the whole
-  // +0.21e-3 mass-scale offset.
-  double clampMomentumFloor_ = 2.0;
+  // the limit, and must re-derive it whenever the limit moves. The built-in
+  // default is 1.25 x the default limit (0.05 GeV). A floor far above the
+  // limit PINS every daughter below it at the floor (momentum-high,
+  // chi2/ndof>>1, and, when p_ref is already under the floor, a scale-to-zero
+  // frozen step): a 2 GeV floor on the flat-pT J/psi gun pinned 12 % of
+  // candidates, carrying the whole +0.21e-3 mass-scale offset.
+  double clampMomentumFloor_ = 0.0625;
   // Relative Gauss-Newton step damping. Per iteration a daughter's
   // momentum may change by at most this factor (default 2: p may at most halve
   // or double). Implemented as the effective floor max(clampMomentumFloor_,
@@ -899,7 +899,7 @@ ResidualGlobalCorrectionMakerTwoTrackG4e::ResidualGlobalCorrectionMakerTwoTrackG
   edmConvergence_ = iConfig.existsAs<double>("edmConvergence")
       ? iConfig.getParameter<double>("edmConvergence") : 1.e-5;
   clampMomentumFloor_ = iConfig.existsAs<double>("clampMomentumFloor")
-      ? iConfig.getParameter<double>("clampMomentumFloor") : 2.0;
+      ? iConfig.getParameter<double>("clampMomentumFloor") : 0.0625;
   // Echo it once per maker instance: the floor silently decides whether soft
   // daughters are fitted or pinned at it, and a job log must record which
   // value was in force. Same line as the single-track maker.

@@ -492,17 +492,21 @@ def nanoAOD_addCvhMuonBranches(process, initFile=None, isMC=False, useScalarPot3
 
 
 # --- Pixel pathological-hit classes in the CVH refits -----------------------
-# The legacy hit-quality cut demotes pixel hits whose cluster touches the sensor
-# edge or is one pixel wide in local x (27-29 % of the pixel hits on muon tracks
-# in MC, 33-35 % in 2016 data). cvhPixelClassHits re-admits them and registers
-# the per-pixel-module class-correction parameters (parmtypes 16-21: edge-x
-# mean/diff, edge-y mean/diff, sizeX1, sizeY1) whose Jacobian columns then enter
-# globalIdxs/jacRef, so the linear calibration can correct their CPE biases
-# (20-100 um, measured in calibration_studies/pixelhits).
+# The legacy (10_6) hit-quality cut demoted pixel hits whose cluster touches the
+# sensor edge or is one pixel wide in local x (27-29 % of the pixel hits on muon
+# tracks in MC, 33-35 % in 2016 data). The makers now re-admit them BY DEFAULT
+# (keepPixelEdgeHits=True, pixelMinSizeX=1) and register the per-pixel-module
+# class-correction parameters (pixelHitClassCorrections=True; parmtypes 16-21:
+# edge-x mean/diff, edge-y mean/diff, sizeX1, sizeY1) whose Jacobian columns
+# then enter globalIdxs/jacRef, so the linear calibration can correct their CPE
+# biases (20-100 um, measured in calibration_studies/pixelhits).
+# cvhPixelClassHits sets the same explicitly, and is still needed for
+# lorentz=True.
 #
-# The CATALOG CHANGES (8640 parameters appended after the existing blocks, so
-# every existing index is unchanged): the calibration that is applied to this
-# nano must be derived with the same setting on the J/psi grads production.
+# The CATALOG CHANGES w.r.t. the legacy cut (8640 parameters appended after the
+# existing blocks, so every existing index is unchanged): the calibration that
+# is applied to this nano must be derived with the same setting on the J/psi
+# grads production.
 #
 # lorentz=True uses the dtanLA physics parameter (22) in place of 16 and 20.
 # Not needed for the linear calibration: 22 is an exact per-module linear

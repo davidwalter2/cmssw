@@ -627,13 +627,14 @@ protected:
 
   // Keep pixel hits whose cluster touches the sensor boundary (isOnEdge) in
   // the fit instead of demoting them to inactive. The sizeX CPE-quality
-  // requirement (below) is unaffected. Default false = legacy behaviour.
-  bool keepPixelEdgeHits_ = false;
+  // requirement (below) is unaffected. Default true; false = the 10_6
+  // behaviour (edge hits demoted).
+  bool keepPixelEdgeHits_ = true;
 
   // Minimum pixel cluster size in x for a hit to stay in the fit
   // (CPE x-resolution needs charge sharing between >=2 pixels).
-  // Default 2 = legacy sizeX>1 cut; 1 admits all clusters.
-  int pixelMinSizeX_ = 2;
+  // Default 1 admits all clusters; 2 = the 10_6 sizeX>1 cut.
+  int pixelMinSizeX_ = 1;
   // Default 1 = NO cut. sizeY==1 is the GEOMETRIC outcome for a
   // perpendicular track (sizeY ~ 1 + 1.9|cot theta|), unlike
   // sizeX==1 which means the expected Lorentz sharing failed.
@@ -646,9 +647,9 @@ protected:
   // (parmtypes 16-21, per pixel module, mean/diff basis for the edge
   // classes) and emit their Jacobian columns in the fit. Meant to be
   // used together with keepPixelEdgeHits=True pixelMinSizeX=1 so the
-  // pathological hits are actually in the fit. Default false = catalog
-  // unchanged.
-  bool pixelHitClassCorrections_ = false;
+  // pathological hits are actually in the fit. Default true; false =
+  // catalog without the class parameters.
+  bool pixelHitClassCorrections_ = true;
 
   // Physics parameterization of the local-x drift effects: replace the
   // empirical parmtypes 16 (edge-x-mean) and 20 (sizeX1) with a single
