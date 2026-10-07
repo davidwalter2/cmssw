@@ -168,6 +168,7 @@ private:
   mutable unsigned long long fitFailProp_ = 0ULL;       // Geant4e propagation failed
   mutable unsigned long long fitFailHitUpdate_ = 0ULL;  // CPE re-evaluation (cloner) invalid
   mutable unsigned long long fitFailNaN_ = 0ULL;        // NaN/inf parameter update
+  mutable unsigned long long fitNoDof_ = 0ULL;          // succeeded fits with no degrees of freedom (ndof stored as 0)
   mutable unsigned long long fitStepClamped_ = 0ULL;    // fits with >=1 trust-region-clamped GN step
   mutable unsigned long long stepClampEvents_ = 0ULL;   // individual clamped GN steps
   mutable unsigned long long fitStepBacktracked_ = 0ULL;// fits with >=1 chi2 backtrack
@@ -372,6 +373,7 @@ ResidualGlobalCorrectionMakerG4e::~ResidualGlobalCorrectionMakerG4e() {
               << "  fail[prop]=" << fitFailProp_
               << "  fail[hitupdate]=" << fitFailHitUpdate_
               << "  fail[nan]=" << fitFailNaN_
+              << "  ndof<=0=" << fitNoDof_
               << "  clamped[step]=" << fitStepClamped_
               << "  clampevents[step]=" << stepClampEvents_
               << "  backtracked[step]=" << fitStepBacktracked_
@@ -1673,11 +1675,17 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     
     const unsigned int nstatefree = freestateidxs.size();
     
-    ndof = ncons - nstatefree;
-    
+    // Computed signed, then clamped: ncons - nstatefree is negative for a
+    // track with fewer measurement coordinates than free state parameters
+    // (e.g. one to four valid hits), and in the unsigned member it would wrap
+    // to ~4.3e9. Such a fit has no degrees of freedom; it is stored with
+    // ndof = 0 and counted as ndof<=0 in the fit summary.
+    long long ndofsigned = static_cast<long long>(ncons) - static_cast<long long>(nstatefree);
+
     if (bsConstraint_) {
-      ndof += 2;
+      ndofsigned += 2;
     }
+    ndof = ndofsigned > 0 ? static_cast<unsigned int>(ndofsigned) : 0u;
     
     MatrixXd validdxeigjac;
     VectorXd validdxeig;
@@ -6233,6 +6241,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       continue;
     }
     ++fitSucceeded_;
+    if (ndof == 0u) {
+      ++fitNoDof_;
+    }
 
     if (fillTrackTree_) {
       tree->Fill();
