@@ -1675,16 +1675,24 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     
     const unsigned int nstatefree = freestateidxs.size();
     
-    // Computed signed, then clamped: ncons - nstatefree is negative for a
-    // track with fewer measurement coordinates than free state parameters
-    // (e.g. one to four valid hits), and in the unsigned member it would wrap
-    // to ~4.3e9. Such a fit has no degrees of freedom; it is stored with
-    // ndof = 0 and counted as ndof<=0 in the fit summary.
-    long long ndofsigned = static_cast<long long>(ncons) - static_cast<long long>(nstatefree);
-
-    if (bsConstraint_) {
-      ndofsigned += 2;
-    }
+    // Degrees of freedom: constraint rows minus free state parameters, where
+    // the beam-line block counts by its random residual components, not by
+    // its rows. It writes three rows (nbscons), but with the PCA reference the
+    // point is the beam-line point at the track's z0 plus d0 along a direction
+    // normal to both the beam and the track, so the residual has two random
+    // components (d0 and the position along the beam) and the block adds 2:
+    // on prompt J/psi MC the chi2 increase from the constraint follows a chi2
+    // distribution with two degrees of freedom. With a curvilinear reference
+    // (fitFromGenParms, cosmics) the point is fixed and all three are random.
+    //
+    // Computed signed, then clamped: the difference is negative for a track
+    // with fewer measurement coordinates than free state parameters (e.g. one
+    // to four valid hits), and in the unsigned member it would wrap to ~4.3e9.
+    // Such a fit has no degrees of freedom; it is stored with ndof = 0 and
+    // counted as ndof<=0 in the fit summary.
+    const long long nbsdof = bsConstraint_ ? (dopca ? 2LL : 3LL) : 0LL;
+    const long long ndofsigned = static_cast<long long>(ncons - nbscons)
+        - static_cast<long long>(nstatefree) + nbsdof;
     ndof = ndofsigned > 0 ? static_cast<unsigned int>(ndofsigned) : 0u;
     
     MatrixXd validdxeigjac;
