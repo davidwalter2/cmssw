@@ -543,10 +543,11 @@ def nanoAOD_addCvhMuon(process, initFile=None):
 
 
 def nanoAOD_addCvhMuonMC(process, initFile=None):
-    """cmsDriver --customise entry point (MC): nominal + ideal + beamspot refits.
+    """cmsDriver --customise entry point (MC): nominal + ideal-geometry refits.
 
-    Adds the MC-only trackrefitideal / trackrefitbs variants and mergedGlobalIdxs
-    on top of the nominal refit. All three share the one EventSetup G4 master.
+    Adds the MC-only trackrefitideal variant and mergedGlobalIdxs on top of the
+    nominal refit; both share the one EventSetup G4 master. The beamspot-
+    constrained refit (trackrefitbs) is opt-in: nanoAOD_cvhBeamspotRefit.
 
     Usage:
       cmsDriver.py ... --customise PhysicsTools/NanoAOD/nano_cff.nanoAOD_addCvhMuonMC
@@ -567,17 +568,39 @@ def nanoAOD_cvhDimuon(process):
                            "(run it after nanoAOD_addCvhMuon[MC])")
     from PhysicsTools.NanoAOD.muons_cff import cvhAddDimuonRefit
     cvhAddDimuonRefit(process)
-    _ref, _m = process.trackrefit, process.trackrefitdimuon
+    return _cvhCopyRefitSetup(process, "trackrefitdimuon", 423456789)
+
+
+def nanoAOD_cvhBeamspotRefit(process):
+    """cmsDriver add-on (MC), chained AFTER nanoAOD_addCvhMuonMC: add the
+    beamspot-constrained single-track refit (trackrefitbs) and its Muon_cvhbs*
+    branches, which are off by default. The refit takes the correction model
+    and the field of the nominal refit.
+
+        --customise PhysicsTools/NanoAOD/nano_cff.nanoAOD_addCvhMuonMC,PhysicsTools/NanoAOD/nano_cff.nanoAOD_cvhBeamspotRefit
+    """
+    if not hasattr(process, "trackrefitideal"):
+        raise RuntimeError("nanoAOD_cvhBeamspotRefit: no MC CVH refit in the process "
+                           "(run it after nanoAOD_addCvhMuonMC)")
+    from PhysicsTools.NanoAOD.muons_cff import cvhAddBeamspotRefit
+    cvhAddBeamspotRefit(process)
+    return _cvhCopyRefitSetup(process, "trackrefitbs", 323456789)
+
+
+def _cvhCopyRefitSetup(process, label, seed):
+    """Give a refit added after setup3DFieldForRefit the correction model and
+    field of the nominal refit, and its own random-number seed."""
+    _ref, _m = process.trackrefit, getattr(process, label)
     for _p in ("perModuleBfield", "globalMaterialModel", "perStepFieldModes",
                "skipHitlessSurfaces", "materialGroupsFile", "scalarPotentialInitFile",
                "MagneticFieldLabel"):
         if hasattr(_ref, _p):
             _v = getattr(_ref, _p)
             setattr(_m, _p, type(_v)(_v.value()))
-    process.RandomNumberGeneratorService.trackrefitdimuon = cms.PSet(
-        initialSeed=cms.untracked.uint32(423456789),
+    setattr(process.RandomNumberGeneratorService, label, cms.PSet(
+        initialSeed=cms.untracked.uint32(seed),
         engineName=cms.untracked.string("HepJamesRandom"),
-    )
+    ))
     return process
 
 

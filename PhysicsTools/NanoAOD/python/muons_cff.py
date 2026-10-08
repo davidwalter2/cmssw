@@ -427,7 +427,22 @@ def cvhAddDimuonRefit(process):
     return process
 
 
-def nanoAOD_addCvhMuonBranches(process, initFile=None, isMC=False, useScalarPot3D=None, addDimuon=False):
+def cvhAddBeamspotRefit(process):
+    """Add the MC beamspot-constrained single-track refit (trackrefitbs) and its
+    Muon_cvhbs* branches. Off by default; nano_cff.nanoAOD_cvhBeamspotRefit
+    enables it."""
+    process.trackrefitbs = trackrefitbs
+    process.muonTablesTask.add(process.trackrefitbs)
+    _cvhScalarVars(process.muonTable.externalVariables, "trackrefitbs", "bs", " (beamspot constraint)")
+    # Self-contained set: own index vector.
+    vecVars = process.muonExternalVecVarsTable.variables
+    vecVars.cvhbsGlobalIdxs = ExtVar(cms.InputTag("trackrefitbs:globalIdxs"), "std::vector<int>", doc="Indices for correction parameters (beamspot constraint)", precision=16)
+    vecVars.cvhbsJacRef = ExtVar(cms.InputTag("trackrefitbs:jacRef"), "std::vector<float>", doc="jacobian for corrections (beamspot constraint)", precision=12)
+    vecVars.cvhbsMomCov = ExtVar(cms.InputTag("trackrefitbs:momCov"), "std::vector<float>", doc="covariance matrix for qop, lambda, phi (beamspot constraint)", precision=12)
+    return process
+
+
+def nanoAOD_addCvhMuonBranches(process, initFile=None, isMC=False, useScalarPot3D=None, addDimuon=False, addBeamspot=False):
     """Attach the CVH-refit muon branches (Muon_cvh*) to the muon table.
 
     Wires the single-muon-track CVH refit into the NanoAOD muon tables:
@@ -437,14 +452,16 @@ def nanoAOD_addCvhMuonBranches(process, initFile=None, isMC=False, useScalarPot3
     potential field + Geant4e propagator the refit needs
     (nano_cff.setup3DFieldForRefit).
 
-    isMC=True also wires the MC-only variants -- process.trackrefitideal
-    (ideal geometry) and process.trackrefitbs (beamspot constraint) -- plus
-    process.mergedGlobalIdxs (union of the nominal+ideal correction-parameter
-    indices). All three refits share the one EventSetup G4 master; running them
-    together in one job is what Stage A2 unblocked. The nominal+ideal branch
-    set reproduces the validated 10_6-tip contract (cvh*/cvhideal* +
-    cvhmergedGlobalIdxs from mergedGlobalIdxs); the beamspot set (cvhbs*) is
-    added as a self-contained parallel set with its own cvhbsGlobalIdxs.
+    isMC=True also wires the MC-only ideal-geometry refit process.trackrefitideal
+    plus process.mergedGlobalIdxs (union of the nominal+ideal correction-parameter
+    indices). The refits share the one EventSetup G4 master. The nominal+ideal
+    branch set reproduces the validated 10_6-tip contract (cvh*/cvhideal* +
+    cvhmergedGlobalIdxs from mergedGlobalIdxs).
+
+    addBeamspot (MC only): also run the beamspot-constrained refit
+    process.trackrefitbs, a self-contained parallel set (cvhbs*) with its own
+    cvhbsGlobalIdxs (default False; from cmsDriver use the
+    nano_cff.nanoAOD_cvhBeamspotRefit add-on).
 
     initFile: scalar-potential coefficient dump (mfs/dump_coeffs_for_cmssw.py
     output). If None, setup3DFieldForRefit falls back to CVH_SCALARPOT_INITFILE
@@ -470,26 +487,24 @@ def nanoAOD_addCvhMuonBranches(process, initFile=None, isMC=False, useScalarPot3
     _producers = [process.tracksfrommuons, process.trackrefit]
 
     if isMC:
-        # MC-only ideal + beamspot refits + merged nominal/ideal indices.
+        # MC-only ideal-geometry refit + merged nominal/ideal indices.
         process.trackrefitideal = trackrefitideal
-        process.trackrefitbs = trackrefitbs
         process.mergedGlobalIdxs = mergedGlobalIdxs
-        _producers += [process.trackrefitideal, process.trackrefitbs, process.mergedGlobalIdxs]
+        _producers += [process.trackrefitideal, process.mergedGlobalIdxs]
         _cvhScalarVars(extVars, "trackrefitideal", "ideal", " (ideal geometry)")
-        _cvhScalarVars(extVars, "trackrefitbs", "bs", " (beamspot constraint)")
         # Merged nominal+ideal index vector (10_6-tip contract).
         vecVars.cvhmergedGlobalIdxs = ExtVar(cms.InputTag("mergedGlobalIdxs"), "std::vector<int>", doc="Indices for correction parameters (merged nominal+ideal)", precision=16)
         vecVars.cvhidealJacRef = ExtVar(cms.InputTag("trackrefitideal:jacRef"), "std::vector<float>", doc="jacobian for corrections (ideal geometry)", precision=12)
         vecVars.cvhidealMomCov = ExtVar(cms.InputTag("trackrefitideal:momCov"), "std::vector<float>", doc="covariance matrix for qop, lambda, phi (ideal geometry)", precision=12)
-        # Beamspot-constrained set (self-contained: own index vector).
-        vecVars.cvhbsGlobalIdxs = ExtVar(cms.InputTag("trackrefitbs:globalIdxs"), "std::vector<int>", doc="Indices for correction parameters (beamspot constraint)", precision=16)
-        vecVars.cvhbsJacRef = ExtVar(cms.InputTag("trackrefitbs:jacRef"), "std::vector<float>", doc="jacobian for corrections (beamspot constraint)", precision=12)
-        vecVars.cvhbsMomCov = ExtVar(cms.InputTag("trackrefitbs:momCov"), "std::vector<float>", doc="covariance matrix for qop, lambda, phi (beamspot constraint)", precision=12)
 
     process.muonExternalVecVarsTable = muonExternalVecVarsTable
     _producers.append(process.muonExternalVecVarsTable)
 
     process.muonTablesTask.add(*_producers)
+
+    # Beamspot-constrained MC refit, off by default.
+    if isMC and addBeamspot:
+        cvhAddBeamspotRefit(process)
 
     # Dimuon (two-track) CVH refit + Dimuon table (data + MC), off by default.
     # Shares the one G4 master with the single-track refit.
