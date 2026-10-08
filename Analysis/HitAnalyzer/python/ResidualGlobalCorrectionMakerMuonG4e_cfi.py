@@ -75,7 +75,7 @@ ResidualGlobalCorrectionMakerMuonG4e = cms.EDProducer(
     globalMaterialModel = cms.bool(True),
     perStepFieldModes = cms.bool(True),
     skipHitlessSurfaces = cms.bool(True),
-    localUpdate = cms.bool(True),
+    localUpdate = cms.bool(False),
     materialGroupsFile = cms.string(_materialGroups50),
     outprefix = cms.untracked.string('globalcor_muon'),
     # The Geant4 master is no longer per-producer: it is the shared

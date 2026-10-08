@@ -420,7 +420,7 @@ opts.register('injectFieldModes', [], VarParsing.VarParsing.multiplicity.list,
 opts.register('injectFieldModeValues', [], VarParsing.VarParsing.multiplicity.list,
               VarParsing.VarParsing.varType.float,
               'shifts for injectFieldModes, same order')
-opts.register('localUpdate', True, VarParsing.VarParsing.multiplicity.singleton,
+opts.register('localUpdate', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'Gauss-Newton linearisation point: False = re-propagate each '
               'track unscattered from the updated reference state; True = '

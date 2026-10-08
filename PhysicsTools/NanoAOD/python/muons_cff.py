@@ -413,7 +413,21 @@ def _cvhScalarVars(extVars, tag, suffix, note):
     setattr(extVars, "cvh%sNValidPixelHits" % suffix, ExtVar(cms.InputTag(tag + ":nValidPixelHits"), int, doc="Number of valid pixel hits in refit" + note))
 
 
-def nanoAOD_addCvhMuonBranches(process, initFile=None, isMC=False, useScalarPot3D=None):
+def cvhAddDimuonRefit(process):
+    """Add the dimuon (two-track) CVH refit + Dimuon table producers to
+    muonTablesTask. Off by default; nano_cff.nanoAOD_cvhDimuon enables it."""
+    process.diMuonTrackVertexCandidates = diMuonTrackVertexCandidates
+    process.trackrefitdimuon = trackrefitdimuon
+    process.dimuonTable = dimuonTable
+    _producers = [process.diMuonTrackVertexCandidates, process.trackrefitdimuon, process.dimuonTable]
+    if trackrefitdimuon.fillGradsFactored.value():
+        process.dimuonVecVarsTable = dimuonVecVarsTable
+        _producers.append(process.dimuonVecVarsTable)
+    process.muonTablesTask.add(*_producers)
+    return process
+
+
+def nanoAOD_addCvhMuonBranches(process, initFile=None, isMC=False, useScalarPot3D=None, addDimuon=False):
     """Attach the CVH-refit muon branches (Muon_cvh*) to the muon table.
 
     Wires the single-muon-track CVH refit into the NanoAOD muon tables:
@@ -439,6 +453,9 @@ def nanoAOD_addCvhMuonBranches(process, initFile=None, isMC=False, useScalarPot3
     useScalarPot3D: baseline field for the refit. None (default) means data uses
     the accurate ScalarPot3D map and MC keeps the DEFAULT CMSSW field (consistent
     with the field the simulation used); pass True/False to override.
+
+    addDimuon: also run the dimuon (two-track) refit and write the Dimuon table
+    (default False; from cmsDriver use the nano_cff.nanoAOD_cvhDimuon add-on).
     """
     from PhysicsTools.NanoAOD.nano_cff import setup3DFieldForRefit
     if useScalarPot3D is None:
@@ -472,17 +489,12 @@ def nanoAOD_addCvhMuonBranches(process, initFile=None, isMC=False, useScalarPot3
     process.muonExternalVecVarsTable = muonExternalVecVarsTable
     _producers.append(process.muonExternalVecVarsTable)
 
-    # Dimuon (two-track) CVH refit + Dimuon table (data + MC). Shares the one
-    # G4 master with the single-track refit.
-    process.diMuonTrackVertexCandidates = diMuonTrackVertexCandidates
-    process.trackrefitdimuon = trackrefitdimuon
-    process.dimuonTable = dimuonTable
-    _producers += [process.diMuonTrackVertexCandidates, process.trackrefitdimuon, process.dimuonTable]
-    if trackrefitdimuon.fillGradsFactored.value():
-        process.dimuonVecVarsTable = dimuonVecVarsTable
-        _producers.append(process.dimuonVecVarsTable)
-
     process.muonTablesTask.add(*_producers)
+
+    # Dimuon (two-track) CVH refit + Dimuon table (data + MC), off by default.
+    # Shares the one G4 master with the single-track refit.
+    if addDimuon:
+        cvhAddDimuonRefit(process)
 
     # Field + Geant4e propagator + shared G4 master. Data -> ScalarPot3D map;
     # MC -> default (sim-consistent) field.

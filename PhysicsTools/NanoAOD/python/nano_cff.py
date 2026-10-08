@@ -555,6 +555,32 @@ def nanoAOD_addCvhMuonMC(process, initFile=None):
     return nanoAOD_addCvhMuonBranches(process, initFile=initFile, isMC=True)
 
 
+def nanoAOD_cvhDimuon(process):
+    """cmsDriver add-on, chained AFTER nanoAOD_addCvhMuon[MC]: add the dimuon
+    (two-track) CVH refit and the Dimuon table, which are off by default. The
+    refit takes the correction model and the field of the nominal refit.
+
+        --customise PhysicsTools/NanoAOD/nano_cff.nanoAOD_addCvhMuon,PhysicsTools/NanoAOD/nano_cff.nanoAOD_cvhDimuon
+    """
+    if not hasattr(process, "trackrefit"):
+        raise RuntimeError("nanoAOD_cvhDimuon: no CVH refit in the process "
+                           "(run it after nanoAOD_addCvhMuon[MC])")
+    from PhysicsTools.NanoAOD.muons_cff import cvhAddDimuonRefit
+    cvhAddDimuonRefit(process)
+    _ref, _m = process.trackrefit, process.trackrefitdimuon
+    for _p in ("perModuleBfield", "globalMaterialModel", "perStepFieldModes",
+               "skipHitlessSurfaces", "materialGroupsFile", "scalarPotentialInitFile",
+               "MagneticFieldLabel"):
+        if hasattr(_ref, _p):
+            _v = getattr(_ref, _p)
+            setattr(_m, _p, type(_v)(_v.value()))
+    process.RandomNumberGeneratorService.trackrefitdimuon = cms.PSet(
+        initialSeed=cms.untracked.uint32(423456789),
+        engineName=cms.untracked.string("HepJamesRandom"),
+    )
+    return process
+
+
 def nanoAOD_cvhPixelClassHits(process):
     """cmsDriver add-on, chained AFTER nanoAOD_addCvhMuon[MC]: re-admit the
     pixel edge / single-pixel hits in every CVH refit and emit their class-

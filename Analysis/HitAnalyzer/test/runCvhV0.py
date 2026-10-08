@@ -48,7 +48,7 @@ opts.register('globalMaterialModel', True, VarParsing.VarParsing.multiplicity.si
               VarParsing.VarParsing.varType.bool,
               'parmtype-15 global material groups (default True -- the whole '
               'point for displaced tracks); False = legacy per-module block')
-opts.register('localUpdate', True, VarParsing.VarParsing.multiplicity.singleton,
+opts.register('localUpdate', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'Gauss-Newton linearisation point: False = re-propagate each '
               'track unscattered from the updated reference state; True = '

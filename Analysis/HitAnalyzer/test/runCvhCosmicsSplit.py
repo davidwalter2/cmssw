@@ -122,7 +122,7 @@ opts.register('perStepFieldModes', True, VarParsing.VarParsing.multiplicity.sing
               VarParsing.VarParsing.varType.bool,
               'apply the scalar-potential correction and attribute the per-mode '
               'derivatives per Geant4 step (leg-structure-free; default True)')
-opts.register('localUpdate', True, VarParsing.VarParsing.multiplicity.singleton,
+opts.register('localUpdate', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'Gauss-Newton linearisation point: False = re-propagate each '
               'track unscattered from the updated reference state; True = '

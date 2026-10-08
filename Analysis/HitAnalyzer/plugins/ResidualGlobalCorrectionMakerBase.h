@@ -796,8 +796,8 @@ protected:
   // carried forward, so every leg is propagated from the fitted state on the
   // previous layer and material, Q and the Jacobians are evaluated along the
   // fitted (scattered) trajectory; dx0 then holds the residual w.r.t. the
-  // propagated state.
-  bool localUpdate_ = true;
+  // propagated state. Default false.
+  bool localUpdate_ = false;
 
   // Numerical-FD closure (debug only; one-shot per job).
   bool runFDClosure_ = false;

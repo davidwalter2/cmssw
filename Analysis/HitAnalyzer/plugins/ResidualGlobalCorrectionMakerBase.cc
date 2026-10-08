@@ -405,7 +405,7 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   }
 
   localUpdate_ = iConfig.existsAs<bool>("localUpdate")
-      ? iConfig.getParameter<bool>("localUpdate") : true;
+      ? iConfig.getParameter<bool>("localUpdate") : false;
 
   // Numerical-FD closure flags (debug; both makers honour them).
   runFDClosure_ = iConfig.existsAs<bool>("runFDClosure")

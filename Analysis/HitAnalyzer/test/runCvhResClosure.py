@@ -376,7 +376,7 @@ opts.register('globalMaterialModel', True, VarParsing.VarParsing.multiplicity.si
 opts.register('perStepFieldModes', True, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'per-Geant4-step field-mode attribution (default True)')
-opts.register('localUpdate', True, VarParsing.VarParsing.multiplicity.singleton,
+opts.register('localUpdate', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'Gauss-Newton linearisation point: False = re-propagate each '
               'track unscattered from the updated reference state; True = '
