@@ -31,6 +31,7 @@ namespace cvhcgf {
     s.dumpEmParameters = pset.getParameter<bool>("DumpEmParameters");
     s.emHarmonise = pset.getParameter<bool>("EmHarmonise");
     s.dedxScale = pset.getParameter<double>("DedxScale");
+    s.radiativeDEDXTable = pset.getParameter<bool>("RadiativeDEDXTable");
     s.speciesDedxNbin = pset.getParameter<int>("ReferenceSpeciesDedxNbin");
     s.ioniKokoulinNbin = pset.getParameter<int>("IoniKokoulinNbin");
     s.ioniKokoulinCgfNbin = pset.getParameter<int>("IoniKokoulinCgfNbin");
@@ -86,6 +87,7 @@ namespace cvhcgf {
                         s.dumpEmParameters == g_switches.dumpEmParameters &&
                         s.emHarmonise == g_switches.emHarmonise &&
                         s.dedxScale == g_switches.dedxScale &&
+                        s.radiativeDEDXTable == g_switches.radiativeDEDXTable &&
                         s.speciesDedxNbin == g_switches.speciesDedxNbin &&
                         s.ioniKokoulinNbin == g_switches.ioniKokoulinNbin &&
                         s.ioniExactDeltaT0 == g_switches.ioniExactDeltaT0 &&

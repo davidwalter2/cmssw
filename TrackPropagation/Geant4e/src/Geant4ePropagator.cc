@@ -10,6 +10,7 @@
 #include "TrackPropagation/Geant4e/interface/G4ErrorPhysicsListForCVH.h"
 #include "TrackPropagation/Geant4e/interface/MaterialGroupModel.h"
 #include "TrackPropagation/Geant4e/interface/CGFQoPBlock.h"
+#include "TrackPropagation/Geant4e/interface/RadiativeDEDXTable.h"
 
 // CMSSW
 #include "DataFormats/TrajectorySeed/interface/PropagationDirection.h"
@@ -67,8 +68,6 @@
 #include "G4Proton.hh"
 #include "G4MuonPlus.hh"
 #include "G4MuonMinus.hh"
-#include "G4hBremsstrahlungModel.hh"
-#include "G4hPairProductionModel.hh"
 #include <map>
 #include "G4MuBremsstrahlungModel.hh"
 #include "G4MuPairProductionModel.hh"
@@ -2499,89 +2498,33 @@ void Geant4ePropagator::computeRadiativeDEDX(const G4Track *aTrack, double &dedx
   dedxBrem = 0.;
   dedxPair = 0.;
   const G4ParticleDefinition *part = aTrack->GetDynamicParticle()->GetParticleDefinition();
-  if (std::abs(part->GetPDGEncoding()) == 11) {
-    // e+-: the bremsstrahlung half of the electron mean-loss table
-    // (G4TablesForExtrapolatorForCVH::ComputeElectronDEDX), same models, same
-    // unrestricted cut; no pair production.
-    const G4Material *emate = aTrack->GetVolume()->GetLogicalVolume()->GetMaterial();
-    const double epre = aTrack->GetStep()->GetPreStepPoint()->GetKineticEnergy();
-    const double epost = aTrack->GetStep()->GetPostStepPoint()->GetKineticEnergy();
-    const double etkin = 0.5 * (epre + epost);
-    dedxBrem = eBremModel(part, etkin)->ComputeDEDXPerVolume(emate, part, etkin, etkin) / (CLHEP::GeV / CLHEP::cm);
+  const int apdg = std::abs(part->GetPDGEncoding());
+  // HADRONS. The simulation runs hBrems/hPairProd; the model carried no
+  // radiative block at all, so `radv` came out identically zero. Enabling it
+  // is gated on CVH_REF_HADRAD because the MEAN half lives in the reference
+  // (G4TablesForExtrapolatorForCVH::GetHadronRadiativeTable) and the two must
+  // move together: measured, the missing mean and the missing fluctuation
+  // cancel to ~90%, so the fluctuation ALONE is 0.00049 against 0.00005 for
+  // the complete correction -- a 10x degradation. One switch drives both.
+  if (apdg != 11 && apdg != 13 && !cvhcgf::referenceHasHadronRadiative()) {
     return;
   }
-  const bool isMuon = (std::abs(part->GetPDGEncoding()) == 13);
-  if (!isMuon) {
-    // HADRONS. The simulation runs hBrems/hPairProd; the model carried no
-    // radiative block at all, so `radv` came out identically zero. Enabling it
-    // is gated on CVH_REF_HADRAD because the MEAN half lives in the reference
-    // (G4TablesForExtrapolatorForCVH::GetHadronRadiativeTable) and the two must
-    // move together: measured, the missing mean and the missing fluctuation
-    // cancel to ~90%, so the fluctuation ALONE is 0.00049 against 0.00005 for
-    // the complete correction -- a 10x degradation. One switch drives both.
-    if (!cvhcgf::referenceHasHadronRadiative()) {
-      return;
-    }
-    // Cached per (thread, particle): model construction is expensive and this
-    // runs per Geant4 step. G4hBremsstrahlungModel / G4hPairProductionModel are
-    // the mass-aware subclasses the SIM itself uses for hadrons, built here on
-    // the ACTUAL particle -- no muon quantity in disguise, and no proton mass
-    // scaling (radiative loss is not a function of beta*gamma).
-    static thread_local std::map<const G4ParticleDefinition *,
-                                 std::pair<G4hBremsstrahlungModel *, G4hPairProductionModel *>>
-        hadModels;
-    auto it = hadModels.find(part);
-    if (it == hadModels.end()) {
-      G4DataVector cuts(std::max<size_t>(G4Material::GetNumberOfMaterials(), 1), DBL_MAX);
-      auto *hb = new G4hBremsstrahlungModel(part);
-      auto *hp = new G4hPairProductionModel(part);
-      hb->Initialise(part, cuts);
-      hp->Initialise(part, cuts);
-      hb->SetUseBaseMaterials(false);
-      hp->SetUseBaseMaterials(false);
-      it = hadModels.emplace(part, std::make_pair(hb, hp)).first;
-    }
-    const G4Material *hmate = aTrack->GetVolume()->GetLogicalVolume()->GetMaterial();
-    const double hpre = aTrack->GetStep()->GetPreStepPoint()->GetKineticEnergy();
-    const double hpost = aTrack->GetStep()->GetPostStepPoint()->GetKineticEnergy();
-    const double hekin = 0.5 * (hpre + hpost);
-    const double hu = CLHEP::GeV / CLHEP::cm;
-    dedxBrem = it->second.first->ComputeDEDXPerVolume(hmate, part, hekin, hekin) / hu;
-    dedxPair = it->second.second->ComputeDEDXPerVolume(hmate, part, hekin, hekin) / hu;
-    return;
-  }
-
-  // Build against muonPlus with unrestricted cuts, EXACTLY as
-  // G4TablesForExtrapolatorForCVH::ComputeMuonDEDX does (that table is built
-  // for muonPlus and used for both charges), so what is exported here is the
-  // radiative part of the mean the propagator actually subtracts. Cached per
-  // thread: model construction is expensive and this runs per Geant4 step.
-  static thread_local G4MuPairProductionModel *pairModel = nullptr;
-  static thread_local G4MuBremsstrahlungModel *bremModel = nullptr;
-  static thread_local const G4ParticleDefinition *muPlus = nullptr;
-  if (pairModel == nullptr) {
-    muPlus = G4MuonPlus::MuonPlus();
-    G4DataVector cuts(std::max<size_t>(G4Material::GetNumberOfMaterials(), 1), DBL_MAX);
-    pairModel = new G4MuPairProductionModel(muPlus);
-    bremModel = new G4MuBremsstrahlungModel(muPlus);
-    pairModel->Initialise(muPlus, cuts);
-    bremModel->Initialise(muPlus, cuts);
-    pairModel->SetUseBaseMaterials(false);
-    bremModel->SetUseBaseMaterials(false);
-  }
-
+  // The models are those the mean-loss table is built from, with the same
+  // particle and the same unrestricted cut (cvhrad::radiativeDEDX): what is
+  // exported here is the radiative part of the mean the propagator actually
+  // subtracts, brems and pair SEPARATE so each tabulated shape can be
+  // normalized to its own process mean. Evaluated at the step's mid kinetic
+  // energy in the step's material, read from cvhrad's tables unless
+  // RadiativeDEDXTable is off.
   const G4Material *mate = aTrack->GetVolume()->GetLogicalVolume()->GetMaterial();
   const double ePre = aTrack->GetStep()->GetPreStepPoint()->GetKineticEnergy();
   const double ePost = aTrack->GetStep()->GetPostStepPoint()->GetKineticEnergy();
   const double ekin = 0.5 * (ePre + ePost);
-
-  // ComputeDEDXPerVolume(material, particle, kineticEnergy, cut); the table
-  // passes e for both energy and cut, i.e. unrestricted -- matched here.
-  // Kept SEPARATE so each tabulated shape can be normalized to its own
-  // process mean; the sum is exactly what the mean-loss table adds.
+  double brem = 0., pair = 0.;
+  cvhrad::radiativeDEDX(part, mate, ekin, cvhcgf::switches().radiativeDEDXTable, brem, pair);
   const double u = CLHEP::GeV / CLHEP::cm;
-  dedxBrem = bremModel->ComputeDEDXPerVolume(mate, muPlus, ekin, ekin) / u;
-  dedxPair = pairModel->ComputeDEDXPerVolume(mate, muPlus, ekin, ekin) / u;
+  dedxBrem = brem / u;
+  dedxPair = pair / u;
 }
 
 double Geant4ePropagator::computeErrorIoni(const G4Track *aTrack, double pforced) const {

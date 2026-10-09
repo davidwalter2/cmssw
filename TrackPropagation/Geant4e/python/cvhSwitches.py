@@ -37,6 +37,7 @@ BOOLS = (
     "DumpEmParameters",
     "EmHarmonise",
     "CgfRadiativeChannel",
+    "RadiativeDEDXTable",
 )
 INTS = (
     "ReferenceSpeciesDedxNbin",

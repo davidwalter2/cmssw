@@ -110,6 +110,9 @@ namespace cvhcgf {
     bool emHarmonise = false;
     // dE/dx table scale.  A probe for the J/psi mass bias, not a tune.
     double dedxScale = 1.0;
+    // The radiative dE/dx of every step from cvhrad's tables (true) or from
+    // the Geant4 models directly (false, the reference for validating them).
+    bool radiativeDEDXTable = true;
     // Quadrature/table sizes.
     int speciesDedxNbin = 16;
     int ioniKokoulinNbin = 96;
