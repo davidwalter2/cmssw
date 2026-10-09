@@ -20,6 +20,14 @@ Geant4ePropagator = cms.ESProducer("GeantPropagatorESProducer",
                                    PropagationPtotLimit = cms.double(0.05), ## GeV/c; low enough for soft hadrons (pT ~ 0.2 GeV kaons)
                                    MagneticFieldLabel = cms.string(""),
                                    ForCVH=cms.bool(False),
+                                   # The q/p transport rows of layered material
+                                   # (Geant4ePropagator::layerLossRow) from
+                                   # central differences of the volume chord
+                                   # everywhere, also where the chord is linear
+                                   # over their reach and the row is otherwise
+                                   # its analytic derivative: the validation
+                                   # mode, 1.8x the default row cost.
+                                   LayerChordFiniteDifference=cms.bool(False),
                                    # The CDF fraction of the delta-electron
                                    # spectrum kept when the ionization variance
                                    # is formed.  This is a convention, and it

@@ -93,7 +93,12 @@ std::unique_ptr<Propagator> GeantPropagatorESProducer::produce(const TrackingCom
                                      ? pset_.getParameter<double>("StepLengthLimit")
                                      : 10.0;
 
-  return std::make_unique<Geant4ePropagator>(
+  auto prop = std::make_unique<Geant4ePropagator>(
       &(iRecord.get(magFieldToken_)), particleName, dir, plimit_, forCVH_,
       ioniTruncationAlpha, stepLengthLimit);
+  // The layer rows' validation mode: central differences of the chord
+  // everywhere (Geant4ePropagator::layerLossRow). Optional, like the two above.
+  prop->setLayerChordFiniteDifference(pset_.existsAs<bool>("LayerChordFiniteDifference") &&
+                                      pset_.getParameter<bool>("LayerChordFiniteDifference"));
+  return prop;
 }
