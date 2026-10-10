@@ -11,15 +11,18 @@ If the persistent format of class `SiStripApproximateClusterCollection` gets cha
 
 ## Reading SiStripCluster versions 10-13 (CMSSW <= 14_X) in 15_X (local W-mass patch)
 
-The v10-v13 -> v14 read rule in `classes_def.xml` has no `source`: ROOT reads
-`amplitudes_` and `firstStrip_` by automatic member-wise schema evolution (same
-name and type on file in every version) and the rule only fills the
-`barycenter_`/`charge_` cache that v14 keeps for every cluster (v12/v13 stored it
-for approximate clusters only, v10/v11 not at all). The release rules sourced the
-on-file members (`onfile.amplitudes_`, ...); ROOT does not serve those for
-branches written at split level > 1 (root-project/root#19773), so every <= 14_X
-file with the clusters at split 99 (AOD, RECO, ALCARECO, 2024 PromptReco MINIAOD)
-was read as EMPTY clusters (firstStrip 0, no amplitudes, barycenter 0, charge 0) --
-and the 15_0 re-MINI of 2024 (MiniAODv6 / MINIv6NANOv15) wrote those empty
-clusters to disk. Not covered: the approximateMask flag of v12/v13 approximate
-(rawprime) clusters is not set; their stored barycenter_/charge_ are kept.
+The v10-v11 and v12-v13 -> v14 read rules in `classes_def.xml` are the release's, with
+their `target` lists reordered so that the first target is the last source
+(`firstStrip_` for v10-v11, `charge_` for v12-v13). ROOT attaches a rule to the
+element of its first target and inserts it after the last source; when two or more
+sources still exist under the same name and the first target is not the last
+source, the rule is never executed for a class read member-wise from split
+sub-branches. With the release order (`amplitudes_` first) every <= 14_X file with
+the clusters at split level > 1 (AOD, RECO, ALCARECO, 2024 PromptReco MINIAOD) was
+read as EMPTY clusters (firstStrip 0, no amplitudes, barycenter 0, charge 0) -- and
+the 15_0 re-MINI of 2024 (MiniAODv6 / MINIv6NANOv15) wrote those empty clusters to
+disk. Split level 1 was not affected. With the reordered targets, files written by
+10_6, 13_0 and 14_0 at split level 99 read cluster for cluster the same as their
+split-level-1 copies (detId, firstStrip, amplitudes, barycenter, charge). The rule
+code is unchanged, so v12/v13 approximate (rawprime) clusters keep their stored
+barycenter/charge and get the approximateMask flag.
