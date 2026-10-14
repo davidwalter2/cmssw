@@ -149,6 +149,12 @@ public:
 
   bool GetForCVH() const { return forCVH_; }
 
+  // Every layer row of the q/p transport (layerLossRow) from central
+  // differences of the volume chord, also where the chord is linear and the
+  // row is otherwise its analytic derivative: the validation mode
+  // (`LayerChordFiniteDifference`).
+  void setLayerChordFiniteDifference(bool on) { layerChordFD_ = on; }
+
   // Per-step Urban-model log for the physics-CF export (doRes): one entry
   // per Geant4 step that produced a nonzero ionization-fluctuation
   // contribution during the LAST propagateGenericWithJacobianAltD call
@@ -414,6 +420,8 @@ private:
   // destructor's summary).
   mutable unsigned long long layerSteps_{0ULL};
   mutable unsigned long long layerNoChord_{0ULL};
+  // layer steps whose row came from finite differences of the chord
+  mutable unsigned long long layerFiniteDiff_{0ULL};
 
   // Geant4 11.1 made G4ErrorPropagatorManager / G4ErrorPropagatorData
   // singletons G4ThreadLocal. Fetch them per-call via the static accessors
@@ -512,6 +520,8 @@ private:
   // The navigator the chords are measured with (created on first use, on the
   // tracking world of the thread that propagates).
   mutable std::unique_ptr<G4Navigator> chordNav_;
+  // see setLayerChordFiniteDifference
+  bool layerChordFD_ = false;
 
   // mutable: allocation deferred from ctors to the first-call init block
   // in propagateGeneric / propagateGenericWithJacobianAltD (both const

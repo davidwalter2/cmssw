@@ -64,7 +64,7 @@ opts.register('useIdealGeometry', False, VarParsing.VarParsing.multiplicity.sing
               'realistic MC alignment')
 opts.register('globalTag', '106X_mcRun2_asymptotic_v17', VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string, 'UL16 MC conditions')
-opts.register('propagationPtotLimit', 0.2, VarParsing.VarParsing.multiplicity.singleton,
+opts.register('propagationPtotLimit', 0.05, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.float, 'Geant4e momentum floor (GeV)')
 opts.register('outprefix', 'globalcor_truth', VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string, 'output file prefix (<prefix>_<stream>.root)')

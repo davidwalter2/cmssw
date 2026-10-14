@@ -280,14 +280,14 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   varianceFDEps_ = iConfig.existsAs<double>("varianceFDEps")
                            ? iConfig.getParameter<double>("varianceFDEps") : 1e-3;
   keepPixelEdgeHits_ = iConfig.existsAs<bool>("keepPixelEdgeHits")
-      ? iConfig.getParameter<bool>("keepPixelEdgeHits") : false;
+      ? iConfig.getParameter<bool>("keepPixelEdgeHits") : true;
   pixelMinSizeX_ = iConfig.existsAs<int>("pixelMinSizeX")
-      ? iConfig.getParameter<int>("pixelMinSizeX") : 2;
+      ? iConfig.getParameter<int>("pixelMinSizeX") : 1;
   pixelMinSizeY_ = iConfig.existsAs<int>("pixelMinSizeY")
       ? iConfig.getParameter<int>("pixelMinSizeY") : 1;
   // |pdgId| used by the single-track gen matching (doGen); default muon.
   pixelHitClassCorrections_ = iConfig.existsAs<bool>("pixelHitClassCorrections")
-      ? iConfig.getParameter<bool>("pixelHitClassCorrections") : false;
+      ? iConfig.getParameter<bool>("pixelHitClassCorrections") : true;
   pixelLorentzParam_ = iConfig.existsAs<bool>("pixelLorentzParam")
       ? iConfig.getParameter<bool>("pixelLorentzParam") : false;
   lorentzWclean_ = iConfig.existsAs<double>("lorentzWclean")
@@ -405,7 +405,7 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   }
 
   localUpdate_ = iConfig.existsAs<bool>("localUpdate")
-      ? iConfig.getParameter<bool>("localUpdate") : true;
+      ? iConfig.getParameter<bool>("localUpdate") : false;
 
   // Numerical-FD closure flags (debug; both makers honour them).
   runFDClosure_ = iConfig.existsAs<bool>("runFDClosure")

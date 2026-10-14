@@ -52,7 +52,7 @@ opts.register('deweightPathoHits', False, VarParsing.VarParsing.multiplicity.sin
               'them: keeps surface+state so hitdiag residuals are unbiased '
               'w.r.t. the rest of the fit; combine with keepPixelEdgeHits='
               'True pixelMinSizeX=1 and fitFromGenParms=True')
-opts.register('pixelHitClassCorrections', False, VarParsing.VarParsing.multiplicity.singleton,
+opts.register('pixelHitClassCorrections', True, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'register the per-pixel-module pathology-class correction '
               'parameters (parmtypes 16-21: edge-x-mean/diff, edge-y-mean/'
@@ -147,9 +147,9 @@ opts.register('fitSimHitPositions', False, VarParsing.VarParsing.multiplicity.si
               VarParsing.VarParsing.varType.bool,
               'rung-E closure: fit simulated hit positions (measured '
               'coordinates only, covariances unchanged); needs doSimHits=True')
-opts.register('propagationPtotLimit', 0.2, VarParsing.VarParsing.multiplicity.singleton,
+opts.register('propagationPtotLimit', 0.05, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.float,
-              'G4e propagation momentum floor [GeV]; cfi default was 1.0')
+              'G4e propagation momentum floor [GeV]; the cfi default is 0.05')
 opts.register('maxMomentumStepFactor', 2.0, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.float,
               'RELATIVE Gauss-Newton step damping: the max factor by which a '
@@ -391,16 +391,16 @@ opts.register('edmConvergence', 1e-5, VarParsing.VarParsing.multiplicity.singlet
               VarParsing.VarParsing.varType.float,
               'EDM convergence threshold on the reference-state block (default 1e-5; '
               '0 disables early stopping, e.g. for per-iteration trajectory studies)')
-opts.register('keepPixelEdgeHits', False, VarParsing.VarParsing.multiplicity.singleton,
+opts.register('keepPixelEdgeHits', True, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'keep pixel hits whose cluster touches the sensor boundary '
               '(isOnEdge) in the fit instead of demoting them to inactive; '
               'the pixelMinSizeX CPE-quality cut applies independently '
-              '(default False = baseline)')
-opts.register('pixelMinSizeX', 2, VarParsing.VarParsing.multiplicity.singleton,
+              '(default True; False = the 10_6 edge-hit veto)')
+opts.register('pixelMinSizeX', 1, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.int,
               'minimum pixel cluster size in x for a hit to stay in the fit '
-              '(default 2 = baseline sizeX>1 cut; 1 admits all clusters)')
+              '(default 1 admits all clusters; 2 = the 10_6 sizeX>1 cut)')
 _defaultGroupsFile = os.path.join(os.environ.get('CMSSW_BASE', ''),
                                   'src/Analysis/HitAnalyzer/data/materialGroups50.txt')
 opts.register('materialGroupsFile', _defaultGroupsFile, VarParsing.VarParsing.multiplicity.singleton,
@@ -420,7 +420,7 @@ opts.register('injectFieldModes', [], VarParsing.VarParsing.multiplicity.list,
 opts.register('injectFieldModeValues', [], VarParsing.VarParsing.multiplicity.list,
               VarParsing.VarParsing.varType.float,
               'shifts for injectFieldModes, same order')
-opts.register('localUpdate', True, VarParsing.VarParsing.multiplicity.singleton,
+opts.register('localUpdate', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'Gauss-Newton linearisation point: False = re-propagate each '
               'track unscattered from the updated reference state; True = '

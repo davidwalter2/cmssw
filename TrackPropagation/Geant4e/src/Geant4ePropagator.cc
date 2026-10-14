@@ -10,6 +10,7 @@
 #include "TrackPropagation/Geant4e/interface/G4ErrorPhysicsListForCVH.h"
 #include "TrackPropagation/Geant4e/interface/MaterialGroupModel.h"
 #include "TrackPropagation/Geant4e/interface/CGFQoPBlock.h"
+#include "TrackPropagation/Geant4e/interface/RadiativeDEDXTable.h"
 
 // CMSSW
 #include "DataFormats/TrajectorySeed/interface/PropagationDirection.h"
@@ -30,6 +31,7 @@
 #include "G4Navigator.hh"
 #include "G4Step.hh"
 #include "G4VTouchable.hh"
+#include "G4VSolid.hh"
 #include "G4ErrorCylSurfaceTarget.hh"
 #include "G4ErrorFreeTrajState.hh"
 #include "G4ErrorPlaneSurfaceTarget.hh"
@@ -67,8 +69,6 @@
 #include "G4Proton.hh"
 #include "G4MuonPlus.hh"
 #include "G4MuonMinus.hh"
-#include "G4hBremsstrahlungModel.hh"
-#include "G4hPairProductionModel.hh"
 #include <map>
 #include "G4MuBremsstrahlungModel.hh"
 #include "G4MuPairProductionModel.hh"
@@ -149,6 +149,7 @@ Geant4ePropagator::Geant4ePropagator(const Geant4ePropagator &other)
       stepLengthLimit_(other.stepLengthLimit_),
       ioniStepLogging_(other.ioniStepLogging_),
       stepTransportLogging_(other.stepTransportLogging_) {
+  layerChordFD_ = other.layerChordFD_;
   // fluct allocation is deferred to the first propagate() call on this
   // thread (under geant4eInitMutex), AFTER the per-thread G4 world has
   // been set up by CvhWorker. Allocating it eagerly in the deep-copy ctor
@@ -178,7 +179,8 @@ Geant4ePropagator::~Geant4ePropagator() {
               << "   exit6[fieldbound]=" << propFailCounts_[5]
               << "   backwardLegs=" << propBackwardLegs_
               << "   targetResumes=" << propTargetResumes_
-              << "   qopRow=layerChord(steps=" << layerSteps_ << ", noChord=" << layerNoChord_ << ")"
+              << "   qopRow=layerChord(steps=" << layerSteps_ << ", noChord=" << layerNoChord_
+              << ", finiteDiff=" << layerFiniteDiff_ << ")"
               << std::endl;
   }
 
@@ -2499,89 +2501,33 @@ void Geant4ePropagator::computeRadiativeDEDX(const G4Track *aTrack, double &dedx
   dedxBrem = 0.;
   dedxPair = 0.;
   const G4ParticleDefinition *part = aTrack->GetDynamicParticle()->GetParticleDefinition();
-  if (std::abs(part->GetPDGEncoding()) == 11) {
-    // e+-: the bremsstrahlung half of the electron mean-loss table
-    // (G4TablesForExtrapolatorForCVH::ComputeElectronDEDX), same models, same
-    // unrestricted cut; no pair production.
-    const G4Material *emate = aTrack->GetVolume()->GetLogicalVolume()->GetMaterial();
-    const double epre = aTrack->GetStep()->GetPreStepPoint()->GetKineticEnergy();
-    const double epost = aTrack->GetStep()->GetPostStepPoint()->GetKineticEnergy();
-    const double etkin = 0.5 * (epre + epost);
-    dedxBrem = eBremModel(part, etkin)->ComputeDEDXPerVolume(emate, part, etkin, etkin) / (CLHEP::GeV / CLHEP::cm);
+  const int apdg = std::abs(part->GetPDGEncoding());
+  // HADRONS. The simulation runs hBrems/hPairProd; the model carried no
+  // radiative block at all, so `radv` came out identically zero. Enabling it
+  // is gated on CVH_REF_HADRAD because the MEAN half lives in the reference
+  // (G4TablesForExtrapolatorForCVH::GetHadronRadiativeTable) and the two must
+  // move together: measured, the missing mean and the missing fluctuation
+  // cancel to ~90%, so the fluctuation ALONE is 0.00049 against 0.00005 for
+  // the complete correction -- a 10x degradation. One switch drives both.
+  if (apdg != 11 && apdg != 13 && !cvhcgf::referenceHasHadronRadiative()) {
     return;
   }
-  const bool isMuon = (std::abs(part->GetPDGEncoding()) == 13);
-  if (!isMuon) {
-    // HADRONS. The simulation runs hBrems/hPairProd; the model carried no
-    // radiative block at all, so `radv` came out identically zero. Enabling it
-    // is gated on CVH_REF_HADRAD because the MEAN half lives in the reference
-    // (G4TablesForExtrapolatorForCVH::GetHadronRadiativeTable) and the two must
-    // move together: measured, the missing mean and the missing fluctuation
-    // cancel to ~90%, so the fluctuation ALONE is 0.00049 against 0.00005 for
-    // the complete correction -- a 10x degradation. One switch drives both.
-    if (!cvhcgf::referenceHasHadronRadiative()) {
-      return;
-    }
-    // Cached per (thread, particle): model construction is expensive and this
-    // runs per Geant4 step. G4hBremsstrahlungModel / G4hPairProductionModel are
-    // the mass-aware subclasses the SIM itself uses for hadrons, built here on
-    // the ACTUAL particle -- no muon quantity in disguise, and no proton mass
-    // scaling (radiative loss is not a function of beta*gamma).
-    static thread_local std::map<const G4ParticleDefinition *,
-                                 std::pair<G4hBremsstrahlungModel *, G4hPairProductionModel *>>
-        hadModels;
-    auto it = hadModels.find(part);
-    if (it == hadModels.end()) {
-      G4DataVector cuts(std::max<size_t>(G4Material::GetNumberOfMaterials(), 1), DBL_MAX);
-      auto *hb = new G4hBremsstrahlungModel(part);
-      auto *hp = new G4hPairProductionModel(part);
-      hb->Initialise(part, cuts);
-      hp->Initialise(part, cuts);
-      hb->SetUseBaseMaterials(false);
-      hp->SetUseBaseMaterials(false);
-      it = hadModels.emplace(part, std::make_pair(hb, hp)).first;
-    }
-    const G4Material *hmate = aTrack->GetVolume()->GetLogicalVolume()->GetMaterial();
-    const double hpre = aTrack->GetStep()->GetPreStepPoint()->GetKineticEnergy();
-    const double hpost = aTrack->GetStep()->GetPostStepPoint()->GetKineticEnergy();
-    const double hekin = 0.5 * (hpre + hpost);
-    const double hu = CLHEP::GeV / CLHEP::cm;
-    dedxBrem = it->second.first->ComputeDEDXPerVolume(hmate, part, hekin, hekin) / hu;
-    dedxPair = it->second.second->ComputeDEDXPerVolume(hmate, part, hekin, hekin) / hu;
-    return;
-  }
-
-  // Build against muonPlus with unrestricted cuts, EXACTLY as
-  // G4TablesForExtrapolatorForCVH::ComputeMuonDEDX does (that table is built
-  // for muonPlus and used for both charges), so what is exported here is the
-  // radiative part of the mean the propagator actually subtracts. Cached per
-  // thread: model construction is expensive and this runs per Geant4 step.
-  static thread_local G4MuPairProductionModel *pairModel = nullptr;
-  static thread_local G4MuBremsstrahlungModel *bremModel = nullptr;
-  static thread_local const G4ParticleDefinition *muPlus = nullptr;
-  if (pairModel == nullptr) {
-    muPlus = G4MuonPlus::MuonPlus();
-    G4DataVector cuts(std::max<size_t>(G4Material::GetNumberOfMaterials(), 1), DBL_MAX);
-    pairModel = new G4MuPairProductionModel(muPlus);
-    bremModel = new G4MuBremsstrahlungModel(muPlus);
-    pairModel->Initialise(muPlus, cuts);
-    bremModel->Initialise(muPlus, cuts);
-    pairModel->SetUseBaseMaterials(false);
-    bremModel->SetUseBaseMaterials(false);
-  }
-
+  // The models are those the mean-loss table is built from, with the same
+  // particle and the same unrestricted cut (cvhrad::radiativeDEDX): what is
+  // exported here is the radiative part of the mean the propagator actually
+  // subtracts, brems and pair SEPARATE so each tabulated shape can be
+  // normalized to its own process mean. Evaluated at the step's mid kinetic
+  // energy in the step's material, read from cvhrad's tables unless
+  // RadiativeDEDXTable is off.
   const G4Material *mate = aTrack->GetVolume()->GetLogicalVolume()->GetMaterial();
   const double ePre = aTrack->GetStep()->GetPreStepPoint()->GetKineticEnergy();
   const double ePost = aTrack->GetStep()->GetPostStepPoint()->GetKineticEnergy();
   const double ekin = 0.5 * (ePre + ePost);
-
-  // ComputeDEDXPerVolume(material, particle, kineticEnergy, cut); the table
-  // passes e for both energy and cut, i.e. unrestricted -- matched here.
-  // Kept SEPARATE so each tabulated shape can be normalized to its own
-  // process mean; the sum is exactly what the mean-loss table adds.
+  double brem = 0., pair = 0.;
+  cvhrad::radiativeDEDX(part, mate, ekin, cvhcgf::switches().radiativeDEDXTable, brem, pair);
   const double u = CLHEP::GeV / CLHEP::cm;
-  dedxBrem = bremModel->ComputeDEDXPerVolume(mate, muPlus, ekin, ekin) / u;
-  dedxPair = pairModel->ComputeDEDXPerVolume(mate, muPlus, ekin, ekin) / u;
+  dedxBrem = brem / u;
+  dedxPair = pair / u;
 }
 
 double Geant4ePropagator::computeErrorIoni(const G4Track *aTrack, double pforced) const {
@@ -2741,9 +2687,8 @@ void Geant4ePropagator::CalculateEffectiveZandA(const G4Material *mate, G4double
 // daughters bound the chord (a volume's solid alone would not know them: a
 // beam-pipe wall whose solid contains the vacuum inside it).  d is the step's
 // chord direction oriented along the state's momentum.  The derivatives are
-// central differences in the curvilinear conventions of the transport (lam,
-// phi rotate d; xt, yt move p along U = z x d / |z x d| and V = d x U),
-// one-sided where a displaced point leaves the step's volume.
+// taken in the curvilinear conventions of the transport (lam, phi rotate d;
+// xt, yt move p along U = z x d / |z x d| and V = d x U).
 //
 // A perturbed track meets the layer at a different ARC LENGTH: the chord's
 // midpoint along the perturbed line moves by ds, and over ds the real track
@@ -2754,8 +2699,41 @@ void Geant4ePropagator::CalculateEffectiveZandA(const G4Material *mate, G4double
 // a coaxial shell unchanged, as it must; the straight line alone gives the
 // x_T derivative twice its value at 40 degrees incidence.
 //
-// Any solid and any hierarchy: only the Geant4 navigation interface is used.
-// False where the chord is undefined.
+// The row is the derivative of the chord over a finite reach: central
+// differences with hAngle = 1e-4 rad and hPos = 10 um (every perturbed chord
+// taken twice, straight for ds and then bent; one-sided where a displaced
+// point leaves the step's volume) -- seventeen chords.  Where the chord is
+// LINEAR over that reach the differences are its analytic first derivative,
+// from the one chord through p: the line (p + dp, d + dv) meets the boundary
+// that limits the chord forward -- at xf = p + sf d, normal nf -- and the one
+// that limits it backward -- at xb = p - sb d, normal nb -- at
+//     dsf = -(nf.dp + sf nf.dv) / nf.d,     dsb = (nb.dp - sb nb.dv) / nb.d
+// (a first-order shift sees only the tangent planes); the midpoint moves by
+// ds = (dsf - dsb)/2 along the line, the bent line is dv' = dv + ds (q/p)
+// d x B, and d ln L = (dsf' + dsb') / L with (dp, dv').  Linearity is checked,
+// not assumed, on the chords the position differences start from (p moved by
+// +-hPos along U and V, straight): their central differences must equal the
+// analytic ones to 1e-6.  Within the reach of an edge, a thin layer, a sliver
+// of a volume, a daughter that a displaced chord would meet, a boundary of
+// millimetre radius, or one met at grazing incidence, the chord is not
+// linear, its differences depend on the reach, and the row is the
+// differences (bit for bit) -- 8 % of the steps on the CMS tracker.  The
+// angle differences move a chord's ends by (L/2) hAngle, inside the position
+// reach up to L = 20 cm; the longer chords run through air (4e-4 of the
+// steps, 1e-6 of the row).
+// `LayerChordFiniteDifference` takes the differences everywhere (the
+// validation mode).
+//
+// The navigator is put at a point by the hierarchical search, which is then
+// checked to have found the step's volume (the same physical volume at the
+// same placement), or -- for a point that lies in that volume and off its
+// daughters, i.e. within the isotropic safety of the midpoint, while the
+// navigator still sits in the volume -- merely moved there.  Both leave the
+// navigator in the same state, so every chord is the same to the bit; the
+// move skips re-testing every daughter of the voxel.
+//
+// Any solid and any hierarchy: only the Geant4 navigation interface and the
+// solids' surface normals are used.  False where the chord is undefined.
 bool Geant4ePropagator::layerLossRow(const G4Step *step,
                                      const Eigen::Matrix<double, 7, 1> &start,
                                      double scale,
@@ -2790,17 +2768,26 @@ bool Geant4ePropagator::layerLossRow(const G4Step *step,
   auto dirOf = [](double l, double f) {
     return G4ThreeVector(std::cos(l) * std::cos(f), std::cos(l) * std::sin(f), std::sin(l));
   };
-  bool located = false;
+  bool located = false, atVol = false;
+  // `inside`: p is known to lie in the step's volume, off its daughters
+  auto locate = [&](const G4ThreeVector &p, const G4ThreeVector &dir, bool inside) {
+    if (inside && atVol) {
+      nav.LocateGlobalPointWithinVolume(p);
+      return true;
+    }
+    const G4VPhysicalVolume *pv = nav.LocateGlobalPointAndSetup(p, &dir, located, false);
+    located = true;
+    atVol = pv == vol &&
+            (nav.GetGlobalToLocalTransform().InverseTransformPoint(G4ThreeVector()) - volOrigin).mag2() <= 1e-12;
+    return atVol;
+  };
   // the chord through the step's volume at p along dir: the distances to its
   // boundaries forward (sf) and backward (sb); false where p is not in that
-  // volume (the same physical volume at the same placement)
-  auto chord = [&](const G4ThreeVector &p, const G4ThreeVector &dir, double &sf, double &sb) {
+  // volume
+  auto chord = [&](const G4ThreeVector &p, const G4ThreeVector &dir, bool inside, double &sf, double &sb) {
     for (const double sgn : {1., -1.}) {
       const G4ThreeVector dd = sgn * dir;
-      const G4VPhysicalVolume *pv = nav.LocateGlobalPointAndSetup(p, &dd, located, false);
-      located = true;
-      if (pv != vol ||
-          (nav.GetGlobalToLocalTransform().InverseTransformPoint(G4ThreeVector()) - volOrigin).mag2() > 1e-12)
+      if (!locate(p, dd, inside))
         return false;
       G4double safety = 0.;
       const G4double sd = nav.ComputeStep(p, dd, kInfinity, safety);
@@ -2810,30 +2797,119 @@ bool Geant4ePropagator::layerLossRow(const G4Step *step,
     }
     return sf + sb > 0.;
   };
-  double sf0 = 0., sb0 = 0.;
-  if (!chord(mid, d, sf0, sb0))
+  // the normal of the boundary that ended the navigator's last step (from p
+  // along dir, s long), in global coordinates: the entered daughter's surface
+  // (the navigator evaluates it) or the volume's own
+  auto boundaryNormal = [&](const G4ThreeVector &p, const G4ThreeVector &dir, double s, G4ThreeVector &n) {
+    const G4AffineTransform &toLocal = nav.GetGlobalToLocalTransform();
+    G4ThreeVector nl;
+    if (nav.EnteredDaughterVolume()) {
+      G4bool valid = false;
+      nl = nav.GetLocalExitNormal(&valid);
+      if (!valid)
+        return false;
+    } else if (nav.ExitedMotherVolume()) {
+      nl = vol->GetLogicalVolume()->GetSolid()->SurfaceNormal(toLocal.TransformPoint(p) +
+                                                               s * toLocal.TransformAxis(dir));
+    } else {
+      return false;
+    }
+    n = toLocal.InverseTransformAxis(nl);
+    return std::abs(n.mag2() - 1.) < 1e-9;
+  };
+
+  // the chord through the midpoint, with the normals of its two boundaries
+  // unless the differences are taken everywhere
+  double sf0 = 0., sb0 = 0., safety0 = 0.;
+  G4ThreeVector nf, nb;
+  bool normals = !layerChordFD_;
+  if (!locate(mid, d, false))
     return false;
-  const double l0 = std::log(sf0 + sb0);
+  sf0 = nav.ComputeStep(mid, d, kInfinity, safety0);
+  if (!(sf0 < kInfinity))
+    return false;
+  normals = normals && boundaryNormal(mid, d, sf0, nf);
+  // a point this far inside every boundary is not on any of them
+  constexpr double kInside = 1e-6 * CLHEP::mm;
+  const bool midInside = safety0 > kInside;
+  if (!locate(mid, -d, midInside))
+    return false;
+  G4double safety = 0.;
+  sb0 = nav.ComputeStep(mid, -d, kInfinity, safety);
+  if (!(sb0 < kInfinity) || !(sf0 + sb0 > 0.))
+    return false;
+  normals = normals && boundaryNormal(mid, -d, sb0, nb);
+
   // the track's curvature vector per mm: dT/ds = (q/p) T x B, B in 1/GeV/cm
   const GlobalVector Bi = theField->inInverseGeV(
       GlobalPoint(mid.x() / CLHEP::cm, mid.y() / CLHEP::cm, mid.z() / CLHEP::cm));
   const double qop = start[6] / start.segment<3>(3).norm();
   const G4ThreeVector Bv(Bi.x(), Bi.y(), Bi.z());
+  constexpr double hAngle = 1e-4;           // rad
+  constexpr double hPos = 1e-3 * CLHEP::cm;  // 10 um; the derivative is per cm
+  const bool shiftInside = safety0 > hPos + kInside;
+
+  // the analytic row, where the chord is linear over the reach of the
+  // differences; the incidence bound only keeps 1/(n.d) finite, the
+  // linearity check is what decides
+  constexpr double kMinCos = 1e-2;
+  constexpr double kLinTol = 1e-6;
+  // the check's floor in |d ln L / dx| (per mm): planar layers give exactly
+  // zero, and their rounding must not count against linearity
+  constexpr double kLinFloor = 1e-3 / CLHEP::cm;
+  const double cf = normals ? nf.dot(d) : 0., cb = normals ? nb.dot(d) : 0.;
+  if (normals && shiftInside && std::abs(cf) > kMinCos && std::abs(cb) > kMinCos) {
+    const G4ThreeVector kappa = (qop / CLHEP::cm) * d.cross(Bv);  // dT/ds per mm
+    const double L = sf0 + sb0;
+    auto shifts = [&](const G4ThreeVector &dp, const G4ThreeVector &dv, double &dsf, double &dsb) {
+      dsf = -(nf.dot(dp) + sf0 * nf.dot(dv)) / cf;
+      dsb = (nb.dot(dp) - sb0 * nb.dot(dv)) / cb;
+    };
+    auto dlnL = [&](const G4ThreeVector &dp, const G4ThreeVector &dv) {
+      double dsf = 0., dsb = 0.;
+      shifts(dp, dv, dsf, dsb);
+      shifts(dp, dv + 0.5 * (dsf - dsb) * kappa, dsf, dsb);
+      return (dsf + dsb) / L;
+    };
+    const G4ThreeVector zero;
+    bool linear = true;
+    for (const G4ThreeVector *e : {&U, &V}) {
+      double dsf = 0., dsb = 0., sfp = 0., sbp = 0., sfm = 0., sbm = 0.;
+      shifts(*e, zero, dsf, dsb);
+      const double a = (dsf + dsb) / L;
+      linear = chord(mid + hPos * *e, d, true, sfp, sbp) && chord(mid - hPos * *e, d, true, sfm, sbm) &&
+               std::abs((std::log(sfp + sbp) - std::log(sfm + sbm)) / (2. * hPos) - a) <=
+                   kLinTol * std::max(std::abs(a), kLinFloor);
+      if (!linear)
+        break;
+    }
+    if (linear) {
+      g(0) = dlnL(zero, G4ThreeVector(-std::sin(lam) * std::cos(phi), -std::sin(lam) * std::sin(phi), std::cos(lam)));
+      g(1) = dlnL(zero, G4ThreeVector(-std::cos(lam) * std::sin(phi), std::cos(lam) * std::cos(phi), 0.));
+      g(2) = dlnL(U, zero) * CLHEP::cm;
+      g(3) = dlnL(V, zero) * CLHEP::cm;
+      g *= scale;
+      return true;
+    }
+  }
+
+  // the finite differences: under the switch, and where the chord is not
+  // linear over their reach
+  ++layerFiniteDiff_;
+  const double l0 = std::log(sf0 + sb0);
   // ln of the chord of the perturbed track (p, dir), taken along the direction
   // it has where it crosses the layer (the midpoint shift ds, see above)
-  auto lnChord = [&](const G4ThreeVector &p, const G4ThreeVector &dir, double &out) {
+  auto lnChord = [&](const G4ThreeVector &p, const G4ThreeVector &dir, bool inside, double &out) {
     double sf = 0., sb = 0.;
-    if (!chord(p, dir, sf, sb))
+    if (!chord(p, dir, inside, sf, sb))
       return false;
     const double ds = 0.5 * ((sf - sb) - (sf0 - sb0));            // mm, along dir
     const G4ThreeVector bent = (dir + (ds / CLHEP::cm) * qop * dir.cross(Bv)).unit();
-    if (!chord(p, bent, sf, sb))
+    if (!chord(p, bent, inside, sf, sb))
       return false;
     out = std::log(sf + sb);
     return true;
   };
-  constexpr double hAngle = 1e-4;           // rad
-  constexpr double hPos = 1e-3 * CLHEP::cm;  // 10 um; the derivative is per cm
   auto deriv = [&](auto &&shifted, double h, double per) {
     double lp = 0., lm = 0.;
     const bool okp = shifted(h, lp), okm = shifted(-h, lm);
@@ -2845,10 +2921,10 @@ bool Geant4ePropagator::layerLossRow(const G4Step *step,
       return (l0 - lm) / h * per;
     return 0.;
   };
-  g(0) = deriv([&](double h, double &o) { return lnChord(mid, dirOf(lam + h, phi), o); }, hAngle, 1.);
-  g(1) = deriv([&](double h, double &o) { return lnChord(mid, dirOf(lam, phi + h), o); }, hAngle, 1.);
-  g(2) = deriv([&](double h, double &o) { return lnChord(mid + h * U, d, o); }, hPos, CLHEP::cm);
-  g(3) = deriv([&](double h, double &o) { return lnChord(mid + h * V, d, o); }, hPos, CLHEP::cm);
+  g(0) = deriv([&](double h, double &o) { return lnChord(mid, dirOf(lam + h, phi), midInside, o); }, hAngle, 1.);
+  g(1) = deriv([&](double h, double &o) { return lnChord(mid, dirOf(lam, phi + h), midInside, o); }, hAngle, 1.);
+  g(2) = deriv([&](double h, double &o) { return lnChord(mid + h * U, d, shiftInside, o); }, hPos, CLHEP::cm);
+  g(3) = deriv([&](double h, double &o) { return lnChord(mid + h * V, d, shiftInside, o); }, hPos, CLHEP::cm);
   g *= scale;
   return true;
 }

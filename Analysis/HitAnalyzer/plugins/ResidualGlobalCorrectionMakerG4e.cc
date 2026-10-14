@@ -200,7 +200,7 @@ private:
   // Configurable via the `clampMomentumFloor` cfi parameter, whose driver
   // default is derived from the propagation limit. Same name/semantics as
   // the two-track and N-track makers.
-  double clampMomentumFloor_ = 2.0;
+  double clampMomentumFloor_ = 0.0625;
   // Relative Gauss-Newton step damping. Per iteration a track's
   // momentum may change by at most this factor (default 2: p may at most halve
   // or double). Implemented as the effective floor max(clampMomentumFloor_,
@@ -464,9 +464,10 @@ ResidualGlobalCorrectionMakerG4e::ResidualGlobalCorrectionMakerG4e(const edm::Pa
   allowChargeFlipAboveP_ = iConfig.existsAs<double>("allowChargeFlipAboveP")
       ? iConfig.getParameter<double>("allowChargeFlipAboveP") : 1.e9;
   // Gauss-Newton momentum floor (see member comment). existsAs-guarded so a
-  // cfi that does not set it keeps the default 2.0 GeV.
+  // cfi that does not set it keeps the default 0.0625 GeV = 1.25 x the
+  // default PropagationPtotLimit (0.05 GeV).
   clampMomentumFloor_ = iConfig.existsAs<double>("clampMomentumFloor")
-      ? iConfig.getParameter<double>("clampMomentumFloor") : 2.0;
+      ? iConfig.getParameter<double>("clampMomentumFloor") : 0.0625;
   // Relative step damping and chi2 backtracking (see member comments).
   // maxMomentumStepFactor <= 1 => legacy absolute-floor clamp, bit-identical.
   maxMomentumStepFactor_ = iConfig.existsAs<double>("maxMomentumStepFactor")

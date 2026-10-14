@@ -17,9 +17,17 @@ Geant4ePropagator = cms.ESProducer("GeantPropagatorESProducer",
                                    # physical frame in propagateGenericWithJacobianAltD.
                                    PropagationDirection=cms.string("anyDirection"),
                                    ParticleName=cms.string("mu"),
-                                   PropagationPtotLimit = cms.double(1.0), ## GeV/c
+                                   PropagationPtotLimit = cms.double(0.05), ## GeV/c; low enough for soft hadrons (pT ~ 0.2 GeV kaons)
                                    MagneticFieldLabel = cms.string(""),
                                    ForCVH=cms.bool(False),
+                                   # The q/p transport rows of layered material
+                                   # (Geant4ePropagator::layerLossRow) from
+                                   # central differences of the volume chord
+                                   # everywhere, also where the chord is linear
+                                   # over their reach and the row is otherwise
+                                   # its analytic derivative: the validation
+                                   # mode, 1.8x the default row cost.
+                                   LayerChordFiniteDifference=cms.bool(False),
                                    # The CDF fraction of the delta-electron
                                    # spectrum kept when the ionization variance
                                    # is formed.  This is a convention, and it
@@ -77,6 +85,16 @@ Geant4ePropagator = cms.ESProducer("GeantPropagatorESProducer",
                                    # dE/dx table scale; a probe for the J/psi
                                    # mass bias, not a tune.  1.0 = unscaled.
                                    DedxScale=cms.double(1.0),
+                                   # The radiative (brems + pair) dE/dx of each
+                                   # Geant4 step read from tables of the Geant4
+                                   # models (TrackPropagation/Geant4e/src/
+                                   # RadiativeDEDXTable.cc: within 4e-7 of the
+                                   # models, 1e-9 rms) instead of the models'
+                                   # numerical integrals, 55% of the refit's
+                                   # CPU.  False evaluates the models at every
+                                   # step: the reference the tables are
+                                   # validated against.
+                                   RadiativeDEDXTable=cms.bool(True),
 
                                    # Simpson interval counts; must be even and
                                    # >= 2, enforced in cvhcgf::configure.
