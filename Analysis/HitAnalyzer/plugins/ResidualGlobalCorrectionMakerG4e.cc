@@ -98,6 +98,13 @@ private:
   edm::EDPutTokenT<edm::ValueMap<std::vector<float>>> outputJacRef_;
   edm::EDPutTokenT<edm::ValueMap<std::vector<float>>> outputMomCov_;
 
+  // Key the ValueMaps above (corPt ... momCov) to the input track collection
+  // instead of the pat::Muon association: entry i describes input track i.
+  // For inputs without muons (the AlCaReco track collections), where the
+  // NanoAOD table is built on the tracks themselves. Exclusive with
+  // doMuonAssoc.
+  bool trackKeyedOutputs_ = false;
+
   // Optional refit-track output. The ValueMaps above publish only a 3x3
   // momentum block, and only when a muon association is configured, so they
   // cannot seed a TransientTrack. A downstream constrained B-vertex fit
@@ -540,6 +547,13 @@ ResidualGlobalCorrectionMakerG4e::ResidualGlobalCorrectionMakerG4e(const edm::Pa
 
   outputJacRef_ = produces<edm::ValueMap<std::vector<float>>>("jacRef");
   outputMomCov_ = produces<edm::ValueMap<std::vector<float>>>("momCov");
+
+  trackKeyedOutputs_ = iConfig.existsAs<bool>("trackKeyedOutputs")
+      ? iConfig.getParameter<bool>("trackKeyedOutputs") : false;
+  if (trackKeyedOutputs_ && doMuonAssoc_) {
+    throw cms::Exception("Configuration")
+        << "ResidualGlobalCorrectionMakerG4e: trackKeyedOutputs and doMuonAssoc are exclusive";
+  }
 
   emitRefJacobian_ = iConfig.existsAs<bool>("emitRefJacobian")
       ? iConfig.getParameter<bool>("emitRefJacobian") : false;
@@ -1003,19 +1017,22 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     trkMomCovV.assign(trackOrigH->size(), std::vector<float>());
   }
 
-  if (doMuonAssoc_) {
-    corPtV.assign(muonAssoc->ref()->size(), -99.);
-    corEtaV.assign(muonAssoc->ref()->size(), -99.);
-    corPhiV.assign(muonAssoc->ref()->size(), -99.);
-    corChargeV.assign(muonAssoc->ref()->size(), -99);
-    corDxyV.assign(muonAssoc->ref()->size(), -99.);
-    corDzV.assign(muonAssoc->ref()->size(), -99.);
-    edmvalV.assign(muonAssoc->ref()->size(), -99.);
-    nValidHitsV.assign(muonAssoc->ref()->size(), -99);
-    nValidPixelHitsV.assign(muonAssoc->ref()->size(), -99);
-    globalidxsV.assign(muonAssoc->ref()->size(), std::vector<int>());
-    jacRefV.assign(muonAssoc->ref()->size(), std::vector<float>());
-    momCovV.assign(muonAssoc->ref()->size(), std::vector<float>());
+  // Keyed outputs: one entry per muon of the association, or per input track
+  // with trackKeyedOutputs; none otherwise.
+  if (doMuonAssoc_ || trackKeyedOutputs_) {
+    const std::size_t nkeyed = doMuonAssoc_ ? muonAssoc->ref()->size() : trackOrigH->size();
+    corPtV.assign(nkeyed, -99.);
+    corEtaV.assign(nkeyed, -99.);
+    corPhiV.assign(nkeyed, -99.);
+    corChargeV.assign(nkeyed, -99);
+    corDxyV.assign(nkeyed, -99.);
+    corDzV.assign(nkeyed, -99.);
+    edmvalV.assign(nkeyed, -99.);
+    nValidHitsV.assign(nkeyed, -99);
+    nValidPixelHitsV.assign(nkeyed, -99);
+    globalidxsV.assign(nkeyed, std::vector<int>());
+    jacRefV.assign(nkeyed, std::vector<float>());
+    momCovV.assign(nkeyed, std::vector<float>());
   }
 
 // for (const reco::Track &track : *trackOrigH) {
@@ -1033,6 +1050,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     // fit can flip the charge consistently with refFts[6].
 
     const edm::Ref<std::vector<pat::Muon>> muonref = doMuonAssoc_ ? (*muonAssoc)[trackref] : edm::Ref<std::vector<pat::Muon>>();
+    // Entry of this track in the keyed outputs, -1 if it has none.
+    const int outidx = muonref.isNonnull() ? static_cast<int>(muonref.key())
+                                           : (trackKeyedOutputs_ ? static_cast<int>(itrack) : -1);
 
     // forceCosmic_ makes split-leg tracks (algo 'cosmic', not matched below) use
     // the outside-in cosmic handling instead of the beamline-PCA parameterisation.
@@ -6126,10 +6146,11 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
           covfull.topLeftCorner<3, 3>().cast<float>();
     }
 
-    // Muon-association outputs (written per attempt; the winning attempt's
-    // values persist since the fit is re-run to restore the nominal if the
-    // opposite loses). Inert for cosmics/single-track (muonref null).
-    if (muonref.isNonnull()) {
+    // Keyed outputs, per muon of the association or per input track with
+    // trackKeyedOutputs (written per attempt; the winning attempt's values
+    // persist since the fit is re-run to restore the nominal if the opposite
+    // loses). Inert without either (outidx = -1).
+    if (outidx >= 0) {
       const double qbpupd = refParmsMomD[0];
       const double lamupd = refParmsMomD[1];
       const double phiupd = refParmsMomD[2];
@@ -6140,17 +6161,17 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       const double thetaupd = M_PI_2 - lamupd;
       const double etaupd = -std::log(std::tan(0.5*thetaupd));
 
-      corPtV[muonref.index()] = ptupd;
-      corEtaV[muonref.index()] = etaupd;
-      corPhiV[muonref.index()] = phiupd;
-      corChargeV[muonref.index()] = chargeupd;
-      corDxyV[muonref.index()] = refParms[3];
-      corDzV[muonref.index()] = refParms[4];
-      edmvalV[muonref.index()] = edmval;
-      nValidHitsV[muonref.index()] = nvalid;
-      nValidPixelHitsV[muonref.index()] = nvalidpixel;
+      corPtV[outidx] = ptupd;
+      corEtaV[outidx] = etaupd;
+      corPhiV[outidx] = phiupd;
+      corChargeV[outidx] = chargeupd;
+      corDxyV[outidx] = refParms[3];
+      corDzV[outidx] = refParms[4];
+      edmvalV[outidx] = edmval;
+      nValidHitsV[outidx] = nvalid;
+      nValidPixelHitsV[outidx] = nvalidpixel;
 
-      auto &iglobalidxv = globalidxsV[muonref.key()];
+      auto &iglobalidxv = globalidxsV[outidx];
       iglobalidxv.clear();
       iglobalidxv.reserve(globalidxvfinal.size());
       for (auto val : globalidxvfinal) {
@@ -6170,13 +6191,13 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
       // quantities). The TTree branch (`jacrefv`, see above) has always been
       // the full 5 rows; with jacRefRows=5 the two are identical (task 3.4
       // cross-checks them).
-      auto &ijacrefv = jacRefV[muonref.key()];
+      auto &ijacrefv = jacRefV[outidx];
       ijacrefv.assign(jacRefRows_*nparsfinal, 0.);
       //eigen representation of the underlying vector storage
       Map<Matrix<float, Dynamic, Dynamic, RowMajor> > refjacrefout(ijacrefv.data(), jacRefRows_, nparsfinal);
       refjacrefout = ( (dxdparms).leftCols(jacRefRows_).transpose() ).cast<float>();
 
-      auto &imomCov = momCovV[muonref.key()];
+      auto &imomCov = momCovV[outidx];
       imomCov.assign(3*3, 0.);
       Map<Matrix<float, 3, 3, RowMajor>> momCovout(imomCov.data(), 3, 3);
       momCovout.triangularView<Upper>() = covfull.topLeftCorner<3,3>().cast<float>();
@@ -6234,54 +6255,61 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
   edm::ValueMap<std::vector<float>> jacRefMap;
   edm::ValueMap<std::vector<float>> momCovMap;
 
-  if (doMuonAssoc_) {
+  // The keyed ValueMaps: keyed to the muons of the association, or to the
+  // input tracks with trackKeyedOutputs; empty otherwise.
+  auto fillKeyedMaps = [&](const auto &keys) {
     edm::ValueMap<float>::Filler corPtMapFiller(corPtMap);
-    corPtMapFiller.insert(muonAssoc->ref(), std::make_move_iterator(corPtV.begin()), std::make_move_iterator(corPtV.end()));
+    corPtMapFiller.insert(keys, std::make_move_iterator(corPtV.begin()), std::make_move_iterator(corPtV.end()));
     corPtMapFiller.fill();
 
     edm::ValueMap<float>::Filler corEtaMapFiller(corEtaMap);
-    corEtaMapFiller.insert(muonAssoc->ref(), std::make_move_iterator(corEtaV.begin()), std::make_move_iterator(corEtaV.end()));
+    corEtaMapFiller.insert(keys, std::make_move_iterator(corEtaV.begin()), std::make_move_iterator(corEtaV.end()));
     corEtaMapFiller.fill();
 
     edm::ValueMap<float>::Filler corPhiMapFiller(corPhiMap);
-    corPhiMapFiller.insert(muonAssoc->ref(), std::make_move_iterator(corPhiV.begin()), std::make_move_iterator(corPhiV.end()));
+    corPhiMapFiller.insert(keys, std::make_move_iterator(corPhiV.begin()), std::make_move_iterator(corPhiV.end()));
     corPhiMapFiller.fill();
 
     edm::ValueMap<int>::Filler corChargeMapFiller(corChargeMap);
-    corChargeMapFiller.insert(muonAssoc->ref(), std::make_move_iterator(corChargeV.begin()), std::make_move_iterator(corChargeV.end()));
+    corChargeMapFiller.insert(keys, std::make_move_iterator(corChargeV.begin()), std::make_move_iterator(corChargeV.end()));
     corChargeMapFiller.fill();
 
     edm::ValueMap<float>::Filler corDxyMapFiller(corDxyMap);
-    corDxyMapFiller.insert(muonAssoc->ref(), std::make_move_iterator(corDxyV.begin()), std::make_move_iterator(corDxyV.end()));
+    corDxyMapFiller.insert(keys, std::make_move_iterator(corDxyV.begin()), std::make_move_iterator(corDxyV.end()));
     corDxyMapFiller.fill();
 
     edm::ValueMap<float>::Filler corDzMapFiller(corDzMap);
-    corDzMapFiller.insert(muonAssoc->ref(), std::make_move_iterator(corDzV.begin()), std::make_move_iterator(corDzV.end()));
+    corDzMapFiller.insert(keys, std::make_move_iterator(corDzV.begin()), std::make_move_iterator(corDzV.end()));
     corDzMapFiller.fill();
 
     edm::ValueMap<float>::Filler edmvalMapFiller(edmvalMap);
-    edmvalMapFiller.insert(muonAssoc->ref(), std::make_move_iterator(edmvalV.begin()), std::make_move_iterator(edmvalV.end()));
+    edmvalMapFiller.insert(keys, std::make_move_iterator(edmvalV.begin()), std::make_move_iterator(edmvalV.end()));
     edmvalMapFiller.fill();
 
     edm::ValueMap<int>::Filler nValidHitsMapFiller(nValidHitsMap);
-    nValidHitsMapFiller.insert(muonAssoc->ref(), std::make_move_iterator(nValidHitsV.begin()), std::make_move_iterator(nValidHitsV.end()));
+    nValidHitsMapFiller.insert(keys, std::make_move_iterator(nValidHitsV.begin()), std::make_move_iterator(nValidHitsV.end()));
     nValidHitsMapFiller.fill();
 
     edm::ValueMap<int>::Filler nValidPixelHitsMapFiller(nValidPixelHitsMap);
-    nValidPixelHitsMapFiller.insert(muonAssoc->ref(), std::make_move_iterator(nValidPixelHitsV.begin()), std::make_move_iterator(nValidPixelHitsV.end()));
+    nValidPixelHitsMapFiller.insert(keys, std::make_move_iterator(nValidPixelHitsV.begin()), std::make_move_iterator(nValidPixelHitsV.end()));
     nValidPixelHitsMapFiller.fill();
 
     edm::ValueMap<std::vector<int>>::Filler globalidxsMapFiller(globalidxsMap);
-    globalidxsMapFiller.insert(muonAssoc->ref(), std::make_move_iterator(globalidxsV.begin()), std::make_move_iterator(globalidxsV.end()));
+    globalidxsMapFiller.insert(keys, std::make_move_iterator(globalidxsV.begin()), std::make_move_iterator(globalidxsV.end()));
     globalidxsMapFiller.fill();
 
     edm::ValueMap<std::vector<float>>::Filler jacRefMapFiller(jacRefMap);
-    jacRefMapFiller.insert(muonAssoc->ref(), std::make_move_iterator(jacRefV.begin()), std::make_move_iterator(jacRefV.end()));
+    jacRefMapFiller.insert(keys, std::make_move_iterator(jacRefV.begin()), std::make_move_iterator(jacRefV.end()));
     jacRefMapFiller.fill();
 
     edm::ValueMap<std::vector<float>>::Filler momCovMapFiller(momCovMap);
-    momCovMapFiller.insert(muonAssoc->ref(), std::make_move_iterator(momCovV.begin()), std::make_move_iterator(momCovV.end()));
+    momCovMapFiller.insert(keys, std::make_move_iterator(momCovV.begin()), std::make_move_iterator(momCovV.end()));
     momCovMapFiller.fill();
+  };
+  if (doMuonAssoc_) {
+    fillKeyedMaps(muonAssoc->ref());
+  } else if (trackKeyedOutputs_) {
+    fillKeyedMaps(trackOrigH);
   }
 
   if (emitRefitTracks_) {
