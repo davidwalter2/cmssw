@@ -34,7 +34,7 @@ namespace magneticfield {
     const DD4hep_VolumeBasedMagneticFieldESProducer& operator=(const DD4hep_VolumeBasedMagneticFieldESProducer&) =
         delete;
 
-    std::unique_ptr<MagneticField> produce(const IdealMagneticFieldRecord& iRecord);
+    std::shared_ptr<MagneticField> produce(const IdealMagneticFieldRecord& iRecord);
 
     static void fillDescriptions(edm::ConfigurationDescriptions& descriptions);
 
@@ -47,6 +47,15 @@ namespace magneticfield {
     const std::string version_;
     edm::ESGetToken<MagneticField, IdealMagneticFieldRecord> paramFieldToken_;
     edm::ESGetToken<cms::DDCompactView, IdealMagneticFieldRecord> cpvToken_;
+    // Without a parametrized slave field this map is a pure function of the
+    // configuration (version, geometryVersion, scaling, grid files) and of the MF
+    // geometry, none of which can change within a job: the run-dependent field of a
+    // data job is the separate, unlabelled AutoMagneticFieldESProducer product. So it
+    // is built once and the SAME object is handed back on every later IOV. Returning a
+    // new object each IOV is what makes CvhMasterThread refuse to continue ("the
+    // magnetic-field product changed after the G4 world was built"), since G4 holds the
+    // raw pointer for the whole job; it also rebuilt the full volume geometry per run.
+    std::shared_ptr<MagneticField> cachedField_;
   };
 }  // namespace magneticfield
 
@@ -69,8 +78,13 @@ DD4hep_VolumeBasedMagneticFieldESProducer::DD4hep_VolumeBasedMagneticFieldESProd
 }
 
 // ------------ method called to produce the data  ------------
-std::unique_ptr<MagneticField> DD4hep_VolumeBasedMagneticFieldESProducer::produce(
+std::shared_ptr<MagneticField> DD4hep_VolumeBasedMagneticFieldESProducer::produce(
     const IdealMagneticFieldRecord& iRecord) {
+  // Only safe to reuse when there is no parametrized slave field, whose product may
+  // legitimately differ between IOVs.
+  if (cachedField_ && !useParametrizedTrackerField_) {
+    return cachedField_;
+  }
   if (debug_) {
     LogTrace("MagGeoBuilder") << "DD4hep_VolumeBasedMagneticFieldESProducer::produce() " << version_;
   }
@@ -99,15 +113,16 @@ std::unique_ptr<MagneticField> DD4hep_VolumeBasedMagneticFieldESProducer::produc
     LogTrace("MagGeoBuilder") << "Getting MF for parametrized field";
     paramField = &iRecord.get(paramFieldToken_);
   }
-  return std::make_unique<VolumeBasedMagneticField>(conf_.geometryVersion,
-                                                    builder.barrelLayers(),
-                                                    builder.endcapSectors(),
-                                                    builder.barrelVolumes(),
-                                                    builder.endcapVolumes(),
-                                                    builder.maxR(),
-                                                    builder.maxZ(),
-                                                    paramField,
-                                                    false);
+  cachedField_ = std::make_shared<VolumeBasedMagneticField>(conf_.geometryVersion,
+                                                           builder.barrelLayers(),
+                                                           builder.endcapSectors(),
+                                                           builder.barrelVolumes(),
+                                                           builder.endcapVolumes(),
+                                                           builder.maxR(),
+                                                           builder.maxZ(),
+                                                           paramField,
+                                                           false);
+  return cachedField_;
 }
 
 void DD4hep_VolumeBasedMagneticFieldESProducer::fillDescriptions(edm::ConfigurationDescriptions& descriptions) {
