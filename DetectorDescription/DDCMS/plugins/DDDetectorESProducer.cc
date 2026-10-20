@@ -42,7 +42,7 @@ public:
   DDDetectorESProducer(const ParameterSet&);
   ~DDDetectorESProducer() override;
 
-  using ReturnType = unique_ptr<DDDetector>;
+  using ReturnType = shared_ptr<DDDetector>;
   using Detector = dd4hep::Detector;
 
   ReturnType produceGeom(const IdealGeometryRecord&);
@@ -61,6 +61,15 @@ private:
   const string label_;
   edm::ESGetToken<FileBlob, MFGeometryFileRcd> mfToken_;
   edm::ESGetToken<FileBlob, GeometryFileRcd> geomToken_;
+  // The XML-driven detector is a pure function of (appendToDataLabel, confGeomXMLFiles),
+  // neither of which can change within a job, so it is built once and shared across
+  // IOVs. Rebuilding it is not merely wasteful: cms::DDDetector has no destructor, so
+  // dd4hep::Detector::getInstance(tag) hands back the instance built the first time and
+  // the ctor's addExtension<DDVectorsMap> then re-adds an extension that is already
+  // there, which segfaults inside dd4hep. That is reached whenever IdealMagneticFieldRecord
+  // changes IOV, i.e. on every run transition of a data job.
+  // Guarded by the kDD4hep shared resource (usesResources), which serialises these calls.
+  std::shared_ptr<DDDetector> cachedXML_;
 };
 
 DDDetectorESProducer::DDDetectorESProducer(const ParameterSet& iConfig)
@@ -120,9 +129,12 @@ DDDetectorESProducer::ReturnType DDDetectorESProducer::produceMagField(const Ide
     edm::ESTransientHandle<FileBlob> gdd = iRecord.getTransientHandle(mfToken_);
     unique_ptr<vector<unsigned char> > tb = (*gdd).getUncompressedBlob();
 
-    return make_unique<cms::DDDetector>(label_, string(tb->begin(), tb->end()), true);
+    return make_shared<cms::DDDetector>(label_, string(tb->begin(), tb->end()), true);
   } else {
-    return make_unique<DDDetector>(appendToDataLabel_, confGeomXMLFiles_);
+    if (!cachedXML_) {
+      cachedXML_ = make_shared<DDDetector>(appendToDataLabel_, confGeomXMLFiles_);
+    }
+    return cachedXML_;
   }
 }
 
@@ -132,15 +144,21 @@ DDDetectorESProducer::ReturnType DDDetectorESProducer::produceGeom(const IdealGe
     edm::ESTransientHandle<FileBlob> gdd = iRecord.getTransientHandle(geomToken_);
     unique_ptr<vector<unsigned char> > tb = (*gdd).getUncompressedBlob();
 
-    return make_unique<cms::DDDetector>(label_, string(tb->begin(), tb->end()), true);
+    return make_shared<cms::DDDetector>(label_, string(tb->begin(), tb->end()), true);
   } else {
-    return make_unique<DDDetector>(appendToDataLabel_, confGeomXMLFiles_, false);
+    if (!cachedXML_) {
+      cachedXML_ = make_shared<DDDetector>(appendToDataLabel_, confGeomXMLFiles_, false);
+    }
+    return cachedXML_;
   }
 }
 
 DDDetectorESProducer::ReturnType DDDetectorESProducer::produce() {
   LogVerbatim("Geometry") << "DDDetectorESProducer::Produce " << appendToDataLabel_;
-  return make_unique<DDDetector>(appendToDataLabel_, confGeomXMLFiles_, false);
+  if (!cachedXML_) {
+    cachedXML_ = make_shared<DDDetector>(appendToDataLabel_, confGeomXMLFiles_, false);
+  }
+  return cachedXML_;
 }
 
 DEFINE_FWK_EVENTSETUP_SOURCE(DDDetectorESProducer);
