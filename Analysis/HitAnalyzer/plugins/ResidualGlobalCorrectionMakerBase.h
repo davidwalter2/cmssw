@@ -119,6 +119,7 @@
 #include "TrackPropagation/Geant4e/interface/MaterialGroupModel.h"
 #include "TrackPropagation/Geant4e/interface/CvhCfExponents.h"
 #include "Analysis/HitAnalyzer/interface/ScalarPotFieldModeProvider.h"
+#include "Analysis/HitAnalyzer/interface/CvhParmCatalog.h"
 
 using namespace Eigen;
 
@@ -587,6 +588,15 @@ protected:
   bool fillGradsFactored_;
   bool fillJac_;
   bool fillRunTree_;
+  // Calibration NanoAOD: the parameter catalog (the runtree columns the
+  // calibration fit reads) as an event FlatTable "catalog", put once per run
+  // and stream by putCatalogOncePerRun; RunFlatTableFromEventProducer moves it
+  // into the Runs tree.
+  bool produceCatalog_ = false;
+  bool catalogPending_ = false;
+  cvh::ParmCatalog catalog_;
+  edm::EDPutTokenT<nanoaod::FlatTable> catalogToken_;
+  void putCatalogOncePerRun(edm::Event& iEvent);
   bool alignGlued_ = true;
   double gluedGarbageTiltThreshold_ = 0.05;
   double moduleGarbageShiftThreshold_ = 0.4;

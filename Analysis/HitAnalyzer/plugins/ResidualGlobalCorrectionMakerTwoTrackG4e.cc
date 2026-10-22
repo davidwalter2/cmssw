@@ -314,6 +314,15 @@ private:
   edm::EDPutTokenT<edm::ValueMap<float>> vmEdmval_;
   edm::EDPutTokenT<edm::ValueMap<std::vector<int>>> vmGlobalIdxs_;
   edm::EDPutTokenT<edm::ValueMap<std::vector<float>>> vmJacRefMuPlus_, vmJacRefMuMinus_, vmJacMass_, vmHessFactor_;
+  // fit quality and the per-leg selection quantities of the calibration fit
+  // (edmvalref, chi2/ndof, the mass-constrained muon pt, the valid hits)
+  edm::EDPutTokenT<edm::ValueMap<float>> vmEdmvalRef_, vmChi2_, vmMuPlusConsPt_, vmMuMinusConsPt_;
+  edm::EDPutTokenT<edm::ValueMap<int>> vmNdof_, vmMuPlusNValid_, vmMuPlusNValidPixel_, vmMuMinusNValid_,
+      vmMuMinusNValidPixel_;
+  // the gradient of the fit's objective wrt the global parameters (globalIdxs),
+  // which the calibration fit sums with the factored Hessian
+  edm::EDPutTokenT<edm::ValueMap<std::vector<float>>> vmGrad_;
+  edm::EDPutTokenT<edm::ValueMap<float>> vmGradMax_;
 
   mutable unsigned long long fitFailNaN_ = 0ULL;         // NaN/inf parameter update
   mutable unsigned long long fitFailNdof_ = 0ULL;        // fit with no degrees of freedom (ndof <= 0)
@@ -958,12 +967,23 @@ ResidualGlobalCorrectionMakerTwoTrackG4e::ResidualGlobalCorrectionMakerTwoTrackG
     vmMuMinusEta_ = produces<edm::ValueMap<float>>("muMinusEta");
     vmMuMinusPhi_ = produces<edm::ValueMap<float>>("muMinusPhi");
     vmEdmval_     = produces<edm::ValueMap<float>>("edmval");
+    vmEdmvalRef_  = produces<edm::ValueMap<float>>("edmvalRef");
+    vmChi2_       = produces<edm::ValueMap<float>>("chi2");
+    vmNdof_       = produces<edm::ValueMap<int>>("ndof");
+    vmMuPlusConsPt_  = produces<edm::ValueMap<float>>("muPlusConsPt");
+    vmMuMinusConsPt_ = produces<edm::ValueMap<float>>("muMinusConsPt");
+    vmMuPlusNValid_       = produces<edm::ValueMap<int>>("muPlusNValid");
+    vmMuPlusNValidPixel_  = produces<edm::ValueMap<int>>("muPlusNValidPixel");
+    vmMuMinusNValid_      = produces<edm::ValueMap<int>>("muMinusNValid");
+    vmMuMinusNValidPixel_ = produces<edm::ValueMap<int>>("muMinusNValidPixel");
     if (fillGradsFactored_) {
       vmGlobalIdxs_    = produces<edm::ValueMap<std::vector<int>>>("globalIdxs");
       vmJacRefMuPlus_  = produces<edm::ValueMap<std::vector<float>>>("jacRefMuPlus");
       vmJacRefMuMinus_ = produces<edm::ValueMap<std::vector<float>>>("jacRefMuMinus");
       vmJacMass_       = produces<edm::ValueMap<std::vector<float>>>("jacMass");
       vmHessFactor_    = produces<edm::ValueMap<std::vector<float>>>("hessFactor");
+      vmGrad_          = produces<edm::ValueMap<std::vector<float>>>("grad");
+      vmGradMax_       = produces<edm::ValueMap<float>>("gradMax");
     }
   }
 
@@ -1375,6 +1395,9 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::beginStream(edm::StreamID streami
 // ------------ method called for each event ------------
 void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const edm::EventSetup &iSetup)
 {
+  // the parameter catalog, in the first event of each run (produceCatalog)
+  putCatalogOncePerRun(iEvent);
+
   // Sync the material-group k values from corparms_ into the model so the
   // propagator's per-step provider applies the current calibration.
   if (globalMaterialModel_) {
@@ -1767,7 +1790,11 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
       vmCorPtV(nVMCand, -99.f), vmCorEtaV(nVMCand, -99.f), vmCorPhiV(nVMCand, -99.f),
       vmMuPlusPtV(nVMCand, -99.f), vmMuPlusEtaV(nVMCand, -99.f), vmMuPlusPhiV(nVMCand, -99.f),
       vmMuMinusPtV(nVMCand, -99.f), vmMuMinusEtaV(nVMCand, -99.f), vmMuMinusPhiV(nVMCand, -99.f),
-      vmEdmvalV(nVMCand, -99.f);
+      vmEdmvalV(nVMCand, -99.f), vmEdmvalRefV(nVMCand, -99.f), vmChi2V(nVMCand, -99.f),
+      vmMuPlusConsPtV(nVMCand, -99.f), vmMuMinusConsPtV(nVMCand, -99.f), vmGradMaxV(nVMCand, -99.f);
+  std::vector<int> vmNdofV(nVMCand, -1), vmMuPlusNValidV(nVMCand, -1), vmMuPlusNValidPixelV(nVMCand, -1),
+      vmMuMinusNValidV(nVMCand, -1), vmMuMinusNValidPixelV(nVMCand, -1);
+  std::vector<std::vector<float>> vmGradV(nVMCand);
   std::vector<std::vector<int>> vmGlobalIdxsV(nVMCand);
   std::vector<std::vector<float>> vmJacRefMuPlusV(nVMCand), vmJacRefMuMinusV(nVMCand),
       vmJacMassV(nVMCand), vmHessFactorV(nVMCand);
@@ -7304,12 +7331,23 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
         vmMuMinusEtaV[candCollIdx] = Muminus_eta;
         vmMuMinusPhiV[candCollIdx] = Muminus_phi;
         vmEdmvalV[candCollIdx]     = edmval;
+        vmEdmvalRefV[candCollIdx]  = edmvalref;
+        vmChi2V[candCollIdx]       = chisqval;
+        vmNdofV[candCollIdx]       = ndof;
+        vmMuPlusConsPtV[candCollIdx]  = Mupluscons_pt;
+        vmMuMinusConsPtV[candCollIdx] = Muminuscons_pt;
+        vmMuPlusNValidV[candCollIdx]       = Muplus_nvalid;
+        vmMuPlusNValidPixelV[candCollIdx]  = Muplus_nvalidpixel;
+        vmMuMinusNValidV[candCollIdx]      = Muminus_nvalid;
+        vmMuMinusNValidPixelV[candCollIdx] = Muminus_nvalidpixel;
         if (fillGradsFactored_) {
           vmGlobalIdxsV[candCollIdx].assign(globalidxvfinal.begin(), globalidxvfinal.end());
           vmJacRefMuPlusV[candCollIdx]  = Muplus_jacRef;
           vmJacRefMuMinusV[candCollIdx] = Muminus_jacRef;
           vmJacMassV[candCollIdx]       = Jpsi_jacMass;
           vmHessFactorV[candCollIdx]    = hessfactorv;
+          vmGradV[candCollIdx]          = gradv;
+          vmGradMaxV[candCollIdx]       = gradmax;
         }
       }
 
@@ -7407,6 +7445,24 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
     putF(vmMuMinusEta_, vmMuMinusEtaV);
     putF(vmMuMinusPhi_, vmMuMinusPhiV);
     putF(vmEdmval_, vmEdmvalV);
+    putF(vmEdmvalRef_, vmEdmvalRefV);
+    putF(vmChi2_, vmChi2V);
+    putF(vmMuPlusConsPt_, vmMuPlusConsPtV);
+    putF(vmMuMinusConsPt_, vmMuMinusConsPtV);
+    auto putI = [&](edm::EDPutTokenT<edm::ValueMap<int>>& tok, std::vector<int>& v) {
+      edm::ValueMap<int> m;
+      if (doVM) {
+        edm::ValueMap<int>::Filler f(m);
+        f.insert(vmCandH, v.begin(), v.end());
+        f.fill();
+      }
+      iEvent.emplace(tok, std::move(m));
+    };
+    putI(vmNdof_, vmNdofV);
+    putI(vmMuPlusNValid_, vmMuPlusNValidV);
+    putI(vmMuPlusNValidPixel_, vmMuPlusNValidPixelV);
+    putI(vmMuMinusNValid_, vmMuMinusNValidV);
+    putI(vmMuMinusNValidPixel_, vmMuMinusNValidPixelV);
     if (fillGradsFactored_) {
       {
         edm::ValueMap<std::vector<int>> m;
@@ -7431,6 +7487,8 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
       putVF(vmJacRefMuMinus_, vmJacRefMuMinusV);
       putVF(vmJacMass_, vmJacMassV);
       putVF(vmHessFactor_, vmHessFactorV);
+      putVF(vmGrad_, vmGradV);
+      putF(vmGradMax_, vmGradMaxV);
     }
   }
 }

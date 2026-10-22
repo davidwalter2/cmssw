@@ -176,6 +176,10 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   hessrankgap = 0.;
   fillJac_ = iConfig.getParameter<bool>("fillJac");
   fillRunTree_ = iConfig.getParameter<bool>("fillRunTree");
+  produceCatalog_ = iConfig.existsAs<bool>("produceCatalog") ? iConfig.getParameter<bool>("produceCatalog") : false;
+  if (produceCatalog_) {
+    catalogToken_ = produces<nanoaod::FlatTable>("catalog");
+  }
   doGen_ = iConfig.getParameter<bool>("doGen");
   requireGen_ = iConfig.getParameter<bool>("requireGen");
   doSim_ = iConfig.getParameter<bool>("doSim");
@@ -1362,6 +1366,10 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       cfmodel = cvhcf::modelTag(cfRowConfig_, nucelActive_);
     }
     unsigned int globalidx = 0;
+    if (produceCatalog_) {
+      catalog_.clear();
+      catalog_.reserve(parmset.size());
+    }
     for (const auto& key: parmset) {
 // std::cout << "parmtype = " << key.first << " detid = " << key.second.rawId() << std::endl;
       
@@ -1569,6 +1577,10 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
         
       }
 
+      if (produceCatalog_) {
+        catalog_.push_back(parmtype, rawdetid, subdet, layer, stereo, glued, x, y, z, eta, phi);
+      }
+
       //fill map
       detidparms.emplace(key, globalidx);
       detidparmsrev.emplace_back(key);
@@ -1721,6 +1733,11 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
     }
   
   }
+
+  // The catalog, built once with the parameters (the block above runs for
+  // the first run only), goes into the first event of every run this stream
+  // processes.
+  catalogPending_ = produceCatalog_;
   
   surfacemap_.clear();
   surfacemapD_.clear();
@@ -5334,3 +5351,12 @@ Matrix<double, 6, 6> ResidualGlobalCorrectionMakerBase::massinvsqHessianAltD(con
 
 //define this as a plug-in
 // DEFINE_FWK_MODULE(ResidualGlobalCorrectionMakerBase);
+
+
+void ResidualGlobalCorrectionMakerBase::putCatalogOncePerRun(edm::Event& iEvent) {
+  if (!produceCatalog_ || !catalogPending_) {
+    return;
+  }
+  iEvent.put(catalogToken_, catalog_.table("CvhParm"));
+  catalogPending_ = false;
+}
