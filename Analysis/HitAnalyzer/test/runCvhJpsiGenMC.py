@@ -64,15 +64,15 @@ opts.register('pixelLorentzParam', False, VarParsing.VarParsing.multiplicity.sin
               'delta-tan(thetaL) parameter (parmtype 22) with a Jacobian '
               'column on EVERY valid pixel hit (weights: size-1 = 1, '
               'x-edge = lorentzWedge, regular = lorentzWclean)')
-opts.register('lorentzWclean', 0.67, VarParsing.VarParsing.multiplicity.singleton,
+opts.register('lorentzWclean', 0.69, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.float,
               'dtanLA response weight of regular (clean) pixel hits '
               '(measured: digitizer twin-sample study)')
-opts.register('lorentzWsize1', 0.02, VarParsing.VarParsing.multiplicity.singleton,
+opts.register('lorentzWsize1', 0.07, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.float,
               'dtanLA response weight of size-1 pixel hits (measured ~0: '
               'pixel-center quantisation)')
-opts.register('lorentzWedge', 0.45, VarParsing.VarParsing.multiplicity.singleton,
+opts.register('lorentzWedge', 0.75, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.float,
               'dtanLA response weight of x-edge pixel hits (low-stats '
               'measurement, +-0.4)')

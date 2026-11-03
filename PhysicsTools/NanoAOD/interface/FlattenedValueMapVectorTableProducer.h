@@ -41,10 +41,19 @@ class FlattenedValueMapVectorTableProducer : public edm::stream::EDProducer<> {
                 else throw cms::Exception("Configuration", "unsupported type "+type+" for variable "+vname);
             }
 
-            produces<nanoaod::FlatTable>("floatcounts");
-            produces<nanoaod::FlatTable>("intcounts");
-            produces<nanoaod::FlatTable>("intvecs");
-            produces<nanoaod::FlatTable>("floatvecs");
+            // One (Counts + Vals) table pair per variable, each its own named
+            // collection. This is the 10_6 behaviour: distinct-length vectors
+            // (e.g. globalIdxs, jacRef, momCov) each get their own table, so
+            // there is no "same length" constraint and no collision with the
+            // main object table.
+            for (size_t i = 0; i < intVecMaps_.size(); i++) {
+                produces<nanoaod::FlatTable>("intcounts"+std::to_string(i));
+                produces<nanoaod::FlatTable>("intvec"+std::to_string(i));
+            }
+            for (size_t i = 0; i < floatVecMaps_.size(); i++) {
+                produces<nanoaod::FlatTable>("floatcounts"+std::to_string(i));
+                produces<nanoaod::FlatTable>("floatvec"+std::to_string(i));
+            }
         }
 
         ~FlattenedValueMapVectorTableProducer() override {}
@@ -56,15 +65,7 @@ class FlattenedValueMapVectorTableProducer : public edm::stream::EDProducer<> {
             allvals.reserve(objs.size());
             for (size_t i = 0; i < objs.size(); i++) {
                 auto& vals = vmap[objs[i]];
-                if (sizes[i] == 0)
-                    sizes[i] = vals.size();
-                else if (sizes[i] != static_cast<int>(vals.size())) {
-                    throw cms::Exception("Unmatched values", std::string("All vector value maps in the table need to have the same length. ") +
-                        std::string("If you want to add vectors of a different length, make a new table call\n ") +
-                        std::string("Size of initial collection is ") + std::to_string(sizes[i]) + 
-                        " tried to add collection of size " + std::to_string(vals.size()) + std::string(" at index ") + std::to_string(i) +
-                        std::string(". Number of objects is ") + std::to_string(objs.size()));
-                }
+                sizes[i] = vals.size();
                 allvals.insert(std::end(allvals), std::begin(vals), std::end(vals));
             }
 
@@ -83,49 +84,41 @@ class FlattenedValueMapVectorTableProducer : public edm::stream::EDProducer<> {
                 }
             }
 
+            // One (Counts + Vals) table pair per variable, each with its own
+            // named collection (name_ + "_" + var[ + "_Counts"]). No same-length
+            // constraint across variables, and no collision with the main
+            // object table (name_). Matches the 10_6 behaviour.
             std::vector<int> sizes(objs.size(), 0);
-            auto intsizetab = std::make_unique<nanoaod::FlatTable>(objs.size(), this->name_, false, false);
-            auto floatsizetab = std::make_unique<nanoaod::FlatTable>(objs.size(), this->name_, false, true);
-            std::unique_ptr<nanoaod::FlatTable> floatvectab; ;
-            std::unique_ptr<nanoaod::FlatTable> intvectab; ;
-
             for (size_t i = 0; i < intVecMaps_.size(); i++) {
                 edm::Handle<edm::ValueMap<std::vector<int>>> vmap;
                 iEvent.getByToken(intVecMaps_[i], vmap);
                 const auto& results = readVals(*vmap, objs, sizes);
-                if (i == 0)
-                    intvectab = std::make_unique<nanoaod::FlatTable>(results.size(), this->name_+"_IntVals", false, false);
-                intvectab->addColumn<int>(intNames_[i], results, intDocs_[i], intPrecisions_[i]);
+
+                auto countstab = std::make_unique<nanoaod::FlatTable>(objs.size(), this->name_ + "_" + intNames_[i] + "_Counts", false, false);
+                countstab->template addColumn<int>("", sizes, "Number of entries per object", countPrecision_);
+                countstab->setDoc(doc_);
+                auto vectab = std::make_unique<nanoaod::FlatTable>(results.size(), this->name_ + "_" + intNames_[i], false, false);
+                vectab->template addColumn<int>("Vals", results, intDocs_[i], intPrecisions_[i]);
+                vectab->setDoc(doc_);
+
+                iEvent.put(std::move(countstab), "intcounts"+std::to_string(i));
+                iEvent.put(std::move(vectab), "intvec"+std::to_string(i));
             }
-            intsizetab->template addColumn<int>("IntCounts", sizes, "Number of entries per object", countPrecision_);
-            std::fill(sizes.begin(), sizes.end(), 0);
             for (size_t i = 0; i < floatVecMaps_.size(); i++) {
                 edm::Handle<edm::ValueMap<std::vector<float>>> vmap;
                 iEvent.getByToken(floatVecMaps_[i], vmap);
                 const auto& results = readVals(*vmap, objs, sizes);
-                if (i == 0)
-                    floatvectab = std::make_unique<nanoaod::FlatTable>(results.size(), this->name_+"_FloatVals", false, false);
-                floatvectab->addColumn<float>(floatNames_[i], results, floatDocs_[i], floatPrecisions_[i]);
+
+                auto countstab = std::make_unique<nanoaod::FlatTable>(objs.size(), this->name_ + "_" + floatNames_[i] + "_Counts", false, false);
+                countstab->template addColumn<int>("", sizes, "Number of entries per object", countPrecision_);
+                countstab->setDoc(doc_);
+                auto vectab = std::make_unique<nanoaod::FlatTable>(results.size(), this->name_ + "_" + floatNames_[i], false, false);
+                vectab->template addColumn<float>("Vals", results, floatDocs_[i], floatPrecisions_[i]);
+                vectab->setDoc(doc_);
+
+                iEvent.put(std::move(countstab), "floatcounts"+std::to_string(i));
+                iEvent.put(std::move(vectab), "floatvec"+std::to_string(i));
             }
-            floatsizetab->template addColumn<int>("FloatCounts", sizes, "Number of entries per object", countPrecision_);
-
-            // The vec tables are only constructed inside the loops above; a
-            // configuration with zero int-type or zero float-type variables
-            // must still put a (empty) table for every declared product.
-            if (!intvectab)
-                intvectab = std::make_unique<nanoaod::FlatTable>(0, this->name_+"_IntVals", false, false);
-            if (!floatvectab)
-                floatvectab = std::make_unique<nanoaod::FlatTable>(0, this->name_+"_FloatVals", false, false);
-
-            intsizetab->setDoc(doc_);
-            floatsizetab->setDoc(doc_);
-            floatvectab->setDoc(doc_);
-            intvectab->setDoc(doc_);
-
-            iEvent.put(std::move(intsizetab), "intcounts");
-            iEvent.put(std::move(floatsizetab), "floatcounts");
-            iEvent.put(std::move(floatvectab), "floatvecs");
-            iEvent.put(std::move(intvectab), "intvecs");
         }
 
     protected:
