@@ -26,6 +26,12 @@ opts.register('nEvents', -1, VarParsing.VarParsing.multiplicity.singleton,
 opts.register('numberOfThreads', 1, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.int,
               'framework numberOfThreads (numberOfStreams follows)')
+opts.register('fillGrads', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool, 'store per-event gradient + packed Hessian')
+opts.register('fillGradsFactored', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'store per-event gradient + low-rank factored Hessian (H = B^T B); '
+              'use for grads production (matches the J/psi driver)')
 opts.register('scalarPot3DInitFile', '', VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.string,
               'coefficient dump file (always required; registers the parmtype-14 modes)')
@@ -138,10 +144,14 @@ from TrackPropagation.Geant4e.cvhMaster_cfi import CvhMasterPSet
 process.maxEvents = cms.untracked.PSet(input=cms.untracked.int32(opts.nEvents))
 
 assert opts.input, "must set input=<path> on the cmsRun command line"
-_url = opts.input if opts.input.startswith(("root://", "file:")) else "file:" + opts.input
+# input accepts a comma-separated list so one Slurm task can process a
+# block of the (many small) V0 per-block files in a single job.
+def _tourl(p):
+    return p if p.startswith(("root://", "file:")) else "file:" + p
+_urls = [_tourl(p) for p in opts.input.split(",") if p]
 process.source = cms.Source(
     "PoolSource",
-    fileNames=cms.untracked.vstring(_url),
+    fileNames=cms.untracked.vstring(*_urls),
     secondaryFileNames=cms.untracked.vstring(),
 )
 if opts.eventsToProcess:
@@ -173,6 +183,8 @@ process.globalCor = _v0maker.clone(
     useIdealGeometry=cms.bool(bool(opts.useIdealGeometry)),
     fillRunTree=cms.bool(True),
     fillJac=cms.bool(True),
+    fillGrads=cms.bool(bool(opts.fillGrads)),
+    fillGradsFactored=cms.untracked.bool(bool(opts.fillGradsFactored)),
     scalarPotentialInitFile=cms.string(opts.scalarPot3DInitFile),
     materialGroupsFile=cms.string(opts.materialGroupsFile),
     globalMaterialModel=cms.bool(bool(opts.globalMaterialModel)),
