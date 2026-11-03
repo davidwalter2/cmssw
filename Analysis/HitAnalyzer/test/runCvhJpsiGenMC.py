@@ -134,6 +134,17 @@ opts.register('minPairHits', -1, VarParsing.VarParsing.multiplicity.singleton,
               'hits counted once). -1 = auto = 10 with the vertex constraint '
               'on, 11 with it off -- the same requirement as minNdof read on '
               'hits rather than on measurement coordinates. 0 disables.')
+opts.register('exportFrozenModel', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'export the FROZEN LOCAL MODEL of the converged unconstrained '
+              'two-track fit (fm_* branches: residuals, block weights, design '
+              'matrix, Gauss-Newton step, Q parts, reference states) for the '
+              'offline likelihood re-minimisation; spec in '
+              'Documents/Resolution/LIKELIHOOD_TRACKFIT.md')
+opts.register('exportFrozenModelGlobals', False, VarParsing.VarParsing.multiplicity.singleton,
+              VarParsing.VarParsing.varType.bool,
+              'with exportFrozenModel: also the global-parameter design '
+              'columns dr/da as COO (fm_Jrow/fm_Jglob/fm_Jval)')
 opts.register('exportVtxResidual', False, VarParsing.VarParsing.multiplicity.singleton,
               VarParsing.VarParsing.varType.bool,
               'export the VERTEX-CONSTRAINT RESIDUAL (the track-track PCA '
@@ -636,6 +647,8 @@ process.globalCor = cms.EDProducer(
     minPairHits=cms.int32(int(opts.minPairHits)),
     minLegHits=cms.int32(int(opts.minLegHits)),
     exportVtxResidual=cms.bool(bool(opts.exportVtxResidual)),
+    exportFrozenModel=cms.bool(bool(opts.exportFrozenModel)),
+    exportFrozenModelGlobals=cms.bool(bool(opts.exportFrozenModelGlobals)),
     doMassConstraint=cms.bool(bool(opts.doMassConstraint)),
     massConstraint=cms.double(3.0969),
     massConstraintWidth=cms.double(1e-5),

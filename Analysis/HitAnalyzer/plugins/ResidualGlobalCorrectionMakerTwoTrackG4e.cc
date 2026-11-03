@@ -395,6 +395,79 @@ private:
   // (single column -> y from one pixel). Outer index 0 = BPix, 1 = FPix.
   mutable std::array<std::array<unsigned long long, 16>, 2> pixHitsClass_ {{{{0ULL}}, {{0ULL}}}};
 
+  // THE FROZEN LOCAL MODEL (gated by exportFrozenModel): the sparse-GBL
+  // linear problem of the converged UNCONSTRAINED (icons == 0) pass --
+  // residual vector, block-diagonal weight, design matrix on the full state
+  // index space, the Gauss-Newton step, the MS/ionisation parts of Q per hit,
+  // the propagated reference state at every hit and the row bookkeeping --
+  // so the per-candidate likelihood can be re-minimised offline on this
+  // linearisation with non-Gaussian block densities. Row blocks are tagged
+  // in assembly order: 0 propagation (5 rows), 1 measurement (2), 2 beam
+  // line (3), 3 pointing (1). Spec: Documents/Resolution/LIKELIHOOD_TRACKFIT.md.
+  bool exportFrozenModel_ = false;
+  // ... plus the global-parameter columns J = dr/da as COO with the GLOBAL
+  // index as column (duplicates to be summed by the reader).
+  bool exportFrozenModelGlobals_ = false;
+  int fm_nstate = 0;
+  int fm_ncons = 0;
+  int fm_trkstate0 = 0;
+  int fm_trkstate1 = 0;
+  int fm_nhits0 = 0;
+  int fm_nhits1 = 0;
+  int fm_nvalid0 = 0;
+  int fm_nvalid1 = 0;
+  std::vector<int> fm_freeidx;
+  std::vector<double> fm_ref;
+  std::vector<double> fm_layerstate;
+  std::vector<int> fm_rowtype;
+  std::vector<int> fm_rowtrk;
+  std::vector<int> fm_rowhit;
+  std::vector<int> fm_rowflags;
+  std::vector<unsigned int> fm_rowdetid;
+  std::vector<int> fm_rowcls;
+  std::vector<double> fm_r;
+  std::vector<double> fm_Vinv;
+  std::vector<int> fm_Frow;
+  std::vector<int> fm_Fcol;
+  std::vector<double> fm_Fval;
+  std::vector<double> fm_QMS;
+  std::vector<double> fm_QI;
+  // the curvilinear-to-local Jacobian at each hit (25 per hit, row-major):
+  // the row frame of the propagation block; the MS projections are
+  // block-diagonal only in the curvilinear frame
+  std::vector<double> fm_Hm;
+  std::vector<unsigned int> fm_msidx;
+  std::vector<unsigned int> fm_ioniidx;
+  std::vector<int> fm_nmssteps;
+  std::vector<int> fm_nionisteps;
+  std::vector<double> fm_dx;
+  double fm_stepscale = 1.;
+  double fm_chisq0 = 0.;
+  double fm_deltachisq = 0.;
+  double fm_chisq = 0.;
+  std::vector<int> fm_Jrow;
+  std::vector<int> fm_Jglob;
+  std::vector<double> fm_Jval;
+  // chi2 of the icons == 0 pass, so that under doMassConstraint both the
+  // free and the constrained (`chisqval`) values are on the record.
+  float chisqval_cons0 = 0.f;
+  void fmClearRows() {
+    fm_rowtype.clear();
+    fm_rowtrk.clear();
+    fm_rowhit.clear();
+    fm_rowflags.clear();
+    fm_rowdetid.clear();
+    fm_rowcls.clear();
+    fm_layerstate.clear();
+    fm_QMS.clear();
+    fm_QI.clear();
+    fm_Hm.clear();
+    fm_msidx.clear();
+    fm_ioniidx.clear();
+    fm_nmssteps.clear();
+    fm_nionisteps.clear();
+  }
+
   // Per-hit pixel diagnostics (gated by fillHitDiagnostics): last-iteration
   // local residuals dy0 + side-resolved pathology class of every valid
   // pixel hit on the two tracks. Class bits: 0=edge at -x boundary,
@@ -921,6 +994,12 @@ ResidualGlobalCorrectionMakerTwoTrackG4e::ResidualGlobalCorrectionMakerTwoTrackG
   deweightPathoHits_ = iConfig.existsAs<bool>("deweightPathoHits")
       ? iConfig.getParameter<bool>("deweightPathoHits") : false;
 
+  // The frozen local model export (see the member docs).
+  exportFrozenModel_ = iConfig.existsAs<bool>("exportFrozenModel")
+      ? iConfig.getParameter<bool>("exportFrozenModel") : false;
+  exportFrozenModelGlobals_ = iConfig.existsAs<bool>("exportFrozenModelGlobals")
+      ? iConfig.getParameter<bool>("exportFrozenModelGlobals") : false;
+
   // NanoAOD path: emit per-candidate ValueMaps keyed to srcCandidates. Only
   // meaningful in the candidate-driven mode. Kinematics always; the global-fit
   // payload additionally when fillGradsFactored_ is set.
@@ -1254,6 +1333,48 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::beginStream(edm::StreamID streami
       tree->Branch("hitdiag_ly", &hitdiag_ly);
     }
 
+    if (exportFrozenModel_) {
+      tree->Branch("fm_nstate", &fm_nstate);
+      tree->Branch("fm_ncons", &fm_ncons);
+      tree->Branch("fm_trkstate0", &fm_trkstate0);
+      tree->Branch("fm_trkstate1", &fm_trkstate1);
+      tree->Branch("fm_nhits0", &fm_nhits0);
+      tree->Branch("fm_nhits1", &fm_nhits1);
+      tree->Branch("fm_nvalid0", &fm_nvalid0);
+      tree->Branch("fm_nvalid1", &fm_nvalid1);
+      tree->Branch("fm_freeidx", &fm_freeidx);
+      tree->Branch("fm_ref", &fm_ref);
+      tree->Branch("fm_layerstate", &fm_layerstate);
+      tree->Branch("fm_rowtype", &fm_rowtype);
+      tree->Branch("fm_rowtrk", &fm_rowtrk);
+      tree->Branch("fm_rowhit", &fm_rowhit);
+      tree->Branch("fm_rowflags", &fm_rowflags);
+      tree->Branch("fm_rowdetid", &fm_rowdetid);
+      tree->Branch("fm_rowcls", &fm_rowcls);
+      tree->Branch("fm_r", &fm_r);
+      tree->Branch("fm_Vinv", &fm_Vinv);
+      tree->Branch("fm_Frow", &fm_Frow);
+      tree->Branch("fm_Fcol", &fm_Fcol);
+      tree->Branch("fm_Fval", &fm_Fval);
+      tree->Branch("fm_QMS", &fm_QMS);
+      tree->Branch("fm_QI", &fm_QI);
+      tree->Branch("fm_Hm", &fm_Hm);
+      tree->Branch("fm_msidx", &fm_msidx);
+      tree->Branch("fm_ioniidx", &fm_ioniidx);
+      tree->Branch("fm_nmssteps", &fm_nmssteps);
+      tree->Branch("fm_nionisteps", &fm_nionisteps);
+      tree->Branch("fm_dx", &fm_dx);
+      tree->Branch("fm_stepscale", &fm_stepscale);
+      tree->Branch("fm_chisq0", &fm_chisq0);
+      tree->Branch("fm_deltachisq", &fm_deltachisq);
+      tree->Branch("fm_chisq", &fm_chisq);
+      if (exportFrozenModelGlobals_) {
+        tree->Branch("fm_Jrow", &fm_Jrow);
+        tree->Branch("fm_Jglob", &fm_Jglob);
+        tree->Branch("fm_Jval", &fm_Jval);
+      }
+    }
+
     tree->Branch("Muplus_highpurity", &Muplus_highpurity);
     tree->Branch("Muminus_highpurity", &Muminus_highpurity);
 
@@ -1320,6 +1441,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::beginStream(edm::StreamID streami
     // constraint, or icons==0 if no constraint)
     tree->Branch("edmval_cons0", &edmval_cons0);
     tree->Branch("niter_cons0", &niter_cons0);
+    tree->Branch("chisqval_cons0", &chisqval_cons0);
 
     tree->Branch("dmassconvval", &dmassconvval);
     tree->Branch("dinvmasssqconvval", &dinvmasssqconvval);
@@ -1440,6 +1562,11 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
     // pay the bookkeeping when the resolution machinery is on (same gating
     // as the single-track maker).
     streamPropagator_->setIoniStepLogging(doRes_ && (fillGrads_ || fillGradsFactored_));
+    // per-step cumulative transport, for the TRANSPORTED lever arms of
+    // `msmoliv` columns 11/12. Only when the raw step records are actually
+    // written, so production pays neither the 25 doubles per step of
+    // bookkeeping nor the per-step 5x5 inverse at the drain.
+    streamPropagator_->setStepTransportLogging(doRes_ && exportStepRecords_);
   }
   const Geant4ePropagator *g4prop = streamPropagator_.get();
   const MagneticField* field = g4prop->magneticField();
@@ -2322,6 +2449,23 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
       Jpsicons_phi = -99.f;
       Jpsicons_mass = -99.f;
       Jpsi_mass_unc = -99.f;
+      chisqval_cons0 = 0.f;
+      if (exportFrozenModel_) {
+        fmClearRows();
+        fm_nstate = 0;
+        fm_ncons = 0;
+        fm_freeidx.clear();
+        fm_ref.clear();
+        fm_r.clear();
+        fm_Vinv.clear();
+        fm_Frow.clear();
+        fm_Fcol.clear();
+        fm_Fval.clear();
+        fm_dx.clear();
+        fm_Jrow.clear();
+        fm_Jglob.clear();
+        fm_Jval.clear();
+      }
       Jpsi_covmassvtx = 0.f;
       Mupluscons_pt = -99.f;
       Mupluscons_eta = -99.f;
@@ -2579,6 +2723,12 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           Jfull = MatrixXd::Zero(ncons, npars);
           Vinvfull = MatrixXd::Zero(ncons, ncons);
 
+          if (exportFrozenModel_ && icons == 0) {
+            // the row tags follow the assembly; the converged iteration's are
+            // the ones written
+            fmClearRows();
+          }
+
           if (dores) {
             // fresh registration each iteration; the converged iteration's
             // content is what the export reads
@@ -2588,15 +2738,21 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
             resfamily_.clear();
             resvalidhit_.clear();
             rescls_.clear();
-            ioniurbanidx.clear();
-            ioniurbanv.clear();
-            ioniqscaleidx.clear();
-            ioniqscalev.clear();
-            radstepidx.clear();
-            radstepv.clear();
-            radstepspecv.clear();
-            msmoliidx.clear();
-            msmoliv.clear();
+            // The step records are drained on the icons == 0 pass only, so
+            // they are cleared on that pass only: cleared on the constrained
+            // pass too, the tree would carry empty records whenever
+            // doMassConstraint is on.
+            if (icons == 0) {
+              ioniurbanidx.clear();
+              ioniurbanv.clear();
+              ioniqscaleidx.clear();
+              ioniqscalev.clear();
+              radstepidx.clear();
+              radstepv.clear();
+              radstepspecv.clear();
+              msmoliidx.clear();
+              msmoliv.clear();
+            }
           }
 
           // Per-hit diagnostics: cleared every iteration so the vectors
@@ -2799,6 +2955,14 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               Ffull.block(irow, fullvtxidx, 3, nlocalvtx) =
                   Fbs.leftCols<nlocalvtx>();
               Vinvfull.block<3, 3>(irow, irow) = covBSinv;
+              if (exportFrozenModel_ && icons == 0) {
+                fm_rowtype.push_back(2);
+                fm_rowtrk.push_back(-1);
+                fm_rowhit.push_back(-1);
+                fm_rowflags.push_back(0);
+                fm_rowdetid.push_back(0);
+                fm_rowcls.push_back(-1);
+              }
 
               // Registered as a RESOLUTION BLOCK, family 16, dV = covBS --
               // the same convention as the hit families (dV_b/dk = V_b for
@@ -2917,6 +3081,14 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               rfull(irow) = g;
               Ffull.block(irow, fullvtxidx, 1, nlocal) = Jg;
               Vinvfull(irow, irow) = inv_var;
+              if (exportFrozenModel_ && icons == 0) {
+                fm_rowtype.push_back(3);
+                fm_rowtrk.push_back(-1);
+                fm_rowhit.push_back(-1);
+                fm_rowflags.push_back(0);
+                fm_rowdetid.push_back(0);
+                fm_rowcls.push_back(-1);
+              }
               irow += 1;
             }
 
@@ -3031,6 +3203,19 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                 const DetId propdetid = gluedidprop ? DetId(gluedidprop) : hit->geographicalId();
                 msglobalidx = detidparms.at(std::make_pair(10, propdetid));
                 ioniglobalidx = detidparms.at(std::make_pair(11, propdetid));
+                // TRANSPORTED lever arms, columns 11/12. The projected MS
+                // angle of a step reaches the leg end as a (angle, offset)
+                // pair on a ray whose slope these are; the straight-line
+                // stand-in is the remaining path (the reversed cumulative sum
+                // of column 10). Conventions and what the pair does not carry:
+                // `Geant4ePropagator::msLeverArms`. Zeros when the transport
+                // log is off, which cannot happen while `msmoliv` is written.
+                const double pxEnd = updtsos(3);
+                const double pyEnd = updtsos(4);
+                const double pEnd = updtsos.segment<3>(3).norm();
+                const double cosLamEnd = pEnd > 0. ? std::hypot(pxEnd, pyEnd) / pEnd : 1.;
+                const std::vector<std::array<double, 2>> lever = g4prop->msLeverArms(cosLamEnd);
+                std::size_t istep = 0;
                 for (auto const &ms : g4prop->msStepLog()) {
                   msmoliidx.push_back(msglobalidx);
                   msmoliv.push_back(ms.effZ);
@@ -3045,6 +3230,10 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                   msmoliv.push_back(ms.zzp1OverA);
                   msmoliv.push_back(ms.lnScreenW);
                   msmoliv.push_back(ms.stepGroup);
+                  msmoliv.push_back(ms.stepCm);
+                  msmoliv.push_back(istep < lever.size() ? lever[istep][0] : 0.);
+                  msmoliv.push_back(istep < lever.size() ? lever[istep][1] : 0.);
+                  ++istep;
                 }
                 for (auto const &us : g4prop->ioniStepLog()) {
                   ioniurbanidx.push_back(ioniglobalidx);
@@ -3432,6 +3621,28 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                 Jfull.block(irow, parmidx, 5, nlocalparms) =
                     Fprop.middleCols(localparmidx, nlocalparms);
                 Vinvfull.block<5, 5>(irow, irow) = Qinv;
+                if (exportFrozenModel_ && icons == 0) {
+                  fm_rowtype.push_back(0);
+                  fm_rowtrk.push_back(int(id));
+                  fm_rowhit.push_back(int(ihit));
+                  fm_rowflags.push_back(hit->isValid() ? 1 : 0);
+                  fm_rowdetid.push_back(hit->geographicalId().rawId());
+                  fm_rowcls.push_back(-1);
+                  for (unsigned int ir = 0; ir < 5; ++ir) {
+                    for (unsigned int ic = 0; ic < 5; ++ic) {
+                      fm_QMS.push_back(dQMS(ir, ic));
+                      fm_QI.push_back(dQI(ir, ic));
+                      fm_Hm.push_back(Hm(ir, ic));
+                    }
+                  }
+                  for (unsigned int k = 0; k < 7; ++k) {
+                    fm_layerstate.push_back(updtsos[k]);
+                  }
+                  fm_msidx.push_back(msglobalidx);
+                  fm_ioniidx.push_back(ioniglobalidx);
+                  fm_nmssteps.push_back(dores ? int(g4prop->msStepLog().size()) : -1);
+                  fm_nionisteps.push_back(dores ? int(g4prop->ioniStepLog().size()) : -1);
+                }
                 if (dores && (icons == 0 || exportVarianceGrads_)) {
                   for (auto const *dQpart : {&dQMS, &dQI}) {
                     std::vector<Triplet<double>> coeffs;
@@ -3488,6 +3699,28 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                 Jfull.block(irow, parmidx, 5, nlocalparms) =
                     Fprop.middleCols(localparmidx, nlocalparms);
                 Vinvfull.block<5, 5>(irow, irow) = Qinv;
+                if (exportFrozenModel_ && icons == 0) {
+                  fm_rowtype.push_back(0);
+                  fm_rowtrk.push_back(int(id));
+                  fm_rowhit.push_back(int(ihit));
+                  fm_rowflags.push_back(hit->isValid() ? 1 : 0);
+                  fm_rowdetid.push_back(hit->geographicalId().rawId());
+                  fm_rowcls.push_back(-1);
+                  for (unsigned int ir = 0; ir < 5; ++ir) {
+                    for (unsigned int ic = 0; ic < 5; ++ic) {
+                      fm_QMS.push_back(dQMS(ir, ic));
+                      fm_QI.push_back(dQI(ir, ic));
+                      fm_Hm.push_back(Hm(ir, ic));
+                    }
+                  }
+                  for (unsigned int k = 0; k < 7; ++k) {
+                    fm_layerstate.push_back(updtsos[k]);
+                  }
+                  fm_msidx.push_back(msglobalidx);
+                  fm_ioniidx.push_back(ioniglobalidx);
+                  fm_nmssteps.push_back(dores ? int(g4prop->msStepLog().size()) : -1);
+                  fm_nionisteps.push_back(dores ? int(g4prop->ioniStepLog().size()) : -1);
+                }
                 if (dores && (icons == 0 || exportVarianceGrads_)) {
                   for (auto const *dQpart : {&dQMS, &dQI}) {
                     std::vector<Triplet<double>> coeffs;
@@ -3922,6 +4155,14 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
                               2, nlocalparms) =
                       Fhit.middleCols(localparmidx, nlocalparms);
                   Vinvfull.block<2, 2>(irow, irow) = Vinv;
+                  if (exportFrozenModel_ && icons == 0) {
+                    fm_rowtype.push_back(1);
+                    fm_rowtrk.push_back(int(id));
+                    fm_rowhit.push_back(int(ihit));
+                    fm_rowflags.push_back(1 | (ispixel ? 2 : 0) | (hit1d ? 4 : 0));
+                    fm_rowdetid.push_back(preciseHit->geographicalId().rawId());
+                    fm_rowcls.push_back(pixcls);
+                  }
 
                   // ---- HIT-RESOLUTION BLOCKS (parmtype 8/9) --------------
                   //
@@ -4831,6 +5072,83 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
               Cinvd.solve(MatrixXd::Identity(nstatefree, nstatefree)).eval();
 
           covrefmom  = covstate.topLeftCorner<6, 6>();
+
+          if (exportFrozenModel_ && icons == 0) {
+            // The frozen local model at this iteration's linearisation point
+            // (the last iteration's write is the converged one). Rows and
+            // states as documented at the members.
+            fm_nstate = int(nstateparms);
+            fm_ncons = int(ncons);
+            fm_trkstate0 = int(trackstateidxarr[0]);
+            fm_trkstate1 = int(trackstateidxarr[1]);
+            fm_nhits0 = int(nhitsarr[0]);
+            fm_nhits1 = int(nhitsarr[1]);
+            fm_nvalid0 = int(nvalidarr[0]);
+            fm_nvalid1 = int(nvalidarr[1]);
+            fm_freeidx.clear();
+            fm_freeidx.reserve(freestateidxs.size());
+            for (auto const idx : freestateidxs) {
+              fm_freeidx.push_back(int(idx));
+            }
+            fm_ref.clear();
+            for (unsigned int id = 0; id < 2; ++id) {
+              for (unsigned int k = 0; k < 7; ++k) {
+                fm_ref.push_back(refftsarr[id][k]);
+              }
+            }
+            fm_r.assign(rfull.data(), rfull.data() + ncons);
+            // one dense nb x nb block per row block, in row order
+            fm_Vinv.clear();
+            {
+              unsigned int r0 = 0;
+              for (auto const rowtype : fm_rowtype) {
+                const unsigned int nb = rowtype == 0 ? 5u : rowtype == 1 ? 2u : rowtype == 2 ? 3u : 1u;
+                for (unsigned int ir = 0; ir < nb; ++ir) {
+                  for (unsigned int ic = 0; ic < nb; ++ic) {
+                    fm_Vinv.push_back(r0 + ir < ncons && r0 + ic < ncons ? Vinvfull(r0 + ir, r0 + ic) : 0.);
+                  }
+                }
+                r0 += nb;
+              }
+              if (r0 != ncons) {
+                std::cout << "WARNING: frozen-model row tags cover " << r0
+                          << " rows against ncons = " << ncons << std::endl;
+              }
+            }
+            fm_Frow.clear();
+            fm_Fcol.clear();
+            fm_Fval.clear();
+            for (unsigned int i = 0; i < ncons; ++i) {
+              for (unsigned int j = 0; j < nstateparms; ++j) {
+                const double v = Ffull(i, j);
+                if (v != 0.) {
+                  fm_Frow.push_back(int(i));
+                  fm_Fcol.push_back(int(j));
+                  fm_Fval.push_back(v);
+                }
+              }
+            }
+            fm_dx.assign(dxfull.data(), dxfull.data() + nstateparms);
+            fm_stepscale = stepScaleApplied;
+            fm_chisq0 = chisq0val;
+            fm_deltachisq = deltachisq;
+            fm_chisq = chisq0val + deltachisq;
+            if (exportFrozenModelGlobals_) {
+              fm_Jrow.clear();
+              fm_Jglob.clear();
+              fm_Jval.clear();
+              for (unsigned int i = 0; i < ncons; ++i) {
+                for (unsigned int j = 0; j < npars; ++j) {
+                  const double v = Jfull(i, j);
+                  if (v != 0.) {
+                    fm_Jrow.push_back(int(i));
+                    fm_Jglob.push_back(int(globalidxv[j]));
+                    fm_Jval.push_back(v);
+                  }
+                }
+              }
+            }
+          }
 
           
 // Matrix<double, 6, 6> covrefmom;
@@ -6335,11 +6653,20 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           edmval = -deltachisq;
 
           const Matrix<double, 10, 1> dxRef = dxfull.head<10>();
-          const Matrix<double, 10, 10> covref = covstate.topLeftCorner<10, 10>();
-
-          const Matrix<double, 10, 10> hessref = covref.inverse();
-
-          const double deltachisqref = -0.5*dxRef.transpose()*hessref*dxRef;
+          // The reference-block EDM on the indices actually solved for. Under
+          // doVtxConstraint index 6 is frozen and covstate's row and column 6
+          // are zero, so the 10x10 inverse is NaN -- which disables the
+          // convergence break below and runs every candidate to the cap.
+          std::vector<Eigen::Index> freeref;
+          for (auto const idx : freestateidxs) {
+            if (idx < 10) {
+              freeref.push_back(idx);
+            }
+          }
+          const MatrixXd covreffree = covstate(freeref, freeref);
+          const VectorXd dxreffree = dxRef(freeref);
+          const double deltachisqref =
+              freeref.empty() ? 0. : -0.5 * dxreffree.dot(covreffree.inverse() * dxreffree);
 
           edmvalref = -deltachisqref;
 
@@ -6353,6 +6680,7 @@ void ResidualGlobalCorrectionMakerTwoTrackG4e::produce(edm::Event &iEvent, const
           if (icons == 0) {
             edmval_cons0 = edmval;
             niter_cons0 = niter;
+            chisqval_cons0 = chisqval;
           }
 
           // openspec/improve-cvh-refit-convergence §1.5: per-iter debug

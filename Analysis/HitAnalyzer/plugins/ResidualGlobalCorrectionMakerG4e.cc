@@ -875,6 +875,9 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
     // Urban step log feeds the ioniurbanv physics-CF export; only pay the
     // bookkeeping when the resolution machinery is on and grads are kept.
     streamPropagator_->setIoniStepLogging(doRes_ && (fillGrads_ || fillGradsFactored_));
+    // per-step cumulative transport, for the TRANSPORTED lever arms of
+    // `msmoliv` columns 11/12; only when the raw step records are written.
+    streamPropagator_->setStepTransportLogging(doRes_ && exportStepRecords_);
   }
   const Geant4ePropagator *g4prop = streamPropagator_.get();
   const MagneticField* field = g4prop->magneticField();
@@ -3103,7 +3106,14 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             resfamily_.push_back(10);            // multiple scattering
 
             // Phase B export: Moliere raw step data of the same leg (log
-            // sync argument as for the Urban export below).
+            // sync argument as for the Urban export below). Columns 11/12 are
+            // the TRANSPORTED lever arms -- conventions and what the pair does
+            // not carry: `Geant4ePropagator::msLeverArms`.
+            const double pEndMs = updtsos.segment<3>(3).norm();
+            const double cosLamEndMs =
+                pEndMs > 0. ? std::hypot(updtsos(3), updtsos(4)) / pEndMs : 1.;
+            const std::vector<std::array<double, 2>> lever = g4prop->msLeverArms(cosLamEndMs);
+            std::size_t istepms = 0;
             for (auto const &ms : g4prop->msStepLog()) {
               msmoliidx.push_back(msglobalidx);
               msmoliv.push_back(ms.effZ);
@@ -3118,6 +3128,10 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
               msmoliv.push_back(ms.zzp1OverA);
               msmoliv.push_back(ms.lnScreenW);
               msmoliv.push_back(ms.stepGroup);
+              msmoliv.push_back(ms.stepCm);
+              msmoliv.push_back(istepms < lever.size() ? lever[istepms][0] : 0.);
+              msmoliv.push_back(istepms < lever.size() ? lever[istepms][1] : 0.);
+              ++istepms;
             }
           }
 

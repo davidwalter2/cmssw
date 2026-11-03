@@ -883,8 +883,25 @@ protected:
   // Phase B analogue for multiple scattering: per Geant4 step, raw
   // material/kinematic data for the offline Moliere compound-Poisson tail
   // model, tagged by the parmtype-10 global parameter index of the leg.
-  // 8 floats per step: [effZ, effA, x(g/cm2), p(GeV), beta,
-  // thp2-as-in-Q, d/X0, materialGroup] (see Geant4ePropagator::MoliereMsStep).
+  // 13 floats per step (see Geant4ePropagator::MoliereMsStep; readers infer
+  // the stride from size(msmoliv)/size(msmoliidx)):
+  //
+  //   0..6   effZ, effA, x(g/cm2), p(GeV), beta, thp2-as-in-Q, d/X0
+  //   7..8   zzp1OverA, lnScreenW   -- the per-element Moliere sums
+  //   9      materialGroup
+  //   10     step(cm)               -- the step's own path length; its
+  //          reversed cumulative sum over the leg is the STRAIGHT-LINE
+  //          remaining path, the lever arm that turns the step's scattering
+  //          angle into a position offset at the leg end
+  //   11..12 the TRANSPORTED lever arms of the same step, for the two
+  //          projections (phi cos(lambda), +x3) and (lambda, +x4) in that
+  //          order -- the ray slopes of the exact curvilinear transport to
+  //          the leg end, which include curvature and frame rotation and
+  //          reduce to column 10 for a straight step. Filled only when the
+  //          per-step transport log is on, which is exactly when `msmoliv`
+  //          is written. Conventions and the two effects they do not carry
+  //          (the per-step angle scale and the mixing of the two
+  //          projections): Geant4ePropagator::msLeverArms.
   std::vector<unsigned int> msmoliidx;
   std::vector<float> msmoliv;
 

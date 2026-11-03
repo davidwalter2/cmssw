@@ -1,6 +1,7 @@
 #ifndef TrackPropagation_Geant4ePropagator_h
 #define TrackPropagation_Geant4ePropagator_h
 
+#include <array>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -233,6 +234,11 @@ public:
     double effZ = 0., effA = 0., xg = 0.;
     double pGeV = 0., beta = 0.;
     double thp2 = 0., dOverX0 = 0.;
+    // the step's path length in cm: with the steps of a leg in drain order,
+    // the remaining path from a step to the leg end is the lever arm that
+    // turns its scattering angle into a position offset (the offline Moliere
+    // (angle, offset) leg density needs it; the straight-line approximation)
+    double stepCm = 0.;
     // PER-ELEMENT Moliere parameters (added 2026-08-08). effZ/effA are
     // MASS-FRACTION averages, but both Moliere parameters are NON-LINEAR in
     // Z, so evaluating them at effZ is wrong for compounds:
@@ -372,6 +378,56 @@ public:
   };
   void setStepTransportLogging(bool on) { stepTransportLogging_ = on; }
   const std::vector<StepTransport> &stepTransportLog() const { return stepTransportLog_; }
+
+  // TRANSPORTED LEVER ARMS OF THE LAST CALL'S MULTIPLE-SCATTERING STEPS,
+  // one pair per `msStepLog()` entry, in cm:
+  //
+  //     {  J(3,2) / ( J(2,2) cosLambdaEnd ) ,   J(4,1) / J(1,1)  }
+  //
+  // with J = J_{s->end} = jacc_end jacc_s^{-1} the transport from the point
+  // where step s injected its noise to the leg end.
+  //
+  // WHAT THEY ARE. A scattering kick at step s is a 2-D angle whose projected
+  // components in the curvilinear frame THERE are u1 = d(lambda)_s and
+  // u2 = d(phi)_s cos(lambda)_s -- the frame `PropagateErrorMSC` writes its
+  // block in, res(1,1) = S2 and res(2,2) = S2/cos^2(lambda). Transported, each
+  // component produces both an ANGLE and an OFFSET at the leg end,
+  //
+  //     projection A (indices 1, 4):  ( J(1,1) u1 ,  J(4,1) u1 )
+  //     projection B (indices 2, 3):  ( J(2,2) cosLamEnd u2 / cosLam_s ,
+  //                                     J(3,2) u2 / cosLam_s )
+  //
+  // i.e. each is a RAY through the origin, and its SLOPE is the lever arm the
+  // offline 2-D Moliere (angle, offset) leg density needs. `cosLam_s` cancels
+  // out of the ratio, so the only kinematic input is cos(lambda) at the leg
+  // END.
+  //
+  // SIGNS. In the curvilinear frame this code transports in, a positive
+  // d(phi) tilts the direction along +x3 and a positive d(lambda) along +x4,
+  // so J(3,2) and J(4,1) are BOTH positive going forward and both canonical
+  // pairs, (d(phi) cos(lambda), +x3) and (d(lambda), +x4), have a positive
+  // lever arm. For a straight step J(1,1) = J(2,2) = 1,
+  // J(3,2) = L cos(lambda) and J(4,1) = L, so both entries reduce to the
+  // remaining path L.
+  //
+  // `PropagateErrorMSC` disagrees with that on ONE entry: it writes the
+  // WITHIN-step correlation as res(2,3) = +S3 but res(1,4) = -S3, while the
+  // transport that accumulates the leg's block adds +L in both projections.
+  // The leg's own dQMS is therefore built with a sign flip on the (lambda,
+  // x4) within-step term -- Q(1,4) = sum thp2 (L - l/2) and
+  // Q(4,4) = sum thp2 (L^2 - L l + l^2/3) instead of the +l/2, +L l of the
+  // (phi, x3) projection. It is the fit's own convention and is not changed
+  // here; it is named because a lever-arm model that reproduces one
+  // projection cannot reproduce the other without knowing about it.
+  //
+  // NOT CARRIED, deliberately, by a two-numbers-per-step interface: the angle
+  // scale factors J(1,1) and J(2,2) cosLamEnd/cosLam_s themselves (a per-step
+  // reweighting of the scattering power, unity for a helix at fixed momentum),
+  // and the cross terms J(3,1), J(4,2), J(1,2), J(2,1), which mix the two
+  // projections.
+  //
+  // Returns zeros unless `setStepTransportLogging(true)` was set for the call.
+  std::vector<std::array<double, 2>> msLeverArms(double cosLambdaEnd) const;
 
 private:
   typedef std::pair<TrajectoryStateOnSurface, double> TsosPP;

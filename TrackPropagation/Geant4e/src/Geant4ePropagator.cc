@@ -48,6 +48,7 @@
 #include "TrackingTools/TrajectoryParametrization/interface/CurvilinearTrajectoryParameters.h"
 
 #include <Eigen/Geometry>
+#include <Eigen/LU>
 
 #include "SimG4Core/MagneticField/interface/Field.h"
 
@@ -1249,6 +1250,7 @@ Geant4ePropagator::propagateGenericWithJacobianAltD(const Eigen::Matrix<double, 
       // curvilinear (qop, lambda, phi, yT, zT) -> (lambda, lambda)
       ms.thp2 = errMSIout(1, 1);
       ms.dOverX0 = thisPathLength / X0;
+      ms.stepCm = thisPathLength;
       ms.stepGroup = stepGroup;
       msStepLog_.push_back(ms);
 
@@ -1986,6 +1988,39 @@ void Geant4ePropagator::debugReportTrackState(std::string const &currentContext,
 // warning by deleting the variable and leaving the block -- that makes the
 // verbose path worse. Either repair `iverbose`/`fError` or delete the blocks.
 // ============================================================================
+
+//------------------------------------------------------------------------
+// Transported lever arms of the last call's MS steps. Conventions, signs and
+// what the two numbers do and do not carry: `msLeverArms` in the header.
+std::vector<std::array<double, 2>> Geant4ePropagator::msLeverArms(double cosLambdaEnd) const {
+  using namespace Eigen;
+  std::vector<std::array<double, 2>> out(msStepLog_.size(), {{0., 0.}});
+  if (out.empty() || stepTransportLog_.empty()) {
+    return out;
+  }
+  // the last logged cumulative transport is the leg end: `jac.leftCols<5>()`
+  // is not touched after the stepping loop except by the backward-leg Pflip,
+  // which is applied to the log as well.
+  const Matrix<double, 5, 5> jacEnd =
+      Map<const Matrix<double, 5, 5, RowMajor>>(stepTransportLog_.back().jacc);
+  const double cle = (std::abs(cosLambdaEnd) > 1.e-9) ? cosLambdaEnd : 1.;
+  int prevN = 0;
+  for (auto const &st : stepTransportLog_) {
+    const int n = st.nMs;
+    // `nMs` is the size of the Moliere log AFTER this step, so a step that
+    // pushed a record is one where it increases, and the record is n - 1.
+    if (n > prevN && n <= static_cast<int>(out.size())) {
+      const Matrix<double, 5, 5> jacS = Map<const Matrix<double, 5, 5, RowMajor>>(st.jacc);
+      const Matrix<double, 5, 5> J = jacEnd * jacS.inverse();
+      const double aPhi = J(2, 2) * cle;   // angle scale, projection (phi, x3)
+      const double aLam = J(1, 1);         // angle scale, projection (lambda, x4)
+      out[n - 1][0] = (std::abs(aPhi) > 1.e-9) ? J(3, 2) / aPhi : 0.;
+      out[n - 1][1] = (std::abs(aLam) > 1.e-9) ? J(4, 1) / aLam : 0.;
+    }
+    prevN = n;
+  }
+  return out;
+}
 
 //------------------------------------------------------------------------
 Eigen::Matrix<double, 5, 5> Geant4ePropagator::PropagateErrorMSC(const G4Track *aTrack, double pforced) const {

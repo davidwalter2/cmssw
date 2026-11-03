@@ -363,7 +363,14 @@ void G4ePropagationExport::analyze(const edm::Event &iEvent, const edm::EventSet
     refglobr_ = std::sqrt(gp.x() * gp.x() + gp.y() * gp.y());
     refglobz_ = gp.z();
 
-    // drain the per-step logs of THIS leg before any further propagate call
+    // drain the per-step logs of THIS leg before any further propagate call.
+    // Columns 11/12 are the TRANSPORTED lever arms; `stepjacc` carries the
+    // full cumulative transport they are built from, so this leg is also the
+    // place to audit what the two numbers drop
+    // (`Geant4ePropagator::msLeverArms`).
+    const double cosLamEndMs = refp_ > 0. ? refpt_ / refp_ : 1.;
+    const std::vector<std::array<double, 2>> lever = prop_->msLeverArms(cosLamEndMs);
+    std::size_t istepms = 0;
     for (auto const &ms : prop_->msStepLog()) {
       msmoliv_.push_back(ms.effZ);
       msmoliv_.push_back(ms.effA);
@@ -377,6 +384,10 @@ void G4ePropagationExport::analyze(const edm::Event &iEvent, const edm::EventSet
       msmoliv_.push_back(ms.zzp1OverA);
       msmoliv_.push_back(ms.lnScreenW);
       msmoliv_.push_back(ms.stepGroup);
+      msmoliv_.push_back(ms.stepCm);
+      msmoliv_.push_back(istepms < lever.size() ? lever[istepms][0] : 0.);
+      msmoliv_.push_back(istepms < lever.size() ? lever[istepms][1] : 0.);
+      ++istepms;
     }
     // radiative (brems + pair) per-step records; same ordering as msmoliv so
     // the two zip step-for-step offline
@@ -434,7 +445,7 @@ void G4ePropagationExport::analyze(const edm::Event &iEvent, const edm::EventSet
 
     edm::LogPrint("G4ePropagationExport")
         << "leg " << k << " detid " << detid_ << "  r=" << refglobr_ << " z=" << refglobz_ << " cm  p=" << refp_
-        << " GeV  steps=" << stepnms_.size() << " ms=" << msmoliv_.size() / 8 << " ioni=" << ioniurbanv_.size() / 11;
+        << " GeV  steps=" << stepnms_.size() << " ms=" << msmoliv_.size() / 13 << " ioni=" << ioniurbanv_.size() / 11;
 
     tree_->Fill();
     state = endState;
