@@ -166,6 +166,7 @@ private:
   mutable unsigned long long fitAttempted_ = 0ULL;
   mutable unsigned long long fitSucceeded_ = 0ULL;
   mutable unsigned long long fitFailProp_ = 0ULL;       // Geant4e propagation failed
+  mutable unsigned long long fitFailPropSpeciesDedx_ = 0ULL;  // of which: species dE/dx outside its validity
   mutable unsigned long long fitFailHitUpdate_ = 0ULL;  // CPE re-evaluation (cloner) invalid
   mutable unsigned long long fitFailNaN_ = 0ULL;        // NaN/inf parameter update
   mutable unsigned long long fitStepClamped_ = 0ULL;    // fits with >=1 trust-region-clamped GN step
@@ -370,6 +371,7 @@ ResidualGlobalCorrectionMakerG4e::~ResidualGlobalCorrectionMakerG4e() {
               << "  failed=" << failTotal
               << " (" << (100. * failTotal / fitAttempted_) << "%)"
               << "  fail[prop]=" << fitFailProp_
+              << " (of which speciesdedx=" << fitFailPropSpeciesDedx_ << ")"
               << "  fail[hitupdate]=" << fitFailHitUpdate_
               << "  fail[nan]=" << fitFailNaN_
               << "  clamped[step]=" << fitStepClamped_
@@ -2470,17 +2472,38 @@ void ResidualGlobalCorrectionMakerG4e::produce(edm::Event &iEvent, const edm::Ev
             g4prop->setCgfOverride(cgfCacheQ[ihit]);
           }
         }
-        auto const &propresult = simhitdebug
-            ? g4prop->propagateGenericWithJacobianAltD(propfromtsos, surface, dB, dxival, dmsval, dionival, -1., g4PartName,
-                                                       matModel_.get(), matModel_ ? &groupJacs_ : nullptr,
-                                                       (matModel_ && doRes_ && exportMaterialNoise_) ? &groupQs_ : nullptr,
-                                                       fieldModeProvider_.get(),
-                                                       fieldModeProvider_ ? &modeJacs_ : nullptr)
-            : g4prop->propagateGenericWithJacobianAltD(updtsos,      surface, dB, dxival, dmsval, dionival, -1., g4PartName,
-                                                       matModel_.get(), matModel_ ? &groupJacs_ : nullptr,
-                                                       (matModel_ && doRes_ && exportMaterialNoise_) ? &groupQs_ : nullptr,
-                                                       fieldModeProvider_.get(),
-                                                       fieldModeProvider_ ? &modeJacs_ : nullptr);
+        // The species dE/dx correction of the hadron reference (ReferenceSpeciesDedx)
+        // throws when its perturbation treatment is outside its validity, i.e. the
+        // range defect exceeds half the range. A badly mis-measured stiff hadron
+        // track (e.g. a 6-hit pion at pT 238 +- 65 GeV) reaches that during the
+        // fit; it is a failed fit of that track, not of the job, so it takes the
+        // per-track propagation-failure path below. Every other exception of the
+        // extrapolator (non-finite values, missing tables) still stops the job.
+        auto propagate = [&]() {
+          return simhitdebug
+              ? g4prop->propagateGenericWithJacobianAltD(propfromtsos, surface, dB, dxival, dmsval, dionival, -1., g4PartName,
+                                                         matModel_.get(), matModel_ ? &groupJacs_ : nullptr,
+                                                         (matModel_ && doRes_ && exportMaterialNoise_) ? &groupQs_ : nullptr,
+                                                         fieldModeProvider_.get(),
+                                                         fieldModeProvider_ ? &modeJacs_ : nullptr)
+              : g4prop->propagateGenericWithJacobianAltD(updtsos,      surface, dB, dxival, dmsval, dionival, -1., g4PartName,
+                                                         matModel_.get(), matModel_ ? &groupJacs_ : nullptr,
+                                                         (matModel_ && doRes_ && exportMaterialNoise_) ? &groupQs_ : nullptr,
+                                                         fieldModeProvider_.get(),
+                                                         fieldModeProvider_ ? &modeJacs_ : nullptr);
+        };
+        decltype(propagate()) propresultv{};  // std::get<0> == false: failed
+        try {
+          propresultv = propagate();
+        } catch (cms::Exception const &e) {
+          if (e.category() != "G4EnergyLossForExtrapolatorForCVH" ||
+              e.message().find("is more than half the range") == std::string::npos) {
+            throw;
+          }
+          ++fitFailPropSpeciesDedx_;
+          std::cout << "Abort: species dE/dx outside its validity (" << e.message() << ")" << std::endl;
+        }
+        auto const &propresult = propresultv;
 
 
         if (simhitdebug && simhit) {
