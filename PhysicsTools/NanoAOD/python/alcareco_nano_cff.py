@@ -41,6 +41,9 @@
 #       --customise PhysicsTools/NanoAOD/alcareco_nano_cff.nanoAOD_alcareco<skim>[Calib] ...
 # with <skim> TkAlJpsiMuMu (the default track source) or TkAlUpsilonMuMu, and
 # the Calib suffix (TkAlJpsiMuMu only) for calib=True.
+# For the MuKPiGun gun ALCARECO (MC, table named Track), see nanoAOD_alcarecoGun:
+#   cmsDriver.py NANO -s NANO:PhysicsTools/NanoAOD/alcareco_nano_cff.alcarecoNanoSequenceMC \
+#       --customise PhysicsTools/NanoAOD/alcareco_nano_cff.nanoAOD_alcareco{MuGun,PiGun,KGun} ...
 import FWCore.ParameterSet.Config as cms
 from PhysicsTools.NanoAOD.common_cff import Var, ExtVar
 from PhysicsTools.NanoAOD.nano_cff import nanoMetadata, lhcInfoTable
@@ -300,6 +303,81 @@ def nanoAOD_alcarecoTkAlUpsilonMuMu(process):
     return nanoAOD_alcareco(process, "TkAlUpsilonMuMu")
 
 
+# --- single-particle gun ALCARECO (MuKPiGun UL16, WMass/WMassNanoProduction#38) --
+# The gun ALCARECO keeps the tracks matched to the gun particles (dR < 0.3) as
+# genMatchedTracks, with their extras, hits and clusters: about 12 tracks per
+# event, of which about 2 are the gun pair (particle and antiparticle) and the
+# rest the pileup tracks in the cone; Track_genPartIdx tells them apart. The
+# generator record is the gun pair, and the pileup summary is slimmedAddPileupInfo.
+# Per species: the refit's particle (mass and, for hadrons, the nuclear-elastic
+# family), the gen match and the table's mass and pdgId. The table is named
+# Track, since it holds pions and kaons too.
+_GUN_TRACKS = "genMatchedTracks"
+_GUN_SPECIES = {
+    # species: (refit particle, |pdgId|, sign of pdgId for a positive charge, mass, candidate type)
+    "MuGun": ("mu", 13, -1, "0.1056583755", "mu+"),
+    "PiGun": ("pi", 211, 1, "0.13957039", "pi+"),
+    "KGun": ("kaon", 321, 1, "0.493677", "K+"),
+}
+
+
+def nanoAOD_alcarecoGun(process, species):
+    """Run on the gun-matched tracks of the MuKPiGun ALCARECO, for the gun
+    species `species` (MuGun, PiGun or KGun). MC only."""
+    if species not in _GUN_SPECIES:
+        raise RuntimeError("nanoAOD_alcarecoGun: unknown species %r (expected one of %s)"
+                           % (species, ", ".join(sorted(_GUN_SPECIES))))
+    if not process.nanoAOD_step.contains(process.trackrefitideal):
+        raise RuntimeError("nanoAOD_alcarecoGun: the gun ALCARECO is MC, use alcarecoNanoSequenceMC")
+    particle, pdgId, sign, mass, candType = _GUN_SPECIES[species]
+    tracks = cms.InputTag(_GUN_TRACKS)
+    doc = "tracks matched to the %s gun particles (%s), all of the cone" % (species, _GUN_TRACKS)
+    for label in _trackConsumers:
+        if hasattr(process, label):
+            getattr(process, label).src = tracks
+    for label in ("trackrefit", "trackrefitideal"):
+        getattr(process, label).trackParticleName = cms.string(particle)
+        getattr(process, label).genMatchPdgId = cms.int32(pdgId)
+    for label in ("muonTable", "muonCvhIdealTable", "muonExternalVecVarsTable", "muonExternalVecVarsMCTable"):
+        if hasattr(process, label):
+            getattr(process, label).name = "Track"
+    for label in ("muonTable", "muonExternalVecVarsTable", "muonExternalVecVarsMCTable"):
+        if hasattr(process, label):
+            getattr(process, label).doc = doc
+    process.muonTable.variables.mass.expr = mass
+    process.muonTable.variables.mass.doc = "%s mass" % particle
+    process.muonTable.variables.pdgId.expr = "%d*charge" % (sign * pdgId)
+    process.muonTable.variables.pdgId.doc = "PDG code of the gun species, signed by the track charge"
+    process.muonCands.particleType = candType
+    process.muonsMCMatchForTable.mcPdgId = [pdgId]
+    process.muonMCTable.objName = "Track"
+    process.muonMCTable.objType = "Track"
+    process.muonMCTable.docString = "MC matching to the status==1 %s gun particles" % species
+    process.puTable.src = "slimmedAddPileupInfo"
+    # the gun chain has no generator filter, so no GenFilterInfo to write
+    process.alcarecoNanoTaskMC.remove(process.genFilterTable)
+    # the generator record is the gun pair, which the MiniAOD pruning (leptons,
+    # heavy hadrons, ...) would drop for pions and kaons
+    process.finalGenParticles.select = ["keep *"]
+    return process
+
+
+def nanoAOD_alcarecoMuGun(process):
+    return nanoAOD_alcarecoGun(process, "MuGun")
+
+
+def nanoAOD_alcarecoPiGun(process):
+    return nanoAOD_alcarecoGun(process, "PiGun")
+
+
+def nanoAOD_alcarecoKGun(process):
+    return nanoAOD_alcarecoGun(process, "KGun")
+
+
+def _isGun(process):
+    return process.trackrefit.src.getModuleLabel() == _GUN_TRACKS
+
+
 def nanoAOD_customizeCommon(process):
     """cmsDriver's default NANO customisation, which is this function when the
     NANO step loads this cff: the field, geometry and Geant4e setup of the CVH
@@ -307,9 +385,13 @@ def nanoAOD_customizeCommon(process):
     and the default field for MC, the field of the simulation; in MC also the
     full-precision gen leptons of the MiniAOD NanoAOD (nanoGenWmassCustomize).
     MC is the sequence alcarecoNanoSequenceMC, which runs the ideal-geometry
-    refit."""
+    refit. For the gun ALCARECO, the gun particles (pions and kaons too) get
+    full-precision pt, eta and phi as well."""
     from PhysicsTools.NanoAOD.nano_cff import setup3DFieldForRefit, customizeGenLeptonPrecision
     isMC = process.nanoAOD_step.contains(process.trackrefitideal)
     if isMC:
         process = customizeGenLeptonPrecision(process)
+        if _isGun(process):
+            for var in ("pt", "eta", "phi"):
+                getattr(process.genParticleTable.variables, var).precision = cms.string("-1")
     return setup3DFieldForRefit(process, useScalarPot3D=not isMC)
